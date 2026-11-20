@@ -4368,8 +4368,8 @@ export class ClawtrateClient {
   /**
    * A Page one occurrence names: read only when that occurrence is confirmed
    * in the task's current transcript (the item holds a `page` block with this
-   * id) and the task is still on the session the opener saw. Anything else is
-   * not read.
+   * id), that transcript's history named its session, and that session is the
+   * one the opener saw and the task's row names. Anything else is not read.
    */
   readPage(
     key: string,
@@ -4380,8 +4380,13 @@ export class ClawtrateClient {
     const task = Object.values(this.state.tasksByBot)
       .flat()
       .find((each) => each.key === key);
-    // The session the opener saw is the task's session now, both unknown included.
-    const sameSession = (task?.sessionId ?? null) === occurrence.sessionId;
+    // The session is confirmed only by a read history that named it, the same one the opener
+    // saw and the task's row names now: two unknown sessions confirm nothing.
+    const confirmed = transcript?.status === "ready" ? (transcript.historySessionId ?? "") : "";
+    const sameSession =
+      confirmed !== "" &&
+      confirmed === occurrence.sessionId &&
+      confirmed === (task?.sessionId ?? null);
     const named = transcript?.items.some(
       (item) =>
         item.id === occurrence.itemId &&
@@ -5779,6 +5784,7 @@ export class ClawtrateClient {
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: null,
         hasMore: history?.hasMore === true,
+        historySessionId: typeof history?.sessionId === "string" ? history.sessionId : null,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
       };

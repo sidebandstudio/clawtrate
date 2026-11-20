@@ -486,8 +486,9 @@ export function ArtifactReader({
 /** "Sent in chat" in the Files tab: the task's items newest first, as file rows. */
 export function SentInChat({ onOpen }: { onOpen: (artifact: Artifact) => void }) {
   const api = useArtifacts();
-  if (!api?.list) return null;
-  const items = [...api.list.artifacts].reverse();
+  if (!api) return null;
+  // The transcript's Pages show whatever the listing did: it may have failed, or not be read yet.
+  const items = [...(api.list?.artifacts ?? [])].reverse();
   // Pages are not artifacts: the transcript names them, and each row opens the same Page view.
   const pages = [...api.pages].reverse();
   if (items.length === 0 && pages.length === 0) return null;
@@ -566,7 +567,7 @@ export function SentInChat({ onOpen }: { onOpen: (artifact: Artifact) => void })
           );
         })}
       </ul>
-      {api.list.omitted > 0 && (
+      {api.list && api.list.omitted > 0 && (
         <p className="files-note">{api.list.omitted} more items didn't fit here.</p>
       )}
     </section>

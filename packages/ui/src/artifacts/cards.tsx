@@ -658,10 +658,10 @@ export function MessageArtifacts({ item }: { item: TranscriptItem }) {
   return (
     <div className="artifacts" data-msg={item.id} data-testid="message-artifacts">
       {link && <LinkCard link={link} />}
-      {pages.map((block) =>
+      {pages.map((block, i) =>
         block.kind === "page" ? (
           <PageCard
-            key={block.docId}
+            key={`${i}:${block.docId}`}
             api={api}
             docId={block.docId}
             title={block.title ?? "Page"}

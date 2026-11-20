@@ -597,6 +597,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   questionsOmitted: NUMBER,
   runsOmitted: NUMBER,
   sessionKey: ID,
+  historySessionId: ID,
   status: ENUM,
   items: list(MAX_HISTORY_ITEMS, item, { pools: { blocks: MAX_HISTORY_BLOCKS } }),
   error: text(MAX_MESSAGE_LINE_CHARS),

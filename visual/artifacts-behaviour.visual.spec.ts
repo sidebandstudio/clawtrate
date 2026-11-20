@@ -529,6 +529,23 @@ test.describe("a Page", () => {
     expect(away).toEqual([]);
   });
 
+  test("F-115: a failed artifact listing still shows the transcript's Page rows", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&artifactlist=failed`, "light");
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    // The cards of the transcript's Pages, and their rows in Files, with no listing at all.
+    await expect(page.getByTestId("page-card")).toHaveCount(2);
+    await expect(page.getByTestId("artifact-card")).toHaveCount(0);
+    await page.getByRole("button", { name: "Show work panel" }).first().click();
+    await page.getByRole("tab", { name: "Files" }).click();
+    const rows = page.getByTestId("sent-in-chat").getByTestId("sent-page");
+    await expect(rows).toHaveCount(2);
+    await rows.first().click();
+    await expect(page.getByTestId("page-unavailable")).toBeVisible();
+  });
+
   test("F-115: Export reads the Page once, for its occurrence, and saves the Clawtrate version with nothing that runs, navigates or loads, or the original", async ({
     page,
   }) => {

@@ -342,6 +342,11 @@ export type Transcript = TaskActivity & {
   reactions?: Record<string, MessageReaction[]>;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
+  /**
+   * The session the latest successful history load answered for (`chat.history`
+   * `sessionId`), or null when it named none. Absent until history is read.
+   */
+  historySessionId?: string | null;
   /** Epoch ms of the latest successful history load. */
   loadedAt: number | null;
 };

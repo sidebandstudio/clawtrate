@@ -41,6 +41,8 @@ export type ArtifactParams = {
   brokenAudio: boolean;
   /** The recording's whole read answers after 800 ms (`audio=slow`). */
   slowAudio: boolean;
+  /** The task's artifact listing is refused, and nothing else is (`artifactlist=failed`). */
+  listFails: boolean;
 };
 
 export function artifactParams(params: URLSearchParams): ArtifactParams {
@@ -55,6 +57,7 @@ export function artifactParams(params: URLSearchParams): ArtifactParams {
     reportLinks: params.get("reportlinks") === "on",
     brokenAudio: params.get("audio") === "broken",
     slowAudio: params.get("audio") === "slow",
+    listFails: params.get("artifactlist") === "failed",
   };
 }
 
@@ -372,6 +375,7 @@ export function artifactAnswers(params: ArtifactParams) {
   return async (command: BridgeCommand): Promise<unknown> => {
     switch (command.type) {
       case "listArtifacts": {
+        if (params.listFails) throw new Error("The gateway refused artifacts.list.");
         const list: ArtifactList = {
           key: command.key,
           artifacts: command.key === ARTIFACT_TASK ? artifacts : [],

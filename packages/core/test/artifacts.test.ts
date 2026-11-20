@@ -27,6 +27,7 @@ import type { HttpFetch } from "../src/host.ts";
 import { mapHistory } from "../src/mapping.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
+import { sessionsList } from "./fixtures.ts";
 import { memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const GATEWAY = "ws://127.0.0.1:19980";
@@ -774,7 +775,16 @@ describe("nothing remote loads by itself", () => {
 
   it("F-116 F-117: a transcript with remote media, opened, listed and drawn, makes no request until the person acts", async () => {
     const gateway = grantingGateway();
-    gateway.handlers["chat.history"] = () => ({ messages: remoteHistory, hasMore: false });
+    // The task's row, which names its session s-1.
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: sessionsList.sessions, hasMore: false },
+    });
+    gateway.handlers["chat.history"] = () => ({
+      sessionId: "s-1",
+      messages: remoteHistory,
+      hasMore: false,
+    });
     gateway.handlers["artifacts.list"] = () => ({
       artifacts: [
         {
@@ -834,6 +844,11 @@ describe("nothing remote loads by itself", () => {
     );
     await client.start();
     await until(() => client.state.discovery.status === "ready");
+    await until(() =>
+      Object.values(client.state.tasksByBot)
+        .flat()
+        .some((task) => task.key === KEY),
+    );
     client.openSession(KEY);
     await until(() => client.state.transcripts[KEY]?.status === "ready");
     const item = client.state.transcripts[KEY]!.items.find((each) => each.role === "assistant")!;
@@ -879,6 +894,71 @@ describe("nothing remote loads by itself", () => {
       status: "content",
     });
     expect(reads()).toBe(1);
+    client.stop();
+  });
+
+  it("F-115: Page export requires a confirmed history session", async () => {
+    const reads: string[] = [];
+    /** A client whose task's history answers `sessionId`, and the Page occurrence it shows. */
+    const opened = async (sessionId: string | undefined) => {
+      const gateway = grantingGateway();
+      gateway.handlers["sessions.subscribe"] = () => ({
+        subscribed: true,
+        list: { sessions: sessionsList.sessions, hasMore: false },
+      });
+      gateway.handlers["chat.history"] = () => ({
+        ...(sessionId === undefined ? {} : { sessionId }),
+        messages: remoteHistory,
+        hasMore: false,
+      });
+      gateway.handlers["canvas.document.view"] = (params) => {
+        reads.push(String((params as { docId: string }).docId));
+        return { html: "<h1>Trail guide</h1>" };
+      };
+      const storage = memoryStorage({
+        connection: JSON.stringify({ url: URL_A, token: null }),
+        [tokenKey(URL_A)]: JSON.stringify({
+          token: "device-token",
+          grantedScopes: INTERACTIVE_SCOPES,
+          heldScopes: INTERACTIVE_SCOPES,
+        }),
+      });
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      await client.start();
+      await until(() => client.state.discovery.status === "ready");
+      await until(() =>
+        Object.values(client.state.tasksByBot)
+          .flat()
+          .some((task) => task.key === KEY),
+      );
+      client.openSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      const itemId = client.state.transcripts[KEY]!.items.find(
+        (each) => each.role === "assistant",
+      )!.id;
+      return { client, itemId };
+    };
+    // The task's row names s-1. A history that names no session, or another one, confirms none:
+    // not with the row's session, and not with an unknown one either.
+    for (const answered of [undefined, "", "s-2"]) {
+      const { client, itemId } = await opened(answered);
+      for (const sessionId of [null, "", "s-1", "s-2"])
+        expect(
+          await client.readPage(KEY, { sessionId, itemId, docId: "trail-guide" }),
+          `${String(answered)} ${String(sessionId)}`,
+        ).toMatchObject({ status: "failed" });
+      client.stop();
+    }
+    expect(reads).toEqual([]);
+    // The history names s-1, the row names s-1, and so did the opener: read, once.
+    const { client, itemId } = await opened("s-1");
+    expect(
+      await client.readPage(KEY, { sessionId: null, itemId, docId: "trail-guide" }),
+    ).toMatchObject({ status: "failed" });
+    expect(
+      await client.readPage(KEY, { sessionId: "s-1", itemId, docId: "trail-guide" }),
+    ).toMatchObject({ status: "content" });
+    expect(reads).toEqual(["trail-guide"]);
     client.stop();
   });
 

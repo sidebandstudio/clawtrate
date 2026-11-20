@@ -156,11 +156,15 @@ export function shownAgainBelow(items: TranscriptItem[]): Set<string> {
   const again = new Set<string>();
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i]!;
+    // A message's own Pages are checked against later messages only: the same Page twice in
+    // one message is not a later share, so they join what was seen after the whole message.
+    const here = new Set<string>();
     for (const block of item.blocks) {
       if (block.kind !== "page" || !block.docId.trim()) continue;
       if (seen.has(block.docId)) again.add(`${item.id}:${block.docId}`);
-      seen.add(block.docId);
+      here.add(block.docId);
     }
+    for (const docId of here) seen.add(docId);
   }
   return again;
 }
