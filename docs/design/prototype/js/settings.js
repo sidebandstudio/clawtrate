@@ -237,9 +237,12 @@
 
     // The gateway menu and the rail's footer ----------------------------------------------------------
 
+    // A gateway whose saved connection a removal has already deleted, with the rest still on this device.
+    const halfRemoved = (id) => S.removal?.outcome === "local" && S.removal.id === id && S.removal.marks.connection === "done";
     function renderMenu() {
       const holder = $("#s-menu-gateways");
       const items = S.order
+        .filter((id) => !halfRemoved(id))
         .map(
           (id) =>
             `<li role="none" data-s-menu-item><button type="button" class="menu-item" role="menuitemradio" aria-checked="${id === S.inUse}" data-s="switch" data-gw="${id}">${esc(gw(id).name)}<span class="glyph" data-state="check"></span></button></li>`,
@@ -652,13 +655,28 @@
         return showRemoval();
       }
       const said = rec === "ask" ? "removed" : rec;
+      // The saved connection is deleted after the disconnect (section 7, steps 2 and 3): once it is gone the
+      // gateway is no longer in use, and isn't offered again while the rest is left.
+      const unhook = () => {
+        if (id !== S.inUse) return;
+        S.inUse = null;
+        S.last = null;
+        S.conn = "none";
+        S.waiting = 0;
+        showEmpty("Not connected", "Choose a gateway to use.");
+        strip("");
+      };
       if (RMFAIL === "local" && attempt === 1 && !S.localRetried) {
         S.removal = { id, outcome: "local", marks: { connection: "done", token: "done", drafts: "left", waiting: "left", prefs: "untried", state: "untried" }, rec: said, items };
+        unhook();
+        renderMenu();
         return showRemoval();
       }
       // A local item whose state on disk couldn't be read: neither removed nor kept is claimed.
       if (RMFAIL === "unread" && attempt === 1 && !S.localRetried) {
         S.removal = { id, outcome: "local", marks: { connection: "done", token: "done", drafts: "unknown", prefs: "unknown" }, rec: said, items };
+        unhook();
+        renderMenu();
         return showRemoval();
       }
       // Every step on disk: the gateway is gone from this device.
@@ -666,17 +684,10 @@
       S.order = S.order.filter((x) => x !== id);
       if (id === "home") S.refused = null;
       if (S.page === id) S.page = null;
-      if (id === S.inUse) {
-        S.inUse = null;
-        S.last = null;
-        S.conn = "none";
-        S.waiting = 0;
-        if (!S.order.length) {
-          location.href = "setup.html";
-          return;
-        }
-        showEmpty("Not connected", "Choose a gateway to use.");
-        strip("");
+      unhook();
+      if (!S.inUse && S.conn === "none" && !S.order.length) {
+        location.href = "setup.html";
+        return;
       }
       renderMenu();
       announce(`${g.name} is removed from this device`);
@@ -768,7 +779,7 @@
     // Your gateways (section 4) --------------------------------------------------------------------------
 
     CT.botsSectionViews.gateways = () => {
-      if (S.page && gw(S.page) && S.order.includes(S.page) && S.page !== S.inUse) return gatewayPage(gw(S.page));
+      if (S.page && gw(S.page) && S.order.includes(S.page) && S.page !== S.inUse && !halfRemoved(S.page)) return gatewayPage(gw(S.page));
       // After pairing, the warning about the gateway's record stays whether or not the way back works.
       const paired = { failedpaired: "Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. ", noid: "Clawtrate couldn't read the new gateway's identity. Setup had already paired, so the gateway's device record may remain. " }[S.added] || "";
       const again = S.addFrom ? `Clawtrate is connected to ${esc(gw(S.addFrom).name)} again.` : "";
@@ -807,7 +818,8 @@
                     : id === S.changed
                       ? `${esc(g.route)} · <span data-tone="danger">A different gateway answered</span>`
                 : `${esc(g.route)} · Last used ${esc(g.last)}`;
-        const text = `<span class="b-choice-text"><span class="b-choice-title">${esc(g.name)}</span><span class="b-choice-sub">${sub}</span></span>`;
+        const text = `<span class="b-choice-text"><span class="b-choice-title">${esc(g.name)}</span><span class="b-choice-sub">${halfRemoved(id) ? `${esc(g.route)} · <span data-tone="danger">Couldn't remove everything</span>` : sub}</span></span>`;
+        if (halfRemoved(id)) return `<li><div class="b-choice s-gateway-row" data-gw-row="${id}">${text}</div></li>`;
         if (id === S.inUse) return `<li><button type="button" class="b-choice" data-s="open-gw" data-gw="${id}">${text}${icon("chevron")}</button></li>`;
         return (
           `<li><div class="b-choice s-gateway-row" data-gw-row="${id}">${text}<span class="s-row-end">` +

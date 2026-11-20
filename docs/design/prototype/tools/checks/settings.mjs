@@ -548,6 +548,21 @@ const INTRO = "If the record still appears in the gateway's device list, this co
   await p.close();
 }
 
+{
+  // CodeRabbit 5: once a removal confirms the saved connection is gone, that gateway is no longer offered.
+  const p = await open("remove=home&rmfail=local");
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
+  check("walk: remove the gateway in use, a local step fails: not connected any more, the result and Try again kept", (await rail(p)).includes("Not connected") && (await p.locator("#composer").isHidden()) && (await footer(p)).includes("Not connected") && (await text(p, settings)).includes("Couldn't remove everything") && (await p.getByRole("button", { name: "Try again", exact: true }).count()) === 1, await footer(p));
+  await p.close();
+}
+{
+  const p = await open("remove=studio&rmfail=local");
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
+  const offered = await p.evaluate(() => ({ list: document.querySelectorAll('#settings-dialog [data-gw-row="studio"] [data-s="switch"], #settings-dialog [data-gw-row="studio"] [data-s="open-gw"]').length, menu: document.querySelectorAll('#gateway-menu [data-gw="studio"]').length }));
+  check("walk: remove another gateway, a local step fails: it is listed, not offered", offered.list === 0 && offered.menu === 0 && (await text(p, '[data-testid="gateway-list"]')).includes("Couldn't remove everything") && (await rail(p)).includes("Otto"), JSON.stringify(offered));
+  await p.close();
+}
+
 // Part 6: Appearance, System (sections 8 and 9) --------------------------------------------------------------
 
 {
