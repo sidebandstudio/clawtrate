@@ -46,6 +46,8 @@ const clickText = (p, root, words) =>
   );
 const starOn = (p) => p.evaluate(() => [...document.querySelectorAll("#bot-list .bot")].filter((r) => r.querySelector(".lc-star")).map((r) => r.dataset.bot).join(","));
 const railMenu = async (p, bot) => {
+  // Close a menu still open from an earlier call: it can cover the row now under it.
+  if (await p.evaluate(() => Boolean(document.querySelector("#rail-menu:not([hidden]) .menu-item")))) await p.keyboard.press("Escape");
   await p.click(`#bot-list .bot[data-bot="${bot}"]`, { button: "right" });
   await p.waitForTimeout(60);
   return p.evaluate(() => [...document.querySelectorAll("#rail-menu .menu-item")].map((x) => x.textContent.trim()));
@@ -61,8 +63,8 @@ process.on("uncaughtException", (e) => {
 // The primary bot (section 3) -------------------------------------------------------------------------
 let p = await open("lc=intro");
 let t = await dlg(p);
-check("S3 the introduction says what a primary bot is and isn't", has(t, "Introducing the primary bot", "Your primary bot comes first in your list, with a star, and it's the bot Clawtrate offers when you share something into the app.", "Choosing one changes nothing on the gateway. Juniper has the star until you choose: it's the gateway's default bot."));
-check("S3 it says where the choice is kept and who else sees it", t.includes("Kept for you on this gateway, so your other devices show the same star. Other people who use this gateway choose their own."));
+check("S3 the introduction says what a primary bot is and isn't", has(t, "Introducing the primary bot", "Your primary bot has a star and comes first in its part of your list: first among your pins if you pinned it, otherwise first after them. It's the bot Clawtrate offers when you share something into the app.", "Juniper has the star until you choose: it's the gateway's default bot.") && !t.includes("changes nothing on the gateway"));
+check("S3 it says the choice is a preference of the gateway profile, not who else sees it", t.includes("This saves a Clawtrate preference for the current gateway profile. Devices using that profile see the same choice. The gateway's routing default stays the same.") && !t.includes("Other people who use this gateway"));
 check("F-007 it offers an existing bot, a new one, and Not now", has(t, "Use an existing bot", "Create primary bot", "Not now"));
 check("S3 before a choice the star is on the gateway's default bot", (await starOn(p)) === "juniper");
 await clickText(p, "#lc-dialog", "Not now");
@@ -81,6 +83,8 @@ await click(p, '[data-lc="confirm-primary"]');
 check("S3 Confirm shows Saving while it writes", (await dlg(p)).includes("Saving…"));
 await p.waitForTimeout(650);
 check("F-259 the star moves only after the read-back, and it is announced", !(await dlg(p)) && (await starOn(p)) === "pip" && (await announced(p)) === "Pip is your primary bot");
+const railIds = (p, sel) => p.evaluate((sel) => [...document.querySelectorAll(sel)].map((x) => x.dataset.bot).join(","), sel);
+check("S3 the primary bot comes first among the bots not pinned, the others in their order", (await railIds(p, "#bot-list button.bot")) === "pip,juniper,marlow,otto");
 check("F-259 the primary bot's menu offers Replace, not Delete", has((await railMenu(p, "pip")).join("|"), "Replace with different bot") && !(await railMenu(p, "pip")).includes("Delete…"));
 check("S10 another bot's menu offers Make primary bot and Delete", has((await railMenu(p, "otto")).join("|"), "Make primary bot", "Delete…", "Duplicate…", "Export…", "Rename"));
 await p.close();
@@ -88,12 +92,40 @@ await p.close();
 p = await open("lc=choose&primfail=1");
 await click(p, '[data-lc-pick="marlow"]');
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await p.waitForTimeout(600);
 t = await dlg(p);
-check("S3 a failed save keeps the old star and says so", t.includes("Couldn't save your choice. The gateway didn't answer. Your primary bot is still Juniper.") && t.includes("Try again") && (await starOn(p)) === "juniper");
+check("S3 a lost reply says Couldn't confirm while it reads the choice again", t.includes("Couldn't confirm your choice. Reading it again…") && (await announced(p)) === "Couldn't confirm your choice" && (await starOn(p)) === "juniper" && (await p.evaluate(() => document.querySelector('[data-lc="confirm-primary"]').disabled)));
+await p.waitForTimeout(550);
+t = await dlg(p);
+check("S3 when the fresh read still has the old choice it says so, and the star stays", t.includes("Your choice wasn't saved. Read again, the gateway still has Juniper.") && t.includes("Try again") && (await starOn(p)) === "juniper");
 await click(p, '[data-lc="confirm-primary"]');
 await p.waitForTimeout(650);
 check("S3 Try again saves", (await starOn(p)) === "marlow");
+await p.close();
+
+p = await open("lc=choose&primfail=landed");
+await click(p, '[data-lc-pick="marlow"]');
+await click(p, '[data-lc="confirm-primary"]');
+await p.waitForTimeout(1150);
+check("S3 when the fresh read shows the choice landed, the star moves on that read", !(await dlg(p)) && (await starOn(p)) === "marlow");
+await p.close();
+
+p = await open("lc=choose&primfail=noread");
+await click(p, '[data-lc-pick="marlow"]');
+await click(p, '[data-lc="confirm-primary"]');
+await p.waitForTimeout(1150);
+t = await dlg(p);
+check("S3 when the fresh read gets no answer it still says Couldn't confirm, with Check again", t.includes("Couldn't confirm your choice. The gateway didn't answer when Clawtrate read it again. The star stays on Juniper, the last choice read.") && t.includes("Check again") && !t.includes("Try again") && (await starOn(p)) === "juniper");
+await click(p, '[data-lc="confirm-primary"]');
+await p.waitForTimeout(650);
+check("S3 Check again reads, and the star moves only on what it reads", (await starOn(p)) === "marlow");
+await p.close();
+
+p = await open("pin=otto,marlow&lc=choose");
+await click(p, '[data-lc-pick="marlow"]');
+await click(p, '[data-lc="confirm-primary"]');
+await p.waitForTimeout(650);
+check("S3 a pinned primary bot comes first among the pins, the others keep their order", (await railIds(p, "#bot-list .pin-grid .pin")) === "marlow,otto" && (await railIds(p, "#bot-list button.bot")) === "juniper,pip");
 await p.close();
 
 p = await open("lc=choose&primconflict=1");
@@ -115,13 +147,20 @@ await p.close();
 
 p = await open("lc=choose&access=read");
 t = await dlg(p);
-check("S2 S3 a read-only connection asks for the interactive tier, not admin", t.includes("Read-only. Choosing a primary bot needs the interactive tier: it saves a preference for you on the gateway.") && t.includes("Request access") && !t.includes("Confirm"));
+check("S2 S3 a read-only connection asks for the interactive tier, not admin", t.includes("Read-only. Choosing a primary bot needs the interactive tier: it saves a preference on the gateway.") && t.includes("Request access") && !t.includes("Confirm"));
 await p.click('[data-lc-pick="pip"]', { force: true });
 check("S3 ... and cannot choose", await p.evaluate(() => document.querySelector('[data-lc-pick="juniper"]').getAttribute("aria-checked") === "true"));
 await p.close();
 
-p = await open("primary=gone");
-check("S3 a stored primary bot no longer listed gives the star back to the default", (await starOn(p)) === "juniper");
+p = await open(`primary=gone&bot=juniper&${settings}`);
+check("S3 a stored primary bot no longer listed gives the star back to the default", (await starOn(p)) === "juniper" && (await p.evaluate(() => document.querySelector("#panel-settings .lc-manage dd")?.textContent)) === "Yes, as the gateway's default");
+await p.close();
+
+p = await open(`primary=reused&bot=juniper&${settings}`);
+check("S3 a stored id now used by a bot made since is not applied", (await starOn(p)) === "juniper" && (await panel(p)).includes("Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot."));
+await p.close();
+p = await open("primary=reused&lc=choose");
+check("S3 ... and Choose says so", (await dlg(p)).includes("Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot.") && (await p.evaluate(() => document.querySelector('[data-lc-pick="juniper"]').getAttribute("aria-checked") === "true")));
 await p.close();
 
 p = await open(`bot=pip&${settings}`);

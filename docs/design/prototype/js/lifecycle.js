@@ -73,7 +73,17 @@
         }
       });
   }
-  const primaryId = () => (L.primary && botOf(L.primary) ? L.primary : botOf(GATEWAY_DEFAULT) ? GATEWAY_DEFAULT : app.bots[0]?.id);
+  // A stored choice applies only to the bot it was made for: the same id and, where the
+  // gateway records one, the same creation time. A bot made later under that id is not it.
+  if (p("primary") === "reused") (L.primary = "pip"), (L.reused = true);
+  const storedValid = () => Boolean(L.primary && botOf(L.primary) && !L.reused);
+  const primaryId = () => (storedValid() ? L.primary : botOf(GATEWAY_DEFAULT) ? GATEWAY_DEFAULT : app.bots[0]?.id);
+  // The primary bot comes first in its rail group, pinned or not; the others keep their order.
+  CT.railOrder = (list) => {
+    const id = primaryId();
+    const at = list.findIndex((b) => b.id === id);
+    return at > 0 ? [list[at], ...list.slice(0, at), ...list.slice(at + 1)] : list;
+  };
   // What a delete or a copy reads at that moment: each bot's workspace folder,
   // its tasks, its routines, its channel routes, its memory files.
   const FACTS = {
@@ -159,14 +169,14 @@
   const keptLine = () =>
     L.deviceOnly
       ? `<p class="b-hint" data-lc-kept>This device only: this connection has no profile on the gateway to keep it in, so your other devices won't show it.</p>`
-      : `<p class="b-hint" data-lc-kept>Kept for you on this gateway, so your other devices show the same star. Other people who use this gateway choose their own.</p>`;
+      : `<p class="b-hint" data-lc-kept>This saves a Clawtrate preference for the current gateway profile. Devices using that profile see the same choice. The gateway's routing default stays the same.</p>`;
 
   VIEWS.intro = () =>
     sheet(
       "Introducing the primary bot",
       `<span class="lc-intro-art" aria-hidden="true"><span class="avatar" data-bot="${primaryId()}"></span><span class="lc-star">${starSvg}</span></span>` +
-        `<p class="b-lead">Your primary bot comes first in your list, with a star, and it's the bot Clawtrate offers when you share something into the app.</p>` +
-        `<p class="b-lead">Choosing one changes nothing on the gateway. ${esc(nameOf(GATEWAY_DEFAULT))} has the star until you choose: it's the gateway's default bot.</p>` +
+        `<p class="b-lead">Your primary bot has a star and comes first in its part of your list: first among your pins if you pinned it, otherwise first after them. It's the bot Clawtrate offers when you share something into the app.</p>` +
+        `<p class="b-lead">${esc(nameOf(GATEWAY_DEFAULT))} has the star until you choose: it's the gateway's default bot.</p>` +
         keptLine(),
       button("Use an existing bot", 'data-lc="open-choose" data-lc-focus data-size="lg"', "primary") +
         (isAdmin() ? button("Create primary bot", 'data-lc="create-primary" data-size="lg"') : "") +
@@ -175,7 +185,7 @@
     );
 
   const writeBar = () =>
-    `<section class="access-bar" role="region" aria-label="Access" data-state="none"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Read-only.</b> Choosing a primary bot needs the interactive tier: it saves a preference for you on the gateway.</span>${button("Request access", 'data-b="request-write" data-size="sm"', "primary")}</div></section>`;
+    `<section class="access-bar" role="region" aria-label="Access" data-state="none"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Read-only.</b> Choosing a primary bot needs the interactive tier: it saves a preference on the gateway.</span>${button("Request access", 'data-b="request-write" data-size="sm"', "primary")}</div></section>`;
 
   VIEWS.choose = (d) => {
     const q = (d.query || "").toLowerCase();
@@ -195,16 +205,21 @@
       "Choose a primary bot",
       `<label class="visually-hidden" for="lc-search">Search bots</label><input class="input lc-search" id="lc-search" placeholder="Search" autocomplete="off" value="${esc(d.query || "")}" data-lc-focus />` +
         `<ul class="b-choices lc-bots" role="radiogroup" aria-label="Bots">${rows || `<li class="b-hint">No bot matches.</li>`}</ul>` +
-        (d.status === "failed"
-          ? note(`<p><b>Couldn't save your choice.</b> The gateway didn't answer. Your primary bot is still ${esc(nameOf(current))}.</p>`, "danger")
+        (d.status === "unconfirmed"
+          ? `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Couldn't confirm your choice. Reading it again…</p>`
+          : d.status === "noread"
+            ? note(`<p><b>Couldn't confirm your choice.</b> The gateway didn't answer when Clawtrate read it again. The star stays on ${esc(nameOf(current))}, the last choice read.</p>`, "danger")
+          : d.status === "failed"
+            ? note(`<p><b>Your choice wasn't saved.</b> Read again, the gateway still has ${esc(nameOf(current))}.</p>`, "danger")
           : d.status === "conflict"
             ? note(`<p><b>Another of your devices chose ${esc(nameOf(d.theirs))} a moment ago.</b> That's what the gateway has now. Confirm to choose ${esc(nameOf(pick))} instead.</p>`, "warn")
             : "") +
+        (L.reused ? note(`<p>Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot.</p>`, "warn") : "") +
         keptLine() +
         `<p class="b-hint">The gateway's own default bot stays ${esc(nameOf(GATEWAY_DEFAULT))}. Clawtrate doesn't change it: the gateway uses it for messages no route claims.</p>`,
       B.access === "read"
         ? writeBar()
-        : button(busy ? "Saving…" : d.status === "failed" ? "Try again" : "Confirm", `data-lc="confirm-primary" data-size="lg"${pick === current && d.status !== "conflict" ? " disabled" : ""}${busy ? ' aria-busy="true" disabled' : ""}`, "primary"),
+        : button(busy ? "Saving…" : d.status === "failed" ? "Try again" : d.status === "noread" ? "Check again" : "Confirm", `data-lc="confirm-primary" data-size="lg"${(pick === current && d.status !== "conflict" && d.status !== "failed" && d.status !== "noread") || d.status === "unconfirmed" ? " disabled" : ""}${busy ? ' aria-busy="true" disabled' : ""}`, "primary"),
       d.from === "intro" ? "back-intro" : "",
     );
   };
@@ -214,13 +229,20 @@
     d.status = "saving";
     paint();
     setTimeout(() => {
-      if (p("primfail") && !d.retried) {
-        d.status = "failed";
+      // users.prefs.set, then users.prefs.get: the star moves only on what was read back.
+      const lost = p("primfail") && !d.retried;
+      if (lost) {
         d.retried = true;
+        d.status = "unconfirmed";
         paint();
-        $('[data-lc="confirm-primary"]', dialog)?.focus();
-        announce("Couldn't save your choice");
-        return;
+        announce("Couldn't confirm your choice");
+        // The fresh users.prefs.get decides: the new choice (it landed), the old one, or no answer.
+        return setTimeout(() => {
+          if (p("primfail") === "landed") return applyPrimary(id);
+          d.status = p("primfail") === "noread" ? "noread" : "failed";
+          paint();
+          $('[data-lc="confirm-primary"]', dialog)?.focus();
+        }, 500);
       }
       if (p("primconflict") && !d.conflicted) {
         d.status = "conflict";
@@ -231,12 +253,15 @@
         paint();
         return;
       }
-      // users.prefs.set, then users.prefs.get: the star moves only on what was read back.
-      L.primary = id;
-      closeDialog();
-      refreshRail();
-      announce(`${nameOf(id)} is your primary bot${L.deviceOnly ? " on this device" : ""}`);
+      applyPrimary(id);
     }, 500);
+  }
+  function applyPrimary(id) {
+    L.primary = id;
+    L.reused = false;
+    closeDialog();
+    refreshRail();
+    announce(`${nameOf(id)} is your primary bot${L.deviceOnly ? " on this device" : ""}`);
   }
 
   // The picture editor (section 4) ------------------------------------------------------------------
@@ -542,11 +567,12 @@
   CT.botsSettingsTail = (id) => {
     const primary = id === primaryId();
     const only = app.bots.length === 1;
+    const reusedNote = L.reused && primary ? `<p class="b-hint" data-lc-reused>Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot.</p>` : "";
     const name = esc(nameOf(id));
     return (
       `<h3 class="b-tabgroup">Manage</h3><dl class="facts lc-manage">` +
-      `<div><dt>Primary bot</dt><dd>${primary ? `Yes${L.primary ? "" : ", as the gateway's default"}` : "No"}</dd></div>` +
-      `</dl><div class="lc-manage-actions">` +
+      `<div><dt>Primary bot</dt><dd>${primary ? `Yes${storedValid() ? "" : ", as the gateway's default"}` : "No"}</dd></div>` +
+      `</dl>` + reusedNote + `<div class="lc-manage-actions">` +
       (B.access === "read" ? "" : primary ? button("Replace with different bot", 'data-lc="open-choose" data-size="sm"') : button("Make primary bot", `data-lc="make-primary" data-lc-bot="${id}" data-size="sm"`)) +
       (isAdmin() ? button("Duplicate…", `data-lc="open-duplicate" data-lc-bot="${id}" data-size="sm"`) : "") +
       button("Export…", `data-lc="open-export" data-lc-bot="${id}" data-size="sm"`) +
@@ -1131,7 +1157,7 @@
     if (pick && L.dialog?.kind === "choose") {
       if (B.access === "read") return;
       L.dialog.pick = pick.dataset.lcPick;
-      if (L.dialog.status === "failed") L.dialog.status = null;
+      if (L.dialog.status === "failed" || L.dialog.status === "noread") L.dialog.status = null;
       paint();
       $(`[data-lc-pick="${L.dialog.pick}"]`, dialog)?.focus();
       return;
@@ -1193,6 +1219,12 @@
         L.opener = el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el;
         return savePrimary(bot);
       case "confirm-primary":
+        if (L.dialog.status === "noread") {
+          // Check again reads the preference; it writes nothing. Here the read shows the choice landed.
+          L.dialog.status = "unconfirmed";
+          paint();
+          return setTimeout(() => applyPrimary(L.dialog.pick), 500);
+        }
         return savePrimary(L.dialog.pick || primaryId());
       case "open-picture":
         return openDialog("picture", el, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });

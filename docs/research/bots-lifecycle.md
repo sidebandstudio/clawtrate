@@ -58,6 +58,8 @@ agents.list defaultId after: main
 
 Both paired devices belong to the same profile, `gateway-owner`, so a second person was not observed; that preferences are per profile is from the source above. `listAgentsForGateway` also returns `createdVia` and `createdAt` for bots the gateway recorded (section 8).
 
+A profile is not a person. `shouldUseGatewayOwnerProfile` (`dist/gateway-owner-profile-6q0DpnDA.mjs`, lines 44-48) puts an operator connection that has no authenticated user of its own on the gateway's owner profile when it signed in with the gateway's token or password, or when the gateway has no roles configured; `users.prefs.get` and `users.prefs.set` (`dist/users-XXBiT3kC.mjs`, lines 338-406) key the preference by that profile, and answer `no_durable_identity` only when the connection resolves to none. So every device that connects that way reads and writes one shared choice.
+
 ### For the design
 
 The primary bot is a Clawtrate preference, `clawtrate.primary` in `users.prefs`: the same person's devices agree, other people keep their own, and nothing on the gateway changes. Until the person chooses, the star is on `defaultId`, as the built rail already draws it. On `no_durable_identity` the choice is kept on the device, as F-266 does for the manual order. Choosing needs the interactive tier, not admin.

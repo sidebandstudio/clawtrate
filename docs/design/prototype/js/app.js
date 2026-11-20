@@ -257,8 +257,10 @@
           : `<li class="rail-empty"><strong>No bots</strong>Bots appear here once the gateway has one.</li>`;
       return;
     }
-    const pinned = bots.filter(isPinned);
-    const rest = bots.filter((b) => !isPinned(b));
+    // A page built on this one (lifecycle.html) may order each group, the primary bot first.
+    const order = CT.railOrder || ((list) => list);
+    const pinned = order(bots.filter(isPinned));
+    const rest = order(bots.filter((b) => !isPinned(b)));
     let html = "";
 
     if (pinned.length) {
