@@ -7,7 +7,6 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { MAX_FOREIGN_EPOCHS } from "../src/client.ts";
 import { deferred, sleep, until, type FakeGateway } from "./fake-gateway.ts";
 import {
   MAX_QUEUE_ALIASES,
@@ -627,7 +626,7 @@ describe("a recipient session nobody has open (F-122)", () => {
     client.stop();
   });
 
-  it("F-122: a stale recipient read is still dropped after its deletion's epoch was evicted", async () => {
+  it("F-122: a stale recipient read is still dropped after its session's deletion, whatever deletions follow", async () => {
     const gateway = grantingGateway();
     const held = deferred<unknown>();
     let peerReads = 0;
@@ -642,11 +641,10 @@ describe("a recipient session nobody has open (F-122)", () => {
     await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
     gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
     await until(() => peerReads === 1);
-    // The deletion settles the card, and enough further deletions evict its
-    // epoch entry while the read is still on its way.
+    // The deletion settles the card; many deletions of other sessions follow it.
     gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
     await until(() => transcript().linkedRuns["peer-r"]?.state === "cancelled");
-    for (let i = 0; i <= MAX_FOREIGN_EPOCHS; i += 1)
+    for (let i = 0; i < 70; i += 1)
       gateway.emit("sessions.changed", { sessionKey: `agent:marlow:extra-${i}`, reason: "delete" });
     // The held answer is the session's old snapshot, with the run still in flight.
     held.resolve({ messages: [], inFlightRun: { runId: "peer-r" } });
@@ -680,6 +678,58 @@ describe("a recipient session nobody has open (F-122)", () => {
       client as unknown as { foreign: Map<string, { queueAliases: Record<string, string> }> }
     ).foreign;
     expect(Object.keys(foreign.get(PEER)?.queueAliases ?? {})).toHaveLength(MAX_QUEUE_ALIASES);
+    client.stop();
+  });
+
+  it("F-122: a named error ends the run failed when history's page holds only its rows", async () => {
+    const gateway = grantingGateway();
+    let peerHistory: unknown = { messages: [] };
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER ? peerHistory : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The idle page holds the run's tool call and no reply: history reads it as
+    // completed without knowing the outcome, and the row said it errored.
+    peerHistory = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
+          __openclaw: { id: "a1", runId: "peer-r" },
+        },
+      ],
+    };
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "error" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "failed");
+    expect(transcript().linkedRuns["peer-r"]?.outcomeKnown).toBe(true);
+    client.stop();
+  });
+
+  it("F-122: a read that unrelated deletions overtake still settles the run", async () => {
+    const gateway = grantingGateway();
+    const held = deferred<unknown>();
+    let peerReads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      peerReads += 1;
+      return held.promise;
+    };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => peerReads === 1);
+    // Other sessions are deleted while the read is on its way — enough to fill
+    // and turn over the deletions kept — but this session is untouched.
+    for (let i = 0; i < 520; i += 1)
+      gateway.emit("sessions.changed", { sessionKey: `agent:marlow:extra-${i}`, reason: "delete" });
+    // The held answer is idle history: it settles the run as vanished.
+    held.resolve({ messages: [] });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.outcomeKnown).toBe(false);
     client.stop();
   });
 });

@@ -396,8 +396,8 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
-/** Sessions' removal epochs kept, so a history read a deletion superseded is dropped; the oldest give way. */
-export const MAX_FOREIGN_EPOCHS = 64;
+/** Deleted sessions' names kept so a history read a deletion supersedes is dropped; the oldest give way. */
+export const MAX_FOREIGN_DELETES = 512;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
@@ -771,17 +771,12 @@ export class ClawtrateClient {
   /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
   private readonly foreignRaw = new RawTable(0, 0);
   /**
-   * Bumped each time a session nobody has open is deleted, so a history read of
-   * it that was already on its way is dropped instead of rebuilding its runs
-   * from an answer that predates the deletion.
+   * Sessions nobody has open whose deletion a read on its way must still see,
+   * newest kept (`MAX_FOREIGN_DELETES`): a deletion settles the session's
+   * followed runs, and an answer that predates it rebuilds nothing. A session
+   * alive again clears its own.
    */
-  private readonly foreignEpochs = new Map<string, number>();
-  /**
-   * Bumped whenever an epoch entry is evicted: an evicted epoch's value can be
-   * captured again, and only the floor tells a read made before that from one
-   * made after it.
-   */
-  private foreignEpochFloor = 0;
+  private readonly foreignDeleted = new Set<string>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3195,6 +3190,8 @@ export class ClawtrateClient {
   ): void {
     // Kept under the id cap, as the state keeps ids.
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
+    // The session is alive again: its deletion no longer supersedes a read.
+    this.foreignDeleted.delete(sessionKey);
     const before = this.foreign.get(sessionKey) ?? emptyActivity;
     let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
     if (next === before) return;
@@ -3239,26 +3236,26 @@ export class ClawtrateClient {
    */
   private retireForeign(rawKey: string): void {
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
-    // A read of this session on its way now answers a session that is gone.
-    this.foreignEpochs.set(sessionKey, (this.foreignEpochs.get(sessionKey) ?? 0) + 1);
-    while (this.foreignEpochs.size > MAX_FOREIGN_EPOCHS) {
-      this.foreignEpochs.delete(this.foreignEpochs.keys().next().value as string);
-      this.foreignEpochFloor += 1;
+    if (this.foreign.has(sessionKey)) {
+      this.updateForeign(sessionKey, (activity, ctx) =>
+        activity.runs.some((run) => !isTerminal(run.state))
+          ? {
+              ...activity,
+              runs: activity.runs.map((run) =>
+                isTerminal(run.state)
+                  ? run
+                  : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
+              ),
+            }
+          : activity,
+      );
+      this.foreign.delete(sessionKey);
     }
-    if (!this.foreign.has(sessionKey)) return;
-    this.updateForeign(sessionKey, (activity, ctx) =>
-      activity.runs.some((run) => !isTerminal(run.state))
-        ? {
-            ...activity,
-            runs: activity.runs.map((run) =>
-              isTerminal(run.state)
-                ? run
-                : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
-            ),
-          }
-        : activity,
-    );
-    this.foreign.delete(sessionKey);
+    // A deletion a read on its way must still see, however many deletions follow it.
+    this.foreignDeleted.delete(sessionKey);
+    this.foreignDeleted.add(sessionKey);
+    while (this.foreignDeleted.size > MAX_FOREIGN_DELETES)
+      this.foreignDeleted.delete(this.foreignDeleted.keys().next().value as string);
   }
 
   /** A run this task does not hold: a followed foreign session's, or another task's. */
@@ -3570,10 +3567,6 @@ export class ClawtrateClient {
         .filter((run) => ids.has(run.id) && !isTerminal(run.state))
         .map((run) => run.id),
     );
-    // A delete of this session while the read is on its way supersedes it, as
-    // does any eviction of epoch entries since the read was asked.
-    const epoch = this.foreignEpochs.get(sessionKey);
-    const floor = this.foreignEpochFloor;
     let history: RawRecord | null;
     try {
       history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
@@ -3584,8 +3577,8 @@ export class ClawtrateClient {
       generation !== this.generation ||
       this.tracked(sessionKey) ||
       (senderKey !== undefined && !this.tracked(senderKey)) ||
-      this.foreignEpochs.get(sessionKey) !== epoch ||
-      this.foreignEpochFloor !== floor
+      // A deletion of this session while the read was on its way supersedes it.
+      this.foreignDeleted.has(sessionKey)
     )
       return;
     const aliases = Object.fromEntries([
@@ -4895,8 +4888,7 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
-    this.foreignEpochs.clear();
-    this.foreignEpochFloor = 0;
+    this.foreignDeleted.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();

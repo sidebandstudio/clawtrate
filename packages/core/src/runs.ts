@@ -3200,7 +3200,10 @@ export function settleVanishedRuns(
 ): Run[] {
   return runs.map((run) => {
     const named = namedEnded?.get(run.id);
-    if (isTerminal(run.state) || run.state === "queued") return run;
+    if (run.state === "queued") return run;
+    // A terminal state history only inferred (its rows' shape, or the vanished
+    // rule) gives way to the phase a terminal row named; an established one is final.
+    if (isTerminal(run.state) && (!named || run.outcomeKnown)) return run;
     if (!named && !activeBefore.has(run.id)) return run;
     if (
       run.id === inFlightRunId ||
@@ -3214,8 +3217,12 @@ export function settleVanishedRuns(
     }
     // The row said this run ended and history could not say how: settle it as
     // the row said, with the reply unknown rather than invented.
-    const settled = finishRun(run, named === "error" ? "failed" : "completed", ctx);
-    return named === "error" ? settled : { ...settled, outcomeKnown: false };
+    const to: "failed" | "completed" = named === "error" ? "failed" : "completed";
+    const settled = isTerminal(run.state) ? { ...run, state: to } : finishRun(run, to, ctx);
+    // The row said how it ended; whether it ended with a reply, only history could say.
+    return named === "error"
+      ? { ...settled, outcomeKnown: true }
+      : { ...settled, outcomeKnown: false };
   });
 }
 
