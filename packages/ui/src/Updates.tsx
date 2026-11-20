@@ -204,6 +204,19 @@ export function Updates({
   const downloading = !pending && state.kind === "downloading";
   const notice = preferenceLine(s);
   const capability = restartCapability(s);
+  const unavailable =
+    s.install.kind === "unavailable-in-this-build" ? refusalLine(s.install.reason) : null;
+  const installNotice =
+    (source ||
+      (state.kind === "failed" &&
+        state.reason === "unsupported-system" &&
+        s.install.kind === "unavailable-in-this-build" &&
+        s.install.reason === "no-installer-path")) &&
+    state.kind !== "handoff-failed" &&
+    !handoffLocked(state) &&
+    unavailable !== line
+      ? unavailable
+      : null;
   const confirm = capability && !pending && capability.offerId === confirmId;
   if (confirmId && !confirm) setConfirmId(null);
   const locked = handoffLocked(state);
@@ -219,21 +232,12 @@ export function Updates({
   return (
     <div className="updates-section">
       <p className="b-hint">Applies on this device.</p>
-      {source &&
-        s.install.kind === "unavailable-in-this-build" &&
-        state.kind !== "handoff-failed" &&
-        !locked &&
-        s.install.reason !== "no-verified-download" &&
-        !(
-          s.install.reason === "artifact-changed" &&
-          (state.kind === "verified" ||
-            (state.kind === "failed" && state.reason === "artifact-changed"))
-        ) && (
-          <div className="b-note" data-tone="warn">
-            <WarnIcon />
-            <p>{refusalLine(s.install.reason)}</p>
-          </div>
-        )}
+      {installNotice && (
+        <div className="b-note" data-tone="warn">
+          <WarnIcon />
+          <p>{installNotice}</p>
+        </div>
+      )}
       {s.runningVersion && (
         <dl className="facts">
           <div>

@@ -288,3 +288,12 @@ it("F-231: the idle install capability adds no warning or restart", () => {
     expect(result.actions).not.toContain("Restart to Update");
   }
 });
+
+it("F-231: an unsupported desktop system explains the absent installer without an action", () => {
+  const row = render(
+    { kind: "failed", stage: "check", reason: "unsupported-system" },
+    { install: { kind: "unavailable-in-this-build", reason: "no-installer-path" } },
+  );
+  expect(row.html).toContain("This build has no installer for this system.");
+  expect(row.actions).toEqual([]);
+});
