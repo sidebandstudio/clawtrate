@@ -1,7 +1,6 @@
 // The packaging configuration: what is shipped, and that signing is chosen by
 // the environment alone.
 import { FuseV1Options } from "@electron/fuses";
-import { SENTINEL } from "@electron/fuses/dist/constants.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,8 @@ import { APP_ID, builderConfig, fuses, macSigningRequested } from "../packaging/
 import { fuseMismatches } from "../packaging/fuse-check.ts";
 
 const APP = join(import.meta.dirname, "..");
+// The marker Electron embeds before the version and fuse bytes in an executable.
+const FUSE_SENTINEL = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
 
 describe("packaging configuration", () => {
   it("names the app and ships only the bundled main, preload and renderer", () => {
@@ -115,7 +116,7 @@ describe("packaging configuration", () => {
         path,
         Buffer.concat([
           Buffer.from("MZ"),
-          Buffer.from(SENTINEL),
+          Buffer.from(FUSE_SENTINEL),
           Buffer.from([1, wire.length]),
           Buffer.from(wire),
         ]),

@@ -442,6 +442,31 @@ describe("a stopped process is stopped once its port is closed too", () => {
     expect(existsSync(stateDir)).toBe(false);
   });
 
+  it("a reset of an instance with a paired machine stops its node by PID and still waits for the gateway's port", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const node = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", {
+      runRoot,
+      gateway,
+      provider: liveProcess(),
+      marker: { nodePid: node.pid, nodeIdentity: node.identity },
+    });
+    let openAfterExit = 3;
+    const listening = async (port: number) => {
+      if (port !== marker.gatewayPort) return false;
+      if (processState(gateway.pid, gateway.identity, processIdentity) === "alive") return true;
+      if (openAfterExit === 0) return false;
+      openAfterExit -= 1;
+      return true;
+    };
+    await reset(testInstance(home, runRoot, "alpha", { listening }));
+    expect(processState(node.pid, node.identity, processIdentity)).toBe("dead");
+    expect(openAfterExit).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
   it("a port still open after the wait fails the stop, naming the process and port, and the reset deletes nothing", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");

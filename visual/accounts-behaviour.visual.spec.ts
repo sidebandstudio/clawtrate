@@ -19,6 +19,28 @@ const sent = (page: Page) =>
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
   );
 
+type Frames = { releaseFrames: () => void };
+/** Animation frames asked for from now wait until `releaseFrames`: a slow frame, made certain. */
+const holdFrames = (page: Page) =>
+  page.evaluate(() => {
+    const real = window.requestAnimationFrame.bind(window);
+    const held: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = (callback) => (held.push(callback), 0);
+    (window as unknown as Frames).releaseFrames = () => {
+      window.requestAnimationFrame = real;
+      for (const callback of held.splice(0)) real(callback);
+    };
+  });
+/** The held frames run, and the frame they run in is over. */
+const releaseFrames = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        (window as unknown as Frames).releaseFrames();
+        requestAnimationFrame(() => done());
+      }),
+  );
+
 test("F-034: the one + menu offers New task and New bot with ⌘N; New bot opens on its name, and Escape gives focus back to +", async ({
   page,
 }) => {
@@ -58,10 +80,14 @@ test("F-034: shapes and colours are radio groups of one tab stop; arrows move an
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("radio", { name: "gem" })).toBeFocused();
   await expect(page.getByRole("radio", { name: "gem" })).toHaveAttribute("aria-checked", "true");
+  // Frames held from Home until after Tab, as on a slow runner: a focus move the key left for a
+  // later frame would land after Tab and take focus back from the colours.
+  await holdFrames(page);
   await page.keyboard.press("Home");
   await expect(page.getByRole("radio", { name: "pebble" })).toHaveAttribute("aria-checked", "true");
   // One tab stop: Tab leaves the group for the colours.
   await page.keyboard.press("Tab");
+  await releaseFrames(page);
   await expect(page.getByRole("radio", { name: "Pink" })).toBeFocused();
   await page.getByRole("textbox", { name: "Name" }).press("Enter");
   await expect(page.getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
