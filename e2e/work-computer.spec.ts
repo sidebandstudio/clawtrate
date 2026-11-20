@@ -401,8 +401,13 @@ test("F-142: when the gateway stops answering renewals, You have control ends wi
   const marker = readMarker(openInstance(COMPUTER).stateDir);
   const pid = marker?.gatewayPid;
   expect(typeof pid === "number" && pid > 1, "the instance's gateway PID").toBe(true);
-  const command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-  expect(command, "the PID is this instance's gateway").toContain(`clawtrate-dev-${COMPUTER}`);
+  // The gateway renames its process, so it is known by the port it listens on: this instance's.
+  const port = marker?.gatewayPort;
+  expect(FORBIDDEN_PORTS, "the instance's own gateway port").not.toContain(port);
+  const listening = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+    encoding: "utf8",
+  });
+  expect(listening.split("\n"), "the PID is this instance's gateway").toContain(String(pid));
   let paused = false;
   try {
     await showComputer(page);
