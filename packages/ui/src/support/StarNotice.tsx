@@ -105,10 +105,10 @@ export function StarNotice({
     mounted.current = true;
   }, [active, covered, field, revision, taskKey, transcripts]);
   useEffect(() => {
-    if (notice !== "success") return;
+    if (notice !== "success" || scene === "success") return;
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [notice, scene]);
   const element = useRef<HTMLElement>(null);
   const close = () => {
     setNotice(null);
@@ -180,6 +180,7 @@ export function StarNotice({
           {notice !== "success" && notice !== "busy" && notice !== "open-error" && (
             <ProjectLink
               onResult={(ok) => {
+                if (!element.current?.isConnected) return;
                 if (ok) close();
                 else {
                   setNotice("open-error");
