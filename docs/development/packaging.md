@@ -51,12 +51,13 @@ Before electron-builder starts, Clawtrate prints the signing plan. On macOS it c
 
 ## The update feed
 
-Nothing in the app reads a feed yet; the update screens are later work. The build fixes two things for them:
+The build fixes the update sources in the Electron main process. Check fetches the selected feed. Download fetches the file named by that check. Leave both addresses unset to package without an update source.
 
-- `CLAWTRATE_UPDATE_FEED_URL`: the feed's `https` address, substituted when a built entry imports the engine. Without it the build has no feed and makes no update request. The packaged app cannot change it.
-- `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. "Update required" counts 14 days from this date.
+- `CLAWTRATE_UPDATE_FEED_URL` supplies the Stable HTTPS feed.
+- `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL` supplies the Nightly HTTPS feed independently of Stable. Each feed must serve its artifacts from its own origin without redirects or credentials.
+- `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. The engine’s age helper uses this date for a later required-update feature.
 
-After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same HTTPS origin, including the same port, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
+After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. The generator sets the feed track from the package version, `X.Y.Z` for stable or `X.Y.Z-nightly.YYYYMMDD.N` for nightly, with a calendar year from 1000 to 9999 and a numeric run number N. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same HTTPS origin, including the same port, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
 
 ## Opening an unsigned build
 

@@ -28,6 +28,7 @@ export function checkFeedAddress(
   } catch {
     return { ok: false, cause: "address-refused" };
   }
+  if (url.hostname.length > 253) return { ok: false, cause: "address-refused" };
   if (url.hostname.endsWith(PLACEHOLDER_HOST_SUFFIX)) {
     return { ok: false, cause: "not-configured" };
   }
@@ -60,6 +61,7 @@ export function buildAddressProblem(text: string): string | null {
   } catch {
     return "is not an address";
   }
+  if (url.hostname.length > 253) return "host name exceeds 253 characters";
   if (url.protocol !== "https:") return "must use https";
   if (url.username || url.password) return "must not carry a user name or password";
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
