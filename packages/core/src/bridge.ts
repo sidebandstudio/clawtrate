@@ -242,7 +242,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
     : C extends { type: "takeBackMessage" }
       ? { text: string; attachments: AttachmentInfo[] }
       : C extends { type: "createTask" }
-        ? { key: string }
+        ? { key: string; messageId?: string }
         : C extends { type: "readStepRaw" }
           ? StepRead | null
           : C extends { type: "readApprovalText" }
@@ -1181,14 +1181,20 @@ class ViewerSession implements BridgeSession {
         const back = client.takeBack(key, command.messageId);
         return { text: back.text, attachments: policy.attachments.restore(back.attachments) };
       }
-      case "createTask":
+      case "createTask": {
+        let messageId: string | undefined;
         // Until the gateway is asked, a viewer that goes away takes its request with it.
-        return this.created(() =>
+        const created = await this.created(() =>
           client.createTask(command.botId, command.text, {
             ...(command.label ? { label: command.label } : {}),
             owner,
+            onStart: (id) => {
+              messageId = id;
+            },
           }),
         );
+        return messageId ? { ...created, messageId } : created;
+      }
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "answerQuestion":

@@ -38,6 +38,7 @@ type Page =
   | { page: "connect"; startWith: string | null };
 
 export function useAccountsSection({
+  active,
   accounts,
   bots,
   connection,
@@ -45,6 +46,7 @@ export function useAccountsSection({
   announce,
   toNav,
 }: {
+  active: boolean;
   accounts: AccountsState;
   bots: readonly Bot[];
   connection: ConnectionState;
@@ -66,10 +68,10 @@ export function useAccountsSection({
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
 
-  // Settings reads the accounts when it opens, and so the locks of the bots on them.
+  // Read the accounts and their bot locks when this section opens.
   useEffect(() => {
-    void bridge.send({ type: "refreshAccounts" }).catch(() => {});
-  }, [bridge]);
+    if (active) void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+  }, [active, bridge]);
 
   const focusTitle = () =>
     requestAnimationFrame(() => document.querySelector<HTMLElement>("#b-section-title")?.focus());

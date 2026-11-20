@@ -12,6 +12,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { invitationReplies } from "./support/invitation.ts";
 import { useBridge } from "./bridge.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
@@ -127,7 +128,7 @@ export function RunReply({ run }: { run: Run }) {
   // Cut off only if the reply was not complete when the run stopped or failed.
   const cut = !run.textComplete && (run.state === "stopped" || run.state === "failed");
   return (
-    <div className="turn" data-role="assistant" data-testid="live-turn">
+    <div className="turn" data-role="assistant" data-testid="live-turn" data-reply-run={run.id}>
       <div className="msg" data-role="assistant">
         <div
           className="bubble"
@@ -290,9 +291,11 @@ export function RunEnding({
                     mode: "auto",
                     attachmentIds: [],
                   });
-              void again.catch((error: unknown) =>
-                setRetryError(error instanceof Error ? error.message : String(error)),
-              );
+              void again
+                .then(({ messageId }) => invitationReplies.sent(taskKey, messageId))
+                .catch((error: unknown) =>
+                  setRetryError(error instanceof Error ? error.message : String(error)),
+                );
             }}
           >
             Try again

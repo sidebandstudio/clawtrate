@@ -14,6 +14,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ProjectLink } from "./support/StarNotice.tsx";
 import { useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
@@ -67,12 +68,13 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "usage" | "machines";
+type Section = "gateway" | "accounts" | "usage" | "machines" | "about";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["about", "About"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -192,7 +194,15 @@ export function Settings({
     </button>
   );
 
-  const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const accountsSection = useAccountsSection({
+    active: section === "accounts",
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
   const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
   const machinesSection = useMachinesSection({
     active: section === "machines",
@@ -338,7 +348,9 @@ export function Settings({
           ? usageSection
           : section === "machines"
             ? machinesSection
-            : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+            : section === "about"
+              ? { title: "About", back: toNav, body: <ProjectLink about />, foot: null }
+              : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
