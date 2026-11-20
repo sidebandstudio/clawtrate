@@ -273,7 +273,7 @@ it.each([
   expect(
     render(
       { kind: "not-checked" },
-      { lastAttempt: { kind, running, target: "2.0.0", from: "1.0.0", track: "stable" } },
+      { revision: 0, lastAttempt: { kind, running, target: "2.0.0", from: "1.0.0", track: "stable" } },
     ).html,
   ).toContain(line);
   expect(render({ kind: "not-checked" }).html).not.toContain(line);
@@ -296,4 +296,18 @@ it("F-231: an unsupported desktop system explains the absent installer without a
   );
   expect(row.html).toContain("This build has no installer for this system.");
   expect(row.actions).toEqual([]);
+});
+
+it("F-231: a previous attempt gives retry advice only on its idle startup track", () => {
+  const lastAttempt = { kind: "old-version-running", from: "1.0.0", running: "1.0.0", target: "1.1.0", track: "stable" } as const;
+  const startup = { revision: 0, lastAttempt };
+  const idle = {kind: "not-checked"} as const;
+  const advice = "Check for updates to try again.";
+  expect(render(idle,startup).html).toContain(advice);
+  for (const extra of [{revision: 1}, {selectedTrack: "nightly" as const}, {pendingTrack: "nightly" as const}])
+    expect(render(idle, {...startup,...extra}).html).not.toContain(advice);
+  for (const state of [
+    ...cases.filter(([state]) => state.kind !== "not-checked").map(([state]) => state),
+    ...(["preparing","handing-off","handed-to-system","handoff-unconfirmed"] as const).map(kind => ({kind, version:"1.1.0",offerId:"shown"})),
+  ]) expect(render(state,startup).html).not.toContain(advice);
 });

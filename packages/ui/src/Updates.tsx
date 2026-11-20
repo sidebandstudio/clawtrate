@@ -229,7 +229,11 @@ export function Updates({
   const confirm = capability && !pending && capability.offerId === confirmId;
   if (confirmId && !confirm) setConfirmId(null);
   const locked = handoffLocked(state);
-  const attempt = attemptLine(s.lastAttempt);
+  const attempt =
+    s.revision === 0 && !working && !pending && s.selectedTrack === s.lastAttempt?.track &&
+    (state.kind === "not-checked" || (state.kind === "failed" && state.reason === "invalid-version"))
+      ? attemptLine(s.lastAttempt)
+      : null;
   const saving = s.pendingTrack
     ? `Saving ${names[s.pendingTrack]} as the update track…`
     : pending
