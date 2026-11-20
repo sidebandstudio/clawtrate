@@ -33,6 +33,7 @@ import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
 import { Permissions, PermissionsRow } from "./Permissions.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
+import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -56,7 +57,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect" | "runs" | "permissions";
+type View = "main" | "account" | "change" | "connect" | "runs" | "permissions" | "memory";
 
 export function BotSettings({
   bot,
@@ -216,6 +217,23 @@ export function BotSettings({
     );
   }
 
+  if (view === "memory") {
+    return (
+      <div ref={rootRef} className="b-tab" data-testid="bot-settings">
+        <BotMemory
+          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${connection.gatewayId ?? ""}`}
+          botId={bot.id}
+          visible={visible}
+          name={name}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onBack={() => go("main", "[data-bs='memory']")}
+        />
+      </div>
+    );
+  }
+
   const runsOnRow = (
     <RunsOnRow
       botName={name}
@@ -258,6 +276,7 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
       </div>
@@ -400,6 +419,7 @@ export function BotSettings({
           visible={visible}
           onOpen={() => go("permissions")}
         />
+        <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
         {foot}
