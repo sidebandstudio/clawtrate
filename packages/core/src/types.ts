@@ -6,6 +6,7 @@ import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
 import type { SidebarState } from "./sidebar.ts";
+import { initialUsage, type UsageState } from "./usage.ts";
 
 export type ConnectionStatus =
   /** No gateway configured yet. */
@@ -98,6 +99,25 @@ export type ConnectionState = {
   connectedAt: number | null;
   /** True once this device holds a device token for the current gateway. */
   paired: boolean;
+  /**
+   * The ceilings a message and its files must fit, from the latest `hello-ok.policy`: each
+   * image within the smaller of 6 MiB and the gateway's image ceiling, each other file within
+   * the smaller of 20 MiB and its file ceiling, the encoded request within `maxPayload`. Null
+   * before the first hello.
+   */
+  sendLimits: SendLimits | null;
+};
+
+/** What one message may carry (`ConnectionState.sendLimits`). Sizes in bytes. */
+export type SendLimits = {
+  /** Each image's decoded size. */
+  imageBytes: number;
+  /** Each other file's decoded size. */
+  fileBytes: number;
+  /** The whole `chat.send` frame, its files base64-encoded. */
+  payloadBytes: number;
+  /** Files in one message. */
+  files: number;
 };
 
 export type Bot = {
@@ -190,7 +210,16 @@ export type ToolResult = {
 };
 
 export type TranscriptBlock =
-  | { kind: "text"; text: string }
+  | {
+      kind: "text";
+      text: string;
+      /**
+       * The gateway's id of the row this bubble's text came from (`__openclaw.id`), on a bot's
+       * turn: what a reaction, a reply or Copy message ID on this bubble names. A turn of several
+       * rows shows several bubbles, each with its own.
+       */
+      messageId?: string;
+    }
   | { kind: "reasoning"; text: string }
   | {
       kind: "tool-call";
@@ -216,8 +245,39 @@ export type TranscriptItem = {
    * read whole, is a prefix of what the gateway stored.
    */
   truncated?: boolean;
+  /**
+   * The gateway's id of the row whose text this item shows (`__openclaw.id`; for a bot's turn,
+   * its last row with text): what a reaction or a reply to it names. Absent when the row has none.
+   */
+  messageId?: string;
+  /**
+   * The message this user row replies to, as the gateway's history says (`__openclaw.replyToId`),
+   * with its preview of it. A bot's turn carries none here (see `replyReference` in `mapping.ts`).
+   */
+  replyTo?: ReplyReference;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
+};
+
+/** A reply's reference to the message it answers, as the gateway stores it (F-067). */
+export type ReplyReference = {
+  /** The gateway's id of the message replied to. */
+  id: string;
+  /**
+   * The gateway's preview of its text (`replyToPreview.text`, or else the message history
+   * attached, `replyToMessage.message`), or null.
+   */
+  text: string | null;
+  /** Who wrote it, as the gateway labels them (`replyToPreview.senderLabel`), or null. */
+  sender: string | null;
+};
+
+/** One emoji's reactions on a message, as the gateway counts them (F-283). */
+export type MessageReaction = {
+  emoji: string;
+  count: number;
+  /** True when this connection's own person is among those who reacted with it. */
+  mine: boolean;
 };
 
 /** One open task: its durable transcript plus its live runs and outgoing messages. */
@@ -256,6 +316,11 @@ export type Transcript = TaskActivity & {
    * Absent or null when the gateway has not said; nothing is inferred then.
    */
   workspaceRoot?: string | null;
+  /**
+   * The reactions on the messages this transcript shows, by the gateway's message id
+   * (`session.reactions.list`, then `session.reaction` events). Absent until read.
+   */
+  reactions?: Record<string, MessageReaction[]>;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
   /** Epoch ms of the latest successful history load. */
@@ -302,11 +367,22 @@ export type ClawtrateState = {
    */
   retention: { estimated: number; bound: number; near: boolean };
   /**
+   * The "Turn time limit" in minutes: a run this client started fails at it, and the client
+   * aborts it (F-100). Clawtrate's own wall-clock limit, kept by the host; 50 by default.
+   */
+  turnLimitMinutes?: number;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * Warning budgets as the gateway keeps them for this person, each one's count
+   * for its current period, and the limits providers report (`usage.ts`).
+   * Absent where a host does not read them.
+   */
+  usage?: UsageState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
@@ -373,6 +449,7 @@ export const initialConnectionState: ConnectionState = {
   retryAt: null,
   connectedAt: null,
   paired: false,
+  sendLimits: null,
 };
 
 export const initialDiscoveryState: DiscoveryState = {
@@ -393,4 +470,5 @@ export const initialState: ClawtrateState = {
   accounts: initialAccountsState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
+  usage: initialUsage,
 };

@@ -38,6 +38,7 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
   MAX_PENDING_SAVES,
@@ -138,9 +139,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * ID + MAX_RUN_TEXT_CHARS,
     row: "streamBaselines",
   },
-  // Raw payloads: their content is the table's budget; these are their keys.
+  // Raw payloads: their content is the table's budget; these are their keys. Each retained step
+  // and each retained run's failure has one, and one incoming entry before the table prunes.
   "raw.entries": {
-    max: T * MAX_STEPS_PER_TASK,
+    max: T * (MAX_STEPS_PER_TASK + MAX_RUN_LIST) + 1,
     each: 3 * ID + 1 + N,
     row: "rawPayloads",
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",
@@ -210,6 +212,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "creationWaiters.*": { max: MAX_ACCESS_WAITERS, each: 0, row: null },
   checkingSlots: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
+  // The scopes a device-access request keeps: those of the admin tier the connection held.
+  heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
@@ -262,6 +266,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "usage.ctx": "the client's own functions, handed to the usage engine",
+  "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -272,6 +278,8 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  usage: "UsageEngine",
+  machines: "MachinesEngine",
   waiting: "WaitingIndex",
 };
 
