@@ -198,8 +198,10 @@ function useHoldPlace(
     };
     // A change of content that moves the reading line without changing any size (a box above
     // growing as much as one below shrinks) is held too.
-    const contentChange = new MutationObserver(() => {
-      layoutChanged.current = true;
+    const contentChange = new MutationObserver((records) => {
+      // A text that changes in place (a ticking time) moves nothing unless it resizes, which the
+      // resize observer reports: only a change of structure or of an element's state can clamp.
+      if (records.some((record) => record.type !== "characterData")) layoutChanged.current = true;
       if (following.current) return;
       hold();
       record();
