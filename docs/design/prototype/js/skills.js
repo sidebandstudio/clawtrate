@@ -29,6 +29,8 @@
   const ANSWER = 300;
   const READ = 300;
   const later = (ms, f) => setTimeout(f, ms);
+  // Every request the prototype sends, as sent: what a check reads to see what a click captured.
+  const sent = [];
 
   // A revision is a hash of the whole SKILL.md and its files, as on the gateway (research section 3).
   const hash = (text) => {
@@ -119,7 +121,7 @@
   // Another device's save, on the gateway's side.
   function otherSave(id) {
     const s = gw(id);
-    s.body = s.body.replace("Pack water, a map and a warm layer.", "Pack water, a map, a warm layer and a head torch.");
+    s.body = s.body.includes("Pack water, a map and a warm layer.") ? s.body.replace("Pack water, a map and a warm layer.", "Pack water, a map, a warm layer and a head torch.") : `${s.body}\nAnother device added this line.`;
     s.rev = revOf(s);
     s.saved = "5:44 PM";
     s.history.push({ rev: s.rev, md: markdown(s) });
@@ -187,7 +189,7 @@
     page: p("skill") || null, // null, a skill's id, or "new"
     read: null, // the page's last read of the skill
     draft: null,
-    mode: { save: p("save"), remove: p("remove"), share: p("share"), task: p("taskw"), cfg: p("cfg"), card: p("cardw") },
+    mode: { save: p("save"), remove: p("remove"), share: p("share"), enable: p("enable"), task: p("taskw"), cfg: p("cfg"), card: p("cardw") },
     pending: null, // the word of a write waiting for its answer or its read: "Saving…"
     status: null, // what the last write's read showed
     compare: null, // {theirs}
@@ -376,7 +378,7 @@
       body += r.shared
         ? `<p class="b-hint">Shared on this gateway: eligible profiles here can see it in their libraries. Tasks that have it keep it when you stop sharing.</p>`
         : `<p class="b-hint" id="k-share-line">Sharing makes it available to eligible profiles on this gateway: it is listed in their libraries, and their new tasks can begin with it while it is included in defaults. Nothing leaves the gateway.</p>`;
-      body += `<p class="b-hint" id="k-share-saved"${dirty() ? "" : " hidden"}>${r.shared ? "Stop sharing acts on" : "Sharing acts on"} the saved revision ${rev(r.rev)}, not your unsaved edit.</p>`;
+      body += `<p class="b-hint" id="k-share-saved">Both change sharing for this skill. The request checks the saved revision shown here.<span id="k-share-draft">${dirty() ? " Your unsaved text stays here." : ""}</span></p>`;
     }
     if (!mine(s) && !canEdit(s) && canWrite()) body += `<p class="b-hint">Only the skill's owner or a Gateway administrator can change it.</p>`;
     const foot = !canWrite()
@@ -426,8 +428,8 @@
     const pr = problems(d);
     const save = $('[data-k="save"]', settings());
     if (save) save.disabled = !saveable() || Boolean(K.nameTaken && d.slug === K.nameTaken);
-    const shareLine = $("#k-share-saved", settings());
-    if (shareLine) shareLine.hidden = !dirty();
+    const shareDraft = $("#k-share-draft", settings());
+    if (shareDraft) shareDraft.textContent = dirty() ? " Your unsaved text stays here." : "";
     const set = (id, error, hint) => {
       const el = $(id, settings());
       if (!el) return;
@@ -648,57 +650,102 @@
     });
   }
 
-  // Sharing (section 8): on the saved revision; the result is what the next read shows.
-  function share() {
+  // Sharing (section 8) and the defaults switch (section 4.1). Each request carries the saved
+  // revision the page shows (expectedRevision); the gateway refuses it when the content has
+  // changed since. The receipt and each read are reported apart: "Shared" only when the
+  // gateway accepted it and both reads say so.
+  const teamRead = (id, mode) => {
+    // skills.library.list {scope: "team"}: is the skill among this gateway's shared skills?
+    const s = gw(id);
+    const listed = Boolean(s && !s.removed && s.shared);
+    return mode === "split" ? !listed : listed;
+  };
+  // A refusal for a stale base: the flag is left alone, the draft keeps its old base.
+  function refusedFlag(after, what) {
+    const kept = dirty();
+    if (kept) K.compare = { theirs: after };
+    else {
+      K.read = after;
+      K.draft = { slug: after.slug, description: after.description, body: after.body };
+    }
+    return `<p>The gateway refused this request because it read a different revision. Reading it again found revision ${rev(after.rev)}, ${what(after)}.${kept ? " Your unsaved text stays here." : ""}</p>`;
+  }
+  function flagWrite({ kind, value, words, done, pending }) {
     const r = K.read;
-    const action = r.shared ? "unshare" : "share";
-    const sub = { id: K.page, base: r.rev };
-    const mode = takeMode("share");
-    K.pending = action === "share" ? "Sharing…" : "Stopping sharing…";
+    const sub = { id: K.page, base: r.rev, action: kind, value };
+    sent.push({ method: "skills.library.mutate", skillId: sub.id, expectedRevision: sub.base, action: kind });
+    const mode = takeMode(kind === "share" || kind === "unshare" ? "share" : "enable");
+    K.pending = pending;
+    K.status = null;
     rerender();
-    announce(K.pending.replace("…", ""));
+    announce(pending.replace("…", ""));
     later(ANSWER, () => {
       const s = gw(sub.id);
-      s.shared = action === "share";
-      // share=raced: another device's opposite write lands just after; both are accepted.
-      if (mode === "raced") s.shared = !s.shared;
+      let answer;
+      if (s.rev !== sub.base) answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_CONFLICT", currentRevision: s.rev };
+      else {
+        s[sub.action === "share" || sub.action === "unshare" ? "shared" : "enabled"] = value;
+        // raced: another device's opposite write on the same revision lands just after; both are accepted.
+        if (mode === "raced") s[sub.action === "share" || sub.action === "unshare" ? "shared" : "enabled"] = !value;
+        answer = mode === "lost" ? null : { state: "published" };
+      }
       later(READ, () => {
         K.pending = null;
-        const after = read(sub.id);
-        const inTeam = after.shared;
-        K.read = { ...K.read, shared: after.shared, saved: after.saved };
-        if ((action === "share") === inTeam)
-          K.status = statusNote(
-            action === "share"
-              ? `<p>Shared. Reading again: the gateway lists revision ${rev(after.rev)} among this gateway's shared skills.</p>`
-              : `<p>Not shared. Reading again: the gateway no longer lists it among this gateway's shared skills. Tasks that already have it keep their revision.</p>`,
-          );
-        else
-          K.status = statusNote(
-            `<p>The gateway accepted ${action === "share" ? "sharing" : "stopping sharing"}, but reading again shows it ${inTeam ? "shared" : "not shared"}: another change landed after yours.</p>`,
-            "warn",
-          );
-        announce(inTeam ? "Shared on this gateway" : "Not shared");
-        rerender();
-        $('[data-k="share"]', settings())?.focus();
+        const after = mode === "readfail" ? { error: "UNAVAILABLE" } : read(sub.id);
+        const settle = (html, tone, said) => {
+          K.status = html ? statusNote(html, tone) : null;
+          announce(said);
+          rerender();
+          $(`[data-k="${kind === "share" || kind === "unshare" ? "share" : "enable"}"]`, settings())?.focus();
+        };
+        if (answer?.code === "SKILL_LIBRARY_CONFLICT" && after.rev) return settle(refusedFlag(after, words.state), "warn", "Not changed");
+        if (after.removed) return settle(`<p>Reading the skill again shows it was removed.</p>`, "danger", "Removed");
+        if (after.error) return settle(`<p>${answer ? "" : "The gateway did not answer this request. "}${words.readfail}</p><div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`, "warn", words.readfail);
+        const facts = words.facts(after, sub.id, mode);
+        K.read = { ...K.read, shared: after.shared, enabled: after.enabled, saved: after.saved };
+        if (facts.split) return settle(`<p>${answer ? "" : "The gateway did not answer this request. "}The two reads reported different sharing states. Read again.</p><div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`, "warn", "The two reads differ");
+        if (!answer) return settle(`<p>The gateway did not answer this request. ${facts.html}</p>`, "warn", "Couldn't tell whether it changed");
+        if (facts.value !== value) return settle(`<p>The gateway accepted the request. The skill is ${words.state(after)} as of the next read.</p>`, "warn", words.said(after));
+        settle(done(after, facts), "", words.said(after));
       });
     });
   }
-
+  const SHARE_WORDS = {
+    state: (a) => (a.shared ? "shared" : "not shared"),
+    said: (a) => (a.shared ? "Shared on this gateway" : "Not shared"),
+    readfail: "Couldn't read sharing again. The sharing status shown is from the earlier read.",
+    facts: (a, id, mode) => {
+      const listed = teamRead(id, mode);
+      return {
+        value: a.shared,
+        split: listed !== a.shared,
+        html: `Reading the skill again, it is ${a.shared ? `shared at revision ${rev(a.rev)}` : "not shared"}. The gateway's list of shared skills ${listed ? "includes" : "doesn't include"} it.`,
+      };
+    },
+  };
+  function share() {
+    const shared = K.read.shared;
+    flagWrite({
+      kind: shared ? "unshare" : "share",
+      value: !shared,
+      words: SHARE_WORDS,
+      pending: shared ? "Stopping sharing…" : "Sharing…",
+      done: (a, f) => `<p>${a.shared ? "Shared." : "Not shared."} ${f.html}${a.shared ? "" : " Tasks that already have it keep their revision."}</p>`,
+    });
+  }
   function toggleDefaults() {
-    const sub = { id: K.page, enabled: !K.read.enabled };
-    K.pending = "Saving…";
-    rerender();
-    later(ANSWER, () => {
-      gw(sub.id).enabled = sub.enabled;
-      later(READ, () => {
-        K.pending = null;
-        const after = read(sub.id);
-        K.read = { ...K.read, enabled: after.enabled, saved: after.saved };
-        rerender();
-        $('[data-k="enable"]', settings())?.focus();
-        announce(after.enabled ? "Included in defaults for new tasks" : "Not included in defaults");
-      });
+    const on = !K.read.enabled;
+    flagWrite({
+      kind: on ? "enable" : "disable",
+      value: on,
+      pending: "Saving…",
+      words: {
+        state: (a) => (a.enabled ? "included in defaults" : "not included in defaults"),
+        said: (a) => (a.enabled ? "Included in defaults for new tasks" : "Not included in defaults"),
+        readfail: "Couldn't read the skill again. The setting shown is from the earlier read.",
+        facts: (a) => ({ value: a.enabled, split: false, html: `Reading the skill again, it is ${a.enabled ? "included in defaults" : "not included in defaults"}.` }),
+      },
+      done: () => "",
     });
   }
 
@@ -1299,7 +1346,7 @@
     });
   }
 
-  window.skills = { G, K, pins, openPage, read };
+  window.skills = { G, K, pins, openPage, read, otherSave, sent };
   paintTask();
   paintCards();
   if (p("section") === "skills" && p("open") === "settings") rerender();

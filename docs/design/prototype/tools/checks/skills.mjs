@@ -63,6 +63,7 @@ process.on("uncaughtException", (e) => {
 // The library (section 3) ---------------------------------------------------------------------------
 let p = await open(LIB);
 let t = await dialog(p);
+let g;
 check("S3 Skills sits after Accounts in Settings", await p.evaluate(() => [...document.querySelectorAll(".b-nav-item")].map((n) => n.textContent.trim()).join(",") === "Gateway,Accounts,Skills,Integrations"));
 check("S3 R6 the lead claims nothing about a person's other devices", t.includes("Skills in your library on this gateway, and skills others share here. A library skill reaches a bot only in a task that has it.") && !t.includes("Every device"));
 check("S3 R6 an admin sees others' skills, unshared ones marked", (await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .b-group")].map((g) => g.textContent).join(","))) === "Your skills,Others' skills on this gateway" && (await text(p, '[data-k-skill="elsewhere"]')).includes("From Robin Park, not shared"));
@@ -130,10 +131,36 @@ await wait(p, 150);
 check("S4.1 R4 the switch waits for the read: pending, not moved, nothing announced", (await dialog(p)).includes("Saving…") && (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "true");
 await wait(p);
 check("S4.1 R3 then moves to the read's value, with its line", (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "false" && (await dialog(p)).includes("Tasks don't begin with it. It can still be attached to a task.") && (await gwRead(p, "trail")).enabled === false);
+check("S4.1 R4 the switch sent the saved revision it showed", (await p.evaluate(() => window.skills.sent.at(-1))).expectedRevision === (await gwRead(p, "trail")).rev);
 await p.click('[data-k="to-list"]');
 await wait(p, 150);
 check("S4 Back returns focus to the skill's row, now Not in defaults", (await p.evaluate(() => document.activeElement?.dataset.kSkill)) === "trail" && (await text(p, '[data-k-skill="trail"]')).includes("Not in defaults"));
 await p.close();
+
+// The switch after another device saved the skill: the request carries the old revision and is refused.
+p = await open(LIB + "&skill=trail");
+await p.evaluate(() => window.skills.otherSave("trail"));
+await p.click('[data-k="enable"]');
+await wait(p, 450);
+check("S4.1 R4 a stale switch: after the receipt and before the read, still pending, nothing said", (await dialog(p)).includes("Saving…") && !(await dialog(p)).includes("refused") && (await gwRead(p, "trail")).enabled === true);
+await wait(p);
+g = await gwRead(p, "trail");
+check(
+  "S4.1 R4 a stale switch: the flag untouched on the gateway, the refusal and the read's revision, no success",
+  g.enabled === true && (await dialog(p)).includes(`The gateway refused this request because it read a different revision. Reading it again found revision ${g.rev.slice(0, 12)}, included in defaults.`) && (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "true" && (await announced(p)) === "Not changed",
+);
+await p.close();
+for (const [mode, words] of [
+  ["raced", "The gateway accepted the request. The skill is included in defaults as of the next read."],
+  ["lost", "The gateway did not answer this request. Reading the skill again, it is not included in defaults."],
+  ["readfail", "Couldn't read the skill again. The setting shown is from the earlier read."],
+]) {
+  p = await open(LIB + "&skill=trail&enable=" + mode);
+  await p.click('[data-k="enable"]');
+  await wait(p);
+  check(`S4.1 R4 the switch, ${mode}: the receipt and the read apart, no plain success`, (await dialog(p)).includes(words) && (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === (mode === "lost" ? "false" : "true"), (await dialog(p)).slice(0, 300));
+  await p.close();
+}
 
 p = await open(LIB + "&skill=kitchen");
 t = await dialog(p);
@@ -147,7 +174,7 @@ check("S2 an address in a skill is text, never a link, and the page never asks f
 await typeInto(p, "#k-body", "Call the forecast service and say it in one line.");
 await p.click('[data-k="save"]');
 await wait(p);
-let g = await gwRead(p, "weather");
+g = await gwRead(p, "weather");
 check("F-361 S5 R1 a text-only save keeps every other frontmatter line on the gateway", g.extra.join("\n") === 'user-invocable: false\nmetadata: {"openclaw":{"requires":{"bins":["curl"],"env":["WEATHER_API_KEY"]}}}' && g.body === "Call the forecast service and say it in one line.");
 await p.close();
 p = await open(LIB + "&skill=kitchen");
@@ -416,12 +443,15 @@ check("F-363 S8 R6 not shared: what sharing does, for eligible profiles, nothing
 await p.click('[data-k="share"]');
 await wait(p, 100);
 check("S8 R4 pending: Sharing…, nothing shared yet on the page", (await dialog(p)).includes("Sharing…") && !(await dialog(p)).includes("Shared. Reading"));
+await wait(p, 350);
+check("S8 R4 after the receipt, before the read: still pending, nothing shared on the page", (await gwRead(p, "kitchen")).shared === true && (await dialog(p)).includes("Sharing…") && !(await dialog(p)).includes("Shared."));
 await wait(p);
 const kitchenRev = (await gwRead(p, "kitchen")).rev.slice(0, 12);
 check(
-  "F-363 S8 R6 shared: exactly what the read found, and no claim of who saw it",
-  (await text(p, ".k-status")) === `Shared. Reading again: the gateway lists revision ${kitchenRev} among this gateway's shared skills.` && !/\b(saw|seen|viewed|opened it)\b/i.test(await dialog(p)) && (await announced(p)) === "Shared on this gateway",
+  "F-363 S8 R6 shared: both reads, each as found, and no claim of who saw it",
+  (await text(p, ".k-status")) === `Shared. Reading the skill again, it is shared at revision ${kitchenRev}. The gateway's list of shared skills includes it.` && !/\b(saw|seen|viewed|opened it)\b/i.test(await dialog(p)) && (await announced(p)) === "Shared on this gateway",
 );
+check("F-363 S8 R4 Share sent the saved revision it showed", (await p.evaluate(() => window.skills.sent.at(-1))).expectedRevision === (await gwRead(p, "kitchen")).rev);
 check("F-363 S8 Stop sharing is offered, with what tasks keep", has(await dialog(p), "Stop sharing", "Tasks that have it keep it when you stop sharing."));
 await p.click('[data-k="to-list"]');
 await wait(p, 120);
@@ -429,17 +459,43 @@ check("F-363 S3 the row carries Shared", (await text(p, '[data-k-skill="kitchen"
 await p.click('[data-k-skill="kitchen"]');
 await p.click('[data-k="share"]');
 await wait(p);
-check("F-363 S8 Stop sharing, from the read", (await text(p, ".k-status")) === "Not shared. Reading again: the gateway no longer lists it among this gateway's shared skills. Tasks that already have it keep their revision.");
+check("F-363 S8 Stop sharing, from both reads", (await text(p, ".k-status")) === "Not shared. Reading the skill again, it is not shared. The gateway's list of shared skills doesn't include it. Tasks that already have it keep their revision.");
 await p.close();
 p = await open(LIB + "&skill=kitchen");
+check("S8 R4 on a clean page, the line says the request checks the saved revision", (await text(p, "#k-share-saved")) === "Both change sharing for this skill. The request checks the saved revision shown here.");
 await typeInto(p, "#k-desc", "Unsaved.");
-check("S8 R4 with unsaved text, the saved revision a share acts on is named", await p.evaluate(() => { const l = document.querySelector("#k-share-saved"); return Boolean(l) && !l.hidden && l.textContent.includes("Sharing acts on the saved revision") && l.textContent.includes("not your unsaved edit."); }));
+check("S8 R4 with unsaved text, it adds that the text stays", (await text(p, "#k-share-saved")) === "Both change sharing for this skill. The request checks the saved revision shown here. Your unsaved text stays here.");
 await p.close();
-p = await open(LIB + "&skill=kitchen&share=raced");
+// Share after another device saved the skill: the request carries the old revision and is refused.
+p = await open(LIB + "&skill=kitchen");
+await typeInto(p, "#k-desc", "Keep this as a draft.");
+await p.evaluate(() => window.skills.otherSave("kitchen"));
 await p.click('[data-k="share"]');
 await wait(p);
-check("S8 R6 opposite writes both accepted: the page says what the read shows", (await dialog(p)).includes("The gateway accepted sharing, but reading again shows it not shared: another change landed after yours."));
+g = await gwRead(p, "kitchen");
+t = await dialog(p);
+check(
+  "S8 R4 a stale Share: the flag untouched, the refusal and the read, the draft kept on its old base, no success",
+  g.shared === false &&
+    t.includes(`The gateway refused this request because it read a different revision. Reading it again found revision ${g.rev.slice(0, 12)}, not shared. Your unsaved text stays here.`) &&
+    !t.includes("Shared.") &&
+    (await p.evaluate(() => document.querySelector("#k-desc").value)) === "Keep this as a draft." &&
+    Boolean(await p.$("[data-k-theirs]")),
+);
 await p.close();
+for (const [mode, words] of [
+  ["raced", "The gateway accepted the request. The skill is not shared as of the next read."],
+  ["split", "The two reads reported different sharing states. Read again."],
+  ["readfail", "Couldn't read sharing again. The sharing status shown is from the earlier read."],
+  ["lost", "The gateway did not answer this request. Reading the skill again, it is shared at revision"],
+]) {
+  p = await open(LIB + "&skill=kitchen&share=" + mode);
+  await p.click('[data-k="share"]');
+  await wait(p);
+  t = await dialog(p);
+  check(`S8 R6 sharing, ${mode}: the receipt and each read apart, no plain success`, t.includes(words) && !t.includes("Shared. Reading"), t.slice(0, 300));
+  await p.close();
+}
 
 // Skills in a task (section 9) -----------------------------------------------------------------------
 p = await open(TASK);
