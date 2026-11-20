@@ -113,15 +113,30 @@ const MARK_ICONS: Record<Exclude<LineMark, null>, ReactNode> = {
   unread: <WarnIcon />,
 };
 
-export function Mark({ mark }: { mark: LineMark }) {
+/** Whether the gateway reports it isn't using the settings it has stored. */
+const notInUse = (view: BotPermissions) => view.settingsApplied === "no";
+const fromSettings = (mark: LineMark) => mark === "set" || mark === "gateway";
+
+/** Who holds a line. The gateway's stored settings it doesn't use yet hold nothing for sure. */
+function markWords(mark: Exclude<LineMark, null>, stored: boolean): string {
+  return stored && fromSettings(mark)
+    ? "Stored in the gateway's settings, not confirmed in use"
+    : MARK_WORDS[mark];
+}
+
+export function Mark({ mark, stored = false }: { mark: LineMark; stored?: boolean }) {
   if (!mark) return null;
   return (
     <span
       className="c-mark"
-      data-tone={mark === "not-now" || mark === "unread" ? "danger" : undefined}
+      data-tone={
+        mark === "not-now" || mark === "unread" || (stored && fromSettings(mark))
+          ? "danger"
+          : undefined
+      }
     >
       {MARK_ICONS[mark]}
-      {MARK_WORDS[mark]}
+      {markWords(mark, stored)}
     </span>
   );
 }
@@ -756,7 +771,7 @@ function LineRow({
 }) {
   const subs = subWords(line, view, name);
   const value = VALUE_WORDS[line.value];
-  const label = [line.words, value, ...subs, line.mark ? MARK_WORDS[line.mark] : ""]
+  const label = [line.words, value, ...subs, line.mark ? markWords(line.mark, notInUse(view)) : ""]
     .filter(Boolean)
     .join(", ");
   return (
@@ -776,7 +791,7 @@ function LineRow({
                 {text}
               </small>
             ))}
-            <Mark mark={line.mark} />
+            <Mark mark={line.mark} stored={notInUse(view)} />
           </span>
         </span>
         <span className="c-line-value">
@@ -812,6 +827,9 @@ const SAVED_WORDS: Record<PermissionChoice, string> = {
 };
 
 function sentence(line: PermissionLine, view: BotPermissions, name: string): string {
+  // Stored settings the gateway doesn't use yet are said as stored, never as in force.
+  if (notInUse(view) && fromSettings(line.mark) && line.kind !== "exec")
+    return `${name}'s stored settings say ${VALUE_WORDS[line.value]}. The gateway reports it isn't using its stored settings yet, so this may not be in force.`;
   const verb = line.words.charAt(0).toLowerCase() + line.words.slice(1);
   if (line.kind === "question")
     return `${name} asks its questions in the conversation, which already waits for you.`;
@@ -886,9 +904,11 @@ function effectiveWords(line: PermissionLine, view: BotPermissions, name: string
   if (line.kind === "exec")
     return "Not given as one verdict: the facts above are shown separately.";
   const subs = subWords(line, view, name);
-  return subs.length > 0
-    ? `${VALUE_WORDS[line.value]}: ${subs.join("; ")}`
-    : VALUE_WORDS[line.value];
+  const words =
+    subs.length > 0 ? `${VALUE_WORDS[line.value]}: ${subs.join("; ")}` : VALUE_WORDS[line.value];
+  return notInUse(view) && fromSettings(line.mark)
+    ? `${words}, by the stored settings; the gateway reports it isn't using them yet`
+    : words;
 }
 
 function LinePage({
@@ -1022,14 +1042,14 @@ function LinePage({
       exec ? (
         line.exec?.every ? (
           <>
-            Commands: {EXEC_WORDS[line.exec.every]} <Mark mark="set" />
+            Commands: {EXEC_WORDS[line.exec.every]} <Mark mark="set" stored={notInUse(view)} />
           </>
         ) : (
           "None"
         )
       ) : line.mark === "set" && line.value !== "allowed" ? (
         <>
-          {VALUE_WORDS[line.value]} <Mark mark="set" />
+          {VALUE_WORDS[line.value]} <Mark mark="set" stored={notInUse(view)} />
         </>
       ) : (
         "None"
@@ -1068,7 +1088,9 @@ function LinePage({
     ],
     [
       "Held by",
-      line.mark ? MARK_WORDS[line.mark] : "Nothing in the settings and rules Clawtrate reads",
+      line.mark
+        ? markWords(line.mark, notInUse(view))
+        : "Nothing in the settings and rules Clawtrate reads",
     ],
   ];
   return (

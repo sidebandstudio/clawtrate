@@ -148,6 +148,16 @@ const SCENES: Scene[] = [
       await expect(page.getByTestId("save-note")).toContainText(
         "Saved in the gateway's settings, and not confirmed in use: the gateway reports it isn't using the stored revision yet. This shows the stored settings.",
       );
+      // Stored settings the gateway doesn't use yet are never said as in force.
+      const lineView = page.getByTestId("permission-line");
+      await expect(page.getByTestId("choice-sentence")).toHaveText(
+        "Otto's stored settings say Never. The gateway reports it isn't using its stored settings yet, so this may not be in force.",
+      );
+      await expect(lineView).toContainText(
+        "Stored in the gateway's settings, not confirmed in use",
+      );
+      await expect(lineView).not.toContainText("The gateway enforces this");
+      await expect(lineView).not.toContainText("The gateway removes");
     },
   },
 ];
