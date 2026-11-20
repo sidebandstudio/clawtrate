@@ -339,6 +339,33 @@ it("gives same-version offers separate private destinations and removes the olde
   expect(readFileSync(join(fresh, readdirSync(fresh)[0]!))).toEqual(other.body);
 });
 
+it("accepts a download as soon as an observer sees the offer", async () => {
+  const prefs = store();
+  const saving = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  vi.spyOn(prefs, "set").mockImplementationOnce(async () => {
+    saving.resolve();
+    await finish.promise;
+  });
+  let download: Promise<DesktopUpdateReply> | undefined;
+  const service = await start({
+    store: prefs,
+    changed: ({ state }) => {
+      if (state.kind === "offered") download = service.download(state.offerId);
+    },
+  });
+  const check = service.check("stable", service.get().revision);
+  await saving.promise;
+  const stateWhileSaving = service.get().state.kind;
+  finish.resolve();
+  await check;
+  expect(await download).toMatchObject({
+    outcome: "accepted",
+    snapshot: { state: { kind: "verified" } },
+  });
+  expect(stateWhileSaving).toBe("checking");
+});
+
 it("marks the command busy before notifying a throwing observer", async () => {
   const replies: Promise<DesktopUpdateReply>[] = [];
   const service = await start({
