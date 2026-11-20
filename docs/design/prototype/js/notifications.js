@@ -518,8 +518,10 @@
       setStrip({ tone: "warn", text: "Clawtrate couldn't open that bot on this gateway." });
       return renderLayer();
     }
-    if (S.click === "gone") {
-      // Not in the rail, and the by-key read found nothing this connection may see.
+    // A connected click reads the task by its key, even when the rail lists it (the fixture's by-key
+    // answer: unlisted returns the session, gone returns null, refused fails).
+    const byKey = S.conn === "down" ? "cached" : S.click === "gone" ? "null" : S.click === "refused" ? "failed" : "session";
+    if (byKey === "null" || byKey === "failed") {
       S.sel = { bot: ev.bot, task: null };
       S.view = "detail";
       setStrip({ tone: "warn", text: "Clawtrate couldn't find that task on this gateway." });
@@ -537,7 +539,7 @@
       findTask(ev.task).t.wait = null;
       setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
     }
-    if (S.click === "offline") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
+    if (S.conn === "down") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
     if (ev.kind === "finished") findTask(ev.task).t.unread = false;
     render();
     requestAnimationFrame(() => {
@@ -554,7 +556,7 @@
     const el = $("#status-strip");
     el.hidden = !strip;
     $(".conversation").dataset.strip = String(Boolean(strip));
-    const down = S.conn === "down" || (S.click === "offline" && strip);
+    const down = S.conn === "down";
     $("#gateway-dot").dataset.status = down ? "reconnecting" : "connected";
     $("#gateway-state").textContent = down ? "Reconnecting…" : "Connected";
     if (!strip) return;
@@ -613,6 +615,7 @@
         (open
           ? `<ul class="task-list" aria-label="${b.name}'s tasks" data-testid="task-list">` +
             b.tasks
+              .filter((t) => !t.hidden)
               .map((t) => {
                 const current = S.sel.task === t.id;
                 const mark = t.wait ? glyph("waiting") : t.status === "failed" ? glyph("failed") : t.unread && !current ? '<span class="unread-dot" aria-hidden="true"></span>' : "";
@@ -642,7 +645,7 @@
   const UNCONFIRMED_LINE = `<p class="request-ended" data-testid="offline-line">Clawtrate couldn't confirm this request is still open. Its answers stay off until it can.</p>`;
   function offlineCard(html) {
     const card = S.pendingCards[S.sel.task];
-    const down = S.conn === "down" || S.click === "offline";
+    const down = S.conn === "down";
     if (!down && (!card || card.confirmed)) return html;
     const OFFLINE_LINE_NOW = down ? OFFLINE_LINE : UNCONFIRMED_LINE;
     return html
@@ -1214,7 +1217,7 @@
       `<button type="button" data-bar="wake">Wake after the end</button>` +
       `<button type="button" data-bar="drop">Drop connection</button>` +
       `<button type="button" data-bar="reconnect">Reconnect</button>` +
-      `<label>At the click <select data-bar="click">${opt("", "all well", S.click)}${opt("unlisted", "not in the rail, found", S.click)}${opt("gone", "not found", S.click)}${opt("botgone", "bot gone", S.click)}${opt("itemgone", "item gone", S.click)}${opt("offline", "connection down", S.click)}${opt("othergw", "another gateway", S.click)}${opt("stale", "no record", S.click)}</select></label>` +
+      `<label>At the click <select data-bar="click">${opt("", "all well", S.click)}${opt("unlisted", "not in the rail, found", S.click)}${opt("gone", "not found", S.click)}${opt("refused", "read refused", S.click)}${opt("botgone", "bot gone", S.click)}${opt("itemgone", "item gone", S.click)}${opt("offline", "connection down", S.click)}${opt("othergw", "another gateway", S.click)}${opt("stale", "no record", S.click)}</select></label>` +
       `<label>Owner <select data-bar="req">${opt("", "—", "")}${opt("granted", "approves", "")}${opt("denied", "denies", "")}${opt("expired", "lets it expire", "")}${opt("failed", "request fails", "")}</select></label>` +
       `<button type="button" data-bar="settings">Settings</button>` +
       `</span>`;
@@ -1371,7 +1374,11 @@
   renderLayer();
   // The prototype's bar is filled at DOMContentLoaded by prototype.js, whose listener comes first.
   document.addEventListener("DOMContentLoaded", bar);
+  // click=unlisted|gone|refused: the target task is not in the rail's list (a filtered or partial list).
+  if (["unlisted", "gone", "refused"].includes(S.click) && EVENTS[p("event")]?.task) findTask(EVENTS[p("event")].task).t.hidden = true;
   if (p("event")) fire(p("event"));
+  // click=offline: the notification is shown while connected, then the connection drops.
+  if (S.click === "offline") dropConnection();
   if (first === "settings") openSettings();
   if (first === "bot") {
     S.panel = true;

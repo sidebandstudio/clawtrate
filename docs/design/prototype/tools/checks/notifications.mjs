@@ -363,17 +363,44 @@ check("another gateway: the strip offers Your gateways", (await text(p, "#status
 await click(p, '#status-strip [data-n="gateways"]');
 check("Your gateways opens that Settings section", (await text(p, "#b-section-title")) === "Your gateways");
 await p.close();
-p = await open("event=finished&click=gone");
+for (const fixture of ["gone", "refused"]) {
+  p = await open(`event=finished&click=${fixture}`);
+  const before = (await text(p, ".bot-list")).includes("Weekly backup check");
+  await click(p, "[data-n-open]");
+  check(`fix 6: ${fixture}: the missing task is absent both before and after the click`, !before && !(await text(p, ".bot-list")).includes("Weekly backup check"));
+  check(`fix 6: ${fixture}: it says it couldn't find the task, opens no composer and selects no task`, (await text(p, "#status-strip")).includes("Clawtrate couldn't find that task on this gateway.") && (await p.evaluate(() => !document.querySelector(".composer-input") && !document.querySelector('.task[aria-current="true"]'))));
+  await p.close();
+}
+p = await open("event=finished&click=unlisted");
+const listedBefore = (await text(p, ".bot-list")).includes("Weekly backup check");
 await click(p, "[data-n-open]");
-check("a task that is gone: no composer and no task is selected", await p.evaluate(() => !document.querySelector(".composer-input") && !document.querySelector('.task[aria-current="true"]')));
-check("a task not found: the rail is not changed by the click", (await text(p, ".bot-list")).includes("Weekly backup check"));
+await p.waitForTimeout(150);
+check("fix 6: unlisted: absent from the rail before the click; the by-key read opens it at the reply", !listedBefore && (await focusedId(p)) === "n-target" && (await text(p, "#transcript")).includes("Yes. Last night's backup finished at 3:25 AM"));
 await p.close();
 
+// Fix 6: answers stay disabled through a real disconnect, until a reconnect lists that exact request.
+for (const ev of ["approval", "question"]) {
+  p = await open(`event=${ev}&chrome=1`);
+  await click(p, '[data-bar="drop"]');
+  await click(p, "[data-n-open]");
+  await p.waitForTimeout(150);
+  const sel = "#n-target button.button, #n-target button.option";
+  check(`fix 6: after the bar's Disconnect, the ${ev} card's answers exist and are disabled`, await p.evaluate((sel) => { const b = [...document.querySelectorAll(sel)]; return b.length > 0 && b.every((x) => x.disabled); }, sel));
+  await click(p, '[data-bar="reconnect"]');
+  check(`fix 6: a reconnect that lists that exact request enables them`, await p.evaluate((sel) => { const b = [...document.querySelectorAll(sel)]; return b.length > 0 && b.every((x) => !x.disabled); }, sel));
+  await p.close();
+}
+p = await open("event=approval&chrome=1&relist=omit");
+await click(p, '[data-bar="drop"]');
+await click(p, "[data-n-open]");
+await click(p, '[data-bar="reconnect"]');
+check("fix 6: a reconnect whose list omits the request leaves its answers disabled and says the item is missing", (await p.evaluate(() => [...document.querySelectorAll("#n-target button.button")].every((x) => x.disabled))) && (await text(p, "#status-strip")).includes("Clawtrate couldn't find that item in this task."));
+await p.close();
 for (const ev of ["approval", "question"]) {
   p = await open(`event=${ev}&click=offline`);
   await click(p, "[data-n-open]");
   await p.waitForTimeout(150);
-  check(`offline: the cached ${ev} card's answers are disabled`, await p.evaluate(() => [...document.querySelectorAll("#n-target button.button, #n-target button.option, #n-target input")].every((x) => x.disabled)));
+  check(`offline shortcut: the cached ${ev} card's answers are disabled`, await p.evaluate(() => [...document.querySelectorAll("#n-target button.button, #n-target button.option, #n-target input")].every((x) => x.disabled)));
   await p.close();
 }
 p = await open("event=finished");
