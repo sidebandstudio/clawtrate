@@ -46,17 +46,21 @@ export interface DesktopUpdateSnapshot {
   /** UTC ISO timestamp of the last completed feed read. */
   lastCheckedAt: string | null;
   state: DesktopUpdateState;
-  /** Only on a command reply refused because another action is in progress. */
-  commandRefusal?: "busy";
   install: { kind: "unavailable-in-this-build" };
+}
+
+export type DesktopUpdateOutcome = "accepted" | "busy" | "stale" | "invalid" | "superseded";
+export interface DesktopUpdateReply {
+  outcome: DesktopUpdateOutcome;
+  snapshot: DesktopUpdateSnapshot;
 }
 
 /** Exposed as bridge.desktopUpdates. Only check and download may start a request. */
 export interface DesktopUpdates {
   get(): Promise<DesktopUpdateSnapshot>;
   subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void): () => void;
-  check(): Promise<DesktopUpdateSnapshot>;
-  chooseTrack(track: UpdateTrack): Promise<DesktopUpdateSnapshot>;
+  check(): Promise<DesktopUpdateReply>;
+  chooseTrack(track: UpdateTrack): Promise<DesktopUpdateReply>;
   /** A stale or unknown identity leaves the current snapshot alone. */
-  download(offerId: string): Promise<DesktopUpdateSnapshot>;
+  download(offerId: string): Promise<DesktopUpdateReply>;
 }

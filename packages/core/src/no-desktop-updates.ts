@@ -12,10 +12,11 @@ async function unavailable(): Promise<DesktopUpdateSnapshot> {
   };
 }
 
+const refuse = async () => ({outcome: "invalid" as const, snapshot: await unavailable()});
 export const noDesktopUpdates: DesktopUpdates = {
   get: unavailable,
-  check: unavailable,
-  chooseTrack: unavailable,
-  download: unavailable,
+  check: refuse,
+  chooseTrack: refuse,
+  download: refuse,
   subscribe: () => () => {},
 };

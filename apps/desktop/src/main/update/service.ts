@@ -1,5 +1,7 @@
 import type {
   DesktopUpdateSnapshot,
+  DesktopUpdateOutcome,
+  DesktopUpdateReply,
   DesktopUpdateState,
   DesktopUpdateFailure,
   KeyValueStore,
@@ -88,14 +90,18 @@ export class DesktopUpdateService {
     }
   }
 
-  async chooseTrack(track: unknown): Promise<DesktopUpdateSnapshot> {
+  private reply(outcome: DesktopUpdateOutcome): DesktopUpdateReply {
+    return {outcome, snapshot: this.snapshot};
+  }
+
+  async chooseTrack(track: unknown): Promise<DesktopUpdateReply> {
+    if (this.switching) return this.reply("busy");
     if (
-      this.switching ||
-      track === this.snapshot.selectedTrack ||
       (track !== "stable" && track !== "nightly") ||
       !this.snapshot.tracks.some((t) => t.track === track)
     )
-      return this.snapshot;
+      return this.reply("invalid");
+    if (track === this.snapshot.selectedTrack) return this.reply("accepted");
     this.switching = true;
     try {
       await this.options.store.set("selectedTrack", track);
@@ -113,15 +119,15 @@ export class DesktopUpdateService {
     } finally {
       this.switching = false;
     }
-    return this.snapshot;
+    return this.reply("accepted");
   }
 
   private clearDownloads() {
     return clearUpdateDirectory(this.options.downloadDir);
   }
 
-  async check(): Promise<DesktopUpdateSnapshot> {
-    if (this.switching || this.work) return { ...this.snapshot, commandRefusal: "busy" };
+  async check(): Promise<DesktopUpdateReply> {
+    if (this.switching || this.work) return this.reply("busy");
     const { runningVersion, selectedTrack } = this.snapshot;
     if (!this.options.packaged) this.publish(failed("development-build"));
     else if (!runningVersion || !selectedTrack) this.publish(failed("invalid-version"));
@@ -192,17 +198,19 @@ export class DesktopUpdateService {
         });
       this.publish({ kind: "checking" });
       await this.work;
+      if (this.engine !== engine) return this.reply("superseded");
     }
-    return this.snapshot;
+    return this.reply("accepted");
   }
 
-  async download(id: unknown): Promise<DesktopUpdateSnapshot> {
+  async download(id: unknown): Promise<DesktopUpdateReply> {
     const { state } = this.snapshot;
     const engine = this.engine;
-    if (this.switching || this.work) return { ...this.snapshot, commandRefusal: "busy" };
-    if (!engine || state.kind !== "offered" || state.offerId !== id) return this.snapshot;
+    if (this.switching || this.work) return this.reply("busy");
+    if (typeof id !== "string" || !id) return this.reply("invalid");
+    if (!engine || state.kind !== "offered" || state.offerId !== id) return this.reply("stale");
     const expected = engine.offeredBytes;
-    if (expected === null) return this.snapshot;
+    if (expected === null) return this.reply("stale");
     const reportFailure = (reason: DesktopUpdateFailure) => {
       this.publish({
         kind: "failed",
@@ -231,6 +239,6 @@ export class DesktopUpdateService {
       });
     this.publish({ kind: "downloading", version: state.version, received: 0, expected });
     await this.work;
-    return this.snapshot;
+    return this.reply(this.engine === engine ? "accepted" : "superseded");
   }
 }

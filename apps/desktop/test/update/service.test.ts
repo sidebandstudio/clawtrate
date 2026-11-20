@@ -1,4 +1,4 @@
-import type { DesktopUpdateSnapshot } from "@clawtrate/core";
+import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createFileStore } from "@clawtrate/core/node";
 import { symlinkSync, statSync, readFileSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
@@ -51,7 +51,7 @@ const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[
     ...overrides,
   });
 async function offer(service: DesktopUpdateService) {
-  const { state } = await service.check();
+  const {snapshot:{ state }} = await service.check();
   if (state.kind !== "offered") throw Error(JSON.stringify(state));
   return state.offerId;
 }
@@ -69,7 +69,7 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   await service.chooseTrack("nightly");
   expect(server.requests).toEqual([]);
   const id = await offer(service);
-  expect(await service.download(id)).toMatchObject({
+  expect((await service.download(id)).snapshot).toMatchObject({
     state: { kind: "verified", version: nightly, size: fixture.body.length },
   });
   expect(readdirSync(updates)).toHaveLength(1);
@@ -115,8 +115,8 @@ it.each(["check", "download"] as const)(
     const pending = stage === "check" ? service.check() : service.download(id);
     await entered.promise;
     const replies = await Promise.all([service.check(), service.download(id)]);
-    expect(replies.map((r) => r.commandRefusal)).toEqual(["busy", "busy"]);
-    expect(service.get().commandRefusal).toBeUndefined();
+    expect(replies.map((r) => r.outcome)).toEqual(["busy", "busy"]);
+    expect(service.get()).not.toHaveProperty("outcome");
     await service.chooseTrack("nightly");
     resume.resolve();
     await pending;
@@ -133,13 +133,13 @@ it.each(["check", "download"] as const)(
 it("refuses a feed for another track and records only completed reads", async () => {
   const service = await start();
   server.route("/stable", (_req, res) => res.destroy());
-  expect((await service.check()).lastCheckedAt).toBeNull();
+  expect((await service.check()).snapshot.lastCheckedAt).toBeNull();
   for (const [version, track] of [
     [nightly, "nightly"],
     [nightly, "stable"],
   ] as const) {
     server.route("/stable", json(document(version, track)));
-    expect(await service.check()).toMatchObject({
+    expect((await service.check()).snapshot).toMatchObject({
       lastCheckedAt: expect.stringMatching(/Z$/),
       state: { kind: "failed", reason: "wrong-track" },
     });
@@ -149,7 +149,7 @@ it("keeps the previous track when saving fails and checks it next", async () => 
   const prefs = store();
   vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("disk full"));
   const service = await start({ store: prefs });
-  expect(await service.chooseTrack("nightly")).toMatchObject({
+  expect((await service.chooseTrack("nightly")).snapshot).toMatchObject({
     selectedTrack: "stable",
     state: { kind: "failed", stage: "preferences", reason: "write-failed" },
   });
@@ -161,7 +161,7 @@ it("reports the running version when the selected track offers an older build", 
   const service = await start({ version: "2.0.0-nightly.20261102.1" });
   expect(service.get().selectedTrack).toBe("nightly");
   await service.chooseTrack("stable");
-  expect(await service.check()).toMatchObject({
+  expect((await service.check()).snapshot).toMatchObject({
     runningVersion: "2.0.0-nightly.20261102.1",
     state: { kind: "nothing-newer" },
   });
@@ -169,11 +169,11 @@ it("reports the running version when the selected track offers an older build", 
 it("describes a single source, development copies and invalid running versions", async () => {
   const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
   expect(single.get().tracks).toHaveLength(1);
-  expect((await single.chooseTrack("nightly")).selectedTrack).toBe("stable");
-  expect((await (await start({ packaged: false })).check()).state).toMatchObject({
+  expect((await single.chooseTrack("nightly")).snapshot.selectedTrack).toBe("stable");
+  expect((await (await start({ packaged: false })).check()).snapshot.state).toMatchObject({
     reason: "development-build",
   });
-  expect(await (await start({ version: "bad" })).check()).toMatchObject({
+  expect((await (await start({ version: "bad" })).check()).snapshot).toMatchObject({
     runningTrack: null,
     runningVersion: null,
     state: { reason: "invalid-version" },
@@ -221,7 +221,7 @@ it("a failed file-store write cannot slip into a later successful save", async (
   const path = join(dir.path, "preferences.json");
   renameSync(path, path + ".saved");
   mkdirSync(path);
-  expect(await service.chooseTrack("stable")).toMatchObject({
+  expect((await service.chooseTrack("stable")).snapshot).toMatchObject({
     selectedTrack: "nightly",
     state: { reason: "write-failed" },
   });
@@ -239,7 +239,7 @@ it("checks ancestry before cleanup and refuses a linked destination before openi
   const service = await start();
   const id = await offer(service);
   symlinkSync(outside, updates, "junction");
-  expect(await service.download(id)).toMatchObject({
+  expect((await service.download(id)).snapshot).toMatchObject({
     state: {
       kind: "failed",
       reason: "write-failed",
@@ -269,7 +269,7 @@ it("gives same-version offers separate private destinations and removes the olde
   server.route("/files/app.zip", bytes(other.body));
   const second = await offer(service);
   expect(second).not.toBe(first);
-  expect((await service.download(first)).state).toMatchObject({ kind: "offered", offerId: second });
+  expect((await service.download(first)).snapshot.state).toMatchObject({ kind: "offered", offerId: second });
   expect(server.requests).toEqual(["/stable", "/files/app.zip", "/stable"]);
   expect(existsSync(old)).toBe(false);
   await service.download(second);
@@ -278,7 +278,7 @@ it("gives same-version offers separate private destinations and removes the olde
 });
 
 it("marks the command busy before notifying a throwing observer", async () => {
-  const replies: Promise<DesktopUpdateSnapshot>[] = [];
+  const replies: Promise<DesktopUpdateReply>[] = [];
   const service = await start({
     changed: (s) => {
       if (s.state.kind === "checking") replies.push(service.download("stale"));
@@ -287,9 +287,9 @@ it("marks the command busy before notifying a throwing observer", async () => {
     },
   });
   const id = await offer(service);
-  expect(await service.download(id)).toMatchObject({ state: { kind: "verified" } });
+  expect((await service.download(id)).snapshot).toMatchObject({ state: { kind: "verified" } });
   expect(replies.length).toBeGreaterThan(1);
-  for (const reply of await Promise.all(replies)) expect(reply.commandRefusal).toBe("busy");
+  for (const reply of await Promise.all(replies)) expect(reply.outcome).toBe("busy");
   expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
 });
 
