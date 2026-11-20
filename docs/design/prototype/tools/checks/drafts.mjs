@@ -680,6 +680,21 @@ const afterHost = await saveMatchesField();
 check("secret: Save is enabled only while the field has a value, after Escape, Raw and a host change", afterEscape && afterRaw && afterHost, JSON.stringify({ afterEscape, afterRaw, afterHost }));
 await p.close();
 
+// A run that ends while an edit is under way stays ended: no later step reopens the draft.
+for (const [when, wait] of [
+  ["while the edit is being given", 0],
+  ["while waiting for the second hold", 1100],
+]) {
+  p = await open("view=draft", { chrome: "1" });
+  await click(p, '[data-d="edit"]');
+  await click(p, '[data-d="edit-send"]');
+  await p.waitForTimeout(wait);
+  await click(p, '[data-proto-event="close"]');
+  await p.waitForTimeout(1800);
+  check(`a run that ends ${when} stays ended`, (await text(p)).includes("Otto's run ended. Couldn't confirm whether this was sent.") && (await p.locator('[data-d="send"], [data-d="edit-send"]').count()) === 0);
+  await p.close();
+}
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);

@@ -871,7 +871,7 @@
 
   function secondHold() {
     go({ d: "editwaiting" });
-    later(() => go({ d: "edited" }, "The gateway asks again, for the edited version"), 500);
+    later(() => S.d === "editwaiting" && go({ d: "edited" }, "The gateway asks again, for the edited version"), 500);
   }
 
   function decide(which) {
@@ -879,7 +879,10 @@
     if (S.d === "sending" || S.d === "editsaving") return;
     S.last = which;
     go({ d: "sending" });
+    // Each step the gateway takes later applies only to the card it left: an event in between (the run ending,
+    // a restart) has the last word.
     later(() => {
+      if (S.d !== "sending") return;
       const a = S.answer;
       if (a === "refused") return go({ d: "refused" }, "The gateway refused this decision");
       if (a === "already") return go({ d: "already" }, "Already answered on another device");
@@ -985,12 +988,14 @@
         S.typed = readTyped();
         go({ d: "editsaving" });
         return later(() => {
+          if (S.d !== "editsaving") return;
           if (S.answer === "already") return go({ d: "editfailed" }, "Your edit wasn't taken");
           if (S.answer === "refused" || S.answer === "noanswer") return go({ d: "editunconfirmed" }, "Couldn't confirm the edit");
           S.editGiven = true;
           S.last = "send";
           go({ d: "sending" }, "Edit taken");
           later(() => {
+            if (S.d !== "sending") return;
             if (S.file === "changed") return go({ d: "filechanged" }, "Not sent");
             S.edited = true;
             secondHold();
