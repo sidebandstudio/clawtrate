@@ -86,9 +86,13 @@ const stageWithElectron: Stage = async (url, signal, handed) => {
     // Electron can report an asynchronous native error after the local deadline.
     autoUpdater.on("error", () => {});
     try {
-      handed();
       signal.throwIfAborted();
-      autoUpdater.checkForUpdates();
+      try {
+        autoUpdater.checkForUpdates();
+      } finally {
+        // From this call onward, even an error cannot recall the native handoff.
+        handed();
+      }
     } catch (error) {
       finish(() => reject(error));
     }
