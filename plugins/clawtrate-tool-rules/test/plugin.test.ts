@@ -588,7 +588,7 @@ describe("what a bot must be denied", () => {
       },
     });
     expect(h.warnings).toEqual([
-      "clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store, so Clawtrate's rules are advice for it. Deny it exec and process. Or run its commands on another machine (tools.exec.host \"node\"). Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot (tools.elevated.enabled false in agents.entries.otto).",
+      "clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store, so Clawtrate's rules are advice for it. Deny it exec and process. Or run its commands on another machine (tools.exec.host \"node\" in agents.entries.otto, which a global setting does not override). Or use a sandbox for its commands, clear any gateway-host override in its sessions and any tools.exec.host \"gateway\" in agents.entries.otto or globally, and disable elevated exec for the bot (tools.elevated.enabled false in agents.entries.otto).",
     ]);
   });
 });

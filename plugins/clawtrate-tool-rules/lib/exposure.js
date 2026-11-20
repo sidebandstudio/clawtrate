@@ -198,7 +198,7 @@ const REMEDY = {
   "commands-on-gateway-host":
     // `entry` names the bot's own settings, where `exposures` reads them.
     (entry) =>
-      `Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"). Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot (tools.elevated.enabled false in ${entry}).`,
+      `Deny it exec and process. Or run its commands on another machine (tools.exec.host "node" in ${entry}, which a global setting does not override). Or use a sandbox for its commands, clear any gateway-host override in its sessions and any tools.exec.host "gateway" in ${entry} or globally, and disable elevated exec for the bot (tools.elevated.enabled false in ${entry}).`,
   "files-outside-workspace":
     "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
   "store-in-workspace":

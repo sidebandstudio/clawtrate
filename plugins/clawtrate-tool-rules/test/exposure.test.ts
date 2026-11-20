@@ -234,10 +234,24 @@ describe("the remedy for commands on the gateway's host", () => {
   it("keeps denying the tools apart, and says a sandbox needs the bot's elevated exec off and no gateway-host override", () => {
     const [line] = exposureWarnings(withAgent(SAFE, { tools: { exec: { mode: "ask" } } }));
     expect(line).toMatch(/Deny it exec and process\./);
-    expect(line).toContain(
-      "Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot",
-    );
+    expect(line).toContain("Or use a sandbox for its commands, clear any gateway-host override");
+    expect(line).toContain("and disable elevated exec for the bot");
     expect(line).toContain("tools.elevated.enabled false in agents.entries.otto");
+  });
+
+  it("tells a bot that names the gateway's host itself to change that, as a global setting does not override it", () => {
+    const config = withAgent(
+      { ...SAFE, tools: { ...SAFE.tools, exec: { mode: "ask", host: "node" } } },
+      { tools: { exec: { host: "gateway" } }, sandbox: { mode: "all" } },
+    );
+    const [line] = exposureWarnings(config);
+    // Following each remedy as written clears the warning.
+    expect(line).toContain('tools.exec.host "node" in agents.entries.otto');
+    expect(line).toContain('any tools.exec.host "gateway" in agents.entries.otto or globally');
+    const fixed = (host: string) =>
+      exposures(withAgent(config, { tools: { exec: { host } }, sandbox: { mode: "all" } }));
+    expect(fixed("node")).toEqual([]);
+    expect(exposures(withAgent(config, { sandbox: { mode: "all" } }))).toEqual([]);
   });
 
   it("names the agents.list entry for a bot listed there, which is what the check reads", () => {
