@@ -94,6 +94,10 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/computer.ts:readTabs>tabs":
     "one answer; the tabs it lists, cut to `MAX_COMPUTER_TABS` before they are kept in the pane",
+  "packages/core/src/computer.ts:stopTask>sent.runIds":
+    "the empty list while the stop is sent; the answer replaces it, never grows it",
+  "packages/core/src/computer.ts:stopTask>stop.runIds":
+    "one answer; the runs it names, cut to `MAX_STOPPED_RUNS` before they are kept in the pane",
   "packages/core/src/routines.ts:initialRoutinesState.routines":
     "the empty list before the first read; the state replaces it, never grows it",
   "packages/core/src/accounts.ts:initialAccountsState.accounts":
