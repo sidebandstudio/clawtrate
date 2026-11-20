@@ -229,12 +229,11 @@ describe("a deleted session nobody had open", () => {
 describe("a recipient's task let go while its sender's task is open", () => {
   const PEER = "agent:marlow:main";
 
-  it("F-122: keeps following the recipient's run, so the sender's card sees it wait and end", async () => {
+  it("F-122: follows a recipient after leaving its task when only the session row reports its end", async () => {
     const gateway = grantingGateway();
+    let history: unknown = { messages: [], inFlightRun: { runId: "peer-r" } };
     gateway.handlers["chat.history"] = (params) =>
-      (params as { sessionKey: string }).sessionKey === PEER
-        ? { messages: [], inFlightRun: { runId: "peer-r" } }
-        : { messages: [] };
+      (params as { sessionKey: string }).sessionKey === PEER ? history : { messages: [] };
     const { client, transcript } = await openTask({ gateway });
     gateway.emit(
       "agent",
@@ -273,7 +272,17 @@ describe("a recipient's task let go while its sender's task is open", () => {
     gateway.emit("agent", agentEvent("sender-r", 3, "lifecycle", { phase: "end" }));
     await until(() => transcript().runs[0]?.state === "completed");
     expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
-    gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
+    history = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Lake loop it is." }],
+          stopReason: "stop",
+          __openclaw: { id: "p1", runId: "peer-r" },
+        },
+      ],
+    };
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
     await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
     client.stop();
   });
