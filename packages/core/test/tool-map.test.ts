@@ -2,10 +2,10 @@
 // tool (`tools.effective`), kept per task: evidence of a call's tool before its
 // result, read when the task opens and again when the gateway reports its
 // plugins changed.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { builtinToolNames, mcpToolMap } from "../src/cards.ts";
 import { MAX_BUILTIN_TOOLS, MAX_MCP_TOOLS } from "../src/state-bounds.ts";
-import { KEY, openTask } from "./client-harness.ts";
+import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, until } from "./fake-gateway.ts";
 
 const entry = (id: string, server: string, tool: string, extra: Record<string, unknown> = {}) => ({
@@ -95,6 +95,95 @@ describe("the tool map from tools.effective", () => {
     }
   });
 
+  it("tries a failed first read again, so a task opened while the gateway was busy still gets its map", async () => {
+    let failures = 1;
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["tools.effective"] = () => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      }
+      return answer([entry("coder__slow_task", "coder", "slow_task")]);
+    };
+    try {
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      // Without the map, history's tool-server call would read as a general card until the
+      // gateway's plugins changed: the read is tried again a little later.
+      await until(() => "coder__slow_task" in (transcript()?.mcpTools ?? {}), 5_000);
+      expect(transcript().mcpTools).toEqual({
+        coder__slow_task: { server: "coder", tool: "slow_task" },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("drops a retry whose task was released and opened again while it waited: the new opening reads for itself, one read at a time", async () => {
+    // A gateway that grants access: closing the task lets it go, and opening reads it anew.
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () =>
+      answer([entry("coder__slow_task", "coder", "slow_task")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "coder__slow_task" in (transcript()?.mcpTools ?? {}));
+    let requests = 0;
+    const pending: Array<(value: unknown) => void> = [];
+    gateway.handlers["tools.effective"] = () => {
+      requests += 1;
+      if (requests === 1) throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      return new Promise((resolve) => pending.push(resolve));
+    };
+    try {
+      gateway.emit("plugins.changed", {});
+      await until(() => requests === 1);
+      // Released and opened again while the retry waits: the opening reads once, and the old
+      // retry, a second later, does not read again beside it.
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => requests === 2);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_300));
+      expect(requests).toBe(2);
+    } finally {
+      for (const resolve of pending) resolve(answer([]));
+      client.stop();
+    }
+  });
+
+  it("a read that succeeds after its retries gives the read queued behind it a fresh retry budget", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () => answer([entry("first__tool", "first", "tool")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "first__tool" in (transcript()?.mcpTools ?? {}));
+    // The retries' delays (1, 2 and 3 s), shortened; every other timer as it is.
+    const real = globalThis.setTimeout;
+    const scheduled = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((fn: () => void, ms?: number) =>
+        real(fn, ms === 1_000 || ms === 2_000 || ms === 3_000 ? 5 : ms)) as typeof setTimeout);
+    let calls = 0;
+    gateway.handlers["tools.effective"] = () => {
+      calls += 1;
+      // Three failures, then a success while a change has queued another read; that read fails
+      // once, then succeeds.
+      if (calls <= 3 || calls === 5)
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      if (calls === 4) {
+        gateway.emit("plugins.changed", {});
+        return answer([entry("second__tool", "second", "tool")]);
+      }
+      return answer([entry("third__tool", "third", "tool")]);
+    };
+    try {
+      gateway.emit("plugins.changed", {});
+      await until(() => calls >= 5);
+      await until(() => "third__tool" in (transcript()?.mcpTools ?? {}), 2_000);
+      expect(calls).toBe(6);
+    } finally {
+      scheduled.mockRestore();
+      client.stop();
+    }
+  });
+
   it("reads a task's map one read at a time, so the map after a change is the one kept", async () => {
     const answers: Array<(value: unknown) => void> = [];
     const { client, gateway, transcript } = await openTask();
@@ -135,6 +224,87 @@ describe("the tool map from tools.effective", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(transcript()?.mcpTools ?? {}).toEqual({});
     } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("a released task's map reads", () => {
+  it("an outstanding map read is the only read for the same task across release and reopening", async () => {
+    const gateway = grantingGateway();
+    const pending: Array<(value: unknown) => void> = [];
+    gateway.handlers["tools.effective"] = () =>
+      new Promise<unknown>((resolve) => pending.push(resolve));
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => pending.length === 1);
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.status === "ready");
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect.soft(pending.length).toBe(1);
+      // Every map the reopened task is given, from the old answer on.
+      const seen: string[] = [];
+      const stop = client.store.subscribe((state) =>
+        seen.push(Object.keys(state.transcripts[KEY]?.mcpTools ?? {}).join(",")),
+      );
+      pending[0]!(answer([entry("old__tool", "old", "tool")]));
+      await until(() => pending.length === 2);
+      pending[1]!(answer([entry("new__tool", "new", "tool")]));
+      await until(() => "new__tool" in (transcript()?.mcpTools ?? {}));
+      stop();
+      expect(transcript()?.mcpTools).toEqual({ new__tool: { server: "new", tool: "tool" } });
+      expect(seen.some((names) => names.includes("old__tool"))).toBe(false);
+    } finally {
+      for (const resolve of pending) resolve(answer([]));
+      client.stop();
+    }
+  });
+
+  it("a release clears the actual timeout of a delayed tool-map retry", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () => answer([entry("old__tool", "old", "tool")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "old__tool" in (transcript()?.mcpTools ?? {}));
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      gateway.handlers["tools.effective"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      gateway.emit("plugins.changed", {});
+      await until(() => scheduled.mock.calls.some(([, ms]) => ms === 1000));
+      const index = scheduled.mock.calls.findIndex(([, ms]) => ms === 1000);
+      const retryTimer = scheduled.mock.results[index]!.value;
+      client.closeSession(KEY);
+      expect(cleared).toHaveBeenCalledWith(retryTimer);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
+      client.stop();
+    }
+  });
+
+  it("a closed connection clears a delayed tool-map retry, so it asks nothing of the connection that is gone", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () => answer([entry("old__tool", "old", "tool")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "old__tool" in (transcript()?.mcpTools ?? {}));
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      gateway.handlers["tools.effective"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      gateway.emit("plugins.changed", {});
+      await until(() => scheduled.mock.calls.some(([, ms]) => ms === 1000));
+      const index = scheduled.mock.calls.findIndex(([, ms]) => ms === 1000);
+      const retryTimer = scheduled.mock.results[index]!.value;
+      client.stop();
+      expect(cleared).toHaveBeenCalledWith(retryTimer);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
       client.stop();
     }
   });

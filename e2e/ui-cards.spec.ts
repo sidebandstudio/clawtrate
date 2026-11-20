@@ -864,8 +864,8 @@ test.describe("tool-server calls on a real gateway", () => {
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     expect(map["coder__send_message"]).toEqual({ server: "coder", tool: "send_message" });
     expect(map["coder__run_checks"]).toEqual({ server: "coder", tool: "run_checks" });
-    // Built-in tools are not tool-server tools.
-    expect(Object.keys(map).every((name) => name.startsWith("coder__"))).toBe(true);
+    // Built-in tools are not tool-server tools: every entry is one of the two stand-ins'.
+    expect(Object.keys(map).every((name) => /^(coder|t3code)__/.test(name))).toBe(true);
   });
 
   test("F-314: an error result is an ordinary failed step", async () => {
@@ -936,5 +936,408 @@ test.describe("cards read again from history", () => {
       await expect(card(fresh, "question-card")).toHaveCount(0);
     }
     await fresh.context().close();
+  });
+});
+
+test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code stand-in", () => {
+  /** A run of Juniper's that calls the stand-in, sent by a test client into a task of its own. */
+  const called = async (slug: string, directive: string) => {
+    const t = await clientTask("main", slug);
+    const run = await clients.plain.send(t.key, directive);
+    return { ...t, runId: String(run.runId) };
+  };
+  /**
+   * A run of Juniper's started by the host's own device, in a task of its own: its results reach
+   * the host live, with the tool server and tool that made them. A run another client starts
+   * reaches the host only through history, which keeps neither (11.4), so its calls are cards
+   * of their own once they end.
+   */
+  const hosted = async (slug: string, directive: string) => {
+    const { title, key } = await hostTask("main", slug, directive);
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const first = await clients.plain.waitFor(
+      `${slug}'s first call`,
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { kind?: string } };
+        return p.sessionKey === key && p.stream === "item" && p.data?.kind === "tool";
+      },
+      60_000,
+    );
+    return { title, key, runId: String((first.payload as { runId: string }).runId) };
+  };
+  /** A call's item start, which every client following the session receives. */
+  const itemStart = (runId: string, tool: string) =>
+    clients.plain.waitFor(
+      `${tool} start in ${runId}`,
+      (e) => {
+        const p = e.payload as { runId?: string; stream?: string; data?: { name?: string } };
+        return p.runId === runId && p.stream === "item" && p.data?.name === `t3code__${tool}`;
+      },
+      60_000,
+    );
+  /** The run's tool events on the test client, by phase and tool. */
+  const toolEvent = (runId: string, phase: string, tool: string) =>
+    clients.plain.waitFor(
+      `${tool} ${phase} in ${runId}`,
+      (e) => {
+        const p = e.payload as { runId?: string; stream?: string; data?: Record<string, unknown> };
+        return (
+          p.runId === runId &&
+          p.stream === "tool" &&
+          p.data?.phase === phase &&
+          p.data?.name === `t3code__${tool}`
+        );
+      },
+      60_000,
+    );
+  /**
+   * Every tool call id the run made, in order, as the gateway reported their items' starts,
+   * which every client following the session receives, whoever started the run.
+   */
+  const callIds = (runId: string) =>
+    clients.plain
+      .runEvents(runId)
+      .map(
+        (e) =>
+          e.payload as {
+            stream?: string;
+            data?: { kind?: string; phase?: string; toolCallId?: string };
+          },
+      )
+      .filter((p) => p.stream === "item" && p.data?.kind === "tool" && p.data?.phase === "start")
+      .map((p) => String(p.data?.toolCallId));
+  /** History holds the run's last result: the read again sees what the live run saw. */
+  const inHistory = async (key: string, count: number) =>
+    expect
+      .poll(
+        async () => {
+          const history = await clients.plain.request<{ messages: Array<{ role?: string }> }>(
+            "chat.history",
+            { sessionKey: key, limit: 50 },
+          );
+          return history.messages.filter((m) => m.role === "toolResult").length;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(count);
+  const thread = (on: Page) => card(on, "t3-card").first();
+  const word = (on: Page) => thread(on).locator(":scope > summary .state");
+  const openCard = async (on: Page) => {
+    const c = thread(on);
+    if ((await c.getAttribute("open")) === null) await c.locator(":scope > summary").click();
+    await expect(c).toHaveAttribute("open", "");
+    return c;
+  };
+  /** Each call's item on the card carries its own Raw, naming its own call. */
+  /**
+   * After a reload each call is a card of its own with its Raw: history keeps no tool server or
+   * tool, so nothing puts a call in a thread (11.4).
+   */
+  const ownRaw = async (on: Page, ids: string[]) => {
+    await expect(card(on, "t3-card")).toHaveCount(0);
+    for (const id of ids) {
+      const own = on.locator(`.card.action[data-call="${id}"]`);
+      await expect(own).toHaveCount(1);
+      if ((await own.getAttribute("open")) === null) await own.locator(":scope > summary").click();
+      await own.getByRole("tab", { name: "Raw" }).click();
+      await expect(own.getByRole("region", { name: "What the gateway sent" })).toContainText(id);
+    }
+  };
+  const eachRaw = async (on: Page, ids: string[]) => {
+    const c = await openCard(on);
+    for (const id of ids) {
+      const item = c.locator(`[data-item-call="${id}"]`);
+      await item.getByRole("button", { name: "Raw for this call" }).click();
+      await expect(item.getByRole("region", { name: "What the gateway sent" })).toContainText(id);
+    }
+  };
+
+  test("F-132 F-134 F-313: a thread launched and waited on, live: the wait's line closes up into the thread's card, which reads Call made, each status on its own item", async () => {
+    test.setTimeout(180_000);
+    const t = await hosted("T3 live", "#t3-start #t3-wait");
+    // Open while the wait runs: its line, and the card's Checking, as the gateway's events say.
+    await itemStart(t.runId, "t3_thread_wait");
+    await openTask(page, "Juniper", t.title);
+    const [launch, wait] = callIds(t.runId);
+    const line = page.locator(`.card.action[data-call="${wait}"]`);
+    await expect(line).toHaveCount(1);
+    await expect(line.locator(":scope > summary")).toContainText("Waiting for");
+    await expect(word(page)).toHaveText("Checking");
+    await shot(page, "t3-checking");
+    await clients.plain.terminal(t.runId);
+    await expect(line).toHaveCount(0);
+    // The launch and the wait each reported a status: Call made, each on its own item.
+    await expect(word(page)).toHaveText("Call made");
+    await expect(thread(page).locator(":scope > summary")).toContainText("· 2 calls");
+    await expect(thread(page)).toHaveAttribute("data-call", launch!);
+    await eachRaw(page, [launch!, wait!]);
+    await shot(thread(page), "t3-thread-live");
+  });
+
+  test("F-132 F-133 F-313: after a reload from history, and on a read-only connection, each call keeps its own card and Raw: history does not say which tool server made it", async () => {
+    test.setTimeout(180_000);
+    const t = await called("t3-history", "#t3");
+    await clients.plain.terminal(t.runId);
+    await inHistory(t.key, 2);
+    const [launch, wait] = callIds(t.runId);
+    for (const on of [page, reader]) {
+      await reload(on, "Juniper", t.title);
+      await ownRaw(on, [launch!, wait!]);
+    }
+    await shot(transcript(reader), "t3-history-readonly");
+  });
+
+  test("F-133 F-313: a read with its reply cut never says it read to the end; a follow-up after a bubble keeps its line, with Show the thread", async () => {
+    test.setTimeout(180_000);
+    // Started by the host's own device: its run's tool events, results included, reach the host
+    // as they happen. (A host that did not start a run gets only its item events, and the result
+    // from history, where the gateway cut this read's rendering; see below.)
+    const { title, key } = await hostTask("main", "T3 long read", "#t3-long #t3-read #t3-send");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const run = await clients.plain.waitFor(
+      "the long read's run",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const t = { key, title, runId: String((run.payload as { runId: string }).runId) };
+    await openTask(page, "Juniper", t.title);
+    await clients.plain.terminal(t.runId);
+    const [, , read, send] = callIds(t.runId);
+    const c = await openCard(page);
+    await expect(c.locator(`[data-item-call="${read}"]`)).toContainText(
+      "Part of the reply only: its text was cut, and the rest was not read",
+    );
+    await expect(c).not.toContainText("Read to the end");
+    await shot(c, "t3-read-cut");
+    const line = page.locator(`.card.action[data-call="${send}"]`);
+    await expect(line.locator(":scope > summary")).toContainText("Followed up with");
+    await line.locator(":scope > summary").click();
+    await line.getByRole("button", { name: "Show this thread's card" }).click();
+    await expect(c.locator(`[data-item-call="${send}"] > summary`)).toBeFocused();
+    // From history each call is a card of its own, and the read still never says it read to
+    // the end.
+    await inHistory(t.key, 4);
+    await reload(page, "Juniper", t.title);
+    await ownRaw(page, [read!]);
+    await expect(page.locator(`.card.action[data-call="${read}"]`)).not.toContainText(
+      "Read to the end",
+    );
+  });
+
+  test("F-134 F-137 F-470: the bot stopped during a wait: the wait is Delivery unknown, the launch keeps Call made, and the card says work may continue", async () => {
+    test.setTimeout(180_000);
+    // Started and stopped by the host's own device, as the composer's Stop does: the host sees
+    // its own run stop. (History alone cannot say so: the gateway keeps no result for a call a
+    // stop cut short, and no end for its run.)
+    const { title, key } = await hostTask("main", "T3 stopped", "#t3-start #t3-wait");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const waiting = await clients.plain.waitFor(
+      "the wait's start",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const t = { key, title, runId: String((waiting.payload as { runId: string }).runId) };
+    await openTask(page, "Juniper", t.title);
+    await hostCommand(page, { type: "stopRun", key: t.key, runId: t.runId }, t.key);
+    await clients.plain.terminal(t.runId);
+    const [launch, wait] = callIds(t.runId);
+    await openTask(page, "Juniper", t.title);
+    const c = await openCard(page);
+    await expect(c.locator(`[data-item-call="${launch}"] > summary .state`)).toHaveText(
+      "Call made",
+    );
+    // The wait ended with no result naming the thread: it joins none, and is a card of its own,
+    // Delivery unknown, that can bring the reader to the thread its arguments name.
+    const own = page.locator(`.card.action[data-call="${wait}"]`);
+    await expect(own.locator(":scope > summary .action-state")).toHaveText("Delivery unknown");
+    await expect(c.locator(`[data-item-call="${wait}"]`)).toHaveCount(0);
+    await own.locator(":scope > summary").click();
+    await expect(own.getByRole("button", { name: "Show this thread's card" })).toBeVisible();
+    await expect(
+      c.getByText("The call was made. Work handed to T3 Code may continue there."),
+    ).toBeVisible();
+    // The note is added; the thread's last reported status stays its word.
+    await expect(word(page)).toHaveText("Running");
+    await shot(c, "t3-stopped");
+  });
+
+  test("F-313: a held occurrence keeps the reader's focus on its Raw through the result and the run's end; reloaded, the call is a card of its own with its Raw", async () => {
+    test.setTimeout(240_000);
+    // Started by the host, so its results reach the host live; the wait takes six seconds.
+    const { title, key } = await hostTask("main", "T3 held", "#t3-start #t3-wait");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const waiting = await clients.plain.waitFor(
+      "the wait's start",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const runId = String((waiting.payload as { runId: string }).runId);
+    await openTask(page, "Juniper", title);
+    const [, wait] = callIds(runId);
+    const line = page.locator(`.card.action[data-call="${wait}"]`);
+    await line.locator(":scope > summary").click();
+    const raw = line.getByRole("tab", { name: "Raw" });
+    await raw.click();
+    await expect(raw).toBeFocused();
+    // The result comes and the run ends: the line the reader holds stays, open, Raw still focused.
+    await clients.plain.terminal(runId);
+    await expect(word(page)).toHaveText("Call made", { timeout: 45_000 });
+    await expect(line).toHaveCount(1);
+    await expect(line).toHaveAttribute("open", "");
+    await expect(raw).toBeFocused();
+    // A view rebuilt from the record: history keeps no tool server or tool, so the wait is a card
+    // of its own with its Raw.
+    await inHistory(key, 2);
+    await reload(page, "Juniper", title);
+    await ownRaw(page, [wait!]);
+  });
+
+  test("F-134: a slow run waited on briefly, then asked to stop: the stop's item says a stop was asked for, and the wait says it ended first", async () => {
+    test.setTimeout(120_000);
+    const t = await hosted("T3 interrupt", "#t3-start #t3-wait-short #t3-stop");
+    // Open while the run goes on: its results reach this page live.
+    await openTask(page, "Juniper", t.title);
+    await clients.plain.terminal(t.runId);
+    const [, wait, stop] = callIds(t.runId);
+    // Three calls reported a status: Call made, each status on its own item.
+    await expect(word(page)).toHaveText("Call made");
+    const c = await openCard(page);
+    await expect(c.locator(`[data-item-call="${stop}"]`)).toContainText(
+      "A stop was asked for. That is not proof that T3 Code stopped.",
+    );
+    await expect(c.locator(`[data-item-call="${wait}"]`)).toContainText(
+      "The wait ended before the run finished",
+    );
+    await expect(c).toContainText("A stop was asked for. That is not proof that T3 Code stopped.");
+  });
+
+  test("F-314 F-313: a follow-up T3 Code refuses is Failed on its own call, with T3 Code's code; its thread's launch is not in the record", async () => {
+    test.setTimeout(120_000);
+    const t = await called("t3-refused", "Ready.");
+    await clients.plain.terminal(t.runId);
+    await openTask(page, "Juniper", t.title);
+    // Send from the open task so its viewer receives the live tool events.
+    const composer = page.getByTestId("composer-input");
+    await composer.fill("#t3-refused");
+    await composer.press("Enter");
+    const own = page.getByTestId("tool-call");
+    await expect(own).toHaveAttribute("data-kind", "t3", { timeout: 30_000 });
+    await expect(own.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(own.locator(":scope > summary")).toContainText("Couldn't follow up with");
+    await expect(own.locator(":scope > summary .action-detail")).toContainText(
+      "thread_not_sendable",
+    );
+    await expect(card(page, "t3-card")).toHaveCount(0);
+    await expect(page.getByText("started before this conversation's record")).toHaveCount(0);
+    await shot(own, "t3-refused");
+
+    const send = await own.getAttribute("data-call");
+    expect(send).toBeTruthy();
+    await inHistory(t.key, 1);
+    await reload(page, "Juniper", t.title);
+    const again = page.locator(`.card.action[data-call="${send}"]`);
+    await expect(again.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(again).not.toHaveAttribute("data-kind", "t3");
+    await expect(card(page, "t3-card")).toHaveCount(0);
+  });
+
+  test("F-313: T3 Code's listings are lines of their own that fold, never a thread's card", async () => {
+    const t = await hosted("T3 list", "#t3-list");
+    await openTask(page, "Juniper", t.title);
+    await clients.plain.terminal(t.runId);
+    await expect(card(page, "t3-card")).toHaveCount(0);
+    const fold = page.locator(".card.action[data-fold]");
+    await expect(fold).toHaveAttribute("data-fold", "2");
+    await expect(fold.locator(":scope > summary")).toContainText(
+      "Looked through T3 Code · 2 times",
+    );
+  });
+
+  test("F-132: a call whose name suggests T3 Code's read and whose result names another tool of the same server is an ordinary tool-server card", async () => {
+    const t = await called("t3-decoy", "#t3-decoy");
+    await clients.plain.terminal(t.runId);
+    const result = await toolEvent(t.runId, "result", "t3_thread_read-2");
+    expect(
+      (result.payload as { data: { result: { details: { mcpTool: string } } } }).data.result.details
+        .mcpTool,
+    ).toBe("T3_thread_read");
+    // The same call started by the host's own device: its result reaches the page as it happens,
+    // so the live reading of it is what is checked. A reload reads it from history.
+    const live = await hostTask("main", "T3 decoy", "#t3-decoy");
+    await openTask(page, "Juniper", live.title);
+    await expect(page.getByTestId("tool-call")).toHaveAttribute("data-kind", "server");
+    await expect(card(page, "t3-card")).toHaveCount(0);
+    await reload(page, "Juniper", live.title);
+    await expect(page.getByTestId("tool-call")).toHaveCount(1);
+    await expect(card(page, "t3-card")).toHaveCount(0);
+  });
+});
+
+test.describe("a bot-to-bot message as an action card on a real gateway", () => {
+  test("F-439 F-122: a Messaged card sits in its run's column between actions, never folds, and its message is shown nowhere else, live and after a reload", async () => {
+    test.setTimeout(180_000);
+    const t = await clientTask("pip", "message-column");
+    const run = await clients.plain.send(t.key, "#message-column");
+    await clients.plain.terminal(String(run.runId));
+    const check = async (on: Page) => {
+      const column = transcript(on);
+      const messaged = card(on, "messaged-card");
+      // Two sends in a row are two cards: they never fold.
+      await expect(messaged).toHaveCount(2);
+      await expect(messaged.first().locator("summary .state")).toHaveText("Replied");
+      // One column: the read, the two Messaged cards and the listing, with nothing between them.
+      const order = await column.evaluate((element) =>
+        [...element.querySelectorAll(".card.action, .card.messaged")].map((each) => {
+          const next = each.nextElementSibling;
+          return [
+            each.classList.contains("messaged") ? "messaged" : (each as HTMLElement).dataset.kind,
+            next?.matches(".card.action, .card.messaged") ?? false,
+          ];
+        }),
+      );
+      expect(order).toEqual([
+        ["read", true],
+        ["messaged", true],
+        ["messaged", true],
+        ["list", false],
+      ]);
+      // Each message is in its own card, and in no other element of the transcript: not in the
+      // other Messaged card either.
+      for (const [i, text] of [
+        "Could you look over the plan?",
+        "And the route for Saturday?",
+      ].entries()) {
+        await expect(messaged.nth(i)).toContainText(text);
+        const elsewhere = await column.evaluate(
+          (element, [text, owner]) => {
+            const copy = element.cloneNode(true) as HTMLElement;
+            copy.querySelectorAll(".card.messaged")[owner]?.remove();
+            return copy.textContent?.split(text).length ?? 1;
+          },
+          [text, i] as const,
+        );
+        expect(elsewhere - 1, text).toBe(0);
+      }
+    };
+    await openTask(page, "Pip", t.title);
+    await check(page);
+    await shot(transcript(page), "messaged-column");
+    await reload(page, "Pip", t.title);
+    await check(page);
   });
 });

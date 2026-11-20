@@ -108,12 +108,21 @@ export const CARD_SCENES = [
   "received-stopped",
   "incoming-line",
   "t3-started",
+  "t3-general",
   "t3-approval",
-  "t3-call-made",
+  "t3-thread",
+  "t3-joining",
+  "t3-read-cut",
+  "t3-checking",
+  "t3-refused",
+  "t3-failed",
   "t3-work-may-continue",
   "t3-delivery-unknown",
-  "t3-failed",
   "t3-not-sent",
+  "t3-two-threads",
+  "t3-before-record",
+  "t3-wait-unknown",
+  "t3-listings",
 ] as const;
 
 export type CardSceneName = (typeof CARD_SCENES)[number];
@@ -180,6 +189,11 @@ class Builder {
   update(change: (activity: TaskActivity) => TaskActivity): this {
     this.activity = change(this.activity);
     return this;
+  }
+
+  /** What the gateway sent for a step, whole, as the engine's raw table keeps it. */
+  rawOf(stepId: string) {
+    return this.raw.get(this.key, stepId);
   }
 
   question(record: Record<string, unknown>): this {
@@ -446,62 +460,180 @@ function linked(state: LinkedRun["state"], now: number): Record<string, LinkedRu
 
 // T3 Code -------------------------------------------------------------------------
 
-/** T3 Code's own tool, as the gateway names a simple server's tool. */
-const T3_TOOL = `${T3_SERVER}__t3_thread_launch`;
+/** T3 Code's seven tools, as the gateway names a simple server's tools. */
+const T3_TOOLS = [
+  "t3_project_list",
+  "t3_thread_launch",
+  "t3_thread_send",
+  "t3_thread_read",
+  "t3_thread_wait",
+  "t3_thread_list",
+  "t3_thread_interrupt",
+] as const;
+const t3Name = (tool: string, server = T3_SERVER) => `${server}__${tool}`;
 /** The gateway's map of tool-server tools for the task, as `tools.effective` reports it. */
-const T3_MAP: Transcript["mcpTools"] = {
-  [T3_TOOL]: { server: T3_SERVER, tool: "t3_thread_launch" },
+export const T3_MAP: Transcript["mcpTools"] = Object.fromEntries(
+  T3_TOOLS.map((tool) => [t3Name(tool), { server: T3_SERVER, tool }]),
+);
+/** A second T3 Code server, on another machine, under a name the person chose. */
+const T3_LAPTOP = "laptop-t3";
+const T3_BOTH: Transcript["mcpTools"] = {
+  ...T3_MAP,
+  ...Object.fromEntries(
+    T3_TOOLS.map((tool) => [t3Name(tool, T3_LAPTOP), { server: T3_LAPTOP, tool }]),
+  ),
 };
-const T3_SENT =
+export const T3_THREAD = "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70";
+const T3_OTHER = "mcp:8d1e4b2a-0c3f-4a5e-b6d7-9f0a1b2c3d4e";
+export const T3_LINK = `https://t3-code.example/threads/local/${encodeURIComponent(T3_THREAD)}`;
+export const T3_SENT =
   "In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it.";
+const T3_LAUNCH_ARGS = {
+  projectId: "backup-scripts",
+  title: "Skip machines that are asleep",
+  workspaceStrategy: { type: "root", branch: "main" },
+  message: T3_SENT,
+};
 
-function t3Call(now: number, b = new Builder(CARD_TASK, now).start(now - 3 * MINUTE)): Builder {
-  return b.toolStart(
-    T3_TOOL,
-    "call_t3",
+/** JSON with every object's keys sorted, as the gateway renders structured content. */
+function sortedJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, sortedJson((value as Record<string, unknown>)[key])]),
+    );
+  return value;
+}
+
+function t3Start(
+  b: Builder,
+  tool: string,
+  id: string,
+  args: Record<string, unknown>,
+  at: number,
+  server = T3_SERVER,
+) {
+  return b
+    .event(
+      "item",
+      { kind: "tool", toolCallId: id, name: t3Name(tool, server), phase: "start", startedAt: at },
+      at,
+    )
+    .toolStart(t3Name(tool, server), id, args, at);
+}
+
+/** A T3 Code result as the gateway passes it on: rendered first in its text, and in `details`. */
+function t3Done(
+  b: Builder,
+  tool: string,
+  id: string,
+  structured: Record<string, unknown>,
+  at: number,
+  isError = false,
+  server = T3_SERVER,
+) {
+  return b.toolResult(
+    t3Name(tool, server),
+    id,
     {
-      environmentId: "local",
-      projectId: "backup-scripts",
-      title: "Skip machines that are asleep",
-      workspaceStrategy: { type: "root", branch: "main" },
-      message: T3_SENT,
+      content: text(`structuredContent:\n${JSON.stringify(sortedJson(structured), null, 2)}`),
+      details: {
+        mcpServer: server,
+        mcpTool: tool,
+        structuredContent: structured,
+        ...(isError ? { status: "error" } : {}),
+      },
     },
-    now - 2 * MINUTE,
+    at,
+    isError,
   );
 }
 
-function t3Result(b: Builder, now: number, isError = false) {
-  return b.toolResult(
-    T3_TOOL,
-    "call_t3",
-    isError
-      ? {
-          content: text("connect ECONNREFUSED: the coding agent's server did not answer"),
-          details: { mcpServer: T3_SERVER, mcpTool: "t3_thread_launch" },
-        }
-      : {
-          content: [
-            ...text("Started thread 18 in backup-scripts on main. Working on the change now."),
-            {
-              type: "resource",
-              resource: { name: "plan.md", mimeType: "text/markdown", uri: "file:///plan.md" },
-            },
-          ],
-          details: {
-            mcpServer: T3_SERVER,
-            mcpTool: "t3_thread_launch",
-            structuredContent: {
-              threadId: "thread-18",
-              link: "https://t3.example.test/projects/backup-scripts/threads/18",
-              projectId: "backup-scripts",
-              runId: "run-t3-1",
-              status: "starting",
-            },
-          },
-        },
-    now - MINUTE,
-    isError,
-  );
+const launched = (status = "running", threadId = T3_THREAD) => ({
+  threadId,
+  link: `https://t3-code.example/threads/local/${encodeURIComponent(threadId)}`,
+  projectId: "backup-scripts",
+  modelSelection: { instanceId: "codex", model: "stand-in-model" },
+  runId: "run-1",
+  status,
+});
+const waited = (status: string, timedOut = false, threadId = T3_THREAD) => ({
+  threadId,
+  runId: "run-1",
+  status,
+  timedOut,
+});
+const REPLY_TEXT =
+  "Done. The weekly check now skips machines that are asleep and lists them in the log.\nA test covers a machine that wakes late.";
+function readOf(
+  opts: {
+    cut?: boolean;
+    otherCut?: boolean;
+    hasMore?: boolean;
+    threadId?: string;
+    /** The read's `limit`: only that many items, from the oldest, are on its page. */
+    limit?: number;
+  } = {},
+) {
+  const run = "run-2";
+  const item = (type: string, text: string, cut = false, n = 0) => ({
+    position: n,
+    itemId: `item-${n}`,
+    runId: run,
+    messageId: `msg-${n}`,
+    type,
+    status: "completed",
+    title: null,
+    text,
+    textTruncated: cut,
+    ...(cut ? { nextTextOffset: text.length } : {}),
+    updatedAt: "2026-11-17T17:41:00.000Z",
+    visibility: "local",
+    sourceThreadId: opts.threadId ?? T3_THREAD,
+    createdBy: type === "user_message" ? "user" : "agent",
+    creationSource: "provider",
+  });
+  const items = [
+    item("user_message", "Also add a test for machines that wake up late.", false, 0),
+    item("tool", "Ran the project's checks.", opts.otherCut === true, 1),
+    item("assistant_message", REPLY_TEXT, opts.cut === true, 2),
+  ].slice(0, opts.limit);
+  return {
+    thread: {
+      threadId: opts.threadId ?? T3_THREAD,
+      title: "Skip machines that are asleep",
+      link: T3_LINK,
+      status: "completed",
+      latestRunId: run,
+      activeRunId: null,
+      settled: true,
+    },
+    recentRuns: [{ runId: run, ordinal: 2, status: "completed" }],
+    items,
+    nextPosition: items.at(-1)!.position,
+    hasMore: opts.hasMore === true,
+  };
+}
+
+/** A run that launched a thread in T3 Code: the launch, open unless `done`. */
+function t3Launch(
+  now: number,
+  done: string | null = "running",
+  b = new Builder(CARD_TASK, now).start(now - 6 * MINUTE),
+): Builder {
+  t3Start(b, "t3_thread_launch", "call_t3", T3_LAUNCH_ARGS, now - 5 * MINUTE);
+  return done
+    ? t3Done(b, "t3_thread_launch", "call_t3", launched(done), now - 5 * MINUTE + 1200)
+    : b;
+}
+
+/** Text the bot writes beside its next call: a bubble, which ends a column. */
+function beside(b: Builder, id: string, words: string, at: number): Builder {
+  return b
+    .event("item", { kind: "preamble", itemId: id, phase: "update", progressText: words }, at)
+    .event("item", { kind: "preamble", itemId: id, phase: "end", progressText: words }, at);
 }
 
 function t3Approval(now: number) {
@@ -511,7 +643,7 @@ function t3Approval(now: number) {
       title: "message T3 Code",
       description: "Send work to T3 Code in backup-scripts.",
       pluginId: "mcp-approvals",
-      toolName: T3_TOOL,
+      toolName: t3Name("t3_thread_launch"),
       agentId: "otto",
       sessionKey: CARD_TASK,
       runId: CARD_RUN,
@@ -970,49 +1102,246 @@ function build(
       return { b: new Builder(CARD_TASK, now).start(ago(3)).end(ago(2)) };
 
     case "t3-started":
-      return { extra: { mcpTools: T3_MAP }, b: t3Call(now) };
+      return { extra: { mcpTools: T3_MAP }, b: t3Launch(now, null) };
+    case "t3-general":
+      // No map from the gateway: nothing says the call is T3 Code's until its result does.
+      return { b: t3Launch(now, null) };
     case "t3-approval":
       return {
         extra: { mcpTools: T3_MAP },
-        b: t3Call(now)
+        b: t3Launch(now, null)
           .event("lifecycle", { phase: "waiting-approval", approvalId: "apr_t3" }, ago(2))
           .update(requested(t3Approval(now))),
       };
-    case "t3-call-made":
-      return { extra: { mcpTools: T3_MAP }, b: t3Result(t3Call(now), now) };
+    case "t3-thread":
+    case "t3-joining": {
+      const b = t3Launch(now);
+      t3Start(
+        b,
+        "t3_thread_wait",
+        "call_t3w",
+        { threadId: T3_THREAD, timeoutMs: 30000 },
+        ago(5) + 1500,
+      );
+      if (name === "t3-joining") return { extra: { mcpTools: T3_MAP }, b };
+      t3Done(b, "t3_thread_wait", "call_t3w", waited("completed"), ago(4));
+      beside(b, "pre_t3", "T3 Code finished the change. I'll ask it for a test as well.", ago(3));
+      t3Start(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        { threadId: T3_THREAD, message: "Also add a test for machines that wake up late." },
+        ago(3),
+      );
+      t3Done(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        {
+          threadId: T3_THREAD,
+          link: T3_LINK,
+          messageId: "msg-4",
+          runId: "run-2",
+          status: "running",
+          delivery: "started",
+        },
+        ago(3) + 900,
+      );
+      t3Start(b, "t3_thread_read", "call_t3r", { threadId: T3_THREAD }, ago(2));
+      t3Done(b, "t3_thread_read", "call_t3r", readOf(), ago(2) + 700);
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
+    case "t3-read-cut": {
+      const b = t3Launch(now, "completed");
+      t3Start(b, "t3_thread_read", "call_t3r", { threadId: T3_THREAD }, ago(4));
+      t3Done(b, "t3_thread_read", "call_t3r", readOf({ cut: true }), ago(4) + 600);
+      t3Start(b, "t3_thread_read", "call_t3p", { threadId: T3_THREAD, limit: 2 }, ago(3));
+      t3Done(
+        b,
+        "t3_thread_read",
+        "call_t3p",
+        readOf({ hasMore: true, otherCut: true, limit: 2 }),
+        ago(3) + 600,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
+    case "t3-checking": {
+      const b = t3Launch(now);
+      beside(b, "pre_t3", "Waiting for T3 Code to finish.", ago(4));
+      t3Start(b, "t3_thread_wait", "call_t3w", { threadId: T3_THREAD, timeoutMs: 30000 }, ago(4));
+      return { extra: { mcpTools: T3_MAP }, b };
+    }
+    case "t3-refused": {
+      const b = t3Launch(now);
+      t3Start(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        { threadId: T3_THREAD, message: "Steer the current turn.", mode: "steer" },
+        ago(4),
+      );
+      t3Done(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        {
+          _tag: "OrchestratorMcpFailure",
+          code: "thread_not_sendable",
+          message: "Nothing is running to steer: the thread is idle.",
+        },
+        ago(4) + 500,
+        true,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
+    case "t3-failed": {
+      const b = new Builder(CARD_TASK, now).start(ago(6));
+      t3Start(
+        b,
+        "t3_thread_launch",
+        "call_t3",
+        { title: "Skip machines that are asleep", message: T3_SENT },
+        ago(5),
+      );
+      t3Done(
+        b,
+        "t3_thread_launch",
+        "call_t3",
+        {
+          _tag: "OrchestratorMcpFailure",
+          code: "target_required",
+          message: "Pass projectId or scratch: an outside launch needs a target.",
+        },
+        ago(5) + 400,
+        true,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
     case "t3-work-may-continue":
       return {
         extra: { mcpTools: T3_MAP },
-        b: t3Result(t3Call(now), now)
+        b: t3Launch(now)
           .update((a) => ({
             ...a,
             runs: a.runs.map((run) => ({ ...run, stopRequestedAt: ago(1) })),
           }))
           .end(ago(1), "end", { aborted: true, stopReason: "aborted" }),
       };
+    case "t3-wait-unknown": {
+      // A wait whose result says only that it was aborted, in a run no one stopped: no result
+      // establishes whether T3 Code received it.
+      const b = t3Launch(now);
+      t3Start(b, "t3_thread_wait", "call_t3w", { threadId: T3_THREAD, timeoutMs: 30000 }, ago(4));
+      b.toolResult(
+        t3Name("t3_thread_wait"),
+        "call_t3w",
+        { content: [{ type: "text", text: "Aborted" }] },
+        ago(4) + 500,
+        true,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(3)) };
+    }
     case "t3-delivery-unknown":
       return {
         extra: { mcpTools: T3_MAP },
-        b: t3Call(now)
+        b: t3Launch(now, null)
           .update((a) => ({
             ...a,
             runs: a.runs.map((run) => ({ ...run, stopRequestedAt: ago(1) })),
           }))
           .end(ago(1), "end", { aborted: true, stopReason: "aborted" }),
       };
-    case "t3-failed":
-      return { extra: { mcpTools: T3_MAP }, b: t3Result(t3Call(now), now, true) };
     case "t3-not-sent":
       return {
         extra: { mcpTools: T3_MAP },
-        b: t3Call(now)
+        b: t3Launch(now, null)
           .event("lifecycle", { phase: "waiting-approval", approvalId: "apr_t3" }, ago(2))
           .update(requested(t3Approval(now)))
           .update((a) =>
             applyApprovalResolved(a, { ...resolution("denied", "deny", ago(1)), id: "apr_t3" }),
           )
-          .toolResult(T3_TOOL, "call_t3", { content: text("Denied by the user.") }, ago(1), true),
+          .toolResult(
+            t3Name("t3_thread_launch"),
+            "call_t3",
+            {
+              content: text("Denied by the user."),
+              details: { status: "blocked", deniedReason: "user-denied" },
+            },
+            ago(1),
+          ),
       };
+    case "t3-two-threads": {
+      // Two threads in one task, and the same thread id on another server: three cards.
+      const b = t3Launch(now);
+      beside(b, "pre_t3", "And a second one for the trail guide.", ago(4));
+      t3Start(
+        b,
+        "t3_thread_launch",
+        "call_t3b",
+        {
+          ...T3_LAUNCH_ARGS,
+          projectId: "trail-guide",
+          title: "Fix the route list",
+          message: "In trail-guide, sort the route list by distance.",
+        },
+        ago(4),
+      );
+      t3Done(b, "t3_thread_launch", "call_t3b", launched("running", T3_OTHER), ago(4) + 900);
+      beside(b, "pre_t3b", "Checking the laptop's copy too.", ago(3));
+      t3Start(b, "t3_thread_read", "call_t3l", { threadId: T3_THREAD }, ago(3), T3_LAPTOP);
+      t3Done(b, "t3_thread_read", "call_t3l", readOf(), ago(3) + 600, false, T3_LAPTOP);
+      return { extra: { mcpTools: T3_BOTH }, b: b.end(ago(1)) };
+    }
+    case "t3-before-record": {
+      const b = new Builder(CARD_TASK, now).start(ago(6));
+      t3Start(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        { threadId: T3_THREAD, message: "Also add a test for machines that wake up late." },
+        ago(5),
+      );
+      t3Done(
+        b,
+        "t3_thread_send",
+        "call_t3s",
+        {
+          threadId: T3_THREAD,
+          link: T3_LINK,
+          messageId: "msg-4",
+          runId: "run-2",
+          status: "running",
+          delivery: "started",
+        },
+        ago(5) + 900,
+      );
+      t3Start(b, "t3_thread_wait", "call_t3w", { threadId: T3_THREAD, timeoutMs: 1500 }, ago(4));
+      t3Done(b, "t3_thread_wait", "call_t3w", waited("running", true), ago(4) + 1500);
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
+    case "t3-listings": {
+      const b = new Builder(CARD_TASK, now).start(ago(6));
+      t3Start(b, "t3_project_list", "call_t3pl", {}, ago(5));
+      t3Done(
+        b,
+        "t3_project_list",
+        "call_t3pl",
+        {
+          projects: [{ id: "backup-scripts" }, { id: "trail-guide" }, { id: "scratchpad" }],
+          nextCursor: null,
+        },
+        ago(5) + 300,
+      );
+      t3Start(b, "t3_thread_list", "call_t3tl", { allProjects: true }, ago(5) + 500);
+      t3Done(
+        b,
+        "t3_thread_list",
+        "call_t3tl",
+        { threads: [{ threadId: T3_THREAD }, { threadId: T3_OTHER }], nextCursor: null, total: 2 },
+        ago(5) + 900,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };
+    }
   }
 }
 
@@ -1046,6 +1375,39 @@ function filler(at: number, count: number, prefix: string): TranscriptItem[] {
     ],
     model: null,
   }));
+}
+
+/**
+ * What history holds of a finished run, as the gateway returns it: one
+ * assistant item with the text written beside each call and each call's
+ * block, its result's text and the facts the engine keeps of it. A run still
+ * going has no history yet: the engine draws it.
+ */
+function historyOf(runs: TaskActivity["runs"], now: number): TranscriptItem[] {
+  return runs.flatMap((run): TranscriptItem[] => {
+    if (run.state === "running" || run.state === "waiting" || run.state === "queued") return [];
+    const blocks: TranscriptItem["blocks"] = [];
+    for (const step of run.steps) {
+      if (step.kind !== "tool" || !step.toolCallId) continue;
+      for (const p of run.preambles ?? [])
+        if (p.beforeCall === step.toolCallId) blocks.push({ kind: "text", text: p.text });
+      blocks.push({
+        kind: "tool-call",
+        callId: step.toolCallId,
+        name: step.toolName ?? "tool",
+        argumentsText: step.argsText?.text ?? "{}",
+        // History holds a result only for a call that returned.
+        result:
+          step.status === "done" || step.status === "failed"
+            ? { isError: step.status === "failed", text: step.result?.text ?? "" }
+            : null,
+        ...(step.t3 ? { t3: step.t3 } : {}),
+      });
+    }
+    return [
+      { id: `a-${run.id}:0`, role: "assistant", timestamp: now - MINUTE, blocks, model: null },
+    ];
+  });
 }
 
 function senderItems(now: number): TranscriptItem[] {
@@ -1127,7 +1489,9 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
           ...senderItems(now),
           ...filler(now - MINUTE, 20, "l"),
         ]
-      : senderItems(now);
+      : name.startsWith("t3-")
+        ? [...senderItems(now), ...historyOf(activity.runs, now)]
+        : senderItems(now);
   const interSession = receiving
     ? [
         {
@@ -1227,6 +1591,12 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
 
 function taskRow(spec: (typeof CARD_TASKS)[keyof typeof CARD_TASKS], now: number): Task {
   return { ...spec, updatedAt: now - MINUTE, status: "running", unread: false };
+}
+
+/** A step's raw payload as the gateway sent it, whole: what `readStepRaw` returns for a long one. */
+export function wholeStepRaw(name: string, now: number, stepId: string) {
+  if (!isCardScene(name)) return null;
+  return build(name, now).b.rawOf(stepId);
 }
 
 /** The approval as the gateway sent it, before anything was cut: what "read it whole" returns. */

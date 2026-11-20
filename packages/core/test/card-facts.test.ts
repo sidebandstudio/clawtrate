@@ -430,3 +430,47 @@ describe("Stop does not hide a returned Messaged-card error (C6)", () => {
     expect(select(activity).botMessages[0]!.state).toBe("sent");
   });
 });
+
+describe("a denied message read again from history (F-122)", () => {
+  // The gateway's own error for a call its approval denied, as history keeps it: no details, the
+  // tool's JSON error as the result's text.
+  const historyOf = (error: string) => {
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "m1",
+            name: "sessions_send",
+            arguments: { sessionKey: PEER, message: "Is the house log open?" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 1, runId: "run-s" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "m1",
+        isError: true,
+        content: [
+          { type: "text", text: JSON.stringify({ status: "error", tool: "sessions_send", error }) },
+        ],
+        __openclaw: { id: "t1", seq: 2, runId: "run-s" },
+      },
+    ];
+    const scratch = new RawTable();
+    const history = runsFromHistory(rows, null, { ...ctx(), raw: scratch });
+    const fresh = (step: Step) => step.raw ?? scratch.get(KEY, step.id);
+    return selectMessageCards({ runs: history }, { rawOf: fresh }).botMessages[0]!;
+  };
+
+  it("F-122: a call the approval denied before it ran stays Not sent, with no approval record", () => {
+    expect(historyOf("Denied by user. The tool call did not run.\nReason: no.").state).toBe(
+      "not-sent",
+    );
+  });
+
+  it("F-122: another error stays Failed", () => {
+    expect(historyOf("The recipient session was not found.").state).toBe("failed");
+  });
+});

@@ -41,6 +41,15 @@ import {
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
+import {
+  DECOY_EFFECTIVE,
+  DECOY_TOOL,
+  MAX_CHARS_PER_ITEM,
+  SEEDED_THREAD,
+  T3_CODE_SERVER,
+  T3_LINK_BASE,
+  TOOLS as T3_CODE_TOOLS,
+} from "./t3-code-mcp.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
@@ -1018,6 +1027,10 @@ export const EXPECTED_OFFERED_TOOLS = [
   "apply_patch",
   "ask_user",
   ...CODING_AGENT_TOOLS.map((tool) => `${CODING_AGENT_SERVER}__${tool.name}`),
+  // The T3 Code stand-in's tools, by the names the gateway gives them.
+  ...T3_CODE_TOOLS.map((tool) =>
+    tool.name === DECOY_TOOL ? DECOY_EFFECTIVE : `${T3_CODE_SERVER}__${tool.name}`,
+  ),
   "edit",
   "exec",
   "ls",
@@ -1048,6 +1061,76 @@ export const EXPECTED_EFFECTIVE_TOOLS = [
 const SCHEDULE_RESULT_SHAPE =
   "content text; details {id: string, owner: {…}, agentId: string, sessionKey: string, name: string, enabled: boolean, deleteAfterRun: boolean, createdAtMs: number, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}, state: {…}, updatedAtMs: number, configRevision: string, nextRunAtMs: number, deliveryPreview: {…}}";
 const SCHEDULE_HISTORY_DETAILS = true;
+
+// The scripted T3 Code stand-in --------------------------------------------------------
+
+/** JSON with every object's keys sorted, as the gateway renders structured content (`stableStringify`). */
+function deepSorted(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(deepSorted);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.keys(value as JsonRecord)
+        .sort()
+        .map((key) => [key, deepSorted((value as JsonRecord)[key])]),
+    );
+  return value;
+}
+
+/** The text the gateway gives a stand-in result: its structured content, rendered, first. */
+const t3Rendering = (structured: unknown) =>
+  `structuredContent:\n${JSON.stringify(deepSorted(structured), null, 2)}`;
+
+/** The gateway's item title for a stand-in tool, from its effective name. */
+const t3Title = (tool: string) =>
+  `T3code ${tool
+    .split("_")
+    .map((word) => word[0]!.toUpperCase() + word.slice(1))
+    .join(" ")}`;
+
+/**
+ * One call to a T3 Code tool on the stand-in, as the gateway reports it: its
+ * result names the server and the tool (`details.mcpServer`, `mcpTool`),
+ * carries T3 Code's structured content, and renders it as its one text.
+ */
+function t3Call(
+  tool: string,
+  args: unknown,
+  check: (structured: JsonRecord, where: string) => void,
+  isError = false,
+): CallExpectation {
+  return {
+    name: `${T3_CODE_SERVER}__${tool}`,
+    args,
+    isError,
+    content: (texts, where) => {
+      same(texts.length, 1, `${where} text blocks`);
+      expect(
+        texts[0]!.startsWith("structuredContent:\n{"),
+        `${where} renders its structured content`,
+      );
+    },
+    details: (details: JsonRecord | undefined, where: string) => {
+      const d = rec(details);
+      same([d.mcpServer, d.mcpTool], [T3_CODE_SERVER, tool], `${where} names its server and tool`);
+      same(d.status, isError ? "error" : undefined, `${where} details.status`);
+      check(rec(d.structuredContent), where);
+    },
+    title: t3Title(tool),
+  };
+}
+
+/** A stand-in result's text is its structured content's rendering, exactly. */
+function expectRendered(view: RunView, tool: string, index = 0): JsonRecord {
+  const end = view.tool("result", `${T3_CODE_SERVER}__${tool}`)[index]!;
+  const result = rec(view.data(end).result);
+  const structured = rec(rec(result.details).structuredContent);
+  const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+  same(String(blocks[0]?.text ?? ""), t3Rendering(structured), `${tool}: the rendered text`);
+  return structured;
+}
+
+const isThreadId = (value: unknown) =>
+  typeof value === "string" && /^mcp:[0-9a-f-]{36}$/.test(value);
 
 export type ScenarioCheck = {
   name: string;
@@ -2438,6 +2521,357 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         },
       ]);
       view.expectEnd("aborted", "");
+    },
+  },
+  {
+    name: "a read, two messages to the other bot and a listing, with no text between",
+    covers: ["#message-column"],
+    run: async (h) => {
+      const view = await h.run(
+        "plain",
+        await h.session("pip", "message-column"),
+        "#message-column",
+      );
+      const returned = (
+        name: string,
+        title: string,
+        check?: (d: JsonRecord) => void,
+      ): CallExpectation => ({
+        name,
+        args: view.data(view.tool("start", name)[0]!).args,
+        isError: false,
+        content: (texts, where) => expect(texts.length > 0, `${where} has text`),
+        details: (d: JsonRecord | undefined) => check?.(rec(d)),
+        title,
+      });
+      const sends = view.tool("start", "sessions_send").map((e) => rec(view.data(e).args).message);
+      same(
+        sends,
+        ["#reply Could you look over the plan?", "#reply And the route for Saturday?"],
+        "the two messages",
+      );
+      view.expectCalls([
+        returned("read", "Read from AGENTS.md"),
+        {
+          ...returned("sessions_send", "Session Send agent marlow, timeout 30", (d) =>
+            same(d.status, "ok", "the first send"),
+          ),
+        },
+        {
+          ...returned("sessions_send", "Session Send agent marlow, timeout 30", (d) =>
+            same(d.status, "ok", "the second send"),
+          ),
+          args: {
+            agentId: "marlow",
+            message: "#reply And the route for Saturday?",
+            timeoutSeconds: 30,
+          },
+        },
+        returned("ls", "Ls ."),
+      ]);
+      // Each send's recipient run: Marlow's main task, which answers with a note and calls nothing.
+      for (const end of view.tool("result", "sessions_send")) {
+        const runId = String(rec(rec(view.data(end).result).details).runId);
+        const recipient = new RunView(h.op("plain"), runId, RECIPIENT_SESSION, view.from);
+        recipient.expectCalls([]);
+        recipient.expectEnd("final", null);
+      }
+      // No text between the calls: the only assistant text is the final reply.
+      view.expectEnd("final", "Both answered, and my files are listed.");
+    },
+  },
+  {
+    name: "T3 Code stand-in: a thread launched, then waited on at once",
+    covers: ["#t3"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "t3"), "#t3");
+      const [launch] = scriptedCalls("#t3");
+      const thread = String(expectRendered(view, "t3_thread_launch").threadId);
+      view.expectCalls([
+        t3Call("t3_thread_launch", launch!.arguments, (s, where) => {
+          expect(isThreadId(s.threadId), `${where}: an MCP thread id`);
+          same(s.link, `${T3_LINK_BASE}${encodeURIComponent(thread)}`, `${where}: its link`);
+          same(
+            [s.projectId, s.status],
+            ["proj-backup-scripts", "running"],
+            `${where}: project and first run`,
+          );
+          expect(typeof s.runId === "string", `${where}: its first run's id`);
+          same(
+            rec(s.modelSelection).instanceId,
+            "codex",
+            `${where}: the canonical model selection`,
+          );
+        }),
+        t3Call("t3_thread_wait", { threadId: thread, timeoutMs: 30_000 }, (s, where) =>
+          same(
+            [s.threadId, s.status, s.timedOut],
+            [thread, "completed", false],
+            `${where}: the run finished`,
+          ),
+        ),
+      ]);
+      expectRendered(view, "t3_thread_wait");
+      view.expectEnd("final", "T3 Code finished the change.");
+    },
+  },
+  {
+    name: "T3 Code stand-in: a slow run waited on briefly, then asked to stop",
+    covers: ["#t3-start", "#t3-wait-short", "#t3-stop"],
+    run: async (h) => {
+      const view = await h.run(
+        "plain",
+        await h.session("main", "t3-stop"),
+        "#t3-start #t3-wait-short #t3-stop",
+      );
+      const [launch] = scriptedCalls("#t3-start");
+      const thread = String(expectRendered(view, "t3_thread_launch").threadId);
+      view.expectCalls([
+        t3Call("t3_thread_launch", launch!.arguments, (s) =>
+          same(s.status, "running", "the slow run is running"),
+        ),
+        t3Call("t3_thread_wait", { threadId: thread, timeoutMs: 1_500 }, (s, where) =>
+          same(
+            [s.threadId, s.status, s.timedOut],
+            [thread, "running", true],
+            `${where}: the wait ended first`,
+          ),
+        ),
+        t3Call("t3_thread_interrupt", { threadId: thread, stop: true }, (s, where) =>
+          same(
+            [s.threadId, s.status],
+            [thread, "interrupt_requested"],
+            `${where}: a stop asked for`,
+          ),
+        ),
+      ]);
+      view.expectEnd("final", null);
+    },
+  },
+  {
+    name: "T3 Code stand-in: a long reply read: the last page, with the reply's text cut",
+    covers: ["#t3-long", "#t3-read"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "t3-read"), "#t3-long #t3-read");
+      const [launch] = scriptedCalls("#t3-long");
+      const thread = String(expectRendered(view, "t3_thread_launch").threadId);
+      view.expectCalls([
+        t3Call("t3_thread_launch", launch!.arguments, (s, where) =>
+          same(s.threadId, thread, `${where}: its thread`),
+        ),
+        t3Call("t3_thread_wait", { threadId: thread, timeoutMs: 30_000 }, (s) =>
+          same(s.status, "completed", "the long run finished"),
+        ),
+        t3Call("t3_thread_read", { threadId: thread }, (s, where) => {
+          const t = rec(s.thread);
+          same(
+            [t.threadId, t.status, t.settled],
+            [thread, "completed", true],
+            `${where}: the thread`,
+          );
+          same([s.hasMore, s.nextPosition], [false, 2], `${where}: no more pages`);
+          const items = (s.items as JsonRecord[]).map((i) => [i.type, i.runId, i.textTruncated]);
+          same(
+            items,
+            [
+              ["user_message", t.latestRunId, false],
+              ["tool", t.latestRunId, false],
+              ["assistant_message", t.latestRunId, true],
+            ],
+            `${where}: the run's items, its reply cut`,
+          );
+          const reply = (s.items as JsonRecord[])[2]!;
+          same(
+            [String(reply.text).length, reply.nextTextOffset],
+            [MAX_CHARS_PER_ITEM, MAX_CHARS_PER_ITEM],
+            `${where}: the cut`,
+          );
+          for (const key of [
+            "visibility",
+            "sourceThreadId",
+            "createdBy",
+            "creationSource",
+            "position",
+            "itemId",
+          ])
+            expect(key in reply, `${where}: an item carries ${key}`);
+        }),
+      ]);
+      // The live event cuts so long a text (it ends "…(truncated)…"); its details keep the
+      // structured content whole, which the engine reads when the text cannot be.
+      const readEnd = view.tool("result", `${T3_CODE_SERVER}__t3_thread_read`)[0]!;
+      const readText = String(
+        rec((rec(view.data(readEnd).result).content as JsonRecord[])[0]).text,
+      );
+      expect(readText.startsWith("structuredContent:\n{"), "the read's text renders it");
+      if (readText.endsWith("…(truncated)…"))
+        h.observe(
+          "a tool event cuts a long result's text; its details keep the structured content",
+        );
+      // History keeps the rendering, cut by the gateway past its bound, and no details.
+      const history = rec(
+        await h.op("plain").request("chat.history", { sessionKey: view.sessionKey, limit: 20 }),
+      );
+      const rows = (Array.isArray(history.messages) ? history.messages : []).map(rec);
+      const results = rows.filter((row) => row.role === "toolResult");
+      same(
+        results.map((row) => row.details ?? null),
+        [null, null, null],
+        "history keeps no details for a tool server",
+      );
+      const read = results[2]!;
+      expect(
+        String(rec((read.content as JsonRecord[])[0]).text).startsWith(
+          'structuredContent:\n{\n  "hasMore": false',
+        ),
+        "history keeps the read's rendering, sorted",
+      );
+      view.expectEnd("final", null);
+    },
+  },
+  {
+    name: "T3 Code stand-in: a follow-up on the seeded thread, a wait, and its first page",
+    covers: ["#t3-send", "#t3-wait", "#t3-read-page"],
+    run: async (h) => {
+      const view = await h.run(
+        "plain",
+        await h.session("main", "t3-send"),
+        "#t3-send #t3-wait #t3-read-page",
+      );
+      view.expectCalls([
+        t3Call(
+          "t3_thread_send",
+          { threadId: SEEDED_THREAD, message: "Also add a test for machines that wake up late." },
+          (s, where) =>
+            same(
+              [s.threadId, s.delivery, s.status],
+              [SEEDED_THREAD, "started", "running"],
+              `${where}: a new run`,
+            ),
+        ),
+        t3Call("t3_thread_wait", { threadId: SEEDED_THREAD, timeoutMs: 30_000 }, (s) =>
+          same([s.status, s.timedOut], ["completed", false], "the follow-up's run finished"),
+        ),
+        t3Call("t3_thread_read", { threadId: SEEDED_THREAD, limit: 2 }, (s, where) => {
+          same([s.hasMore, (s.items as unknown[]).length], [true, 2], `${where}: one page of two`);
+          // The oldest page: an earlier run's items, not the latest run's reply.
+          const latest = rec(s.thread).latestRunId;
+          expect(
+            (s.items as JsonRecord[]).every((i) => i.runId !== latest),
+            `${where}: the first page holds an earlier run only`,
+          );
+        }),
+      ]);
+      view.expectEnd("final", null);
+    },
+  },
+  {
+    name: "T3 Code stand-in: projects and threads listed",
+    covers: ["#t3-list"],
+    run: async (h) => {
+      const key = await h.session("main", "t3-list");
+      const view = await h.run("plain", key, "#t3-list");
+      view.expectCalls([
+        t3Call("t3_project_list", {}, (s, where) => {
+          const projects = s.projects as JsonRecord[];
+          same(projects.length, 3, `${where}: three projects`);
+          same(
+            projects.map((p) => p.defaultModelSelection === null),
+            [false, false, true],
+            `${where}: one with no default model`,
+          );
+          same(s.nextCursor, null, `${where}: one page`);
+        }),
+        t3Call("t3_thread_list", { allProjects: true }, (s, where) => {
+          const threads = s.threads as JsonRecord[];
+          expect(
+            threads.some((t) => t.threadId === SEEDED_THREAD),
+            `${where}: the seeded thread`,
+          );
+          same(s.total, threads.length, `${where}: its total`);
+        }),
+      ]);
+      // The gateway's map names all seven by their own names, on the stand-in's server.
+      const answer = rec(await h.op("plain").request("tools.effective", { sessionKey: key }));
+      const tools = (Array.isArray(answer.groups) ? answer.groups : [])
+        .flatMap((g) => (Array.isArray(rec(g).tools) ? (rec(g).tools as JsonRecord[]) : []))
+        .filter((t) => t.source === "mcp" && t.mcpServer === T3_CODE_SERVER)
+        .map((t) => [t.id, t.mcpToolName]);
+      same(
+        tools.sort(),
+        [
+          ...[
+            "t3_project_list",
+            "t3_thread_interrupt",
+            "t3_thread_launch",
+            "t3_thread_list",
+            "t3_thread_read",
+            "t3_thread_send",
+            "t3_thread_wait",
+          ].map((tool) => [`${T3_CODE_SERVER}__${tool}`, tool]),
+          [DECOY_EFFECTIVE, DECOY_TOOL],
+        ].sort(),
+        "tools.effective",
+      );
+      view.expectEnd("final", null);
+    },
+  },
+  {
+    name: "T3 Code stand-in: a follow-up refused, as T3 Code refuses it: an error result with its code",
+    covers: ["#t3-refused"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "t3-refused"), "#t3-refused");
+      view.expectCalls([
+        t3Call(
+          "t3_thread_send",
+          { threadId: SEEDED_THREAD, message: "Steer the current turn.", mode: "steer" },
+          (s, where) =>
+            same(
+              [s._tag, typeof s.code, s.message],
+              [
+                "OrchestratorMcpFailure",
+                "string",
+                "Nothing is running to steer: the thread is idle.",
+              ],
+              `${where}: T3 Code's failure`,
+            ),
+          true,
+        ),
+      ]);
+      // The live event's details mask a field named `code` (observed: "thread…able"); the
+      // rendered text, which history keeps too, carries it whole. The cards read the text first.
+      const end = view.tool("result", `${T3_CODE_SERVER}__t3_thread_send`)[0]!;
+      const text = String(rec((rec(view.data(end).result).content as JsonRecord[])[0]).text);
+      const rendered = rec(JSON.parse(text.slice("structuredContent:\n".length)));
+      same(rendered.code, "thread_not_sendable", "the failure's code, in the rendered text");
+      const masked = rec(rec(rec(view.data(end).result).details).structuredContent).code;
+      if (masked !== rendered.code)
+        h.observe(`a tool event's details mask structuredContent.code: ${JSON.stringify(masked)}`);
+      view.expectEnd("final", null);
+    },
+  },
+  {
+    name: "T3 Code stand-in: a call whose name suggests T3 Code's read, whose result names another tool",
+    covers: ["#t3-decoy"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "t3-decoy"), "#t3-decoy");
+      view.expectCalls([
+        {
+          // The gateway reports the name it dispatched, in lower case; `tools.effective` keeps its case.
+          name: DECOY_EFFECTIVE.toLowerCase(),
+          args: { threadId: SEEDED_THREAD },
+          isError: false,
+          content: (texts, where) => same(texts.length, 1, `${where} text blocks`),
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(
+              [rec(details).mcpServer, rec(details).mcpTool],
+              [T3_CODE_SERVER, DECOY_TOOL],
+              `${where}: the result names the other tool`,
+            ),
+          title: "T3code T3 Thread Read-2",
+        },
+      ]);
+      view.expectEnd("final", null);
     },
   },
   {

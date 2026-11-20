@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { DECOY_EFFECTIVE, SEEDED_THREAD, T3_CODE_SERVER } from "./t3-code-mcp.ts";
 import { PICTURE_PATH } from "./seed-files.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
@@ -104,6 +105,36 @@ const tool = (name: string, args: Record<string, unknown>): ReplyStep => ({
 });
 const mcp = (name: string, args: Record<string, unknown>) =>
   tool(`${CODING_AGENT_SERVER}__${name}`, args);
+/** A call to one of the scripted T3 Code stand-in's seven tools, by the name the gateway gives it. */
+export const t3Name = (name: string) => `${T3_CODE_SERVER}__${name}`;
+/**
+ * The thread a T3 Code scenario acts on: the one the latest stand-in result
+ * since the user's message names, else the stand-in's seeded thread, whose
+ * launch no record holds.
+ */
+function t3Thread(ctx: PlanContext): string {
+  for (const result of [...ctx.results].reverse()) {
+    if (!result.name.startsWith(`${T3_CODE_SERVER}__`)) continue;
+    const threadId = lastResult(ctx, result.name)?.threadId;
+    if (typeof threadId === "string") return threadId;
+  }
+  return SEEDED_THREAD;
+}
+/** A T3 Code call whose arguments name the thread the scenario acts on. */
+const onThread = (name: string, args: Record<string, unknown> = {}): Step => ({
+  kind: "tool-from",
+  build: (ctx) => tool(t3Name(name), { threadId: t3Thread(ctx), ...args }),
+});
+/** What the task a T3 Code scenario launches asks for. */
+export const T3_TASK =
+  "In backup-scripts, make the weekly check skip machines that are asleep instead of failing.";
+const launch = (message: string, title = "Skip machines that are asleep") =>
+  tool(t3Name("t3_thread_launch"), {
+    projectId: "proj-backup-scripts",
+    title,
+    workspaceStrategy: { type: "root", branch: "main" },
+    message,
+  });
 
 /**
  * The latest result of a tool, parsed as JSON. Some tools put a summary
@@ -676,6 +707,37 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#reply", "Could you look over the plan?", 30),
   },
   {
+    name: "message-column",
+    phrase: "read then message your partner twice",
+    bots: "Marlow or Pip",
+    summary:
+      "A file read, two messages to the other bot, answered in their calls, and a folder listing, with no text between: one column of cards.",
+    steps: () => [
+      think("I will read my instructions, then ask my partner twice."),
+      tool("read", { path: "AGENTS.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: partnerOf(ctx),
+            message: "#reply Could you look over the plan?",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: partnerOf(ctx),
+            message: "#reply And the route for Saturday?",
+            timeoutSeconds: 30,
+          }),
+      },
+      tool("ls", { path: "." }),
+      say("Both answered, and my files are listed."),
+    ],
+  },
+  {
     name: "message-slow",
     phrase: "message your slow partner",
     bots: "Marlow or Pip",
@@ -757,6 +819,107 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "t3",
+    phrase: "start a t3 code thread",
+    summary:
+      "Launches a thread in the scripted T3 Code stand-in, then waits on it at once (the wait joins the thread's card).",
+    steps: () => [
+      think("This is a coding change. I will start a T3 Code thread for it."),
+      launch(T3_TASK),
+      onThread("t3_thread_wait", { timeoutMs: 30_000 }),
+      say("T3 Code finished the change."),
+    ],
+  },
+  {
+    name: "t3-start",
+    phrase: "start a t3 code thread and move on",
+    summary: "Launches a thread in the stand-in and does not wait: its run is still running.",
+    // No text after it, so a call that follows sits directly under the thread's card.
+    steps: () => [launch(`${T3_TASK} This one is slow.`)],
+  },
+  {
+    name: "t3-long",
+    phrase: "start a t3 code thread with a long reply",
+    summary:
+      "Launches a slow thread whose reply is longer than T3 Code's 20,000-character cut, then waits on it (6 seconds).",
+    steps: () => [
+      // Slow, so a viewer can open the task while it waits and see the read arrive.
+      launch(`${T3_TASK} Write a long report of what changed. This one is slow.`, "A long report"),
+      onThread("t3_thread_wait", { timeoutMs: 30_000 }),
+    ],
+  },
+  {
+    name: "t3-send",
+    phrase: "follow up in t3 code",
+    summary:
+      "A follow-up on the latest thread (else the stand-in's seeded thread), after a bubble, so it keeps a line of its own.",
+    steps: () => [
+      say("I will ask T3 Code for a test as well."),
+      onThread("t3_thread_send", { message: "Also add a test for machines that wake up late." }),
+    ],
+  },
+  {
+    name: "t3-read",
+    phrase: "read the t3 code thread",
+    summary: "Reads the latest thread from its oldest item (else the seeded thread's).",
+    steps: () => [onThread("t3_thread_read")],
+  },
+  {
+    name: "t3-read-page",
+    phrase: "read the first page of the t3 code thread",
+    summary: "Reads only the first two items of the latest thread: more pages remain.",
+    steps: () => [onThread("t3_thread_read", { limit: 2 })],
+  },
+  {
+    name: "t3-wait",
+    phrase: "wait for t3 code",
+    summary: "Waits on the latest thread's run, up to 30 seconds.",
+    steps: () => [onThread("t3_thread_wait", { timeoutMs: 30_000 })],
+  },
+  {
+    name: "t3-wait-short",
+    phrase: "wait briefly for t3 code",
+    summary:
+      "Waits on the latest thread's run for 1.5 seconds: the wait ends before a slow run does.",
+    steps: () => [onThread("t3_thread_wait", { timeoutMs: 1_500 })],
+  },
+  {
+    name: "t3-list",
+    phrase: "list the t3 code threads",
+    summary: "Lists the stand-in's projects, then its threads: two listing lines that fold.",
+    steps: () => [
+      tool(t3Name("t3_project_list"), {}),
+      tool(t3Name("t3_thread_list"), { allProjects: true }),
+    ],
+  },
+  {
+    name: "t3-stop",
+    phrase: "stop the t3 code thread",
+    summary: "Asks T3 Code to stop the latest thread's run (`stop: true`).",
+    steps: () => [onThread("t3_thread_interrupt", { stop: true })],
+  },
+  {
+    name: "t3-refused",
+    phrase: "steer the idle t3 code thread",
+    summary:
+      "Steers the seeded thread, which is idle: the stand-in refuses with `thread_not_sendable`, as T3 Code does.",
+    steps: () => [
+      tool(t3Name("t3_thread_send"), {
+        threadId: SEEDED_THREAD,
+        message: "Steer the current turn.",
+        mode: "steer",
+      }),
+    ],
+  },
+  {
+    name: "t3-decoy",
+    phrase: "read the t3 code notes",
+    summary: `A call to ${DECOY_EFFECTIVE}: its name suggests T3 Code's read, its result names another tool of the same server.`,
+    steps: () => [
+      { kind: "tool-from", build: (ctx) => tool(DECOY_EFFECTIVE, { threadId: t3Thread(ctx) }) },
+    ],
+  },
+  {
     name: "model-error",
     phrase: "fail with a model error",
     summary: "The model request fails, so the run ends in an error.",
@@ -825,7 +988,7 @@ export type Selection = { scenario: Scenario; arg: number };
  */
 export function selectScenarios(prompt: string): Selection[] {
   const selected: Selection[] = [];
-  for (const match of prompt.matchAll(/(?:^|\s)#([a-z][a-z-]*)(?:\s+(\d+))?/g)) {
+  for (const match of prompt.matchAll(/(?:^|\s)#([a-z][a-z0-9-]*)(?:\s+(\d+))?/g)) {
     const scenario = BY_NAME.get(match[1]!);
     if (!scenario) continue;
     const raw = match[2] === undefined ? (scenario.defaultArg ?? 0) : Number(match[2]);

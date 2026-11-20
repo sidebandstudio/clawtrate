@@ -18,6 +18,7 @@ import {
   useState,
   type ReactNode,
   type RefObject,
+  type UIEvent,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
@@ -141,11 +142,15 @@ function useHoldPlace(
   scroller: RefObject<HTMLDivElement | null>,
   following: RefObject<boolean>,
   toEnd: () => void,
+  /** Called when the transcript's content or size changes: only a layout change can clamp. */
+  onLayout: () => void,
 ) {
   useLayoutEffect(() => {
     const element = scroller.current;
     if (!element) return;
     let place: { block: Element; caret: Caret | null; top: number } | null = null;
+    // Where the hold last put the scroll, until that scroll is reported.
+    let held: number | null = null;
 
     /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
     const frame = () => {
@@ -175,30 +180,69 @@ function useHoldPlace(
       const rect = block.getBoundingClientRect();
       const found = caretAt(rect.left + 2, Math.max(line + 2, rect.top + 2));
       const caret = found && block.contains(found.node) ? found : null;
-      const held = { block, caret, top: 0 };
-      held.top = (drawnAt(held) ?? rect.top) - top;
-      place = held;
+      const next = { block, caret, top: 0 };
+      next.top = (drawnAt(next) ?? rect.top) - top;
+      place = next;
+    };
+
+    /** Put the held text back where it was drawn: the layout moved under it, not the reader. */
+    const hold = () => {
+      if (!place) return;
+      const now = drawnAt(place);
+      if (now === null) return;
+      const was = element.scrollTop;
+      element.scrollTop += now - frame().top - place.top;
+      if (element.scrollTop !== was) held = element.scrollTop;
     };
 
     // Watching the content too covers late reflows, such as fonts arriving, and every
     // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
+      onLayout();
       if (following.current) toEnd();
-      else if (place) {
-        const now = drawnAt(place);
-        if (now !== null) element.scrollTop += now - frame().top - place.top;
-      }
+      else hold();
+      record();
+    });
+    // A scroll is reported a frame after it happens. The hold's own is no new place of the
+    // reader's: a change committed before it is reported, such as an effect opening a part of
+    // a fold or a pane docking, has moved the layout again, and is held too, before the place
+    // is recorded. Any other scroll, the reader's or a control brought into view, is where the
+    // reader now is.
+    const onScroll = () => {
+      const own = held !== null && Math.abs(element.scrollTop - held) <= 0.5;
+      held = null;
+      if (own && !following.current) hold();
+      record();
+    };
+    // A change of content that moves the reading line without changing any size (a box above
+    // growing as much as one below shrinks) is held too.
+    const contentChange = new MutationObserver((records) => {
+      // A text that changes in place (a ticking time) moves nothing unless it resizes, which the
+      // resize observer reports: only a change of structure or of an element's state can clamp.
+      if (records.some((record) => record.type !== "characterData")) onLayout();
+      if (following.current) return;
+      hold();
       record();
     });
     record();
     observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
-    element.addEventListener("scroll", record, { passive: true });
+    if (element.firstElementChild) {
+      observer.observe(element.firstElementChild);
+      contentChange.observe(element.firstElementChild, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["open", "class", "style", "hidden"],
+      });
+    }
+    element.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       observer.disconnect();
-      element.removeEventListener("scroll", record);
+      contentChange.disconnect();
+      element.removeEventListener("scroll", onScroll);
     };
-  }, [scroller, following, toEnd]);
+  }, [scroller, following, toEnd, onLayout]);
 }
 
 /**
@@ -260,6 +304,38 @@ function TranscriptView({
     followTop.current = element.scrollTop;
   }, []);
 
+  // The reader's own input, or a jump the page makes for them, marks the next scroll as theirs
+  // for a moment. A scroll without it is a layout pass, which never stops following.
+  const scrollIntentUntil = useRef(0);
+  // A clamp: while following, a change of layout finds the view already moved up from where
+  // following put it, with no input of the reader's. A scroll the reader or a script made
+  // without changing the layout is not one.
+  const clampSeen = useRef(false);
+  const markScrollIntent = useCallback(() => {
+    scrollIntentUntil.current = performance.now() + 750;
+  }, []);
+  // A jump the page makes for the reader goes where its target is, down as well as up: content
+  // that grew below a followed end before following caught up can put the target below the view.
+  const jumpUntil = useRef(0);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const onJump = () => {
+      markScrollIntent();
+      jumpUntil.current = scrollIntentUntil.current;
+    };
+    element.addEventListener("clawtrate:transcript-navigation", onJump);
+    return () => element.removeEventListener("clawtrate:transcript-navigation", onJump);
+  }, [markScrollIntent]);
+  /** A fresh jump has moved the view from where following last put it, either way. */
+  const jumpedAway = useCallback(
+    (element: HTMLElement) =>
+      performance.now() <= jumpUntil.current &&
+      followTop.current !== null &&
+      Math.abs(element.scrollTop - followTop.current) > 1,
+    [],
+  );
+
   // What the reader has just opened stays in view (section 18): following the
   // end never pushes the line of a card, a fold or a row they opened above the
   // top of the view. That line is held at the top instead, and the reader is
@@ -278,6 +354,19 @@ function TranscriptView({
   const follow = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
+    // The reader moved the view up, or a jump moved it either way for them, and its scroll is not
+    // reported yet: that is where they are now, and the end does not take it back.
+    if (
+      (performance.now() <= scrollIntentUntil.current &&
+        followTop.current !== null &&
+        element.scrollTop < followTop.current - 1) ||
+      jumpedAway(element)
+    ) {
+      followTop.current = null;
+      following.current = false;
+      setAtEnd(false);
+      return;
+    }
     const held = opened.current;
     const line =
       held?.isConnected && held.open ? (held.querySelector(":scope > summary") ?? held) : null;
@@ -294,21 +383,34 @@ function TranscriptView({
     followTop.current = null;
     following.current = false;
     setAtEnd(false);
-  }, [toEnd]);
+  }, [toEnd, jumpedAway]);
 
-  const onScroll = useCallback(() => {
-    const element = scroller.current;
-    if (!element) return;
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const kept =
-      following.current && followTop.current !== null && element.scrollTop >= followTop.current - 1;
-    const near = kept || distance < NEAR_BOTTOM_PX;
-    if (kept && distance > 1) toEnd();
-    else followTop.current = near ? element.scrollTop : null;
-    following.current = near;
-    setAtEnd(near);
-    if (near) setSeenSize(contentSize);
-  }, [contentSize, toEnd]);
+  const onScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const element = scroller.current;
+      if (!element) return;
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      // A layout pass can clamp the scroll only when the layout changed: a scroll with no change
+      // of content or size since the last one moved the view for the reader.
+      const layoutPass = clampSeen.current;
+      clampSeen.current = false;
+      const readerMoved =
+        !event.nativeEvent.isTrusted ||
+        performance.now() <= scrollIntentUntil.current ||
+        !layoutPass;
+      const kept =
+        following.current &&
+        followTop.current !== null &&
+        (!readerMoved || (element.scrollTop >= followTop.current - 1 && !jumpedAway(element)));
+      const near = kept || distance < NEAR_BOTTOM_PX;
+      if (kept && distance > 1) toEnd();
+      else followTop.current = near ? element.scrollTop : null;
+      following.current = near;
+      setAtEnd(near);
+      if (near) setSeenSize(contentSize);
+    },
+    [contentSize, toEnd, jumpedAway],
+  );
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
@@ -322,7 +424,18 @@ function TranscriptView({
     if (atEnd) follow();
   }, [contentSize, atEnd, follow]);
 
-  useHoldPlace(scroller, following, follow);
+  const onLayout = useCallback(() => {
+    const element = scroller.current;
+    if (
+      element &&
+      following.current &&
+      followTop.current !== null &&
+      element.scrollTop < followTop.current - 1 &&
+      performance.now() > scrollIntentUntil.current
+    )
+      clampSeen.current = true;
+  }, []);
+  useHoldPlace(scroller, following, follow, onLayout);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.
@@ -368,6 +481,20 @@ function TranscriptView({
         className="transcript"
         ref={scroller}
         onScroll={onScroll}
+        onWheelCapture={(event) => {
+          if (event.deltaY < 0) markScrollIntent();
+        }}
+        onTouchMoveCapture={markScrollIntent}
+        // A press anywhere in the transcript is the reader's: on the scrollbar, or on what they
+        // open, which may change the layout before a scroll made just before it is reported.
+        onPointerDownCapture={markScrollIntent}
+        onKeyDownCapture={(event) => {
+          if (
+            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+            (event.shiftKey && event.key === " ")
+          )
+            markScrollIntent();
+        }}
         tabIndex={0}
         role="region"
         aria-label="Transcript"

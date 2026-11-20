@@ -108,6 +108,7 @@ import {
   type InstancePorts,
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { T3_CODE_SERVER } from "./t3-code-mcp.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { accountStoreProblems } from "./account-stores.ts";
 import {
@@ -258,6 +259,9 @@ async function waitFor(label: string, check: () => Promise<boolean>, timeoutMs: 
 
 /** The stand-in coding agent, run by the gateway as a stdio MCP server. */
 export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts", import.meta.url));
+
+/** The scripted T3 Code stand-in, run by the gateway as a stdio MCP server: never T3 Code itself. */
+export const T3_CODE_SCRIPT = fileURLToPath(new URL("./t3-code-mcp.ts", import.meta.url));
 
 /**
  * Each bot's tool policy. Exec stays denied for every bot but the shell bot,
@@ -510,6 +514,14 @@ export function devConfig(
           args: [CODING_AGENT_SCRIPT],
           cwd: stateDir,
         },
+        // The scripted T3 Code stand-in: the seven tools under their real names, in memory,
+        // over stdio. It is never the T3 Code app, and nothing names an address for it.
+        [T3_CODE_SERVER]: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [T3_CODE_SCRIPT],
+          cwd: stateDir,
+        },
       },
     },
     // No "Recent session creations" notice queued in a bot's main task for
@@ -592,6 +604,7 @@ export const ALLOWED_TOOLS = [
   "progress_card",
   "automations",
   `${CODING_AGENT_SERVER}__*`,
+  `${T3_CODE_SERVER}__*`,
 ] as const;
 
 export const DENIED_TOOLS = [

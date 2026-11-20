@@ -9,13 +9,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   applyAgentEvent,
+  callFromStep,
   emptyActivity,
   RawTable,
-  type Step,
+  t3CallOf,
   type TaskActivity,
 } from "@clawtrate/core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { selectCards } from "../../../packages/ui/src/cards/useCards.ts";
 
 type BuildSafeToolName = (params: {
   serverName: string;
@@ -89,22 +89,17 @@ function call(name: string, tool?: string): Pick<TaskActivity, "runs" | "approva
   }
   return a;
 }
-const rawOf = (step: Step) => step.raw;
-/** The calls drawn as T3 Code cards, given the gateway's map at the time. */
+/** The calls read as T3 Code's (`t3CallOf`), given the gateway's map at the time. */
 const cards = (
   activity: Pick<TaskActivity, "runs" | "approvals">,
   map: Record<string, { server: string; tool: string }>,
 ) =>
-  selectCards(
-    {
-      runs: activity.runs,
-      approvals: activity.approvals,
-      linkedRuns: {},
-      interSession: [],
-      mcpTools: map,
-    },
-    rawOf,
-  ).mcpCalls.filter((card) => card.codingAgent);
+  activity.runs.flatMap((run) =>
+    run.steps.flatMap((step) => {
+      const read = t3CallOf(callFromStep(step, run), { toolServers: map });
+      return read ? [read] : [];
+    }),
+  );
 
 describe("a T3 Code call before its result, by the gateway's own names", () => {
   it("F-132: a collision-renamed T3 Code tool shows as the card from its start, by the map", () => {
@@ -116,7 +111,7 @@ describe("a T3 Code call before its result, by the gateway's own names", () => {
     expect(name).toBe("coder__t3_thread_launch-2");
     const map = { [name]: { server: "coder", tool: "t3_thread_launch" } };
     expect(cards(call(name), map)).toMatchObject([{ tool: "t3_thread_launch", state: "started" }]);
-    expect(cards(call(name, "t3_thread_launch"), map)).toMatchObject([{ state: "returned" }]);
+    expect(cards(call(name, "t3_thread_launch"), map)).toMatchObject([{ state: "made" }]);
   });
 
   it("F-132: a tool whose own name only ends in a T3 Code tool's is not T3 Code, by the map", () => {
@@ -149,9 +144,7 @@ describe("a T3 Code call before its result, by the gateway's own names", () => {
     const rebuilt = { [later]: { server: "coder", tool: "t3_thread_launch-2" } };
     // The map missed it: an ordinary step until its result names T3 Code's tool, then the card.
     expect(cards(call(running), rebuilt)).toEqual([]);
-    expect(cards(call(running, "t3_thread_launch"), rebuilt)).toMatchObject([
-      { state: "returned" },
-    ]);
+    expect(cards(call(running, "t3_thread_launch"), rebuilt)).toMatchObject([{ state: "made" }]);
     // The other way round: the map says T3 Code, the result names the other tool.
     const stale = { [running]: { server: "coder", tool: "t3_thread_launch" } };
     expect(cards(call(running), stale)).toMatchObject([{ state: "started" }]);

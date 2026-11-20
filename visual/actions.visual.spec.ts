@@ -5,7 +5,15 @@
 // (apps/desktop/src/fixture/actions.ts).
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  openFixture,
+  OTTO_DISK,
+  paintedFinal,
+  settle,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
@@ -121,7 +129,10 @@ for (const size of SIZES) {
             page.locator(".transcript :is(details.card.action, .thought)").first(),
           ).toBeVisible();
           if (view.prepare) await view.prepare(page);
-          await settle(page);
+          // The final frame: fonts loaded, images decoded, no animation running, and the
+          // transcript where it ends up (at its end, or where a scene put an opened card),
+          // unchanged for several frames. Two frames are not enough on a slow machine.
+          await paintedFinal(page, { atEnd: view.prepare === undefined });
           await expect(page).toHaveScreenshot(`actions-${name}-${theme}-${size.name}.png`);
         });
       }
@@ -858,14 +869,20 @@ test.describe("action cards", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await open(page, "actions-becoming-fold", "light", "&hold");
+    // The scene's later steps wait until the card is open, not a timer that can race the click;
+    // once started, the second read waits for its release.
+    await open(page, "actions-becoming-fold", "light", "&steps=manual&hold");
     // An earlier card, opened: the read of AGENTS.md.
     const opened = cards(page).filter({
       has: page.locator(':scope > summary[aria-label^="Read AGENTS.md"]'),
     });
     await line(opened).click();
     await expect(opened).toHaveAttribute("open", "");
+    await paintedFinal(page, { atEnd: false });
     const top = (await line(opened).boundingBox())!.y;
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { runSteps(): void } }).clawtrateFixture.runSteps(),
+    );
     // A card below updates: the run's read becomes a fold of two as the second read arrives.
     await releaseSecondRead(page);
     const fold = page.locator(".transcript details.card.action[data-fold]");
@@ -916,16 +933,24 @@ test.describe("action cards", () => {
   test("an open card becomes a fold with its first row open in its view; focus stays on the same control; nothing above moves", async ({
     page,
   }) => {
-    await open(page, "actions-becoming-fold", "light", "&hold");
+    // The second read comes when the check has the first one open, not after a time.
+    await open(page, "actions-becoming-fold", "light", "&steps=manual&hold");
     const first = cards(page).last();
     await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     await line(first).click();
     await first.getByRole("tab", { name: "Raw" }).click();
     await expect(first.getByRole("tab", { name: "Raw" })).toBeFocused();
-    // Opening Raw reflows the card. Measure its position before the second read arrives.
-    await settle(page);
+    // The opened view is final before its place is taken: Raw's content in, nothing moving. Opened
+    // while following the end, the card is held at the top once its content is in (section 18).
+    await expect(first.getByRole("region", { name: "What the gateway sent" })).not.toContainText(
+      "Loading",
+    );
+    await paintedFinal(page, { atEnd: false });
     await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     const top = (await line(first).boundingBox())!.y;
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { runSteps(): void } }).clawtrateFixture.runSteps(),
+    );
     // The second read arrives: one fold, open, its first row open on Raw, focus on that Raw tab.
     await releaseSecondRead(page);
     const fold = page.locator(".transcript details.card.action[data-fold]");
@@ -988,6 +1013,60 @@ test.describe("action cards", () => {
     await expect(parts).toHaveCount(2);
     await expect(parts.nth(0)).toHaveAttribute("open", "");
     await expect(parts.nth(1).locator(".fold-rows .step").nth(1)).toHaveAttribute("open", "");
+  });
+
+  test("the reading line holds through a second change above it committed before the hold's own scroll is reported", async ({
+    page,
+  }) => {
+    // The hold moves the view when the layout moves; that scroll is reported a frame later. A
+    // change committed in between (an effect opening a fold's part, a pane docking) moves the
+    // layout again, and is held too: the hold's own scroll is not where the reader now is.
+    await page.setViewportSize({ width: 1440, height: 520 });
+    await open(page, "actions-long");
+    const marker = page.getByText("The house loses most heat through the loft.");
+    await marker.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+      scroller.scrollTop +=
+        element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const before = (await marker.boundingBox())!.y;
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      // A bubble drawn above the line, after the read of the energy bills.
+      const insert = (text: string) =>
+        fixture.setState((state) => {
+          const key = "agent:otto:disk-space";
+          const t = state.transcripts[key]!;
+          const items = t.items.map((item) => {
+            const at = item.blocks.findIndex(
+              (b) =>
+                b.kind === "tool-call" &&
+                b.name === "read" &&
+                (b.argumentsText ?? "").includes("energy-bills"),
+            );
+            if (at === -1) return item;
+            const blocks = [...item.blocks];
+            blocks.splice(at + 1, 0, { kind: "text", text });
+            return { ...item, blocks };
+          });
+          return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };
+        });
+      insert("The bills are in. Two more files to read.");
+      // The hold answers this frame's layout with a scroll; the second change lands after that
+      // frame is drawn and before the next one reports the scroll.
+      requestAnimationFrame(() => setTimeout(() => insert("One of them is from last winter.")));
+    });
+    await expect(page.getByText("One of them is from last winter.")).toBeVisible();
+    await settle(page);
+    await settle(page);
+    expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
   });
 
   test("F-430: at phone width the sentence wraps to at most two lines, the detail is below it, and the state word is whole", async ({

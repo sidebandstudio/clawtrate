@@ -104,6 +104,15 @@ const linked = (state: LinkedRun["state"]): Record<string, LinkedRun> => ({
 });
 
 describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
+  it("F-122: a call waiting for approval goes back to Call started once allowed, and on from there", () => {
+    expect(advanceBotMessageState("waiting-for-approval", "started")).toBe("started");
+    expect(advanceBotMessageState("started", "waiting-for-approval")).toBe("waiting-for-approval");
+    expect(advanceBotMessageState("waiting-for-approval", "sent")).toBe("sent");
+    // Final states stay final, and a delivered message never goes back to Call started.
+    expect(advanceBotMessageState("replied", "started")).toBe("replied");
+    expect(advanceBotMessageState("sent", "started")).toBe("sent");
+  });
+
   it("a started call is Started, delivery not established, with the recipient from the arguments", () => {
     const [card] = select(startSend()).botMessages;
     expect(card).toMatchObject({

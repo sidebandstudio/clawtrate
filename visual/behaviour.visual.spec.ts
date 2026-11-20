@@ -2,7 +2,8 @@
 // These need no gateway; e2e/preview.spec.ts checks the same shell against one.
 import { expect, test, type Page } from "@playwright/test";
 import { DOCK_FROM } from "../packages/ui/src/layout.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { contextFor, openFixture, OTTO_DISK, paintedFinal, settle, SIZES } from "./fixture.ts";
+import { LIVE_VIEWS } from "./live-scenes.ts";
 import { markReadingLine, readingLineSamples, watchReadingLine } from "./reading-line.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -681,5 +682,231 @@ test.describe("the strip at twice the pixel density", () => {
       return { text: range.getBoundingClientRect().width, box: e.getBoundingClientRect().width };
     });
     expect(fit.text).toBeLessThanOrEqual(fit.box + 0.01);
+  });
+});
+
+/** How far the transcript is from its end, in pixels. */
+const fromEnd = (page: Page) =>
+  page.getByTestId("transcript").evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight);
+
+// A layout pass can move the scroll up to a new end, with no input from the reader and no net
+// change of size; the view still follows the end. Only the reader's own input, or a jump the
+// page makes for them, stops following.
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`the end at phone width, ${theme}`, () => {
+    test.use(contextFor(PHONE, theme));
+    for (const scene of ["run-stopping", "access-denied", "run-queued"]) {
+      test(`${scene}: a layout pass that clamps the scroll, with no reader input, leaves the transcript at its end`, async ({
+        page,
+      }) => {
+        await openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed`, theme);
+        await LIVE_VIEWS.find((view) => view.scene === scene)!.ready(page);
+        await paintedFinal(page);
+        const clamp = await page.getByTestId("transcript").evaluate(async (element) => {
+          const scroller = element as HTMLElement;
+          const inner = scroller.firstElementChild as HTMLElement;
+          const before = scroller.scrollTop;
+          const previous = inner.style.cssText;
+          let clamped = 0;
+          // In one frame: the content shrinks so the scroll is clamped, then is as it was.
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => {
+              inner.style.setProperty("height", `${scroller.clientHeight + 150}px`, "important");
+              inner.style.setProperty("min-height", "0px", "important");
+              inner.style.setProperty("overflow", "hidden", "important");
+              clamped = scroller.scrollTop;
+              inner.style.cssText = previous;
+              resolve();
+            }),
+          );
+          return { before, clamped };
+        });
+        expect(clamp.clamped).toBeLessThan(clamp.before - 96);
+        await paintedFinal(page);
+        expect(await fromEnd(page)).toBeLessThanOrEqual(1);
+      });
+    }
+  });
+}
+
+test.describe("the end and the reader's own input", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("the reader's wheel up stops following: new content does not pull them back to the end", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopping&${OTTO_DISK}&panel=closed`, "light");
+    await paintedFinal(page);
+    const transcript = page.getByTestId("transcript");
+    const box = (await transcript.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -600);
+    await expect.poll(() => fromEnd(page)).toBeGreaterThan(400);
+    const away = await fromEnd(page);
+    // New content below: a reader who scrolled up stays where they are.
+    await transcript.evaluate((element) => {
+      const room = document.createElement("div");
+      room.style.height = "200px";
+      element.firstElementChild!.append(room);
+    });
+    await settle(page);
+    await settle(page);
+    expect(await fromEnd(page)).toBeGreaterThan(away);
+  });
+
+  test("Show this thread's card, from the end, brings the thread's card into view and keeps it there", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    await openFixture(page, "scene=t3-thread", "light");
+    await paintedFinal(page);
+    expect(await fromEnd(page)).toBeLessThanOrEqual(1);
+    const own = page.locator('.card.action[data-call="call_t3r"]');
+    await own.locator(":scope > summary").click();
+    await own.getByRole("button", { name: "Show this thread's card" }).click();
+    // The call's own item on the thread's card takes focus, in view.
+    const item = page.getByTestId("t3-card").locator('[data-item-call="call_t3r"] > summary');
+    await expect(item).toBeFocused();
+    await settle(page);
+    await settle(page);
+    await expect(item).toBeInViewport();
+  });
+
+  // On a slower machine the jump's frame can come before following has caught up with the card it
+  // opened, so the jump goes down to the item. Held here: the resize observations, and in the
+  // second order the scroll events too, so following meets the jump before its scroll is reported.
+  for (const order of ["its scroll reported first", "the card's growth seen first"] as const) {
+    test(`Show this thread's card, from the end, its jump made before following caught up with the opened card (${order}), keeps the item in view`, async ({
+      page,
+    }) => {
+      await page.addInitScript(() => {
+        const w = window as unknown as { holdResize: boolean; releaseResize(): void };
+        const queued: (() => void)[] = [];
+        const Real = window.ResizeObserver;
+        window.ResizeObserver = class extends Real {
+          constructor(callback: ResizeObserverCallback) {
+            super((entries, observer) => {
+              if (w.holdResize) queued.push(() => callback(entries, observer));
+              else callback(entries, observer);
+            });
+          }
+        };
+        w.releaseResize = () => {
+          w.holdResize = false;
+          for (const run of queued.splice(0)) run();
+        };
+      });
+      await page.setViewportSize({ width: 390, height: 600 });
+      await openFixture(page, "scene=t3-thread", "light");
+      await paintedFinal(page);
+      const own = page.locator('.card.action[data-call="call_t3r"]');
+      await own.locator(":scope > summary").click();
+      await settle(page);
+      await settle(page);
+      expect(await fromEnd(page)).toBeLessThanOrEqual(1);
+      const jump = await own
+        .getByRole("button", { name: "Show this thread's card" })
+        .evaluate(async (button, holdScroll) => {
+          const w = window as unknown as { holdResize: boolean; releaseResize(): void };
+          const transcript = document.querySelector('[data-testid="transcript"]')!;
+          const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()));
+          const hold = (event: Event) => {
+            if (event.target === transcript) event.stopImmediatePropagation();
+          };
+          w.holdResize = true;
+          if (holdScroll) window.addEventListener("scroll", hold, true);
+          const before = transcript.scrollTop;
+          (button as HTMLElement).click();
+          // Asked for after the jump's own frame, so it runs just after the jump.
+          await frame();
+          const after = transcript.scrollTop;
+          if (!holdScroll) {
+            await frame();
+            await frame();
+          }
+          w.releaseResize();
+          await frame();
+          window.removeEventListener("scroll", hold, true);
+          return { before, after };
+        }, order === "the card's growth seen first");
+      // The case itself: the jump went down, to an item below the view.
+      expect(jump.after).toBeGreaterThan(jump.before + 1);
+      const item = page.getByTestId("t3-card").locator('[data-item-call="call_t3r"] > summary');
+      await expect(item).toBeFocused();
+      await settle(page);
+      await settle(page);
+      await expect(item).toBeInViewport();
+    });
+  }
+});
+
+test.describe("the reading line on a phone", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("the reading line holds when one commit grows a box above it and shrinks one below by as much", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopping&${OTTO_DISK}&panel=closed`, "light");
+    await paintedFinal(page);
+    const transcript = page.getByTestId("transcript");
+    await transcript.evaluate((element) => {
+      const scroller = element as HTMLElement;
+      const inner = scroller.firstElementChild as HTMLElement;
+      const marker = [...inner.querySelectorAll<HTMLElement>(".bubble")][5]!;
+      marker.id = "held-marker";
+      const above = document.createElement("div");
+      above.id = "grows-above";
+      const below = document.createElement("div");
+      below.id = "shrinks-below";
+      below.style.height = "104px";
+      inner.prepend(above);
+      inner.append(below);
+      const band = Number.parseFloat(getComputedStyle(inner).paddingTop);
+      scroller.scrollTop +=
+        marker.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const at = () =>
+      transcript.evaluate((element) => ({
+        y: document.getElementById("held-marker")!.getBoundingClientRect().y,
+        height: element.scrollHeight,
+      }));
+    const before = await at();
+    await transcript.evaluate(() => {
+      document.getElementById("grows-above")!.style.height = "104px";
+      document.getElementById("shrinks-below")!.style.height = "0px";
+    });
+    await settle(page);
+    const after = await at();
+    expect(after.height).toBe(before.height);
+    expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(1);
+  });
+
+  test("the reading line holds while the composer grows by two lines and a card opens above it", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=run-stopping&${OTTO_DISK}&panel=closed`, "light");
+    await paintedFinal(page);
+    const transcript = page.getByTestId("transcript");
+    // The reader at a bubble below the first card, the card above the reading line.
+    const marker = transcript.locator(".bubble").nth(5);
+    await marker.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+      scroller.scrollTop +=
+        element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const before = (await marker.boundingBox())!.y;
+    await transcript.evaluate(() => {
+      const card = document.querySelector<HTMLDetailsElement>(".transcript details.card");
+      if (card) card.open = true;
+    });
+    await page.getByTestId("composer-input").fill("One\nTwo\nThree");
+    await settle(page);
+    await settle(page);
+    expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
   });
 });

@@ -197,6 +197,8 @@ export type TaskContext = {
   fresh: boolean;
 };
 
+import type { T3Facts } from "./t3-facts.ts";
+
 export type ToolResult = {
   isError: boolean;
   text: string;
@@ -231,6 +233,11 @@ export type TranscriptBlock =
       /** The row carried no arguments at all (`argumentsText` is then empty). */
       argumentsAbsent?: boolean;
       result: ToolResult | null;
+      /**
+       * What a tool-server call's arguments and result say that a T3 Code card
+       * reads (`t3-facts.ts`), taken from the whole row before its text is cut.
+       */
+      t3?: T3Facts;
     };
 
 export type TranscriptItem = {

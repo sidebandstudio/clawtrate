@@ -227,7 +227,7 @@ function cutOff(run: Pick<Run, "state" | "error" | "ending">): boolean {
 /** A tool step as the reading takes it. */
 export function callFromStep(
   step: Step,
-  run: Pick<Run, "state" | "error" | "ending" | "origin">,
+  run: Pick<Run, "state" | "error" | "ending" | "origin"> & { id?: string },
 ): ActionCall {
   const open = step.status === "running" || step.status === "waiting";
   // A step whose run ended before its result arrived here (`unknown`): no result is known, so it
@@ -270,6 +270,10 @@ export function callFromStep(
     partial: open || unended ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
     ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
+    ...(step.t3 ? { t3: step.t3 } : {}),
+    ...(run.id ? { runId: run.id } : {}),
+    // The order results were recorded in: the result's own time, or its history row's.
+    ...(!open && !unended ? { resultAt: step.endedAt } : {}),
   };
 }
 
@@ -277,14 +281,20 @@ export function callFromStep(
 export function callFromBlock(
   block: Extract<TranscriptBlock, { kind: "tool-call" }>,
   step: Step | undefined,
-  run: Pick<Run, "state" | "error" | "ending" | "origin"> | undefined,
+  run: (Pick<Run, "state" | "error" | "ending" | "origin"> & { id?: string }) | undefined,
 ): ActionCall {
   if (step && run) {
     const fromStep = callFromStep(step, run);
     // A viewer sent only item events has no arguments for the call: history's block has them.
-    const call = Object.keys(fromStep.args).length
+    const withArgs = Object.keys(fromStep.args).length
       ? fromStep
       : { ...fromStep, args: parseArgs(block.argumentsText) };
+    // History's row may hold T3 Code's facts the step has not got yet: its result's, or, for a
+    // step with none, those of the arguments it took from the row.
+    const call =
+      block.t3 && ((!withArgs.t3?.read && block.t3.read) || !withArgs.t3)
+        ? { ...withArgs, t3: block.t3 }
+        : withArgs;
     // History holds no result, and the step's error says nothing (it came from an item's end,
     // not a result): nothing establishes how the call ended.
     if (!block.result && call.isError && !call.text)
@@ -329,6 +339,7 @@ export function callFromBlock(
     startedAt: null,
     endedAt: null,
     fromHistory: true,
+    ...(block.t3 ? { t3: block.t3 } : {}),
   };
 }
 

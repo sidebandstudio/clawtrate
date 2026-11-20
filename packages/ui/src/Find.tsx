@@ -13,6 +13,7 @@ import {
   type RefObject,
 } from "react";
 import { ArrowDownIcon, ArrowUpIcon, CloseIcon, SearchIcon } from "./icons.tsx";
+import { markTranscriptNavigation } from "./reading-line.ts";
 
 const ALL = "clawtrate-find";
 const CURRENT = "clawtrate-find-current";
@@ -163,6 +164,7 @@ export function FindBar({
       getComputedStyle(scroller.firstElementChild ?? scroller).paddingTop,
     );
     if (at.top < box.top + band || at.bottom > box.bottom - 80) {
+      markTranscriptNavigation(scroller);
       scroller.scrollTop += at.top - box.top - band - (box.height - band) / 3;
     }
   }, [matches, current, scope]);

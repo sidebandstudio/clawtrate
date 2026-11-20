@@ -1,43 +1,28 @@
-// The Messaged cards (conversation.md sections 10 and 11): one card for each
-// message a bot sends to another bot or to T3 Code, drawn only from the bot's
-// own tool events as the engine reads them. No state claims more than an
+// The Messaged cards (conversation.md section 10): one card for each message a
+// bot sends to another bot, drawn only from the bot's own tool events as the
+// engine reads them. T3 Code's thread cards are in `actions/T3Thread.tsx`. No state claims more than an
 // event established, and the app makes no connection to T3 Code.
 
-import type {
-  Bot,
-  BotMessageCard,
-  InterSessionMessage,
-  McpCallCard,
-  Run,
-  StepRaw,
-} from "@clawtrate/core";
-import { useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import type { Bot, BotMessageCard, InterSessionMessage, Run, StepRaw } from "@clawtrate/core";
+import { useContext, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
-import { CardThoughtContext, controlName, useCardEnv, useStepHandover } from "./context.tsx";
+import { CardThoughtContext, useCardEnv } from "./context.tsx";
 import {
   botMessageKey,
   botMessageNote,
   firstLineOf,
   LIVE_STATES,
-  mcpKey,
-  mcpNote,
   MESSAGED_STATES,
   nameOf,
   recipientName,
-  resultLink,
-  sentText,
   sentVerb,
-  targetChips,
   type MessagedKey,
 } from "./model.ts";
 import { cardDomId } from "./placement.ts";
 import {
-  AgentMark,
   CardFoot,
   ChevronIcon,
   CodeBlock,
-  ExternalIcon,
-  FileIcon,
   Glyph,
   timeOf,
   tookOf,
@@ -45,6 +30,7 @@ import {
   type RawContent,
 } from "./parts.tsx";
 import type { StepRawState } from "./useCards.ts";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 /** A bot for an avatar: the listed one, or one drawn from its id. */
 function botFor(bots: Bot[], id: string | null, name: string): Bot {
@@ -404,199 +390,6 @@ export function BotMessageCardView({
   );
 }
 
-// "Messaged T3 Code" ---------------------------------------------------------------
-
-export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRawState }) {
-  const thought = useContext(CardThoughtContext);
-  const env = useCardEnv();
-  // The ordinary step this call was drawn as until its result named it, as the reader left it.
-  const handover = useStepHandover();
-  const [handed] = useState(() => {
-    const state = card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined;
-    return state?.from === "step" ? state : undefined;
-  });
-  // Kept for the ordinary step this call becomes again if its result names another tool.
-  const raw = useRawDisclosure(read.load, handed?.open === true);
-  const note = (element: HTMLDetailsElement, focused: boolean, target?: Element | null) =>
-    card.toolCallId &&
-    handover?.note(card.toolCallId, {
-      open: element.open,
-      focused,
-      from: "card",
-      raw: raw.open,
-      control: focused ? controlName(target ?? document.activeElement, element) : null,
-    });
-  // Opening or closing Raw is part of how the reader left the card.
-  useEffect(() => {
-    const element = document.getElementById(cardDomId({ kind: "t3-code", id: card.id }));
-    if (element instanceof HTMLDetailsElement)
-      note(element, element.contains(document.activeElement));
-    // Only when Raw opens or closes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [raw.open]);
-  const run = env.runOf(card.runId);
-  const step = run?.steps.find((each) => each.id === card.stepId);
-  const key = mcpKey(card, env.transcript.approvals, step?.status === "waiting");
-  const sender = env.bot ?? botFor(env.bots, null, "The bot");
-  const lost = env.connection.status !== "connected";
-  const [, word] = MESSAGED_STATES[key];
-  const text = sentText(card);
-  const first = firstLineOf(text);
-  const chips = targetChips(card.args);
-  const link = resultLink(card);
-  const domId = cardDomId({ kind: "t3-code", id: card.id });
-  useLayoutEffect(() => {
-    if (!handed || !(handed.open || handed.focused)) return;
-    const element = document.getElementById(domId);
-    if (!(element instanceof HTMLDetailsElement)) return;
-    // Open only if the step was; focus moves over either way.
-    if (handed.open) element.open = true;
-    if (handed.focused) element.querySelector("summary")?.focus({ preventScroll: true });
-  }, [handed, domId]);
-
-  const agent = (
-    <span className="exchange-agent">
-      <AgentMark />
-    </span>
-  );
-  let cameBack: ReactNode;
-  if (key === "call-made") {
-    cameBack = (
-      <li className="exchange-item">
-        {agent}
-        <div>
-          <div className="exchange-meta">
-            <b>T3 Code</b>
-            <span>· the call returned</span>
-            {card.resultAt !== null && <time>{clock(card.resultAt)}</time>}
-          </div>
-          {card.result && card.result.text.trim() !== "" ? (
-            <div className="exchange-text">{card.result.text}</div>
-          ) : (
-            <p className="exchange-note">The call returned no text.</p>
-          )}
-          <p className="exchange-note">
-            This shows the call was made. It does not show that the work is finished.
-          </p>
-          {card.workMayContinue && (
-            <p className="exchange-continue">
-              The call was made. Work handed to T3 Code may continue there.
-            </p>
-          )}
-        </div>
-      </li>
-    );
-  } else {
-    cameBack = (
-      <NoteItem lead={agent} who="T3 Code">
-        <p className="exchange-note">
-          {mcpNote(key, card, sender.name, env.transcript.approvals, run)}
-        </p>
-        {key === "failed" && card.error && (
-          <CodeBlock label="Error" text={card.error} copy="error" tone="danger" />
-        )}
-      </NoteItem>
-    );
-  }
-
-  return (
-    <details
-      className="card messaged"
-      data-target="t3code"
-      data-call={card.toolCallId ?? undefined}
-      data-state={key}
-      data-connection={lost ? "lost" : undefined}
-      id={domId}
-      data-testid="t3-card"
-      onToggle={(event) =>
-        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
-      }
-      onFocus={(event) => note(event.currentTarget, true, event.target)}
-      onBlur={(event) => {
-        const next = event.relatedTarget as Element | null;
-        note(event.currentTarget, event.currentTarget.contains(next), next);
-      }}
-    >
-      <summary aria-label={`Messaged T3 Code: ${first} ${word}.`} title={first}>
-        <span className="messaged-verb">Messaged</span>
-        <span className="messaged-who">
-          <AgentMark />
-          T3 Code
-        </span>
-        <span className="messaged-first">{first}</span>
-        <StateWord state={key} lost={lost} />
-        <ChevronIcon className="chevron" />
-      </summary>
-      <div className="messaged-body">
-        {thought && <div className="action-thought">{thought}</div>}
-        <ol className="exchange">
-          <SentItem
-            sender={sender}
-            verb={sentVerb(key)}
-            at={card.requestedAt}
-            text={text}
-            chips={
-              chips.length > 0 && (
-                <div className="chips" aria-label="Where it was sent">
-                  {chips.map((chip) => (
-                    <span className="chip" key={chip.label}>
-                      {chip.label} <span>{chip.value}</span>
-                    </span>
-                  ))}
-                </div>
-              )
-            }
-          />
-          {cameBack}
-        </ol>
-        {card.files.length > 0 && (
-          <div className="chips" aria-label="Files">
-            {card.files.map((file, index) => (
-              <span className="chip" key={index}>
-                <FileIcon />
-                {file.name ?? file.uri ?? file.mimeType ?? "A file"}
-              </span>
-            ))}
-          </div>
-        )}
-        <CardFoot
-          disclosure={raw}
-          raw={callRaw(
-            read,
-            {
-              toolName: step?.toolName ?? null,
-              startedAt: card.requestedAt,
-              endedAt: card.endedAt,
-            },
-            [
-              { label: "Tool call", value: card.toolCallId },
-              { label: "Run", value: card.runId },
-              { label: "Approval", value: card.approvalId },
-            ],
-            step?.status === "failed" ? card.error : null,
-            key === "call-started" || key === "approval",
-            step?.truncated ?? false,
-          )}
-        >
-          {link && (
-            // Opened only when chosen: a plain link, nothing is fetched before that.
-            <a
-              className="link-button"
-              href={link.uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Open the T3 Code thread in your browser"
-            >
-              Open thread
-              <ExternalIcon />
-            </a>
-          )}
-        </CardFoot>
-      </div>
-    </details>
-  );
-}
-
 // "Message from <bot>" --------------------------------------------------------------
 
 /** The receiving side: the message that started a run here, with that run's state. */
@@ -806,6 +599,7 @@ export function focusCard(domId: string): void {
   const element = document.getElementById(domId);
   if (!element) return;
   if (element instanceof HTMLDetailsElement) element.open = true;
+  markTranscriptNavigation(element);
   element.scrollIntoView({ block: "nearest" });
   const target =
     element instanceof HTMLDetailsElement

@@ -60,11 +60,19 @@ export async function settle(page: Page): Promise<void> {
 
 /**
  * The frame a screenshot is to show is the final one: every font face the page uses is
- * loaded and none is loading, every image is decoded, and the transcript, at its end, and
- * the shelf keep the same geometry for three frames in a row. Text on screen alone does not
+ * loaded and none is loading, every image is decoded, no finite animation is running, and the
+ * transcript, at its end, and the shelf keep the same geometry for five frames in a row. Text on screen alone does not
  * say so: a font, an image or the follow-to-end scroll can still move what is drawn.
  */
-export async function paintedFinal(page: Page): Promise<void> {
+export async function paintedFinal(
+  page: Page,
+  /**
+   * `atEnd: false` where the reader has opened something the view holds in place, so the
+   * transcript's final position is not its end (conversation.md 18): it is then final when
+   * it has not moved for those frames.
+   */
+  { atEnd: toEnd = true }: { atEnd?: boolean } = {},
+): Promise<void> {
   await expect
     .poll(
       () =>
@@ -101,27 +109,20 @@ export async function paintedFinal(page: Page): Promise<void> {
     .toBe(true);
   // When the wait times out, keep what each frame looked like so the artifact shows
   // whether the transcript stopped following the end or the shelf kept moving.
-  const frames: Array<{
+  type Frame = {
     scrollTop: number | null;
     scrollHeight: number | null;
     clientHeight: number | null;
     shelf: number[][];
-  }> = [];
+  };
+  const frames: Frame[] = [];
   try {
     await expect
       .poll(
         async () => {
           const attempt = await page.evaluate(
-            () =>
-              new Promise<{
-                atEnd: boolean;
-                frames: Array<{
-                  scrollTop: number | null;
-                  scrollHeight: number | null;
-                  clientHeight: number | null;
-                  shelf: number[][];
-                }>;
-              }>((resolve) => {
+            (toEnd) =>
+              new Promise<{ final: boolean; frames: Frame[] }>((resolve) => {
                 const geometry = () => {
                   const transcript = document.querySelector<HTMLElement>(
                     "[data-testid=transcript]",
@@ -146,25 +147,43 @@ export async function paintedFinal(page: Page): Promise<void> {
                     transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
                   );
                 };
+                // A finite animation still running (a card rising in, a line closing up) can still
+                // move what is drawn; the spinning working mark never ends and moves nothing.
+                const settled = () =>
+                  document
+                    .getAnimations()
+                    .every(
+                      (each) =>
+                        each.playState !== "running" ||
+                        each.effect?.getComputedTiming().iterations === Infinity,
+                    );
                 const seen = [geometry()];
                 const frame = () => {
                   seen.push(geometry());
-                  if (seen.length < 4) requestAnimationFrame(frame);
+                  if (seen.length < 6) requestAnimationFrame(frame);
                   else {
-                    // Record the full boxes, but keep the wait on the original vertical layout.
+                    // Record the full boxes, but keep the wait on the vertical layout.
                     const layouts = seen.map(({ shelf, ...transcript }) =>
                       JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
                     );
-                    resolve({ atEnd: new Set(layouts).size === 1 && atEnd(), frames: seen });
+                    resolve({
+                      final: new Set(layouts).size === 1 && settled() && (!toEnd || atEnd()),
+                      frames: seen,
+                    });
                   }
                 };
                 requestAnimationFrame(frame);
               }),
+            toEnd,
           );
           frames.push(...attempt.frames);
-          return attempt.atEnd;
+          return attempt.final;
         },
-        { message: "the transcript at its end and the shelf, unchanged for three frames" },
+        {
+          message: toEnd
+            ? "the transcript at its end and the shelf, unchanged for five frames, no animation running"
+            : "the transcript and the shelf, unchanged for five frames, no animation running",
+        },
       )
       .toBe(true);
   } catch (error) {

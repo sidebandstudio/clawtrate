@@ -80,5 +80,7 @@ export {
   type SendMode,
   type SendOptions,
 } from "./client.ts";
+export * from "./t3-facts.ts";
+export * from "./t3-code.ts";
 export type * from "./desktop-updates.ts";
 export { noDesktopUpdates } from "./no-desktop-updates.ts";

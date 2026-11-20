@@ -4,7 +4,7 @@
 //
 // The rule (conversation.md section 1): a run's cards follow the message that
 // started it, before its reply, in the order things arrived: each message to
-// another bot or to T3 Code where its call began, then approvals and
+// another bot where its call began (T3 Code's threads are placed by the action feed), then approvals and
 // questions in the order they were asked. A run whose start the transcript
 // does not show yet, and a card whose run is not known, go at the end, before
 // the streaming reply. An inter-session message that started a run here is
@@ -13,7 +13,6 @@
 import type {
   BotMessageCard,
   InterSessionMessage,
-  McpCallCard,
   SelectedCards,
   TaskActivity,
   TranscriptItem,
@@ -22,8 +21,7 @@ import type {
 export type CardRef =
   | { kind: "approval"; id: string }
   | { kind: "question"; id: string }
-  | { kind: "bot-message"; id: string }
-  | { kind: "t3-code"; id: string };
+  | { kind: "bot-message"; id: string };
 
 export type CardPlacement = {
   /** Every card of a run, in order, by run id: for a transcript that draws runs itself. */
@@ -40,11 +38,6 @@ export type PlacementInput = Pick<TaskActivity, "runs" | "approvals" | "question
   items: TranscriptItem[];
   interSession: InterSessionMessage[];
 };
-
-/** Only T3 Code calls get a card of their own; other tool servers' calls stay steps. */
-export function codingCalls(selected: SelectedCards): McpCallCard[] {
-  return selected.mcpCalls.filter((card) => card.codingAgent);
-}
 
 export function placeCards(input: PlacementInput, selected: SelectedCards): CardPlacement {
   const items = new Set(input.items.map((item) => item.id));
@@ -70,7 +63,7 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
     run.steps.forEach((step, s) => stepOrder.set(step.id, r * 10_000 + s)),
   );
   const timeOf = (at: number | null) => at ?? Number.POSITIVE_INFINITY;
-  const pushCall = (card: BotMessageCard | McpCallCard, kind: "bot-message" | "t3-code") =>
+  const pushCall = (card: BotMessageCard, kind: "bot-message") =>
     arrivals.push({
       at: timeOf(card.requestedAt),
       kind: 0,
@@ -79,7 +72,6 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
       ref: { kind, id: card.id },
     });
   for (const card of selected.botMessages) pushCall(card, "bot-message");
-  for (const card of codingCalls(selected)) pushCall(card, "t3-code");
   input.approvals.forEach((card, order) =>
     arrivals.push({
       at: timeOf(card.createdAt),

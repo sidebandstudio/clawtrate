@@ -10,7 +10,17 @@ import {
   parseExecApproval,
   parsePluginApproval,
   RawTable,
-  selectMessageCards,
+  callFromStep,
+  latestSent,
+  placeT3,
+  readDimensions,
+  readingContextOf,
+  readLines,
+  t3CallOf,
+  threadStateOf,
+  workMayContinue,
+  type T3Call,
+  type T3Sequence,
   type TaskActivity,
   type ApprovalCard,
   type ClawtrateState,
@@ -18,7 +28,6 @@ import {
   type Run,
   type Step,
   type Transcript,
-  T3_CODE_TOOLS,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import {
@@ -30,26 +39,21 @@ import {
   decisionPhase,
   expiryLine,
   mayDispatch,
-  mcpKey,
-  resultLink,
   MESSAGED_STATES,
   sentVerb,
   type MessagedKey,
-  mcpNote,
   questionNote,
   resolvedView,
   sendableDecisions,
   SUMMARY_COMMAND_CHARS,
-  targetChips,
 } from "../../../packages/ui/src/cards/model.ts";
 import { placeCards } from "../../../packages/ui/src/cards/placement.ts";
-import { isCardCall, selectCards } from "../../../packages/ui/src/cards/useCards.ts";
+import { selectCards } from "../../../packages/ui/src/cards/useCards.ts";
 import {
   CARD_SCENES,
   CARD_TASK,
   cardScene,
   RECEIVING_TASK,
-  T3_SERVER,
   wholeApproval,
   type CardSceneName,
 } from "../src/fixture/cards.ts";
@@ -96,22 +100,6 @@ const cards = (name: CardSceneName) => {
   // No server is named as T3 Code: its calls are known by T3 Code's own tools, as their results name them.
   return { transcript, selected: selectCards(transcript, rawOf) };
 };
-/**
- * A scene's cards as the engine draws them when it has the gateway's own map
- * from the call's effective name to its server and tool. The app has no such
- * map today; this tests what the card says in the states only it could reach.
- */
-const mapped = (name: CardSceneName) => {
-  const { transcript } = scene(name);
-  const selected = selectMessageCards(transcript, {
-    mcpTools: {
-      [`${T3_SERVER}__t3_thread_launch`]: { server: T3_SERVER, tool: "t3_thread_launch" },
-    },
-    rawOf,
-  });
-  return { transcript, selected };
-};
-
 describe("approval cards from the engine's state", () => {
   it("F-163 F-171 F-168 F-329: a pending command names the bot, what it runs and where, its warnings and its expiry; only offered decisions show, and Deny always", () => {
     const { card } = approval("approval-pending");
@@ -385,7 +373,7 @@ describe("Messaged cards from the engine's state", () => {
     expect(say("messaged-recipient-stopped")).toBe(
       "Marlow's run for this message was stopped before it replied.",
     );
-    expect(say("messaged-not-sent")).toBe("You denied the approval. Nothing was sent.");
+    expect(say("messaged-not-sent")).toBe("The approval was denied. Nothing was sent.");
     expect(say("messaged-unknown")).toBe(
       "Otto was stopped before the call returned. The gateway cannot say whether Marlow received it.",
     );
@@ -412,318 +400,136 @@ describe("Messaged cards from the engine's state", () => {
   });
 });
 
-describe("Messaged T3 Code cards from the engine's state", () => {
-  it("F-134 F-314: a call its result names is a T3 Code card, from the bot's own tool events only", () => {
-    const expected: Array<[CardSceneName, string]> = [
-      ["t3-call-made", "call-made"],
-      ["t3-work-may-continue", "call-made"],
-      ["t3-failed", "failed"],
-    ];
-    for (const [name, key] of expected) {
-      const { transcript, selected } = cards(name);
-      const calls = selected.mcpCalls.filter((card) => card.codingAgent);
-      expect(calls, name).toHaveLength(1);
-      const step = transcript.runs[0]!.steps.find((each) => each.id === calls[0]!.stepId);
-      expect(mcpKey(calls[0]!, transcript.approvals, step?.status === "waiting"), name).toBe(key);
+/** A scene's T3 Code calls as the transcript places them (section 11): the reading the cards draw. */
+function t3Of(name: CardSceneName, ctxOver?: Partial<ReturnType<typeof readingContextOf>>) {
+  const { transcript } = scene(name);
+  const ctx = { ...readingContextOf(transcript), ...ctxOver };
+  const sequence: T3Sequence = [];
+  const calls: T3Call[] = [];
+  for (const run of transcript.runs) {
+    for (const step of run.steps) {
+      if (step.kind !== "tool") continue;
+      const call = t3CallOf(callFromStep(step, run), ctx);
+      if (call) calls.push(call);
+      sequence.push(call ? { type: "t3", call } : { type: "other" });
+      // Text written before the next call is a bubble between them.
+      for (const p of run.preambles ?? [])
+        if (p.beforeCall === step.toolCallId) sequence.splice(-1, 0, { type: "other" });
     }
-    expect(cards("t3-failed").selected.mcpCalls[0]!.error).toMatch(/ECONNREFUSED/);
-  });
-
-  it("F-132 F-134: with the gateway's map, a call is the T3 Code card from its start, in each state before a result; without it, an ordinary step", () => {
-    const expected: Array<[CardSceneName, string]> = [
-      ["t3-started", "call-started"],
-      ["t3-approval", "approval"],
-      ["t3-delivery-unknown", "delivery-unknown"],
-      ["t3-not-sent", "not-sent"],
-    ];
-    for (const [name, key] of expected) {
-      const { transcript, selected } = cards(name);
-      expect(transcript.mcpTools, name).toEqual({
-        [`${T3_SERVER}__t3_thread_launch`]: { server: T3_SERVER, tool: "t3_thread_launch" },
-      });
-      const calls = selected.mcpCalls.filter((card) => card.codingAgent);
-      expect(calls, name).toHaveLength(1);
-      const step = transcript.runs[0]!.steps.find((each) => each.id === calls[0]!.stepId);
-      expect(mcpKey(calls[0]!, transcript.approvals, step?.status === "waiting"), name).toBe(key);
-      // No map: nothing identifies the call before its result.
-      const bare = selectCards({ ...transcript, mcpTools: {} }, rawOf);
-      expect(
-        bare.mcpCalls.filter((card) => card.codingAgent),
-        name,
-      ).toEqual([]);
-    }
-  });
-
-  it("F-132 F-134: the result overrules the map: another tool named is an ordinary step; a result naming none never makes Call made", () => {
-    const { transcript } = cards("t3-call-made");
-    const steps = transcript.runs[0]!.steps;
-    const withResult = (result: Record<string, unknown> | null, status: Step["status"]) => ({
-      ...transcript,
-      runs: transcript.runs.map((run) => ({
-        ...run,
-        steps: steps.map((step) => ({
-          ...step,
-          status,
-          raw: step.raw ? { ...step.raw, result } : null,
-        })),
-      })),
+    sequence.push({ type: "boundary" });
+  }
+  const placed = placeT3(sequence);
+  const threadOf = (head: string) =>
+    calls.filter((c) => {
+      const at = placed.get(c.id);
+      return c.id === head || ((at?.type === "joined" || at?.type === "line") && at.head === head);
     });
-    const t3 = (t: Parameters<typeof selectCards>[0]) =>
-      selectCards(t, rawOf).mcpCalls.filter((card) => card.codingAgent);
-    // Its own result names T3 Code's tool: Call made.
-    expect(t3(transcript)).toMatchObject([{ state: "returned" }]);
-    // The map named T3 Code, the result names another tool: an ordinary step.
-    const other = { mcpServer: T3_SERVER, mcpTool: "t3_project_list_v2" };
-    expect(t3(withResult({ result: { content: [], details: other } }, "done"))).toEqual([]);
-    // A result naming no tool, as history keeps it: never Call made on the map's word.
-    expect(t3(withResult({ content: [{ type: "text", text: "ok" }] }, "done"))).toEqual([]);
-    // A failure naming no tool keeps the map's word.
-    expect(
-      t3(withResult({ content: [{ type: "text", text: "Denied." }], isError: true }, "failed")),
-    ).toMatchObject([{ state: "failed" }]);
-  });
+  return { transcript, calls, placed, threadOf };
+}
 
-  it("F-134 F-470: with the gateway's map of effective names, each state before a result says only what the events establish", () => {
-    const expected: Array<[CardSceneName, string]> = [
-      ["t3-started", "call-started"],
-      ["t3-approval", "approval"],
-      ["t3-delivery-unknown", "delivery-unknown"],
-      ["t3-not-sent", "not-sent"],
-    ];
-    for (const [name, key] of expected) {
-      const { transcript, selected } = mapped(name);
-      const calls = selected.mcpCalls.filter((card) => card.codingAgent);
-      expect(calls, name).toHaveLength(1);
-      const step = transcript.runs[0]!.steps.find((each) => each.id === calls[0]!.stepId);
-      expect(mcpKey(calls[0]!, transcript.approvals, step?.status === "waiting"), name).toBe(key);
-    }
-    const note = (name: CardSceneName, key: Parameters<typeof mcpNote>[0]) => {
-      const { transcript, selected } = mapped(name);
-      return mcpNote(key, selected.mcpCalls[0]!, "Otto", transcript.approvals, transcript.runs[0]);
-    };
-    expect(note("t3-approval", "approval")).toBe(
-      "This call waits for your approval. Nothing has been sent.",
-    );
-    expect(note("t3-not-sent", "not-sent")).toBe("You denied the approval. Nothing was sent.");
-  });
-
-  it("F-133 F-135: the sent text, the target fields it carries, the result's own files and link", () => {
-    const call = cards("t3-call-made").selected.mcpCalls[0]!;
-    expect(call.text).toMatch(/^In backup-scripts/);
-    expect(targetChips(call.args)).toEqual([
-      { label: "Project", value: "backup-scripts" },
-      { label: "Branch", value: "main" },
+describe("T3 Code thread cards from the engine's state", () => {
+  it("F-132: with the gateway's map a call is T3 Code's from its start; without it, an ordinary card until its result names it", () => {
+    const mapped = t3Of("t3-started");
+    expect(mapped.calls.map((c) => [c.tool, c.state, c.mapped])).toEqual([
+      ["t3_thread_launch", "started", true],
     ]);
-    expect(call.files.map((file) => file.name)).toEqual(["plan.md"]);
-    expect(resultLink(call)).toEqual({
-      uri: "https://t3.example.test/projects/backup-scripts/threads/18",
-      title: null,
+    expect(mapped.placed.get("call_t3")).toEqual({ type: "card", thread: null, head: "call_t3" });
+    expect(t3Of("t3-general").calls).toEqual([]);
+    // Recognized per call, by its tool: no server is T3 Code as a whole.
+    const listing = t3Of("t3-listings");
+    expect(listing.calls.map((c) => c.role)).toEqual(["listing", "listing"]);
+  });
+
+  it("F-134 F-314 F-470: each thread's state is what its calls' events establish", () => {
+    const word = (name: CardSceneName) => {
+      const t = t3Of(name);
+      const head = [...t.placed].find(([, at]) => at.type === "card")![0];
+      return threadStateOf(t.threadOf(head));
+    };
+    expect(word("t3-started")).toEqual({ type: "open", word: "call-started" });
+    expect(word("t3-approval")).toEqual({ type: "open", word: "waiting" });
+    expect(word("t3-checking")).toEqual({ type: "open", word: "checking" });
+    // Several calls reported a status: Call made, each status on its own item.
+    expect(word("t3-thread")).toMatchObject({ type: "call", state: "made" });
+    expect(word("t3-refused")).toMatchObject({ type: "reported", status: "running" });
+    // A launch that ended without a result naming a thread joins none: it is a card of its own,
+    // saying how the call itself ended.
+    const own = (name: CardSceneName) => {
+      const t = t3Of(name);
+      return [t.placed.get("call_t3")?.type, t.calls[0]!.state];
+    };
+    expect(own("t3-failed")).toEqual(["own", "failed"]);
+    expect(own("t3-not-sent")).toEqual(["own", "not-sent"]);
+    expect(own("t3-delivery-unknown")).toEqual(["own", "unknown"]);
+    const refused = t3Of("t3-refused").calls[1]!;
+    expect([refused.state, refused.error]).toEqual([
+      "failed",
+      { code: "thread_not_sendable", message: "Nothing is running to steer: the thread is idle." },
+    ]);
+  });
+
+  it("F-313: one card per thread: a call directly under it joins; one after a bubble keeps its line, and is an item too", () => {
+    const t = t3Of("t3-thread");
+    expect(Object.fromEntries([...t.placed].map(([id, at]) => [id, at.type]))).toEqual({
+      call_t3: "card",
+      call_t3w: "joined",
+      call_t3s: "line",
+      call_t3r: "line",
     });
-    // A call with no link in its result offers none.
-    expect(resultLink(cards("t3-failed").selected.mcpCalls[0]!)).toBeNull();
-  });
-
-  it("F-137: after a stop, a call that returned keeps Call made and says work may continue; one that had not returned is Delivery unknown", () => {
-    const made = cards("t3-work-may-continue").selected.mcpCalls[0]!;
-    expect([made.state, made.workMayContinue]).toEqual(["returned", true]);
-    const { transcript, selected } = mapped("t3-delivery-unknown");
-    const unknown = selected.mcpCalls[0]!;
-    expect(mcpNote("delivery-unknown", unknown, "Otto", [], transcript.runs[0])).toBe(
-      "Otto was stopped before the call returned. The gateway cannot say whether T3 Code received it.",
+    expect(t.threadOf("call_t3").map((c) => c.id)).toEqual([
+      "call_t3",
+      "call_t3w",
+      "call_t3s",
+      "call_t3r",
+    ]);
+    expect(latestSent(t.threadOf("call_t3"))).toBe(
+      "Also add a test for machines that wake up late.",
     );
   });
 
-  it("F-441: two calls with no identifier between them are two cards", () => {
-    const { transcript } = cards("t3-call-made");
-    const run = transcript.runs[0]!;
-    const second: Step = {
-      ...run.steps[0]!,
-      id: "tool:call_t3b",
-      toolCallId: "call_t3b",
-      raw: run.steps[0]!.raw ? { ...run.steps[0]!.raw } : null,
-    };
-    const doubled = { ...transcript, runs: [{ ...run, steps: [...run.steps, second] }] };
-    const calls = selectCards(doubled, rawOf).mcpCalls;
-    expect(calls.map((card) => card.id)).toEqual(["tool:call_t3", "tool:call_t3b"]);
+  it("F-313: a thread whose launch is not in the record has its card at its first call there", () => {
+    const t = t3Of("t3-before-record");
+    expect(t.placed.get("call_t3s")).toMatchObject({ type: "card", head: "call_t3s" });
+    expect(t.placed.get("call_t3w")).toMatchObject({ type: "joined", head: "call_t3s" });
+    expect(threadStateOf(t.threadOf("call_t3s"))).toMatchObject({ type: "call", state: "made" });
   });
 
-  it("F-132 F-138: a call is T3 Code by its own tool as its result names it, per call, with no setting and no address", () => {
-    const run = (calls: Array<{ name: string; details?: Record<string, unknown> }>) => {
-      const raw = new RawTable();
-      const ctx = { sessionKey: "agent:otto:t", now: 1, raw };
-      let a: TaskActivity = emptyActivity;
-      let seq = 0;
-      const tool = (data: Record<string, unknown>) => {
-        seq += 1;
-        a = applyAgentEvent(
-          a,
-          { runId: "r", seq, stream: "tool", ts: seq, sessionKey: ctx.sessionKey, data },
-          ctx,
-        ).activity;
-      };
-      calls.forEach(({ name, details }, i) => {
-        tool({ phase: "start", name, toolCallId: `c${i}`, args: { message: "Go" } });
-        if (details) {
-          tool({
-            phase: "result",
-            name,
-            toolCallId: `c${i}`,
-            isError: false,
-            result: { content: [{ type: "text", text: "ok" }], details },
-          });
-        }
-      });
-      return { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] };
-    };
-    const t3 = (
-      calls: Array<{ name: string; details?: Record<string, unknown> }>,
-      mcpTools: Transcript["mcpTools"] = {},
-    ) =>
-      selectCards({ ...run(calls), mcpTools }, rawOf)
-        .mcpCalls.filter((card) => card.codingAgent)
-        .map((card) => card.tool);
-    for (const tool of T3_CODE_TOOLS) {
-      expect(
-        t3([{ name: `any__${tool}`, details: { mcpServer: "any", mcpTool: tool } }]),
-        tool,
-      ).toEqual([tool]);
-    }
-    // Whatever the gateway named it: the result's own tool decides.
-    expect(
-      t3([{ name: "renamed_tool_9", details: { mcpServer: "coder", mcpTool: "t3_thread_send" } }]),
-    ).toEqual(["t3_thread_send"]);
-    // Another tool on the same server is not T3 Code, even beside one that is.
-    expect(
-      t3([
-        {
-          name: "coder__t3_thread_launch",
-          details: { mcpServer: "coder", mcpTool: "t3_thread_launch" },
-        },
-        { name: "coder__send_message", details: { mcpServer: "coder", mcpTool: "send_message" } },
-      ]),
-    ).toEqual(["t3_thread_launch"]);
-    // Nothing is read out of a name before the result.
-    for (const name of [
-      "my_coder__t3_thread_launch",
-      "t3_thread_launch",
-      "coder__t3_thread_launch-2",
-    ]) {
-      expect(t3([{ name }]), name).toEqual([]);
-    }
-    expect(
-      t3([
-        {
-          name: "my_coder__orchestrator_capabilities",
-          details: { mcpServer: "my_coder", mcpTool: "orchestrator_capabilities" },
-        },
-      ]),
-    ).toEqual([]);
-    // No server is T3 Code as a whole: where the map names one of its tools on a server,
-    // a result naming an ordinary tool on that server overrules it.
-    const launch = { server: "my_coder", tool: "t3_thread_launch" };
-    expect(t3([{ name: "opaque_7" }], { opaque_7: launch })).toEqual(["t3_thread_launch"]);
-    expect(
-      t3([{ name: "opaque_7", details: { mcpServer: "my_coder", mcpTool: "read_file" } }], {
-        opaque_7: launch,
-      }),
-    ).toEqual([]);
-    expect(
-      t3([
-        {
-          name: "my_coder__send_message",
-          details: { mcpServer: "my_coder", mcpTool: "send_message" },
-        },
-      ]),
-    ).toEqual([]);
+  it("F-441: two threads are two cards, and the same thread id on another server is a third", () => {
+    const t = t3Of("t3-two-threads");
+    const cards = [...t.placed].filter(([, at]) => at.type === "card").map(([id]) => id);
+    expect(cards).toEqual(["call_t3", "call_t3b", "call_t3l"]);
+    const keys = cards.map((id) => t.calls.find((c) => c.id === id)!.thread!.key);
+    expect(new Set(keys).size).toBe(3);
   });
 
-  // The gateway names a tool-server call `<safe server>__<safe tool>`, cut to 64
-  // characters, with `-2` on a collision (`buildSafeToolName`, OpenClaw 2026.10.6's
-  // agent-bundle-mcp-names). These are the names it gives in the three cases.
-  const calls = (specs: Array<{ name: string; tool?: string }>) => {
-    const raw = new RawTable();
-    const ctx = { sessionKey: "agent:otto:names", now: 1, raw };
-    let a: TaskActivity = emptyActivity;
-    let seq = 0;
-    const apply = (data: Record<string, unknown>) => {
-      seq += 1;
-      a = applyAgentEvent(
-        a,
-        { runId: "r", seq, stream: "tool", ts: seq, sessionKey: ctx.sessionKey, data },
-        ctx,
-      ).activity;
-    };
-    specs.forEach((spec, i) => {
-      apply({ phase: "start", name: spec.name, toolCallId: `c${i}`, args: { message: "Go" } });
-      if (spec.tool) {
-        apply({
-          phase: "result",
-          name: spec.name,
-          toolCallId: `c${i}`,
-          isError: false,
-          result: {
-            content: [{ type: "text", text: "ok" }],
-            details: { mcpServer: "coder", mcpTool: spec.tool },
-          },
-        });
-      }
-    });
-    const transcript = { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] };
-    return { transcript, selected: selectCards(transcript, rawOf) };
-  };
-
-  it("F-132: a different tool on the same server does not become T3 Code", () => {
-    const { selected } = calls([
-      { name: "coder__t3_thread_launch", tool: "t3_thread_launch" },
-      { name: "coder__send_message", tool: "send_message" },
+  it("F-133: a read says how much it read in both dimensions", () => {
+    const [, cut, page] = t3Of("t3-read-cut").calls;
+    expect(readLines(readDimensions(cut!.facts))).toEqual([
+      "Part of the reply only: its text was cut, and the rest was not read",
     ]);
-    expect(selected.mcpCalls.find((card) => card.tool === "send_message")?.codingAgent).toBe(false);
-    expect(selected.mcpCalls.find((card) => card.tool === "t3_thread_launch")?.codingAgent).toBe(
-      true,
-    );
+    expect(readLines(readDimensions(page!.facts))).toEqual([
+      "First page only: the reply may continue",
+      "Part of the run only: an item's text was cut, and the rest was not read",
+    ]);
+    expect(readLines(readDimensions(t3Of("t3-thread").calls[3]!.facts))).toEqual([
+      "Read to the end",
+    ]);
   });
 
-  it("F-132: a tool whose own name only ends in a T3 Code tool's name is not T3 Code", () => {
-    // `buildSafeToolName({serverName: "coder", toolName: "helper__t3_thread_launch"})`.
-    expect(calls([{ name: "coder__helper__t3_thread_launch" }]).selected.mcpCalls).toEqual([]);
-    const after = calls([
-      { name: "coder__helper__t3_thread_launch", tool: "helper__t3_thread_launch" },
-    ]);
-    expect(after.selected.mcpCalls.some((card) => card.codingAgent)).toBe(false);
+  it("F-137: after a stop, a launch that was made keeps Call made and may go on; one that had not returned is Delivery unknown", () => {
+    const made = t3Of("t3-work-may-continue").calls;
+    expect([made[0]!.state, workMayContinue(made)]).toEqual(["made", true]);
+    const unknown = t3Of("t3-delivery-unknown").calls;
+    expect([unknown[0]!.state, workMayContinue(unknown)]).toEqual(["unknown", false]);
   });
 
-  it("F-132: a gateway-renamed T3 Code call is an ordinary step until its result names it, then its card keeps the place where the call began", () => {
-    // `buildSafeToolName` with `coder__t3_thread_launch` already reserved.
-    const name = "coder__t3_thread_launch-2";
-    const before = calls([{ name }]);
-    expect(before.selected.mcpCalls).toEqual([]);
-    // Its payload is read whole when it did not travel with the snapshot, though renamed.
-    const step = before.transcript.runs[0]!.steps[0]!;
-    expect(isCardCall(step)).toBe(true);
-    expect(isCardCall({ ...step, toolName: "exec" })).toBe(false);
-    const after = calls([{ name, tool: "t3_thread_launch" }]);
-    expect(after.selected.mcpCalls.filter((card) => card.codingAgent)).toHaveLength(1);
-    // Placed where the call began: before an approval the run asked for later.
-    const run = after.transcript.runs[0]!;
-    const approval = {
-      id: "ap-later",
-      runId: run.id,
-      createdAt: (run.steps[0]!.startedAt ?? 0) + 1,
-    };
-    const placed = placeCards(
-      {
-        runs: after.transcript.runs,
-        approvals: [approval as ApprovalCard],
-        questions: [],
-        items: [],
-        interSession: [],
-      },
-      after.selected,
-    );
-    expect(placed.byRun.get(run.id)).toEqual([
-      { kind: "t3-code", id: after.selected.mcpCalls[0]!.id },
-      { kind: "approval", id: "ap-later" },
-    ]);
+  it("F-134: Delivery unknown is not final: the call's own result, read later, makes it Call made", () => {
+    const stopped = scene("t3-delivery-unknown").transcript;
+    const later = scene("t3-work-may-continue").transcript;
+    const ctx = readingContextOf(stopped);
+    const step = (t: Transcript) => t.runs[0]!.steps.find((s) => s.toolCallId === "call_t3")!;
+    expect(t3CallOf(callFromStep(step(stopped), stopped.runs[0]!), ctx)!.state).toBe("unknown");
+    expect(t3CallOf(callFromStep(step(later), stopped.runs[0]!), ctx)!.state).toBe("made");
   });
 });
 
@@ -802,37 +608,6 @@ describe("cards follow the gateway's identifiers, forward only", () => {
       ["First change", "returned", null],
       ["Second change", "failed", "second failed"],
     ]);
-  });
-
-  it("F-313: a later call with its own identifier never changes an earlier card; nothing is matched by project or thread", () => {
-    let a = start(emptyActivity, "t3code__t3_thread_send", "c1", "Fix the check");
-    a = result(a, "t3code__t3_thread_send", "c1", {
-      mcpServer: "t3code",
-      mcpTool: "t3_thread_send",
-      structuredContent: { threadId: 18 },
-    });
-    const before = select(a);
-    a = start(a, "t3code__t3_thread_read", "c3", "How is thread 18 going?");
-    a = event(a, {
-      phase: "result",
-      name: "t3code__t3_thread_read",
-      toolCallId: "c3",
-      isError: true,
-      result: {
-        content: [{ type: "text", text: "thread 18 failed" }],
-        details: {
-          mcpServer: "t3code",
-          mcpTool: "t3_thread_read",
-          structuredContent: { threadId: 18 },
-        },
-      },
-    });
-    const after = select(a, before).mcpCalls;
-    expect(after.find((card) => card.toolCallId === "c1")).toMatchObject({
-      state: "returned",
-      error: null,
-    });
-    expect(after.find((card) => card.toolCallId === "c3")).toMatchObject({ state: "failed" });
   });
 
   it("F-435: a send result that arrives after the recipient's run started never moves the card back to Sent, and a final state never changes", () => {
@@ -1059,70 +834,30 @@ describe("cards in the order the gateway's events establish", () => {
   });
 });
 
-describe("a T3 Code card's state moves only as its own call's events establish", () => {
-  it("F-134: Delivery unknown is not final: the call's own result, read later from history, makes it Call made; Call made is final", () => {
-    // The same call, as history later holds it with its result (same call id, same run).
-    const made = cards("t3-call-made").transcript;
-    const withResult = (transcript: Transcript) => ({
-      ...transcript,
-      runs: transcript.runs.map((run) => ({ ...run, steps: made.runs[0]!.steps })),
-    });
-    // In the app, with the gateway's map: Delivery unknown, then Call made when the result names it.
-    const stopped = cards("t3-delivery-unknown");
-    expect(stopped.selected.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
-      { state: "unknown" },
-    ]);
-    const shown = selectCards(withResult(stopped.transcript), rawOf, stopped.selected);
-    expect(shown.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
-      { state: "returned" },
-    ]);
-    // With the gateway's map of names, Delivery unknown is not final either.
-    const known = mapped("t3-delivery-unknown");
-    const before = known.selected;
-    expect(before.mcpCalls[0]!.state).toBe("unknown");
-    const later = selectMessageCards(withResult(known.transcript), {
-      rawOf,
-      previous: before,
-    });
-    expect(later.mcpCalls[0]).toMatchObject({ id: before.mcpCalls[0]!.id, state: "returned" });
-    // Call made is final: another result for the same call that is not the gateway's own
-    // correction (a `replace` frame) changes nothing.
-    const KEY = "agent:otto:final";
-    const raw = new RawTable();
-    const ctx = { sessionKey: KEY, now: 1, raw };
-    let seq = 0;
-    const tool = (activity: TaskActivity, data: Record<string, unknown>) =>
-      applyAgentEvent(
-        activity,
-        { runId: "r", seq: (seq += 1), stream: "tool", ts: seq, sessionKey: KEY, data },
-        ctx,
-      ).activity;
-    const name = "t3code__t3_thread_launch";
-    const details = { mcpServer: "t3code", mcpTool: "t3_thread_launch" };
-    let a = tool(emptyActivity, { phase: "start", name, toolCallId: "c", args: { message: "Go" } });
-    a = tool(a, {
-      phase: "result",
-      name,
-      toolCallId: "c",
-      isError: false,
-      result: { content: [{ type: "text", text: "ok" }], details },
-    });
-    const madeCards = selectCards(
-      { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
-      rawOf,
+describe("Messaged words follow the record", () => {
+  it("F-122: a recorded denial does not assign its decision to the current viewer", () => {
+    const { transcript, selected } = cards("messaged-not-sent");
+    const card = selected.botMessages[0]!;
+    const note = botMessageNote(
+      botMessageKey(card),
+      card,
+      { sender: "Otto", recipient: "Marlow" },
+      transcript.approvals,
+      transcript.runs.find((run) => run.id === card.runId),
     );
-    a = tool(a, {
-      phase: "result",
-      name,
-      toolCallId: "c",
-      isError: true,
-      result: { content: [{ type: "text", text: "late" }], details },
-    });
-    const after = selectCards(
-      { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
-      rawOf,
-      madeCards,
+    expect(note).toBe("The approval was denied. Nothing was sent.");
+  });
+
+  it("F-122: an unknown recipient outcome does not say its run finished without a reply", () => {
+    const { transcript, selected } = cards("messaged-no-reply");
+    const card = { ...selected.botMessages[0]!, state: "recipient-outcome-unknown" as const };
+    const note = botMessageNote(
+      botMessageKey(card),
+      card,
+      { sender: "Otto", recipient: "Marlow" },
+      transcript.approvals,
+      transcript.runs.find((run) => run.id === card.runId),
     );
-    expect(after.mcpCalls[0]).toMatchObject({ state: "returned", error: null });
+    expect(note).not.toContain("run finished without a reply");
   });
 });

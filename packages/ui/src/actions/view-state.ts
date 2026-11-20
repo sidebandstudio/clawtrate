@@ -31,14 +31,42 @@ export function readView(task: string, key: string): Value | undefined {
   return tasks.get(task)?.get(key);
 }
 
+/** Values noted at a click and not yet drawn: the next write of the same value still redraws. */
+const unannounced = new Set<string>();
+
 export function writeView(task: string, key: string, value: Value): void {
   const map = entries(task);
-  if (map.get(key) === value) return;
+  const noted = unannounced.delete(`${task}\n${key}`);
+  if (map.get(key) === value && !noted) return;
   map.delete(key);
   map.set(key, value);
   while (map.size > MAX_ENTRIES) map.delete(map.keys().next().value as string);
   version += 1;
   for (const listener of listeners) listener();
+}
+
+/**
+ * A reader's click on a card's own line, noted before the browser opens or closes it. The
+ * browser reports the toggle in a later task; a change committed before then draws the card
+ * again, from its new identity or its new place, and must find what the reader did. Kept
+ * without a redraw, so the click's own toggle is not undone; the toggle then writes the same.
+ */
+export function onSummaryClick(task: string, key: string) {
+  return (event: {
+    currentTarget: HTMLDetailsElement;
+    target: EventTarget | null;
+    defaultPrevented: boolean;
+  }) => {
+    const details = event.currentTarget;
+    const summary = event.target instanceof Element ? event.target.closest("summary") : null;
+    if (event.defaultPrevented || !summary || summary.parentElement !== details) return;
+    const map = entries(task);
+    map.delete(key);
+    map.set(key, !details.open);
+    while (map.size > MAX_ENTRIES) map.delete(map.keys().next().value as string);
+    unannounced.add(`${task}\n${key}`);
+    while (unannounced.size > MAX_ENTRIES) unannounced.delete(unannounced.values().next().value!);
+  };
 }
 
 function subscribe(listener: () => void) {
@@ -66,10 +94,16 @@ export const viewKeys = {
   fold: (id: string) => `fold:${id}`,
   /** The fold a call was last drawn in, by its first member's id: a split's later part opens as it was. */
   member: (id: string) => `in:${id}`,
-  /** The Readable or Raw view of a call. */
+  /** A call's item on its T3 Code thread card, by its tool call id. */
+  item: (id: string) => `t3item:${id}`,
+  /** The Readable or Raw view of a call; on a thread card, whether its item's Raw is open. */
   view: (id: string) => `view:${id}`,
   /** A "Thought" line, valid only for its run's reasoning revision. */
   thought: (id: string, revision: number) => `thought:${id}@${revision}`,
   /** The run line. */
   run: (id: string) => `run:${id}`,
+  /** An approval card that has resolved, by its approval id. */
+  approval: (id: string) => `approval:${id}`,
+  /** That card's Raw view. */
+  approvalRaw: (id: string) => `approval-raw:${id}`,
 };

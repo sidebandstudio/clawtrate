@@ -154,11 +154,15 @@ async function gatewayTaskCount(botId: string): Promise<number> {
 }
 
 /**
- * A task of Otto's for one check alone, opened in the page: no other check's run, stop or
- * queued message can be in it. Its title is its label.
+ * A task of Otto's (or another bot's) for one check alone, opened in the page: no other check's
+ * run, stop or queued message can be in it. Its title is its label.
  */
-async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
-  return ownTaskOf(page, "otto", "Otto", label);
+async function ownTask(
+  page: Page,
+  label: string,
+  bot = { id: "otto", name: "Otto" },
+): Promise<{ key: string; title: string }> {
+  return ownTaskOf(page, bot.id, bot.name, label);
 }
 
 /** A new task of a bot's own, opened in the page. */
@@ -2286,13 +2290,16 @@ const actionLines = (page: Page) =>
     nodes.map((node) => node.getAttribute("aria-label")!.replace(/, ([0-9.]+ seconds|done)$/, "")),
   );
 
-// These runs go to a task no other check sends to, so nothing another check leaves behind
-// (a stopped run, a refused send) changes them.
+// Each of these runs goes to a task of its own, made for that run, so nothing another check or
+// an earlier repeat leaves behind (a stopped run, a refused send, an earlier run's cards) changes
+// what it reads, live or from history.
+const PIP = { id: "pip", name: "Pip" };
+
 test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five files fold into one card, the status line says the running card and brings it into view, and the run ends with a run line", async ({
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
+  const { title } = await ownTask(page, "Several steps", PIP);
   await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
   await page.keyboard.press("Enter");
   // While the slow tool runs: the reads are one card, the slow call its own card, running.
@@ -2335,11 +2342,12 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   // History reloaded: the page is loaded again and reads the task anew; the same cards.
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
   // Every card is the same. History keeps no `details` for a tool-server result, but the
-  // gateway's map of tool names (`tools.effective`) still names the server and tool.
-  expect(await actionLines(page)).toEqual(ended);
+  // gateway's map of tool names (`tools.effective`) still names the server and tool. The engine
+  // reads that map once it has drawn the history, so the cards agree once its answer is in.
+  await expect.poll(() => actionLines(page), { timeout: 30_000 }).toEqual(ended);
   expect(ended).toContain("Used coder, slow task");
 });
 
@@ -2348,12 +2356,10 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 }) => {
   test.setTimeout(180_000);
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
-  // This run's line is one more than the task has now; earlier checks left runs here.
-  const lines = await page.getByTestId("run-line").count();
+  const { title } = await ownTask(page, "Forty-two actions", PIP);
   await composer(page).fill(`Read it all. ${Array(7).fill("#read-six").join(" ")}`);
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("run-line")).toHaveCount(lines + 1, { timeout: 120_000 });
+  await expect(page.getByTestId("run-line")).toHaveCount(1, { timeout: 120_000 });
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 120_000 });
   const run = page.getByTestId("run-line").last();
   await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 42 actions$/);
@@ -2371,7 +2377,7 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByText("Read it all.", { exact: false }).last()).toBeVisible({
     timeout: 30_000,
   });

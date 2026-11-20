@@ -346,6 +346,66 @@ describe("a recipient's task let go while its sender's task is open", () => {
   });
 });
 
+describe("a recipient's task let go as its sender's task opens again", () => {
+  const PEER = "agent:marlow:main";
+
+  it("F-122: the recipient's run, still going, goes on being followed, so its end reaches the sender's card", async () => {
+    const gateway = grantingGateway();
+    const senderRows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "send-c",
+            name: "sessions_send",
+            arguments: { sessionKey: PEER, message: "A message" },
+          },
+        ],
+        __openclaw: { id: "a1", runId: "sender-r" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "send-c",
+        toolName: "sessions_send",
+        isError: false,
+        content: [{ type: "text", text: "{}" }],
+        details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+        __openclaw: { id: "t1", runId: "sender-r" },
+      },
+    ];
+    let senderHistory: Promise<unknown> | null = null;
+    gateway.handlers["chat.history"] = (params) => {
+      // The recipient's history lags its run's end: it still lists the run in flight.
+      if ((params as { sessionKey: string }).sessionKey === PEER)
+        return { messages: [], inFlightRun: { runId: "peer-r" } };
+      return senderHistory ?? { messages: senderRows };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The person goes to the recipient's task, then back to the sender's: the sender's opens
+    // first, before its history is read, and the recipient's is let go while its run goes on.
+    client.closeSession(KEY);
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    const held = deferred<unknown>();
+    senderHistory = held.promise;
+    client.openSession(KEY);
+    client.closeSession(PEER);
+    await until(() => client.state.transcripts[PEER] === undefined);
+    // The run ends before the sender's history is in.
+    gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
+    await sleep(20);
+    held.resolve({ messages: senderRows });
+    await until(
+      () => client.state.transcripts[KEY]?.linkedRuns["peer-r"]?.state === "completed",
+      2_000,
+    );
+    client.stop();
+  });
+});
+
 describe("a queued turn's two ids stay one run", () => {
   const X = "gateway-own-run";
   const C = "queued-send";

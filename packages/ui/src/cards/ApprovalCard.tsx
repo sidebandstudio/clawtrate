@@ -8,7 +8,15 @@ import {
   type ApprovalCard as Approval,
   type ApprovalDecision,
 } from "@clawtrate/core";
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { onSummaryClick, useView, viewKeys } from "../actions/view-state.ts";
 import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
@@ -30,21 +38,6 @@ import {
   type RawContent,
 } from "./parts.tsx";
 import { settlingRaw } from "./raw.ts";
-
-/**
- * A resolved card's fold, kept by the approval's id. The live drawing and the
- * history row are different places in the tree, so the card is re-created
- * when its run settles into history (F-163); without this the reader's open
- * card collapses under them.
- */
-const openFolds = new Map<string, boolean>();
-const MAX_OPEN_FOLDS = 64;
-
-function rememberFold(id: string, open: boolean): void {
-  openFolds.delete(id);
-  openFolds.set(id, open);
-  while (openFolds.size > MAX_OPEN_FOLDS) openFolds.delete(openFolds.keys().next().value as string);
-}
 
 /** The list method whose items carry the same record as the requested event. */
 const LIST_NAMES: Record<Approval["kind"], string> = {
@@ -197,18 +190,16 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
   const resolvedLine = useRef<HTMLElement>(null);
   const focusInside = useRef(false);
   const wasPending = useRef(card.status === "pending");
-  const raw = useRawDisclosure();
-  const details = useRef<HTMLDetailsElement>(null);
-  // Re-open what the reader had open, when the card is re-created for its
-  // history row. The fold is taken from the DOM as this card unmounts, so a
-  // reconciliation that beats the toggle event still keeps the reader's place.
-  useLayoutEffect(() => {
-    const element = details.current;
-    if (openFolds.get(card.id) === true && element && !element.open) element.open = true;
-    return () => {
-      if (element) rememberFold(card.id, element.open);
-    };
-  });
+  // What the reader opened is the viewer's, kept across the card being drawn again (a run's end
+  // moving its cards to the record, a switch of task and back), as an action card's is.
+  const [opened, setOpened] = useView<boolean>(env.taskKey, viewKeys.approval(card.id), false);
+  const [rawOpened, setRawOpened] = useView<boolean>(
+    env.taskKey,
+    viewKeys.approvalRaw(card.id),
+    false,
+  );
+  const raw = useRawDisclosure(undefined, rawOpened);
+  useEffect(() => setRawOpened(raw.open), [raw.open, setRawOpened]);
 
   // When the card resolves while focus is inside it, focus moves to the resolved card's line.
   useLayoutEffect(() => {
@@ -238,7 +229,11 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
         data-resolved=""
         id={domId}
         data-testid="approval-card"
-        ref={details}
+        open={opened}
+        onClick={onSummaryClick(env.taskKey, viewKeys.approval(card.id))}
+        onToggle={(event) => {
+          if (event.currentTarget.open !== opened) setOpened(event.currentTarget.open);
+        }}
         {...track}
       >
         <summary ref={resolvedLine}>

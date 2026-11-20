@@ -364,7 +364,8 @@ const BOT_RANK: Record<BotMessageState, number> = {
 };
 
 /**
- * §6.1 precedence (Started stands for Sending): forward only; Working and Recipient waiting alternate;
+ * §6.1 precedence: forward only, except that Waiting for approval goes back to Call started when
+ * the approval is allowed; Working and Recipient waiting alternate;
  * No reply yet rests until a terminal state; Unknown can move anywhere; a
  * terminal state is final.
  */
@@ -374,6 +375,8 @@ export function advanceBotMessageState(
 ): BotMessageState {
   if (previous === undefined || previous === "unknown") return next;
   if (BOT_RANK[previous] === 5) return previous;
+  // An approval allowed lets the same call go on: the one move back the graph has (section 10).
+  if (previous === "waiting-for-approval" && next === "started") return next;
   // A call that closed without a delivery result becomes Unknown; a known delivery never does.
   if (next === "unknown") return BOT_RANK[previous] <= 1 ? next : previous;
   return BOT_RANK[next] >= BOT_RANK[previous] ? next : previous;
@@ -450,6 +453,13 @@ function botMessageCard(
   const reply = resultReply ? { text: resultReply } : null;
   const error = str(details?.error) ?? step.error;
   const hasResult = raw?.result !== null && raw?.result !== undefined;
+  // The gateway's own error for a call its approval denied before it ran (2026.10.6): nothing
+  // was sent, also when the approval is no longer listed.
+  const deniedBeforeCall =
+    step.status === "failed" &&
+    status === "error" &&
+    details?.tool === BOT_MESSAGE_TOOL &&
+    str(details.error)?.split("\n", 1)[0] === "Denied by user. The tool call did not run.";
 
   const fromRecipient = (): BotMessageState =>
     reply ? "replied" : (recipientState(linked) ?? "sent");
@@ -461,7 +471,7 @@ function botMessageCard(
       step.status === "waiting" && approval?.status === "pending"
         ? "waiting-for-approval"
         : "started";
-  } else if (approval?.status === "denied") {
+  } else if (approval?.status === "denied" || deniedBeforeCall) {
     state = "not-sent";
   } else if (!status) {
     // No delivery status. A closed call with no result, or a result that says

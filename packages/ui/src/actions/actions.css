@@ -533,6 +533,42 @@
     white-space: normal;
   }
 
+  /* T3 Code's mark is a tile, inline with the words like any icon. */
+  .action-sentence .action-what > .agent-mark {
+    display: inline-grid;
+    margin: 0 4px 0 0;
+    vertical-align: -5px;
+  }
+
+  /* A T3 Code line keeps its verb, its mark and its name on one line; the name gives way first. */
+  .action[data-kind="t3"] > summary > .action-sentence {
+    display: flex;
+    align-items: center;
+    gap: 0 4px;
+    white-space: nowrap;
+  }
+
+  .action[data-kind="t3"] .action-verb {
+    flex: none;
+  }
+
+  .action[data-kind="t3"] .action-what {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .action[data-kind="t3"] .action-what > .agent-mark {
+    flex: none;
+    margin: 0 4px 0 0;
+  }
+
+  .action[data-kind="t3"] .action-object {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   .action-state {
     grid-column: 2;
     grid-row: 1;

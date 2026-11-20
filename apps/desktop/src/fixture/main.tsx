@@ -86,6 +86,8 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
+  // `steps=manual`: the scene's later steps wait for `clawtrateFixture.runSteps()`.
+  manualSteps: params.get("steps") === "manual",
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.

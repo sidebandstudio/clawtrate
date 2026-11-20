@@ -17,30 +17,22 @@ import {
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { ApprovalCardView } from "./ApprovalCard.tsx";
-import {
-  CardEnvContext,
-  OpenTaskContext,
-  StepHandoverContext,
-  useCardEnv,
-  type CardEnv,
-  type StepHandover,
-  type StepState,
-} from "./context.tsx";
+import { CardEnvContext, OpenTaskContext, useCardEnv, type CardEnv } from "./context.tsx";
 import {
   BotMessageCardView,
   IncomingLine,
   ReceivedCardView,
-  T3CodeCardView,
   goBack,
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
 import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
-import { cardDomId, codingCalls, placeCards, type CardRef } from "./placement.ts";
+import { cardDomId, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
 import { useCards } from "./useCards.ts";
 import "./cards.css";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 type Scope = {
   placement: ReturnType<typeof placeCards>;
@@ -48,9 +40,6 @@ type Scope = {
 };
 
 const ScopeContext = createContext<Scope | null>(null);
-
-/** Ordinary steps whose state a task's view remembers, for the cards they may become. */
-const MAX_STEP_STATES = 64;
 
 /** The cards of one open task. Mounted once per task, around its transcript. */
 export function CardScope({
@@ -85,26 +74,6 @@ export function CardScope({
       ),
     [transcript, cards.selected],
   );
-  // Ordinary steps' states, for the card a step becomes; the newest `MAX_STEP_STATES` kept.
-  const stepStates = useRef(new Map<string, StepState>());
-  const { selected, settledRaw } = cards;
-  const handover: StepHandover = useMemo(() => {
-    const drawn = new Set(
-      codingCalls(selected)
-        .filter((card) => card.toolCallId !== null && settledRaw(card.stepId))
-        .map((card) => card.toolCallId!),
-    );
-    return {
-      isCard: (callId) => drawn.has(callId),
-      note: (callId, value) => {
-        const states = stepStates.current;
-        states.delete(callId);
-        states.set(callId, value);
-        while (states.size > MAX_STEP_STATES) states.delete(states.keys().next().value as string);
-      },
-      stateOf: (callId) => stepStates.current.get(callId),
-    };
-  }, [selected, settledRaw]);
   const runOf = useCallback(
     (runId: string | null): Run | undefined =>
       runId ? transcript.runs.find((run) => run.id === runId) : undefined,
@@ -164,6 +133,7 @@ export function CardScope({
       );
       if (!element) return false;
       element.open = true;
+      markTranscriptNavigation(element);
       element.scrollIntoView({ block: "center" });
       element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
@@ -192,9 +162,13 @@ export function CardScope({
       element.open = true;
       const scroller = element.closest<HTMLElement>('[data-testid="transcript"]');
       if (scroller && back.scrollTop !== null) {
+        markTranscriptNavigation(scroller);
         scroller.scrollTop = back.scrollTop;
         scroller.dispatchEvent(new Event("scroll"));
-      } else element.scrollIntoView({ block: "center" });
+      } else {
+        markTranscriptNavigation(element);
+        element.scrollIntoView({ block: "center" });
+      }
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
         (each) => each.textContent?.startsWith("Open in"),
       );
@@ -218,9 +192,7 @@ export function CardScope({
   return (
     <ScopeContext.Provider value={{ placement, cards }}>
       <CardEnvContext.Provider value={env}>
-        <StepHandoverContext.Provider value={handover}>
-          <Announcer>{children}</Announcer>
-        </StepHandoverContext.Provider>
+        <Announcer>{children}</Announcer>
       </CardEnvContext.Provider>
     </ScopeContext.Provider>
   );
@@ -230,6 +202,7 @@ export function CardScope({
 export function focusPending(ref: CardRef): void {
   const element = document.getElementById(cardDomId(ref));
   if (!element) return;
+  markTranscriptNavigation(element);
   element.scrollIntoView({ block: "nearest" });
   const first =
     ref.kind === "question" ? element.querySelector<HTMLElement>('.option[tabindex="0"]') : null;
@@ -280,11 +253,6 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
           partial={partialHistory(env.transcript)}
         />
       );
-    }
-    case "t3-code": {
-      const card = codingCalls(cards.selected).find((each) => each.id === cardRef.id);
-      if (!card || !cards.settledRaw(card.stepId)) return null;
-      return <T3CodeCardView card={card} read={cards.rawState(card.stepId)} />;
     }
   }
 }

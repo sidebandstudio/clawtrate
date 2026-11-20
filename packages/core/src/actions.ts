@@ -11,6 +11,7 @@
 // `action-words.ts`.
 
 import { T3_CODE_TOOLS } from "./cards.ts";
+import type { T3Facts } from "./t3-facts.ts";
 import {
   FORMS,
   LABELS,
@@ -24,6 +25,7 @@ import {
   SCHEDULE,
   SHORT_WORDS,
   STATE_WORDS,
+  T3_WORDS,
   VERBS,
   count,
   mediaCount,
@@ -104,6 +106,18 @@ export type ActionCall = {
    * absent when the row had none, or the value as sent (`null` included).
    */
   rowArgs?: { kept: false } | { kept: true; value: unknown };
+  /**
+   * What a tool-server call's arguments and result say that a T3 Code card
+   * reads (`t3-facts.ts`), kept by the engine from the whole values.
+   */
+  t3?: T3Facts | null;
+  /** The gateway's run the call was made in, when the engine knows it. */
+  runId?: string | null;
+  /**
+   * When the gateway recorded the call's result: the result event's time live,
+   * its history row's time when rebuilt. For ordering results, not for display.
+   */
+  resultAt?: number | null;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -376,6 +390,7 @@ export type ActionIcon =
   | "wave"
   | "message"
   | "plug"
+  | "t3"
   | "tool";
 
 /** The table: an exact tool name to a kind (8.1). */
@@ -436,10 +451,47 @@ export function toolServerOf(
   const server = str(call.details?.mcpServer);
   const tool = str(call.details?.mcpTool);
   if (server && tool) return { server, tool, mapped: false };
-  const known = ctx.toolServers?.[call.name];
+  const known = mappedTool(call.name, ctx);
+  // History keeps no tool server or tool for a call: the map and a stored result's shape do not
+  // establish that a call was T3 Code's, so it stays an ordinary card with its own Raw. A call
+  // still in flight has no stored result: the map is the evidence before the result (11.1).
+  if (
+    known &&
+    T3_CODE_TOOLS.includes(known.tool) &&
+    "fromHistory" in call &&
+    call.fromHistory === true &&
+    !(
+      "status" in call &&
+      (call.status === "running" || call.status === "waiting" || call.status === "review")
+    )
+  )
+    return null;
   return known && str(known.server) && str(known.tool)
     ? { server: known.server, tool: known.tool, mapped: true }
     : null;
+}
+
+/** Each name map by its names in lower case, made once per map. */
+const lowerMaps = new WeakMap<object, Map<string, { server: string; tool: string }>>();
+
+/**
+ * The gateway's map entry for an effective name. The gateway keeps names
+ * unique without regard to case, and its tool events can name a call in
+ * lower case where `tools.effective` keeps the case (OpenClaw 2026.10.6:
+ * `t3code__T3_thread_read-2` is called `t3code__t3_thread_read-2`), so a
+ * name the map does not hold exactly is looked up in lower case.
+ */
+function mappedTool(name: string, ctx: ReadingContext) {
+  const map = ctx.toolServers;
+  if (!map) return undefined;
+  const exact = map[name];
+  if (exact) return exact;
+  let lower = lowerMaps.get(map);
+  if (!lower) {
+    lower = new Map(Object.entries(map).map(([key, value]) => [key.toLowerCase(), value]));
+    lowerMaps.set(map, lower);
+  }
+  return lower.get(name.toLowerCase());
 }
 
 export type KindInfo = {
@@ -474,10 +526,15 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
   });
   const server = toolServerOf(call, ctx);
   if (server) {
-    if (T3_CODE_TOOLS.includes(server.tool)) return info("t3", null);
+    if (T3_CODE_TOOLS.includes(server.tool)) {
+      // T3 Code's listings fold with each other, when the gateway's map named them at their start
+      // (11.2); a thread's calls never fold: they join their thread's card.
+      const listing = server.tool === "t3_project_list" || server.tool === "t3_thread_list";
+      return info("t3", listing && mappedTool(call.name, ctx) ? "t3:listing" : null);
+    }
     // Folds only when the gateway's map named it at its start (7.4), by the server and tool it
     // turned out to be: a result that names another operation keeps it apart.
-    const atStart = ctx.toolServers?.[call.name];
+    const atStart = mappedTool(call.name, ctx);
     return info("server", atStart ? `server:${server.server}:${server.tool}` : null);
   }
   const a = call.args;
@@ -488,7 +545,10 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
   if (!kind) {
     // A general card folds by its name only when the gateway's tool inventory lists it (8.3).
     const listed = call.builtin === true || ctx.builtinTools?.includes(call.name) === true;
-    return info("tool", listed ? `tool:${call.name}` : null);
+    const general = info("tool", listed ? `tool:${call.name}` : null);
+    // A name that holds the gateway's `__` is a tool server's, whose effect leaves the gateway:
+    // while it runs, its general card says Call started (7.3, 11.4).
+    return call.name.includes("__") && !listed ? { ...general, leaves: true } : general;
   }
   switch (kind) {
     case "message":
@@ -1134,6 +1194,15 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
     if (s === "aborted" || s === "cancelled") return "unknown";
     return carries(c) ? "done" : "made";
   },
+  // A T3 Code call that returned is Call made: never Done, since the work goes on there (11).
+  t3: (c) => {
+    const s = c.details?.status;
+    if (s === "blocked") return { outcome: "blocked", word: "policy" };
+    if (s === "aborted" || s === "cancelled") return "unknown";
+    // A listing's result is what it listed, as of the call.
+    if (typeof c.t3?.count === "number") return "done";
+    return "made";
+  },
   // A general card has no field of its own: only a value that says the work was done (7.3).
   tool: (c) => (saysDone(c.details) ? "done" : "made"),
 };
@@ -1426,7 +1495,7 @@ const ICONS: Record<ActionKind, ActionIcon> = {
   look: "read",
   channel: "message",
   server: "plug",
-  t3: "plug",
+  t3: "t3",
   tool: "tool",
 };
 
@@ -1791,16 +1860,20 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
         noun: [NOUNS.toolServer, id.server],
       };
     }
-    case "message":
     case "t3": {
-      // The Messaged cards' own words: the status line says what the card says (sections 5, 10, 11).
+      // Each of T3 Code's operations in its own words (11.2, 11.4); the status line says the same.
+      const tool = toolServerOf(call, ctx)?.tool ?? "";
+      const forms = T3_WORDS.verbs[tool] ?? VERBS.message;
+      const object = T3_WORDS.objects[tool] ?? OBJECTS.t3Code;
+      return {
+        ...three(forms, object, t3Detail(call, tool)),
+        noun: tool === "t3_thread_launch" ? [NOUNS.messaging, object] : [forms[0], object],
+      };
+    }
+    case "message": {
+      // The Messaged cards' own words: the status line says what the card says (section 10).
       const agent = /^agent:([^:]+):/.exec(str(a.sessionKey))?.[1] ?? null;
-      const who =
-        kind === "t3"
-          ? OBJECTS.t3Code
-          : agent
-            ? (ctx.botName?.(agent) ?? agent)
-            : str(a.label) || OBJECTS.anotherBot;
+      const who = agent ? (ctx.botName?.(agent) ?? agent) : str(a.label) || OBJECTS.anotherBot;
       return {
         ...three(VERBS.message, who, firstLine(a.message ?? a.prompt)),
         noun: [NOUNS.messaging, who],
@@ -1816,6 +1889,27 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       };
     }
   }
+}
+
+/**
+ * A T3 Code line's detail (11.4): the first line it sent, or the status it got
+ * back; for a listing, how many it listed.
+ */
+function t3Detail(call: ActionCall, tool: string): string {
+  const a = call.args;
+  const t = call.t3 ?? null;
+  if (tool === "t3_thread_launch") return firstLine(a.message) || str(a.title);
+  if (tool === "t3_thread_send") return firstLine(a.message);
+  if (tool === "t3_project_list" || tool === "t3_thread_list") {
+    if (typeof t?.count !== "number") return "";
+    return tool === "t3_project_list" ? T3_WORDS.projects(t.count) : T3_WORDS.threads(t.count);
+  }
+  const status = !t?.status
+    ? ""
+    : Object.hasOwn(T3_WORDS.status, t.status)
+      ? T3_WORDS.status[t.status]!
+      : upper(nameWords(t.status));
+  return status;
 }
 
 /** The bare verb of a phone action, for "Didn't tap on the phone". */
@@ -1909,6 +2003,15 @@ export function tookOf(call: Pick<ActionCall, "startedAt" | "endedAt">): number 
 }
 
 function stateMark(call: ActionCall, info: KindInfo, o: OutcomeOf): StateMark {
+  // T3 Code's calls keep their own state words (11, "Each call's state").
+  if (info.kind === "t3" && !(call.lastSeen && isOpenOutcome(o.outcome))) {
+    if (o.outcome === "unknown" || o.outcome === "stopped")
+      return { type: "word", glyph: "queued", word: T3_WORDS.deliveryUnknown };
+    if (o.outcome === "blocked" || o.outcome === "denied" || o.outcome === "refused")
+      return { type: "word", glyph: "stopped", word: T3_WORDS.notSent };
+    if (o.outcome === "made" && o.word === STATE_WORDS.storedCut)
+      return { type: "word", glyph: "check", word: STATE_WORDS.callMade };
+  }
   const word = (
     glyph: Extract<StateMark, { type: "word" }>["glyph"],
     text: string,
@@ -1978,7 +2081,8 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
   const info = kindOf(call, ctx);
   const w = wordsOf(call, info.kind, ctx);
   const o = outcomeOf(call, ctx);
-  const runningPair: Pair = info.leaves ? (w.noun ?? w.run) : w.run;
+  // The general card keeps its "Using …" words while it runs, whatever its state says (11.4).
+  const runningPair: Pair = info.leaves && info.kind !== "tool" ? (w.noun ?? w.run) : w.run;
   const runPhrase = (p: Pair) => lower(`${p[0]} ${p[1]}`.trim());
   let pair: Pair;
   switch (o.outcome) {
@@ -2042,6 +2146,17 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
           : (w.noun ?? [FORMS.stopped, runPhrase(w.run)]);
       break;
   }
+  // T3 Code's lines keep their operation's words in every state; the state word says the rest (11).
+  // A call that was not made is said as what was asked; a failure as what was tried (11, 11.4).
+  const t3Tool = info.kind === "t3" ? (toolServerOf(call, ctx)?.tool ?? "") : "";
+  if (info.kind === "t3")
+    pair = isOpenOutcome(o.outcome)
+      ? w.run
+      : o.outcome === "failed"
+        ? w.fail
+        : o.outcome === "done" || o.outcome === "made"
+          ? w.done
+          : [T3_WORDS.askedVerb, T3_WORDS.asked[t3Tool] ?? OBJECTS.t3Code];
   let [verb, object] = pair;
   let detail = w.detail;
   let mono = Boolean(w.mono);
@@ -2057,6 +2172,12 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
     detail = timedOut
       ? FORMS.itsLimit(num(call.args.timeoutSeconds) ?? num(call.args.timeout))
       : FORMS.runLimit;
+    mono = false;
+  } else if (o.outcome === "failed" && info.kind === "t3") {
+    // T3 Code's own reason: its failure's code and message, else the gateway's text.
+    const t = call.t3 ?? null;
+    const said = [t?.code, t?.message].filter(Boolean).join(": ");
+    detail = (said || textReason(call.text)).slice(0, 120);
     mono = false;
   } else if (o.outcome === "failed") {
     // A failure's detail is what went wrong, never a count from a result it did not give.
@@ -2162,6 +2283,8 @@ function pluralOf(kind: ActionKind, calls: ActionCall[], ctx: ReadingContext): P
       return [PLURALS.changedTheControlUi, PLURALS.times(n)];
     case "routine":
       return [PLURALS.lookedAtRoutines, PLURALS.times(n)];
+    case "t3":
+      return T3_WORDS.listingPlural(n);
     case "plan":
       if (first.name === "progress_card") return [PLURALS.savedThePlan, PLURALS.times(n)];
       return [`${lineDone(first).verb} ${lineDone(first).object}`, PLURALS.times(n)];
@@ -2225,8 +2348,9 @@ function neutralOf(kind: ActionKind, calls: ActionCall[], ctx: ReadingContext): 
     }
     case "look":
       return first.name === "pdf" ? NEUTRAL.pdf : NEUTRAL.image;
-    case "tool":
     case "t3":
+      return T3_WORDS.listingNeutral;
+    case "tool":
     case "message":
       return upper(nameWords(first.name));
     case "server":
