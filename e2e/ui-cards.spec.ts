@@ -1274,10 +1274,14 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
       (result.payload as { data: { result: { details: { mcpTool: string } } } }).data.result.details
         .mcpTool,
     ).toBe("T3_thread_read");
-    await openTask(page, "Juniper", t.title);
-    await expect(card(page, "t3-card")).toHaveCount(0);
+    // The same call started by the host's own device: its result reaches the page as it happens,
+    // so the live reading of it is what is checked. A reload reads it from history.
+    const live = await hostTask("main", "T3 decoy", "#t3-decoy");
+    await openTask(page, "Juniper", live.title);
     await expect(page.getByTestId("tool-call")).toHaveAttribute("data-kind", "server");
-    await reload(page, "Juniper", t.title);
+    await expect(card(page, "t3-card")).toHaveCount(0);
+    await reload(page, "Juniper", live.title);
+    await expect(page.getByTestId("tool-call")).toHaveCount(1);
     await expect(card(page, "t3-card")).toHaveCount(0);
   });
 });
