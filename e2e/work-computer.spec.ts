@@ -427,8 +427,8 @@ test("F-142: when the gateway stops answering renewals, You have control ends wi
     await page.keyboard.type("never sent");
     process.kill(pid!, "SIGCONT");
     paused = false;
-    // Read again once the gateway answers: still held, or ended; never a guess.
-    await expect(bar(page)).toContainText(/You still have control\.|Your control ended/, {
+    // Read again once the gateway answers: still held (the note under the bar), or ended; never a guess.
+    await expect(full(page)).toContainText(/You still have control\.|Your control ended/, {
       timeout: 30_000,
     });
     await page.waitForTimeout(1_000);
