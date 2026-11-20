@@ -38,7 +38,7 @@
     item: P.get("item") || "STORE_API_KEY",
     vkind: "secret",
     saved: {}, // entries a write listed, by name, each with its own kind and hosts; never the form's state
-    removed: false,
+    removed: [], // names a removal's list no longer showed, whichever row is open later
     drafts: { otto: true, pip: true, marlow: true, juniper: false },
     unknownSwitch: null,
     saving: null,
@@ -662,7 +662,7 @@
     let list = VAULT.map((e) => (S.saved[e.name] ? { ...e, ...S.saved[e.name], updated: "Nov 19" } : e))
       .concat(Object.keys(S.saved).filter((n) => !VAULT.some((e) => e.name === n)).map(entry))
       .sort((a, b) => a.name.localeCompare(b.name));
-    if (S.removed) list = list.filter((e) => e.name !== S.item);
+    list = list.filter((e) => !S.removed.includes(e.name));
     return list;
   };
 
@@ -909,9 +909,11 @@
     const a = S.vanswer;
     if (a === "lostlisted" || a === "lostother") return go({ v: "stilllisted" }, "Still listed");
     if (a === "refused" || a === "lostunread") return go({ v: "removeunknown" }, "Couldn't confirm the removal");
-    if (a === "lostnot") return go({ v: "removednoreply", removed: true }, "No longer listed");
-    if (a === "refresh") return go({ v: "removedrefresh", removed: true }, "Removed from the Vault");
-    go({ v: "removed", removed: true }, "Removed from the Vault");
+    const gone = { removed: S.removed.concat([S.item]) };
+    delete S.saved[S.item];
+    if (a === "lostnot") return go({ v: "removednoreply", ...gone }, "No longer listed");
+    if (a === "refresh") return go({ v: "removedrefresh", ...gone }, "Removed from the Vault");
+    go({ v: "removed", ...gone }, "Removed from the Vault");
   }
 
   root.addEventListener("click", (event) => {
@@ -932,7 +934,7 @@
       });
     }
     const row = event.target.closest("[data-item]");
-    if (row) return go({ v: "item", item: row.dataset.item, removed: false });
+    if (row) return go({ v: "item", item: row.dataset.item });
     const el = event.target.closest("[data-d]");
     if (!el || el.disabled) return;
     const act = el.dataset.d;
@@ -1047,6 +1049,7 @@
         // What a listing shows of a new name is recorded with the kind this save sent, apart from the form.
         const kind = S.vkind;
         const listed = (hosts) => {
+          S.removed = S.removed.filter((n) => n !== name);
           if (!S.replacing) S.saved[name] = { kind: hosts ? "secret" : kind, hosts: hosts || (kind === "env" ? [] : ["api.example.com"]) };
         };
         return later(() => {

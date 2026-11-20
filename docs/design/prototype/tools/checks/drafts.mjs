@@ -656,6 +656,16 @@ const rowOf = (name) => p.evaluate((n) => document.querySelector(`[data-item="${
 check("Vault: a saved environment value stays one after the form opens and cancels, and a second save keeps it", (await rowOf("ENV_ONE")).startsWith("Environment value") && (await rowOf("SECOND_ONE")).startsWith("Protected"));
 await p.close();
 
+// A removed name stays removed when another row opens.
+p = await open("view=vault&v=item", { chrome: "1" });
+await click(p, '[data-d="v-remove"]');
+await click(p, '[data-d="v-remove-yes"]');
+await waitText(p, ["Removed from the Vault."]);
+await click(p, '[data-item="BUILD_REGION"]');
+await click(p, '[data-d="v-back"]');
+check("Vault: a removed name stays removed after another row opens", (await p.locator('[data-item="STORE_API_KEY"]').count()) === 0 && (await p.locator('[data-item="BUILD_REGION"]').count()) === 1);
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
