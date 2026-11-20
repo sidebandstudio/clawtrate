@@ -1,5 +1,6 @@
 // Probes behind docs/research/skills.md. Research code, not a check.
 //
+//   git apply docs/research/skills/scripted-model.patch   # #learn, #learn-workshop, #skills
 //   pnpm dev-gateway start --instance <name>
 //   node docs/research/skills/probe.ts pair --instance <name> --data <dir> [--tier read|interactive|admin]
 //   node docs/research/skills/probe.ts <experiment> --instance <name> --data <dir> [--data2 <dir>] [--read <dir>] [--admin <dir>]

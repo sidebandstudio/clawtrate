@@ -35,8 +35,6 @@ import {
   LARGE_LOG_BYTES,
   LARGE_LOG_PATH,
   largeLogParts,
-  LEARNED_SKILL,
-  LEARNED_SKILL_NAME,
   SCENARIOS,
   selectScenarios,
   SHELL_COMMANDS,
@@ -2892,58 +2890,6 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         },
       ]);
       view.expectEnd("final", scriptedFinalText("#sessions"));
-    },
-  },
-  {
-    name: "saving a skill where the gateway does not offer skill_workshop",
-    covers: ["#learn", "#learn-workshop"],
-    run: async (h) => {
-      // The development config denies skill_workshop (cli.ts, DENIED_TOOLS), so
-      // each form of the call is refused by name and the bot says it was not saved.
-      for (const [directive, args] of [
-        ["#learn", { action: "create", name: LEARNED_SKILL_NAME, proposal_content: LEARNED_SKILL }],
-        ["#learn-workshop", { action: "create", name: LEARNED_SKILL_NAME, content: LEARNED_SKILL }],
-      ] as const) {
-        const view = await h.run("plain", await h.session("main", directive.slice(1)), directive);
-        same(scriptedArgs(directive, "skill_workshop"), args, `${directive}: the scripted call`);
-        same(view.data(view.tool("start", "skill_workshop")[0]!).args, args, `${directive}: the call as sent`);
-        const result = view.result("skill_workshop");
-        same([result.isError, result.text], [true, "Tool skill_workshop not found"], `${directive}: the result`);
-        same(
-          [view.terminal.state, view.finalText()],
-          ["final", "The skill was not saved; the gateway's answer is shown above."],
-          `${directive}: the run's end`,
-        );
-      }
-    },
-  },
-  {
-    name: "the skills a turn was given, with a library skill's revision",
-    covers: ["#skills"],
-    run: async (h) => {
-      const slug = `scenario-check-${Date.now().toString(36)}`;
-      const content = `---\nname: ${slug}\ndescription: Use when the scenario check runs.\n---\n\nSay that the check ran.\n`;
-      const saved = rec(
-        rec(await h.op("plain").request("skills.library.save", { expectedRevision: null, slug, content })).entry,
-      );
-      try {
-        // A new task pins the library's enabled skills when it is created.
-        const view = await h.run("plain", await h.session("main", "skills"), "#skills");
-        const line = `- ${String(saved.name)} (revision ${String(saved.revision).slice(0, 12)})`;
-        same(view.terminal.state, "final", "the run's end");
-        expect(
-          view.finalText().startsWith("I was given these skills for this turn:\n") &&
-            view.finalText().split("\n").includes(line),
-          `the reply names ${line}: ${view.finalText()}`,
-        );
-        view.expectCalls([]);
-      } finally {
-        await h.op("plain").request("skills.library.mutate", {
-          skillId: saved.skillId,
-          expectedRevision: saved.revision,
-          action: "remove",
-        });
-      }
     },
   },
   {

@@ -26,12 +26,6 @@ export type PlanContext = {
    * of their own (scripted-pages.ts); null otherwise.
    */
   pagesOrigin?: string | null;
-  /**
-   * The skills the gateway listed to the model in this request's system
-   * prompt (`<available_skills>`), by name, each with the revision its
-   * location names when it is a library skill; empty when none were listed.
-   */
-  skills?: { name: string; revision: string | null }[];
 };
 
 /**
@@ -283,33 +277,6 @@ const ask = (questions: unknown[]): Step[] => [
   answerText,
 ];
 
-/**
- * The skill the skill-saving scenarios save. The gateway offers
- * `skill_workshop` only where it is not denied, which an ordinary instance
- * does (cli.ts, DENIED_TOOLS); there the call fails with "not found".
- */
-export const LEARNED_SKILL_NAME = "trail-checklist";
-export const LEARNED_SKILL = [
-  "---",
-  `name: ${LEARNED_SKILL_NAME}`,
-  "description: Use when planning a weekend walk, to check the weather, the route and what to pack.",
-  "---",
-  "",
-  "1. Check the forecast for the day of the walk.",
-  "2. Choose the route and note its length.",
-  "3. Pack water, a map and a warm layer.",
-  "",
-].join("\n");
-
-/** The reply after a skill_workshop call: whether the gateway's answer says it was saved. */
-const afterLearn =
-  (saved: RegExp, text: string): Step =>
-  (ctx) => {
-    const result = [...ctx.results].reverse().find((r) => r.name === "skill_workshop");
-    if (!result) return [];
-    return [say(saved.test(result.text) ? text : "The skill was not saved; the gateway's answer is shown above.")];
-  };
-
 export const SCENARIOS: Scenario[] = [
   {
     name: "help",
@@ -509,46 +476,6 @@ export const SCENARIOS: Scenario[] = [
         content: "- Prefers the lake loop on relaxed weekends.\n",
       }),
       say("Saved to memory: you prefer the lake loop on relaxed weekends."),
-    ],
-  },
-  {
-    name: "learn",
-    phrase: "save this as a skill",
-    summary: `Saves a skill to the person's library with skill_workshop (\`create\`, \`name\` and \`proposal_content\`, ${LEARNED_SKILL_NAME}). Only where the tool is not denied; on an ordinary instance the call fails with "not found".`,
-    steps: () => [
-      think("This is a process worth keeping. I will save it as a skill."),
-      tool("skill_workshop", {
-        action: "create",
-        name: LEARNED_SKILL_NAME,
-        proposal_content: LEARNED_SKILL,
-      }),
-      afterLearn(/"state":\s*"published"/, `Saved ${LEARNED_SKILL_NAME} to your skills.`),
-    ],
-  },
-  {
-    name: "learn-workshop",
-    phrase: "save this as a learned skill",
-    summary: `Saves a learned skill with skill_workshop in its workshop form (\`create\`, \`name\` and \`content\`, ${LEARNED_SKILL_NAME}). Only where the tool is not denied; on an ordinary instance the call fails with "not found".`,
-    steps: () => [
-      think("I will keep this as one of my learned skills."),
-      tool("skill_workshop", { action: "create", name: LEARNED_SKILL_NAME, content: LEARNED_SKILL }),
-      afterLearn(/^Created "/, `Learned ${LEARNED_SKILL_NAME}.`),
-    ],
-  },
-  {
-    name: "skills",
-    phrase: "list your skills",
-    summary:
-      "Names the skills the gateway listed to the model for this turn, with the first 12 characters of each library skill's revision; no tool.",
-    steps: () => [
-      (ctx) => {
-        const skills = ctx.skills ?? [];
-        if (skills.length === 0) return [say("I was given no skills for this turn.")];
-        const lines = skills.map((skill) =>
-          skill.revision ? `- ${skill.name} (revision ${skill.revision.slice(0, 12)})` : `- ${skill.name}`,
-        );
-        return [say(`I was given these skills for this turn:\n${lines.join("\n")}`)];
-      },
     ],
   },
   {

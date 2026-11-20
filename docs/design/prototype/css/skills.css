@@ -312,6 +312,18 @@
   font-size: var(--text-md);
 }
 
+.k-box-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 4px 0;
+}
+.k-cmd {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
 /* The skill cards (section 12) */
 .k-card-facts dd .k-plain {
   margin-top: 2px;

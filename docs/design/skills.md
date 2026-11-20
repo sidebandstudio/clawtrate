@@ -43,35 +43,35 @@ conversation                     the bot's skill_workshop call is an action card
 
 Grok Bot keeps skills in one place with a page per skill and a switch on each bot. The gateway splits that into three controls with different owners, and the screens keep them apart instead of merging them into one switch that would be false for two of them:
 
-| What | Who may change it | Where |
-|---|---|---|
-| The library: a skill's text, whether new tasks start with it, whether it is shared | The person's own connection at the interactive tier (`operator.write`), for their own skills | Settings, Skills |
-| A task's skills: which skills it holds, at which revision | The interactive tier | The task's Details tab |
-| A bot's list: which skills the bot is given at all | Admin (`config.patch`) | The bot's Settings tab |
+| What                                                                               | Who may change it                                                                            | Where                  |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------- |
+| The library: a skill's text, whether new tasks start with it, whether it is shared | The person's own connection at the interactive tier (`operator.write`), for their own skills | Settings, Skills       |
+| A task's skills: which skills it holds, at which revision                          | The interactive tier                                                                         | The task's Details tab |
+| A bot's list: which skills the bot is given at all                                 | Admin (`config.patch`)                                                                       | The bot's Settings tab |
 
 ## 2. Shared rules
 
 ### Components used
 
-| Component | From | Used for |
-|---|---|---|
-| Settings frame, dialog, confirmation, note, result, switch, choice rows | `bots.md` §2 | The Skills section, Remove, the bot's list |
-| Fact block, group word, empty state, tabs | `visual-language.md` §9 | Every page here |
-| The access bar and its states | `conversation.md` §3, `bots.md` §2 | Every write below the tier it needs |
-| Action card, its readable view and Raw | `conversation.md` §7 to §9 | The `skill_workshop` call |
-| `.input`, a `textarea` with the same look | `visual-language.md` §4 | The skill's fields |
+| Component                                                               | From                               | Used for                                   |
+| ----------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------ |
+| Settings frame, dialog, confirmation, note, result, switch, choice rows | `bots.md` §2                       | The Skills section, Remove, the bot's list |
+| Fact block, group word, empty state, tabs                               | `visual-language.md` §9            | Every page here                            |
+| The access bar and its states                                           | `conversation.md` §3, `bots.md` §2 | Every write below the tier it needs        |
+| Action card, its readable view and Raw                                  | `conversation.md` §7 to §9         | The `skill_workshop` call                  |
+| `.input`, a `textarea` with the same look                               | `visual-language.md` §4            | The skill's fields                         |
 
 ### New components
 
 Each is defined once, in `prototype/css/skills.css`, from existing tokens.
 
-| Component | What it is | Tokens |
-|---|---|---|
-| Skill row (`.k-row`) | A whole-row button in a fact block: the name (15/500, mono for a learned skill's name), the "Use when…" line under it (13, faint, two lines at most), and tags at its end. | `--bg-bubble`, `--border` |
-| Tag (`.k-tag`) | A word on a soft fill, radius 999, 12/500: "Off", "Shared", "Team", "Newer revision", "Removed", "Not given". Never colour alone. | `--bg-inset`, `--warn-soft` |
-| Revision (`.k-rev`) | The first 12 characters of a revision, mono, 12, with the full id as its accessible name. | `--font-mono` |
-| Editor (`.k-editor`) | A plain `textarea` for the instructions, mono 13/20, at least 12 lines, growing to the pane, no markdown preview. | `--font-mono`, `--bg-inset` |
-| Side by side (`.k-compare`) | Two columns, "On the gateway now" and "Your edit", each with its own heading; one column below 688 px, the gateway's first. | `--border` |
+| Component                   | What it is                                                                                                                                                                 | Tokens                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Skill row (`.k-row`)        | A whole-row button in a fact block: the name (15/500, mono for a learned skill's name), the "Use when…" line under it (13, faint, two lines at most), and tags at its end. | `--bg-bubble`, `--border`   |
+| Tag (`.k-tag`)              | A word on a soft fill, radius 999, 12/500: "Off", "Shared", "Team", "Newer revision", "Removed", "Not given". Never colour alone.                                          | `--bg-inset`, `--warn-soft` |
+| Revision (`.k-rev`)         | The first 12 characters of a revision, mono, 12, with the full id as its accessible name.                                                                                  | `--font-mono`               |
+| Editor (`.k-editor`)        | A plain `textarea` for the instructions, mono 13/20, at least 12 lines, growing to the pane, no markdown preview.                                                          | `--font-mono`, `--bg-inset` |
+| Side by side (`.k-compare`) | Two columns, "On the gateway now" and "Your edit", each with its own heading; one column below 688 px, the gateway's first.                                                | `--border`                  |
 
 ### Words
 
@@ -84,11 +84,11 @@ Each is defined once, in `prototype/css/skills.css`, from existing tokens.
 
 ### Access
 
-| Tier | What the screens offer |
-|---|---|
-| Read-only (`operator.read`) | Every list, every page, every revision and file name, every bot's list and every learned skill, as text. No field is editable; no Save, Remove, Share, Update, Detach or Attach. The access bar: "**Read-only.** Changing skills needs write access." with "Request access" (the interactive tier). |
-| Interactive (`operator.write`, Clawtrate's default) | Everything in the library for the person's own skills, every task action. A bot's list and archiving a learned skill show their value and the access bar: "**Admin access needed.** Changing which skills <Bot> is given changes the gateway's settings." with "Request admin access". |
-| Admin | Everything, including a bot's list and archive and restore. Admin access is asked for only from those two places, and only when the person chooses the button. |
+| Tier                                                | What the screens offer                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read-only (`operator.read`)                         | Every list, every page, every revision and file name, every bot's list and every learned skill, as text. No field is editable; no Save, Remove, Share, Update, Detach or Attach. The access bar: "**Read-only.** Changing skills needs write access." with "Request access" (the interactive tier). |
+| Interactive (`operator.write`, Clawtrate's default) | Everything in the library for the person's own skills, every task action. A bot's list and archiving a learned skill show their value and the access bar: "**Admin access needed.** Changing which skills <Bot> is given changes the gateway's settings." with "Request admin access".              |
+| Admin                                               | Everything, including a bot's list and archive and restore. Admin access is asked for only from those two places, and only when the person chooses the button.                                                                                                                                      |
 
 Each refusal is the gateway's: `FORBIDDEN` "missing scope: operator.write" or "missing scope: operator.admin" (research §2). The screen does not offer what its tier would make the gateway refuse.
 
@@ -96,7 +96,7 @@ Each refusal is the gateway's: `FORBIDDEN` "missing scope: operator.write" or "m
 
 A skill's name, its "Use when…" text, its instructions, its files' names and contents, the owner's label and a learned skill's change summary come from the gateway, and some of them from a bot. They are shown as text:
 
-- Instructions are shown and edited as plain text in a `textarea`, never rendered as markdown, so an address in them is text, not a link, and nothing in them is fetched (the project's rule for addresses, being decided in `docs/decisions.md`, "Addresses a gateway hands the client").
+- Instructions are shown and edited as plain text in a `textarea`, never rendered as markdown, so an address in them is text, not a link, and nothing in them is fetched (`docs/decisions.md`, "Addresses a gateway hands the client": an address the gateway supplies in a tool result or a reply is never fetched or opened, and may appear as text).
 - A support file is listed by its path and size; its content is never opened, run or previewed by Clawtrate.
 - The owner's label is the gateway's: for the gateway's owner it is the gateway computer's account name (research §1). It is shown as given, truncated, never used as a heading.
 
@@ -117,9 +117,9 @@ The section opens with a sentence: "Skills you keep on this gateway. Your bots a
 
 **Groups**, in this order:
 
-| Group | Rows | From |
-|---|---|---|
-| Your skills | Entries the profile owns | `ownerProfileId === profileId` |
+| Group                  | Rows                                                                                           | From                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Your skills            | Entries the profile owns                                                                       | `ownerProfileId === profileId`      |
 | Shared on this gateway | Others' shared entries and team-owned ones, each with "From <owner's label>" or the "Team" tag | `shared`, or `ownerProfileId: null` |
 
 A row: the name, the "Use when…" line, and its tags: "Off" when `enabled` is false, "Shared" when the person's own skill is shared. A row opens the skill's page.
@@ -128,13 +128,13 @@ A row: the name, the "Use when…" line, and its tags: "Off" when `enabled` is f
 
 **States.**
 
-| State | It shows |
-|---|---|
-| Loading | Three grey row shapes, pulsing, `aria-busy` |
-| Couldn't load | The empty mark with a warning, "Couldn't load your skills", the gateway's message as text, "Try again" |
-| Empty | "No skills yet", "A skill is a process you want a bot to follow, written once. Save one here, or ask a bot to save what it just did." and, on the interactive tier, "New skill" (primary) |
-| No profile | When `profileId` is null: "This connection has no profile on the gateway, so it has no library. The gateway gives a library to a signed-in person." No New skill. (research §1: with `gateway.roles` set, a device connection gets no profile; source only) |
-| Read-only | The rows; no New skill; the access bar at the foot |
+| State         | It shows                                                                                                                                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading       | Three grey row shapes, pulsing, `aria-busy`                                                                                                                                                                                                                 |
+| Couldn't load | The empty mark with a warning, "Couldn't load your skills", the gateway's message as text, "Try again"                                                                                                                                                      |
+| Empty         | "No skills yet", "A skill is a process you want a bot to follow, written once. Save one here, or ask a bot to save what it just did." and, on the interactive tier, "New skill" (primary)                                                                   |
+| No profile    | When `profileId` is null: "This connection has no profile on the gateway, so it has no library. The gateway gives a library to a signed-in person." No New skill. (research §1: with `gateway.roles` set, a device connection gets no profile; source only) |
+| Read-only     | The rows; no New skill; the access bar at the foot                                                                                                                                                                                                          |
 
 The list is read when the section opens, when the dialog regains focus, and after every write of this device. No event announces another device's change (research §4), so nothing claims to be live: the section's foot says "As read at 5:41 PM" with "Read again".
 
@@ -163,16 +163,16 @@ A switch (`bots.md` §2) bound to `enabled`: `mutate {action: "enable" | "disabl
 
 **Save** sends `skills.library.save {skillId, expectedRevision, slug, content, retainFiles}`: the revision the page read, the slug, the whole `SKILL.md` that Clawtrate writes from the fields (`---`, `name: <slug>`, `description: <Use when…>`, `---`, a blank line, the instructions), and every file's path.
 
-| Outcome | What the page shows | From |
-|---|---|---|
-| Saving | Save reads "Saving…" and is disabled; the fields stay editable but a second Save waits | — |
-| Saved | "Saved. New tasks start with revision 12a27e7c037e. Tasks that have this skill keep theirs until they are updated." for 6 seconds, then the facts show the new revision and time | the receipt's `entry` (`state: "published"`) |
-| Nothing to save | "Nothing to save: the gateway already has this text." | `state: "unchanged"` |
-| Someone else saved first | Section 5.1 | `SKILL_LIBRARY_CONFLICT` with `currentRevision` |
-| Removed meanwhile | A danger note: "This skill was removed on the gateway. Your text is still here." with "Save as a new skill" (opens section 6 with the text) | `NOT_FOUND` "Removed skills cannot be edited…" |
-| Refused, with a reason | A danger note with the gateway's message as text, "Nothing was saved." | `INVALID_REQUEST` and its message |
-| Refused, no reason | "The gateway didn't save this skill and didn't say why. It refuses a skill that contains something that looks like a key or a password; if this one has one, take it out. Nothing was saved." | `UNAVAILABLE`, which is what a literal key produces (research §3) |
-| No answer | "Couldn't tell whether it was saved." Clawtrate reads the skill again when it can; if the gateway's text is the page's, it says "Saved."; otherwise the page keeps its text unsaved and says "It wasn't saved." | `read` |
+| Outcome                  | What the page shows                                                                                                                                                                                             | From                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Saving                   | Save reads "Saving…" and is disabled; the fields stay editable but a second Save waits                                                                                                                          | —                                                                 |
+| Saved                    | "Saved. New tasks start with revision 12a27e7c037e. Tasks that have this skill keep theirs until they are updated." for 6 seconds, then the facts show the new revision and time                                | the receipt's `entry` (`state: "published"`)                      |
+| Nothing to save          | "Nothing to save: the gateway already has this text."                                                                                                                                                           | `state: "unchanged"`                                              |
+| Someone else saved first | Section 5.1                                                                                                                                                                                                     | `SKILL_LIBRARY_CONFLICT` with `currentRevision`                   |
+| Removed meanwhile        | A danger note: "This skill was removed on the gateway. Your text is still here." with "Save as a new skill" (opens section 6 with the text)                                                                     | `NOT_FOUND` "Removed skills cannot be edited…"                    |
+| Refused, with a reason   | A danger note with the gateway's message as text, "Nothing was saved."                                                                                                                                          | `INVALID_REQUEST` and its message                                 |
+| Refused, no reason       | "The gateway didn't save this skill and didn't say why. It refuses a skill that contains something that looks like a key or a password; if this one has one, take it out. Nothing was saved."                   | `UNAVAILABLE`, which is what a literal key produces (research §3) |
+| No answer                | "Couldn't tell whether it was saved." Clawtrate reads the skill again when it can; if the gateway's text is the page's, it says "Saved."; otherwise the page keeps its text unsaved and says "It wasn't saved." | `read`                                                            |
 
 After a save the page reads the skill again and shows what the read returned, not what it sent.
 
@@ -193,12 +193,12 @@ If a third save lands while the person compares, Save my edit is refused again, 
 
 "New skill" opens the same page with empty fields, the title "New skill", and **Name** as an input with its rule under it: "Lowercase letters, digits and hyphens, starting with a letter or digit, up to 63 characters." The rule is checked as the person types, from the gateway's own pattern `^[a-z0-9][a-z0-9-]{0,62}$`; the field shows what is wrong and Save stays disabled until it fits. Clawtrate also requires instructions (the gateway accepts a skill without any; research §3), so a saved skill always says what to do.
 
-| Outcome | What the page shows |
-|---|---|
-| Saved | The page becomes the skill's page, with "Saved. New tasks start with it." and the receipt's revision; focus on the title |
-| Name taken | Under Name: "You already have a skill called trail-checklist. Choose another name." (`SKILL_LIBRARY_NAME_CONFLICT`) |
-| Too long | Under Instructions: "Too long for the gateway: 1,048,576 characters at most, frontmatter included." Checked before sending, and again from the gateway's refusal |
-| Other refusals | As in section 5 |
+| Outcome        | What the page shows                                                                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Saved          | The page becomes the skill's page, with "Saved. New tasks start with it." and the receipt's revision; focus on the title                                         |
+| Name taken     | Under Name: "You already have a skill called trail-checklist. Choose another name." (`SKILL_LIBRARY_NAME_CONFLICT`)                                              |
+| Too long       | Under Instructions: "Too long for the gateway: 1,048,576 characters at most, frontmatter included." Checked before sending, and again from the gateway's refusal |
+| Other refusals | As in section 5                                                                                                                                                  |
 
 ## 7. Removing a skill
 
@@ -232,12 +232,12 @@ The Details tab of the Work pane (`work-pane.md`) gains a section after the task
 
 A row per selection: the name, its revision (`.k-rev`), and tags:
 
-| Tag | When | From |
-|---|---|---|
-| "Newer revision" | The library entry's revision differs from the task's | `selections[].revision` against the list's entry |
-| "Removed" | The skill is no longer in the library | the selection's `skillId` is not among the list's entries |
-| "Not given" with a line "<Bot>'s skill list doesn't include it." | The bot's list (section 10) does not name it | `config.get` `agents.entries.<id>.skills` |
-| "Not given" with a line "The gateway says what it needs isn't there." | `skills.status {agentId, sessionKey}` has it with `eligible: false` | research §6 |
+| Tag                                                                   | When                                                                | From                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
+| "Newer revision"                                                      | The library entry's revision differs from the task's                | `selections[].revision` against the list's entry          |
+| "Removed"                                                             | The skill is no longer in the library                               | the selection's `skillId` is not among the list's entries |
+| "Not given" with a line "<Bot>'s skill list doesn't include it."      | The bot's list (section 10) does not name it                        | `config.get` `agents.entries.<id>.skills`                 |
+| "Not given" with a line "The gateway says what it needs isn't there." | `skills.status {agentId, sessionKey}` has it with `eligible: false` | research §6                                               |
 
 A row opens the held revision, read-only, with `skills.library.read {skillId, revision, sessionKey}` (the only revision the gateway lets a task read; research §5): the content sentence, the fields as text, "Revision 8a3e2999a308, the one this task has".
 
@@ -261,11 +261,11 @@ A bot's Settings tab (`bots.md` §8) gains one row in its Tools group: **Skills*
 
 From `config.get`, `agents.entries.<id>.skills`, which every tier can read (research §6). Three choices, a radio group:
 
-| Choice | Written | Its line |
-|---|---|---|
+| Choice      | Written                                      | Its line                                                                                                                          |
+| ----------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Every skill | the key removed (`null` with `replacePaths`) | "<Bot> is given every skill the gateway finds usable: yours that are on, the ones shared on this gateway, and the gateway's own." |
-| Only these | a list of names | the checkboxes below |
-| None | `[]` | "<Bot> is given no skills from your library or the gateway's. Skills <Bot> learned are still given." |
+| Only these  | a list of names                              | the checkboxes below                                                                                                              |
+| None        | `[]`                                         | "<Bot> is given no skills from your library or the gateway's. Skills <Bot> learned are still given."                              |
 
 Under "Only these": two groups of checkboxes, **Your library** (the list's entries, each by its name, written as its command name `entry.name`) and **On the gateway** (`skills.status {agentId}` entries that are not library skills, by their names). A name in the bot's list that matches neither is shown in its own group, **Not on this gateway**, as text, with "Remove from the list"; the line says "A name that matches no skill gives <Bot> nothing." (research §6: an unknown name matched nothing).
 
@@ -273,12 +273,12 @@ The page says, always, under the choices: "Skills <Bot> learned are given whatev
 
 **Save** (admin): one `config.patch` with the `baseHash` the page read and `replacePaths: ["agents.entries.<id>.skills"]` (the gateway refuses to shorten a list without it; research §6). Then `config.get` again:
 
-| Outcome | What the page shows |
-|---|---|
-| Saved | "Saved. From each task's next turn, <Bot> is given these. A turn running now keeps the skills it started with." The choices show the read-back |
+| Outcome                           | What the page shows                                                                                                                                |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Saved                             | "Saved. From each task's next turn, <Bot> is given these. A turn running now keeps the skills it started with." The choices show the read-back     |
 | Someone else changed the settings | "Someone else changed <Bot>'s settings. This shows what the gateway has now." (the gateway's "config changed since last load"); nothing is written |
-| Refused | The gateway's message as text; the choices as read again |
-| No answer | "Couldn't tell whether it was saved." and the read-back when it comes |
+| Refused                           | The gateway's message as text; the choices as read again                                                                                           |
+| No answer                         | "Couldn't tell whether it was saved." and the read-back when it comes                                                                              |
 
 The write does not restart the gateway and does not stop a run (research §6: `requiresRestart: false`, a run in progress ended `final`); the page does not warn of either. Below admin the choices are shown disabled with the access bar: "**Admin access needed.** Changing which skills <Bot> is given changes the gateway's settings."
 
@@ -290,12 +290,12 @@ From `skills.workshop.list {agentId}` and `skills.workshop.changes {agentId, lim
 
 A sentence: "Skills <Bot> saved for itself on the gateway. They are given to <Bot> in every task." Then the rows: the learned skill's name (mono), its description, and one line from its newest change in the feed:
 
-| Change | The line |
-|---|---|
+| Change                              | The line                                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `actor: "agent"`, with `sessionKey` | "Saved by <Bot> in <task's title>, 2:58 PM" (the task's title from the rail; "in a task" when it isn't loaded) |
-| `actor: "agent"`, without one | "Saved by <Bot>, 2:58 PM" |
-| `actor: "user"` | "Restored by a person, 3:10 PM" or "Archived by a person" |
-| None found in the feed's last 50 | "When it was saved isn't in the gateway's recent changes." |
+| `actor: "agent"`, without one       | "Saved by <Bot>, 2:58 PM"                                                                                      |
+| `actor: "user"`                     | "Restored by a person, 3:10 PM" or "Archived by a person"                                                      |
+| None found in the feed's last 50    | "When it was saved isn't in the gateway's recent changes."                                                     |
 
 A row opens the learned skill read-only (`skills.workshop.read {name}`): the content sentence, its text as plain text, its files' names, and its changes. There is no edit: no operator method edits a learned skill (research §7).
 
@@ -317,19 +317,19 @@ A bot saves a skill with its `skill_workshop` tool, when a person asks ("save th
 
 The call is an action card (`conversation.md` §7), in the family of the others:
 
-| The call | The card says | Opened |
-|---|---|---|
+| The call                                                                   | The card says                                                   | Opened                                                                                              |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `create` or `update`, with `proposal_content`, result `state: "published"` | "Saved a skill · trail-checklist", state "Saved to your skills" | the readable view: the name, the "Use when…" line, the instructions as plain text; "Open in Skills" |
-| `create` with `content`, result "Created …" | "Learned a skill · trail-checklist", state "Learned" | the same, and "Open in <Bot>'s skills" |
-| `share`, `unshare`, `remove` | "Shared a skill", "Stopped sharing a skill", "Removed a skill" | the receipt's words |
-| Any refused call | "Couldn't save a skill", state "Failed" | the gateway's text, as text |
-| `list`, `read`, `view` | "Looked at skills" | — |
+| `create` with `content`, result "Created …"                                | "Learned a skill · trail-checklist", state "Learned"            | the same, and "Open in <Bot>'s skills"                                                              |
+| `share`, `unshare`, `remove`                                               | "Shared a skill", "Stopped sharing a skill", "Removed a skill"  | the receipt's words                                                                                 |
+| Any refused call                                                           | "Couldn't save a skill", state "Failed"                         | the gateway's text, as text                                                                         |
+| `list`, `read`, `view`                                                     | "Looked at skills"                                              | —                                                                                                   |
 
 Under a "Saved a skill" card, on the interactive tier, one more line: "New tasks start with it. This task doesn't have it yet." with "Use in this task" (`activate {action: "attach"}`), because the gateway publishes to new tasks only (research §8). When the task already holds it, the line is absent.
 
 No approval was asked for any of these calls (research §8). A person who wants one can set a rule for "Save skills" with the rules plugin (`controls.md`); this document adds no rule of its own.
 
-**The composer** (#18 owns it, and nothing here changes it): in the "/" menu, a skill a bot learned is a command by its name (`/trail_checklist`), from `commands.list`; library skills are not listed there, because the gateway does not offer them as commands (research §8). The "+" menu gains nothing from this design; attaching a skill to a task is in the Details tab.
+**The composer** (#18 owns it, and nothing here changes it). `docs/decisions.md` decides its "/" menu: the bot's skills a person may run, from `skills.status` `userInvocable` and `eligible`, tagged Skill. With a task's key, `skills.status` marks a library skill the task holds `userInvocable` and `eligible`, so the menu lists it by its command name (`/s_lake_loop_…`); typed, the gateway tells the model "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:" and names it (research §8, live). A skill the task does not hold is not in its `skills.status`, so it is not offered there. The "+" menu gains nothing from this design; attaching a skill to a task is in the Details tab.
 
 ## 13. Phone, themes, read-only, keyboard
 
@@ -343,68 +343,66 @@ No approval was asked for any of these calls (research §8). A person who wants 
 
 Every row was run on a development gateway (research, the section named) unless it says source.
 
-| Shown | Driven by | Research |
-|---|---|---|
-| The library, its groups and tags | `skills.library.list {scope: "all"}` (read): `entries[{skillId, slug, name, description, ownerLabel, ownerProfileId, shared, enabled, revision, updatedAt, canEdit}]`, `profileId`, `multipleProfiles` | §1, §2 |
-| "Every device of yours sees the same skills" | The owner profile given to every operator connection on a gateway without roles | §1 |
-| No profile | `profileId: null`; writes refused `IDENTITY_REQUIRED` | §1 (source) |
-| A skill's page, its files, Needs | `skills.library.read {skillId}` (read): `{entry, revisions, content, files[{path, content, encoding, executable}]}`; frontmatter `metadata.openclaw.requires` | §3, §9 |
-| Save and its outcomes | `skills.library.save {skillId, expectedRevision, slug, content, retainFiles}` (write): `state` `published` or `unchanged`; `SKILL_LIBRARY_CONFLICT` with `currentRevision`; `NAME_CONFLICT`; `INVALID_BUNDLE`; schema refusals; `UNAVAILABLE` for a literal key | §3 |
-| Their version stays | Every revision stays readable by id | §3 |
-| Name fixed after creation | The command name is made from the slug; a bot's list names the command name | §3, §6 |
-| Files kept | A save without `retainFiles` drops support files | §3 |
-| New tasks start with it | `mutate {action: "enable" \| "disable"}` (write) | §4 |
-| Remove | `mutate {action: "remove"}`: `state: "removed"`; tasks keep their pins | §4, §5 |
-| Share, Stop sharing, the team group | `mutate {action: "share" \| "unshare"}` (write, own skill); `list {scope: "team"}` | §4, §10 |
-| Another person sees it | `seed` includes others' shared skills | §10 (source) |
-| Nothing is live | No event for any library change | §4 |
-| Skills in this task | `skills.library.list {sessionKey}` (read): `session.selections`, `session.attachable` | §5 |
-| Update to the latest; disabled with a removed skill | `activate {action: "refresh"}` (write): every pin at once; refused with a removed one | §5 |
-| From the next turn; the running turn keeps its own | `sessionActivation: "next-turn"`; a turn during a refresh was given the old revision | §5 |
-| Opening a held revision | `read {skillId, revision, sessionKey}`: only that revision | §5 |
-| Not given: the bot's list | `config.get` `agents.entries.<id>.skills` (read at every tier) | §6 |
-| Not given: needs | `skills.status {agentId, sessionKey}` `eligible: false`; the bot was not given it | §6, §9 |
-| A bot's list, its three choices | `config.patch` (admin) with `baseHash` and `replacePaths`; missing, `[]`, unknown and command-name results each proven with a turn | §6 |
-| No restart; runs continue; the next turn | `requiresRestart: false`; a run in progress ended `final`; an existing task's next turn followed the list | §6 |
-| Someone else changed the settings | "config changed since last load; re-run config.get and retry" | §6 |
-| Learned skills given whatever the list says | `isSkillEntrySelected` passes workshop skills; a turn under `[]` was given one | §6 |
-| What a bot learned, and its line | `skills.workshop.list` and `changes` (read): `actor`, `sessionKey`, `runId`, `createdAtMs`, `summary` | §7 |
-| Archive and Restore, Archived | `skills.workshop.archive`, `restore` (admin); `archived[{name, live, versions}]` | §7 |
-| Learning on its own | `list.mode`; the gateway's documentation | §7 (source) |
-| The card | The `agent` `tool` stream, start `{name: "skill_workshop", args}` and result; the history's `toolCall` and `toolResult` | §8 |
-| Which form the bot had | The connection that sent the message: interactive saves to the library, admin to the workshop | §8 |
-| No approval | None raised | §8 |
-| The "/" menu | `commands.list`: a learned skill as a command; no library skill | §8 |
+| Shown                                               | Driven by                                                                                                                                                                                                                                                       | Research     |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| The library, its groups and tags                    | `skills.library.list {scope: "all"}` (read): `entries[{skillId, slug, name, description, ownerLabel, ownerProfileId, shared, enabled, revision, updatedAt, canEdit}]`, `profileId`, `multipleProfiles`                                                          | §1, §2       |
+| "Every device of yours sees the same skills"        | The owner profile given to every operator connection on a gateway without roles                                                                                                                                                                                 | §1           |
+| No profile                                          | `profileId: null`; writes refused `IDENTITY_REQUIRED`                                                                                                                                                                                                           | §1 (source)  |
+| A skill's page, its files, Needs                    | `skills.library.read {skillId}` (read): `{entry, revisions, content, files[{path, content, encoding, executable}]}`; frontmatter `metadata.openclaw.requires`                                                                                                   | §3, §9       |
+| Save and its outcomes                               | `skills.library.save {skillId, expectedRevision, slug, content, retainFiles}` (write): `state` `published` or `unchanged`; `SKILL_LIBRARY_CONFLICT` with `currentRevision`; `NAME_CONFLICT`; `INVALID_BUNDLE`; schema refusals; `UNAVAILABLE` for a literal key | §3           |
+| Their version stays                                 | Every revision stays readable by id                                                                                                                                                                                                                             | §3           |
+| Name fixed after creation                           | The command name is made from the slug; a bot's list names the command name                                                                                                                                                                                     | §3, §6       |
+| Files kept                                          | A save without `retainFiles` drops support files                                                                                                                                                                                                                | §3           |
+| New tasks start with it                             | `mutate {action: "enable" \| "disable"}` (write)                                                                                                                                                                                                                | §4           |
+| Remove                                              | `mutate {action: "remove"}`: `state: "removed"`; tasks keep their pins                                                                                                                                                                                          | §4, §5       |
+| Share, Stop sharing, the team group                 | `mutate {action: "share" \| "unshare"}` (write, own skill); `list {scope: "team"}`                                                                                                                                                                              | §4, §10      |
+| Another person sees it                              | `seed` includes others' shared skills                                                                                                                                                                                                                           | §10 (source) |
+| Nothing is live                                     | No event for any library change                                                                                                                                                                                                                                 | §4           |
+| Skills in this task                                 | `skills.library.list {sessionKey}` (read): `session.selections`, `session.attachable`                                                                                                                                                                           | §5           |
+| Update to the latest; disabled with a removed skill | `activate {action: "refresh"}` (write): every pin at once; refused with a removed one                                                                                                                                                                           | §5           |
+| From the next turn; the running turn keeps its own  | `sessionActivation: "next-turn"`; a turn during a refresh was given the old revision                                                                                                                                                                            | §5           |
+| Opening a held revision                             | `read {skillId, revision, sessionKey}`: only that revision                                                                                                                                                                                                      | §5           |
+| Not given: the bot's list                           | `config.get` `agents.entries.<id>.skills` (read at every tier)                                                                                                                                                                                                  | §6           |
+| Not given: needs                                    | `skills.status {agentId, sessionKey}` `eligible: false`; the bot was not given it                                                                                                                                                                               | §6, §9       |
+| A bot's list, its three choices                     | `config.patch` (admin) with `baseHash` and `replacePaths`; missing, `[]`, unknown and command-name results each proven with a turn                                                                                                                              | §6           |
+| No restart; runs continue; the next turn            | `requiresRestart: false`; a run in progress ended `final`; an existing task's next turn followed the list                                                                                                                                                       | §6           |
+| Someone else changed the settings                   | "config changed since last load; re-run config.get and retry"                                                                                                                                                                                                   | §6           |
+| Learned skills given whatever the list says         | `isSkillEntrySelected` passes workshop skills; a turn under `[]` was given one                                                                                                                                                                                  | §6           |
+| What a bot learned, and its line                    | `skills.workshop.list` and `changes` (read): `actor`, `sessionKey`, `runId`, `createdAtMs`, `summary`                                                                                                                                                           | §7           |
+| Archive and Restore, Archived                       | `skills.workshop.archive`, `restore` (admin); `archived[{name, live, versions}]`                                                                                                                                                                                | §7           |
+| Learning on its own                                 | `list.mode`; the gateway's documentation                                                                                                                                                                                                                        | §7 (source)  |
+| The card                                            | The `agent` `tool` stream, start `{name: "skill_workshop", args}` and result; the history's `toolCall` and `toolResult`                                                                                                                                         | §8           |
+| Which form the bot had                              | The connection that sent the message: interactive saves to the library, admin to the workshop                                                                                                                                                                   | §8           |
+| No approval                                         | None raised                                                                                                                                                                                                                                                     | §8           |
+| The "/" menu (decided in `docs/decisions.md`)       | `skills.status {agentId, sessionKey}`: a held library skill `userInvocable` and `eligible`; typed, the gateway names it to the model as an explicitly referenced skill                                                                                          | §8           |
 
 ## 15. Parity rows to reword
 
-Statuses unchanged. Each target keeps its opening.
+Statuses unchanged.
 
-| Row | Cell | New wording |
-|---|---|---|
-| F-198 | target | same; note: what the bot saves goes to the person's library from Clawtrate's own connection, and is shown as a "Saved a skill" card; new tasks start with it. |
-| F-198 | dependency | partial: a bot saves a skill with `skill_workshop` `create`. From a connection at the interactive tier its form is the personal library's, `{name, proposal_content}`, saving to `skills.library.list` (live); from an admin connection, the learned workshop's, `{name, content}`, saving to `skills.workshop.list` and `changes` with `actor: "agent"` (live). The call is an ordinary tool call in the agent stream and the history; no approval is raised (live). The development configuration does not offer the tool; `docs/research/skills.md` §8 lists the two config changes that do. |
-| F-199 | target | same; note: three controls kept apart: a skill's "New tasks start with it" switch in the library, the skills a task holds, and which skills a bot is given (admin). |
-| F-199 | dependency | partial: the library is read with `skills.library.list` and `read` (`operator.read`) and changed with `save` and `mutate` (`operator.write`, live). A task pins revisions at creation; `skills.library.activate {sessionKey, action}` (`attach`, `detach`, `refresh`; `operator.write`) applies from the next turn, not the running one (live). Per bot, `agents.entries.<id>.skills` through `config.patch` with `replacePaths` (`operator.admin`): missing gives every eligible skill, `[]` none, an unknown name nothing, and a library skill is matched by its command name; learned skills are given regardless; no restart (live, each with a turn). `config.get` reads the list at every tier. |
-| F-361 | target | same; note: the name is set when a skill is made; saved edits reach new tasks, and an existing task when it is updated, from its next turn. |
-| F-361 | dependency | partial: `skills.library.read {skillId, revision?, sessionKey?}` (`operator.read`) and `save {skillId, expectedRevision, slug, content, retainFiles?}` (`operator.write`, live); name and description are the `SKILL.md` frontmatter. A save on a stale revision is refused with `SKILL_LIBRARY_CONFLICT` and the current revision, and every revision stays readable (live). A save without `retainFiles` drops the support files (live). Learned workshop skills are read with `skills.workshop.read` (`operator.read`); no operator method edits them. |
-| F-362 | target | same; note: the action is "Remove skill"; the gateway keeps a removed skill's revisions for the tasks that hold them, and archives learned skills instead (admin). |
-| F-362 | dependency | partial: `skills.library.mutate {action: "remove"}` (`operator.write`, live): `state: "removed"`, absent from every list, tasks keep their pins and their next turn is still given it, `refresh` is refused until it is detached (live). Learned workshop skills: `skills.workshop.archive` and `restore` (`operator.admin`, live). |
-| F-363 | dependency | partial: `skills.library.mutate {skillId, expectedRevision, action: "share" \| "unshare"}` (`operator.write`, the owner's own skill) sets `shared`, and `list {scope: "team"}` then lists it (live). It needs a durable gateway profile, which every operator connection has on a gateway without `gateway.roles` (the owner profile, live), and the owner's or an admin's entry authority. Another person seeing it is from the source only: a development gateway has one profile. `transfer` (admin) makes a skill team-owned, and it can't be unshared (live). There is no link to a skill; nothing leaves the gateway. |
+**Gateway dependency cells.** The cells of F-198, F-199 and F-361 to F-363 in `docs/parity.md` now state the facts of section 14, each marked live or source as the research found it: the two forms of `skill_workshop` and which connection gets which (F-198); the library's tiers, a task's pins and `activate` from the next turn, and the bot's list through `config.patch` with `replacePaths`, proven with a turn for each value (F-199); compare-and-set on `revision`, `retainFiles`, and a task's pinned revision (F-361); `remove` and what a task keeps, and archive and restore for learned skills (F-362); `share` and `unshare`, the durable profile and entry authority, and what could not be run (F-363).
 
-F-363's target stays "not planned: skill publishing runs through the vendor's team service." This document designs sharing on the gateway instead; whether the row becomes `better:` with that, and its status, is a decision for the maintainers, with the wording proposed in the unit's report.
+**Targets: proposed, not applied.** Each narrows or replaces what the row says; none is applied without a maintainer's ruling.
+
+| Row   | Today                                                                 | Proposed                                                                                                                                                                                                  | Why (the fact)                                                                                                                                                                                                                                |
+| ----- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-198 | same                                                                  | same; note: from Clawtrate's own connection the bot saves to the person's library, shown as a "Saved a skill" card; new tasks start with it, and the task it was saved in only once it is attached there. | The interactive tier gets the personal-library form; a save publishes to new sessions only (research §8).                                                                                                                                     |
+| F-199 | same                                                                  | same; note: three controls kept apart: a skill's "New tasks start with it" switch in the library, the skills a task holds, and which skills a bot is given (admin).                                       | `mutate enable` changes new tasks' defaults, `activate` one task, `agents.entries.<id>.skills` the bot (admin) (research §4 to §6).                                                                                                           |
+| F-361 | same; note: saved edits apply to the next run that uses the skill.    | same; note: the name is set when a skill is made; saved edits reach new tasks, and an existing task once it is updated, from its next turn.                                                               | A task keeps its pinned revision until `refresh`, which takes effect from the next turn; the command name a bot's list names is made from the slug (research §3, §5, §6). The present note is not what the gateway does for an existing task. |
+| F-362 | same                                                                  | same; note: the action is "Remove skill"; tasks that hold it keep their revision, and learned skills are archived instead (admin).                                                                        | `remove` keeps revisions for the tasks that hold them; learned skills have archive and restore only (research §4, §7).                                                                                                                        |
+| F-363 | not planned: skill publishing runs through the vendor's team service. | better: a skill is shared with the other people of this gateway from its page ("Share on this gateway", "Stop sharing"); there is no link and no sync, since nothing leaves the gateway.                  | `share` and `unshare` on the gateway, live; another person's view from the source only (research §10). The status stays `todo`; whether it is planned is the maintainers' decision.                                                           |
 
 ## 16. For builders
 
 ### What each part uses
 
-| Part | Reads | Writes |
-|---|---|---|
-| Settings, Skills | `skills.library.list {scope: "all"}` | — |
-| A skill's page | `skills.library.read` | `save`, `mutate` (`enable`, `disable`, `share`, `unshare`, `remove`) |
-| Skills in this task | `skills.library.list {sessionKey}`, `read {…, sessionKey}`, `config.get`, `skills.status {agentId, sessionKey}` | `activate` |
-| A bot's skills | `config.get`, `skills.library.list`, `skills.status {agentId}`, `skills.workshop.list`, `changes`, `read` | `config.patch`; `skills.workshop.archive`, `restore` |
-| The card | The `agent` `tool` stream and `chat.history` | `activate {action: "attach"}` |
+| Part                | Reads                                                                                                           | Writes                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Settings, Skills    | `skills.library.list {scope: "all"}`                                                                            | —                                                                    |
+| A skill's page      | `skills.library.read`                                                                                           | `save`, `mutate` (`enable`, `disable`, `share`, `unshare`, `remove`) |
+| Skills in this task | `skills.library.list {sessionKey}`, `read {…, sessionKey}`, `config.get`, `skills.status {agentId, sessionKey}` | `activate`                                                           |
+| A bot's skills      | `config.get`, `skills.library.list`, `skills.status {agentId}`, `skills.workshop.list`, `changes`, `read`       | `config.patch`; `skills.workshop.archive`, `restore`                 |
+| The card            | The `agent` `tool` stream and `chat.history`                                                                    | `activate {action: "attach"}`                                        |
 
 ### What the engine supplies
 
@@ -425,23 +423,23 @@ F-363's target stays "not planned: skill publishing runs through the vendor's te
 6. A bot's list, then its learned skills (F-199, F-362's note).
 7. Sharing (F-363), once the row's decision is made.
 
-Each step's check runs against a development gateway that offers `skill_workshop` where it needs it (research §8 lists the two config changes); the scripted model's `#learn`, `#learn-workshop` and `#skills` play the bot.
+Each step's check runs against a development gateway that offers `skill_workshop` where it needs it (research §8 names the two config changes). The scripted model has no skill scenarios yet: the research played the bot with three directives kept as a patch beside its probe (`docs/research/skills/scripted-model.patch`, research §12), which the first build step adds to `tools/dev-gateway` with its own tests and scenario checks.
 
 ### Prototype states
 
 `prototype/skills.html` takes every parameter `bots.html` takes, and these:
 
-| Parameter | Values |
-|---|---|
-| `open=settings&section=skills` | The Skills section |
-| `skill` | A skill's page by id (`trail`, `kitchen`, `weather`, `river` shared by someone else, `ridge` team), or `new` |
-| `lib` | `loading`, `error`, `empty`, `noprofile`, `many` |
-| `save` | How the next save ends: `conflict`, `removed`, `refused`, `silent`, `lost`, `unchanged`, `taken` |
-| `multi` | `1`: the gateway has more than one profile |
-| `panel=open&tab=details` with `bot=juniper&task=j1` | Skills in this task; `pins=outdated`, `removed`, `none`, `error`; `running=1` |
-| `tab=settings&bview=skills` | A bot's skills; `list=all`, `only`, `none`, `unknown`; `learned=empty`, `archived`; `cfg=conflict` |
-| `task=jlearn` (bot Juniper) | The task with the `skill_workshop` cards |
-| `access` | `read`, `write`, `admin`, as in `bots.html` |
+| Parameter                                           | Values                                                                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `open=settings&section=skills`                      | The Skills section                                                                                           |
+| `skill`                                             | A skill's page by id (`trail`, `kitchen`, `weather`, `river` shared by someone else, `ridge` team), or `new` |
+| `lib`                                               | `loading`, `error`, `empty`, `noprofile`, `many`                                                             |
+| `save`                                              | How the next save ends: `conflict`, `removed`, `refused`, `silent`, `lost`, `unchanged`, `taken`             |
+| `multi`                                             | `1`: the gateway has more than one profile                                                                   |
+| `panel=open&tab=details` with `bot=juniper&task=j1` | Skills in this task; `pins=outdated`, `removed`, `none`, `error`; `running=1`                                |
+| `tab=settings&bview=skills`                         | A bot's skills; `list=all`, `only`, `none`, `unknown`; `learned=empty`, `archived`; `cfg=conflict`           |
+| `task=jlearn` (bot Juniper)                         | The task with the `skill_workshop` cards                                                                     |
+| `access`                                            | `read`, `write`, `admin`, as in `bots.html`                                                                  |
 
 The check `prototype/tools/checks/skills.mjs` clicks through every outcome above and asserts each state's words.
 

@@ -87,25 +87,6 @@ export function runtimeFacts(messages: ChatMessage[]): {
   return { agentId, sessionKey };
 }
 
-/**
- * The skills the gateway listed in the system prompt's `<available_skills>`
- * block: each name, and the revision a library skill's location carries
- * (`…/revisions/<64 hex>/SKILL.md`).
- */
-export function promptSkills(messages: ChatMessage[]): { name: string; revision: string | null }[] {
-  const system = messages
-    .filter((m) => m.role === "system" || m.role === "developer")
-    .map(messageText)
-    .join("\n");
-  const block = /<available_skills>([\s\S]*?)<\/available_skills>/.exec(system)?.[1] ?? "";
-  return [...block.matchAll(/<skill>([\s\S]*?)<\/skill>/g)].map((match) => {
-    const body = match[1]!;
-    const name = /<name>([^<]*)<\/name>/.exec(body)?.[1]?.trim() ?? "";
-    const revision = /\/revisions\/([a-f0-9]{64})\//.exec(body)?.[1] ?? null;
-    return { name, revision };
-  });
-}
-
 /** A context block the gateway appends as its own user message, not the user's words. */
 const isRuntimeContext = (message: ChatMessage) =>
   message.role === "user" &&
@@ -227,7 +208,6 @@ export function planReply(
     const ctx: PlanContext = {
       ...facts,
       pagesOrigin: options.pagesOrigin ?? null,
-      skills: promptSkills(messages),
       results: after
         .filter((m) => m.role === "tool")
         .map((m) => ({ name: names.get(m.tool_call_id ?? "") ?? "", text: messageText(m) })),

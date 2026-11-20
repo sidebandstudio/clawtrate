@@ -363,7 +363,7 @@ await p.close();
 p = await open(BOT + "&list=only");
 t = await tab(p);
 check("S10 Only these: your library by name, with the command name the gateway matches", has(t, "Your library", "On the gateway", "trail-checklist") && /s_trail_che_[0-9a-f]{20}/.test(t));
-for (const box of await p.$$("#panel-settings input[type=checkbox]:checked")) await box.click();
+while (await p.$("#panel-settings input[type=checkbox]:checked")) await p.click("#panel-settings input[type=checkbox]:checked");
 await wait(p, 100);
 check("S10 nothing checked: says so, and Save is disabled", (await tab(p)).includes("Check at least one skill, or choose None.") && (await p.evaluate(() => document.querySelector('[data-k="list-save"]').disabled)));
 await p.close();
@@ -454,6 +454,17 @@ await p.close();
 p = await open(LIB + "&width=phone", { width: 390, height: 844 });
 check("S13 phone: rows are 64 px", await p.evaluate(() => Math.round(document.querySelector(".k-row").getBoundingClientRect().height) >= 64));
 await p.close();
+for (const width of ["1100", "800"]) {
+  p = await open(LIB + "&skill=trail&save=conflict&width=" + width);
+  await typeInto(p, "#k-body", "An edit at " + width + ".");
+  await p.click('[data-k="save"]');
+  await wait(p);
+  check(`S13 ${width}: the comparison shows both versions, nothing scrolls sideways`, (await dialog(p)).includes("On the gateway now") && (await p.evaluate(() => document.querySelector(".b-section-body").scrollWidth <= document.querySelector(".b-section-body").clientWidth + 1)));
+  await p.close();
+  p = await open(TASK + "&pins=outdated&width=" + width);
+  check(`S13 ${width}: the task's skills fit the pane`, (await details(p)).includes("Newer revision") && (await p.evaluate(() => { const s = document.querySelector(".k-task"); return s.scrollWidth <= s.clientWidth + 1; })));
+  await p.close();
+}
 p = await open(TASK + "&theme=dark&pins=outdated");
 check("S13 dark: the task's skills render", (await details(p)).includes("Newer revision"));
 await p.close();

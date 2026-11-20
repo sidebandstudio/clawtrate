@@ -548,7 +548,7 @@
     if (d.choice === "only") {
       const lib = G.skills.filter((s) => !s.removed && (mine(s) || s.shared || s.owner === null));
       const box = (value, label) => `<div class="b-row"><label class="b-check"><input type="checkbox" data-k-name="${esc(value)}"${d.names.includes(value) ? " checked" : ""}${isAdmin() ? "" : " disabled"} /> ${label}</label></div>`;
-      html += `<p class="k-subgroup">Your library</p><dl class="facts">${lib.map((s) => box(s.name, `${esc(s.slug)} <small class="b-faint mono">${esc(s.name)}</small>`)).join("")}</dl>`;
+      html += `<p class="k-subgroup">Your library</p><dl class="facts">${lib.map((s) => box(s.name, `<span class="k-box-text"><span>${esc(s.slug)}</span><small class="k-cmd mono">${esc(s.name)}</small></span>`)).join("")}</dl>`;
       html += `<p class="k-subgroup">On the gateway</p><dl class="facts">${GATEWAY_SKILLS.map((n) => box(n, `<span class="mono">${esc(n)}</span>`)).join("")}</dl>`;
       const unknown = d.names.filter((n) => !lib.some((s) => s.name === n) && !GATEWAY_SKILLS.includes(n));
       if (unknown.length)
