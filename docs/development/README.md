@@ -48,4 +48,4 @@ The gateway connection, the device key and pairing all live in the preview host 
 pnpm desktop
 ```
 
-This builds and starts the Electron app. The first run downloads the Electron binary. Its first screen asks where OpenClaw runs; **Advanced** opens the address-and-token form, where development builds offer the same **Use the development gateway** button, and pair the same way. "This computer" looks only in a sandbox you give it in a development build: [setup.md](setup.md) says how.
+This builds and starts the Electron app. The first run downloads the Electron binary. Its first screen asks where OpenClaw runs; **Advanced** opens the address-and-token form, where development builds offer the same **Use the development gateway** button, and pair the same way. "This computer" looks only in a sandbox you give it in a development build: [setup.md](setup.md) says how. A development build doesn't reopen the gateway it was last connected to; choose it again on the first screen.
