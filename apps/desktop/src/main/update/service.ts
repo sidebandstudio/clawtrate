@@ -15,7 +15,7 @@ import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { UpdateEngine } from "./engine.ts";
 import type { UpdateInstaller } from "./install.ts";
 import { readAttempt, attemptOutcome } from "./attempt.ts";
-import { readCheck } from "./preferences.ts";
+import { readCheck, type StoredUpdatePreferences } from "./preferences.ts";
 import { fileKeyFor } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
@@ -28,7 +28,9 @@ export interface UpdateServiceOptions {
   downloadDir: string;
   feeds: Record<UpdateTrack, string | null>;
   releaseDate: string | null;
-  store: Pick<KeyValueStore, "get" | "set">;
+  store: Pick<KeyValueStore, "get" | "set"> & {
+    readPreferences?: () => Promise<StoredUpdatePreferences>;
+  };
   changed: (snapshot: DesktopUpdateSnapshot) => void;
   installer?: UpdateInstaller;
   quitAfterLaunch?: () => void;
@@ -83,16 +85,25 @@ export class DesktopUpdateService {
     let preferenceIssue: DesktopUpdateSnapshot["preferenceIssue"] = null;
     let lastAttempt: DesktopUpdateSnapshot["lastAttempt"] = null;
     try {
-      const attempt = await options.store.get("attempt");
-      if (attempt)
-        lastAttempt = attemptOutcome(
-          readAttempt(JSON.parse(attempt)),
-          version ? formatVersion(version) : null,
-        );
-      const saved = await options.store.get("selectedTrack");
+      const stored = await options.store.readPreferences?.();
+      if (stored?.invalid.size)
+        preferenceIssue = stored.invalid.has("attempt")
+          ? "attempt-not-read"
+          : "preferences-not-read";
+      const saved = stored ? stored.prefs.selectedTrack : await options.store.get("selectedTrack");
       selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
-      const raw = await options.store.get("lastCheck");
-      if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+      if (stored) lastCheck = stored.prefs.lastCheck ?? null;
+      else {
+        const raw = await options.store.get("lastCheck");
+        if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+      }
+      try {
+        const raw = stored ? null : await options.store.get("attempt");
+        const attempt = stored?.prefs.attempt ?? (raw ? readAttempt(JSON.parse(raw)) : null);
+        if (attempt) lastAttempt = attemptOutcome(attempt, version ? formatVersion(version) : null);
+      } catch {
+        preferenceIssue = "attempt-not-read";
+      }
     } catch {
       preferenceIssue = "preferences-not-read";
     }

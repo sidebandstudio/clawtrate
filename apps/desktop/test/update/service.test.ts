@@ -640,12 +640,7 @@ it("reads the last JSON value for a repeated track", async () => {
 it("bounds preference reads and recovers when the file is repaired", async () => {
   const path = join(dir.path, "preferences.json");
   const prefs = store();
-  for (const bad of [
-    " ".repeat(1024) + "{}",
-    "[]",
-    '{"selectedTrack":42}',
-    '{"lastCheck":false}',
-  ]) {
+  for (const bad of [" ".repeat(1024) + "{}", "[]"]) {
     writeFileSync(path, bad);
     const service = await start({ store: prefs });
     expect(service.get()).toMatchObject({
@@ -742,7 +737,7 @@ it("distinguishes folder preparation from a settings read even with no source", 
     state: { reason: "not-configured" },
   });
   const prefs = store();
-  vi.spyOn(prefs, "get").mockRejectedValueOnce(Error("fixture read"));
+  vi.spyOn(prefs, "readPreferences").mockRejectedValueOnce(Error("fixture read"));
   const unreadable = await start({ feeds, store: prefs });
   expect(unreadable.get()).toMatchObject({
     selectedTrack: null,
@@ -965,10 +960,10 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
   ] as const) {
     const prefs = store();
     if (version === "1.1.0") {
-      const get = prefs.get;
-      vi.spyOn(prefs, "get").mockImplementation(async (key) => {
-        if (key === "attempt") expect(existsSync(updates)).toBe(true);
-        return get(key);
+      const read = prefs.readPreferences;
+      vi.spyOn(prefs, "readPreferences").mockImplementation(async () => {
+        expect(existsSync(updates)).toBe(true);
+        return read();
       });
     }
     const next = await start({ version, store: prefs });
@@ -1067,5 +1062,54 @@ it.each(["success", "failure", "quit"])(
     expect(reply.snapshot.state.kind).toBe(action === "failure" ? "handoff-failed" : "handing-off");
     expect(url).toBeDefined();
     await expect(fetch(url!)).rejects.toThrow();
+  },
+);
+
+it("retains the selected track and last check when an authorized write replaces a corrupt attempt", async () => {
+  const path = join(dir.path, "preferences.json");
+  const lastCheck = { track: "nightly", readAt: "2026-11-12T10:00:00.000Z" };
+  const prefs = store();
+  writeFileSync(
+    path,
+    JSON.stringify({ selectedTrack: "nightly", lastCheck, attempt: { phase: "unknown" } }),
+  );
+  const read = vi.spyOn(prefs, "readPreferences");
+  const service = await start({ store: prefs });
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(service.get()).toMatchObject({
+    selectedTrack: "nightly",
+    lastCheck,
+    lastAttempt: null,
+    preferenceIssue: "attempt-not-read",
+  });
+  const attempt = {
+    from: "1.0.0",
+    target: "1.2.0",
+    track: "stable",
+    time: lastCheck.readAt,
+    phase: "handoff",
+  };
+  await prefs.set("attempt", JSON.stringify(attempt));
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+    selectedTrack: "nightly",
+    lastCheck,
+    attempt,
+  });
+  for (const [version, kind] of [
+    ["1.2.0", "target-running"],
+    ["1.0.0", "old-version-running"],
+  ] as const) {
+    const next = await start({ version, store: prefs });
+    expect(next.get().lastAttempt).toMatchObject({ kind, running: version });
+  }
+});
+
+it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
+  "reports and repairs an invalid preference field %o",
+  async (bad) => {
+    writeFileSync(join(dir.path, "preferences.json"), JSON.stringify(bad));
+    const service = await start();
+    expect(service.get().preferenceIssue).toBe("preferences-not-read");
+    expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("nightly");
   },
 );
