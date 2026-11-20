@@ -833,12 +833,17 @@ await (await compactReply("a run was stopped", "stopped", ["The gateway reported
   check("walk: low disk, closed: gone", (await p.locator('[data-testid="disk-note"]').count()) === 0);
   await p.close();
 }
-await stateWords("low disk, the gateway's machine, no mount matched: the state folder's volume, named", "disk=gateway", '[data-testid="disk-note"]', ["The volume containing the gateway's state folder has 4.2 GB free of 994 GB. The workspace volume was unavailable. Checked at 5:40 PM."]);
-await stateWords("low disk, the gateway's machine, a mount matched the workspace", "disk=matched", '[data-testid="disk-note"]', ["The volume containing Otto's workspace has 4.2 GB free of 994 GB. Checked at 5:40 PM."]);
-await stateWords("low disk, a node's stale sample", "disk=stale", '[data-testid="disk-note"]', ["as of 5:31 PM. media-box hasn't sent newer figures."]);
+await stateWords("low disk, the gateway's machine: the state folder's volume, named", "disk=gateway", '[data-testid="disk-note"]', ["The volume containing the gateway's state folder has 4.2 GB free of 994 GB. Checked at 5:40 PM."]);
+await stateWords("low disk, a node's stale sample", "disk=stale", '[data-testid="disk-note"]', ["as of 5:31 PM. Clawtrate has no newer figures."]);
+for (const disk of ["gateway", "partial"]) {
+  const p = await open(`disk=${disk}`);
+  const t = await text(p, '[data-testid="disk-note"]');
+  check(`low disk, ${disk === "partial" ? "a returned prefix" : "the gateway's machine"}: no claim about the workspace's volume`, t.includes("The volume containing the gateway's state folder") && !/workspace/i.test(t), t);
+  await p.close();
+}
 {
-  const p = await open("disk=gateway");
-  check("low disk: the workspace's volume is never claimed without a match", !(await text(p, '[data-testid="disk-note"]')).includes("with its workspace"));
+  const p = await open("disk=stale");
+  check("low disk, a stale sample: says what Clawtrate has, not what the node sent", !(await text(p, '[data-testid="disk-note"]')).includes("hasn't sent"));
   await p.close();
 }
 {

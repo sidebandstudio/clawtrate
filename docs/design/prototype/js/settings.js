@@ -999,9 +999,10 @@
       // The note names the volume that was measured, and when (settings.md section 14).
       const where = {
         node: "Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:40 PM.",
-        stale: "Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:31 PM. media-box hasn't sent newer figures.",
-        gateway: "Otto is set to run commands on the gateway's machine. The volume containing the gateway's state folder has 4.2 GB free of 994 GB. The workspace volume was unavailable. Checked at 5:40 PM.",
-        matched: "Otto is set to run commands on the gateway's machine. The volume containing Otto's workspace has 4.2 GB free of 994 GB. Checked at 5:40 PM.",
+        stale: "Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:31 PM. Clawtrate has no newer figures.",
+        gateway: "Otto is set to run commands on the gateway's machine. The volume containing the gateway's state folder has 4.2 GB free of 994 GB. Checked at 5:40 PM.",
+        // system.info returned a disks prefix that contains Otto's workspace; an incomplete list can't confirm its volume.
+        partial: "Otto is set to run commands on the gateway's machine. The volume containing the gateway's state folder has 4.2 GB free of 994 GB. Checked at 5:40 PM.",
       }[S.disk] || "";
       const d = document.createElement("section");
       d.className = "s-disk-note";
