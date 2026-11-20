@@ -20,14 +20,12 @@ import {
   budgetInput,
   budgetLine,
   budgetWindow,
-  deviceTimeZone,
   full,
   kindWord,
   periodWord,
   reachedLine,
   resetWords,
   warningWords,
-  zoneWords,
 } from "./words.ts";
 
 export type BudgetTarget = { botId: string; routineId: string | null; routineName: string | null };
@@ -74,7 +72,6 @@ export function BudgetForm({
     };
   }, []);
   const tokens = budgetTokens(value);
-  const zone = existing?.timeZone ?? deviceTimeZone();
   const invalid = typeof tokens === "string";
   const shownError = invalid && value.trim() !== "" ? tokens : null;
   const save = async () => {
@@ -152,8 +149,8 @@ export function BudgetForm({
       </label>
       <p className="b-hint" id={`${ids}-help`} style={{ margin: 0 }}>
         A whole number of 1,000 or more. Counts the total the gateway reports for {name}{" "}
-        {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}: input, output and cache.
-        A warning: nothing on the gateway stops a bot at its budget.
+        {period === "daily" ? "each day" : "each week"}: input, output and cache. A warning: nothing
+        on the gateway stops a bot at its budget.
       </p>
       {shownError && (
         <p className="b-field-error" id={`${ids}-error`} style={{ margin: 0 }}>
