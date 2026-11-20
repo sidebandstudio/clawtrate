@@ -172,11 +172,16 @@ await p.click('[data-k="save"]');
 await wait(p, 100);
 t = await dialog(p);
 check("S5 R4 pending: Saving…, and no outcome before the read", t.includes("Saving…") && !t.includes("Saved revision") && (await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
+await p.focus("#k-desc");
+await p.keyboard.press("Escape");
+await p.click('[data-k="to-list"]');
+await wait(p, 60);
+check("S2 R8 a pending Save: Escape and Back wait, the page stays open on its subject", (await p.evaluate(() => document.querySelector("#settings-dialog").open)) && (await text(p, "#b-section-title")) === "trail-checklist" && !(await confirmText(p)).includes("Leave without saving?") && (await p.evaluate(() => window.skills.K.page)) === "trail");
 await typeInto(p, "#k-body", "1. Check the forecast.\n2. Pack water and a map.\n3. Typed while it saved.");
 await wait(p);
 t = await dialog(p);
 g = await gwRead(p, "trail");
-check("S5 R4 what was sent is what was there at the click; later typing is kept", g.body === "1. Check the forecast.\n2. Pack water and a map." && (await p.evaluate(() => document.querySelector("#k-body").value)).endsWith("Typed while it saved.") && t.includes("You typed more after you chose Save; that isn't saved."));
+check("S5 R4 what was sent is what was there at the click; later typing is kept", g.body === "1. Check the forecast.\n2. Pack water and a map." && (await p.evaluate(() => document.querySelector("#k-body").value)).endsWith("Typed while it saved.") && t.includes("You typed more after you chose Save. That text is still here, unsaved."));
 check("F-361 S5 R3 Saved names the revision the read shows, and what new tasks get", t.includes(`Saved revision ${g.rev.slice(0, 12)}. New tasks that begin with this skill get this revision. Tasks that have it keep theirs until they are updated.`) && !t.includes("New tasks start with revision") && (await announced(p)) === "Saved");
 await p.close();
 
@@ -309,7 +314,14 @@ await typeInto(p, "#k-body", "Note the distance and the time.");
 await p.click('[data-k="save"]');
 await wait(p, 100);
 check("S6 R4 pending: no outcome before the read", (await dialog(p)).includes("Saving…") && !(await dialog(p)).includes("Saved revision"));
+check("S6 R4 the new Name is read-only until the creation settles", await p.evaluate(() => document.querySelector("#k-slug").readOnly));
+await typeInto(p, "#k-body", "Note the distance, the time and the weather.");
 await wait(p);
+t = await dialog(p);
+check(
+  "S6 R1 what was sent is stored; what was typed during the save stays in the field, unsaved",
+  (await gwRead(p, "new-trail-notes")).body === "Note the distance and the time." && (await p.evaluate(() => document.querySelector("#k-body").value)) === "Note the distance, the time and the weather." && t.includes("You typed more after you chose Save. That text is still here, unsaved."),
+);
 check("S6 saved: the page becomes the skill's page, from a read by name", (await text(p, "#b-section-title")) === "trail-notes" && (await dialog(p)).includes("Saved revision") && (await dialog(p)).includes("It is included in defaults, so new tasks a person starts can begin with it."));
 await p.close();
 for (const [mode, words] of [
@@ -346,23 +358,56 @@ p = await open(LIB + "&skill=trail");
 await typeInto(p, "#k-body", "An edit that isn't saved.");
 await p.click('[data-k="remove"]');
 await wait(p, 120);
-check("S7 R4 Remove asks, says what tasks keep, and names the unsaved edit it loses", has(await confirmText(p), "Remove trail-checklist?", "Tasks that have it keep their revision until it is detached there. You can't undo this; a new skill can take its name.", "Your unsaved edit on this page is lost too."));
+check("S7 R1 Remove asks, says what tasks keep, and that the unsaved text stays", has(await confirmText(p), "Remove trail-checklist?", "Tasks that have it keep their revision until it is detached there. You can't undo this; a new skill can take its name.", "If the skill is removed, your unsaved text stays here. You can save it as a new skill."));
 await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await wait(p, 100);
 check("S7 R4 pending: Removing…, and no Removed before the read", (await dialog(p)).includes("Removing…") && !(await dialog(p)).includes("Removed."));
+await p.focus("#k-body");
+await p.keyboard.type(" More.");
+check("S7 R1 during Remove the fields are read-only", (await p.evaluate(() => document.querySelector("#k-body").readOnly && document.querySelector("#k-desc").readOnly)) && (await p.evaluate(() => document.querySelector("#k-body").value)) === "An edit that isn't saved.");
 await wait(p);
-check("F-362 S7 removed: said from the read-back, the row gone", (await dialog(p)).includes("Removed. Reading your library again: trail-checklist isn't in it. Tasks that have it keep their revision.") && !(await p.$('[data-k-skill="trail"]')) && (await gwRead(p, "trail")).removed === true && (await announced(p)) === "Removed");
+t = await dialog(p);
+check(
+  "F-362 S7 R1 removed with unsaved text: said from the read-back, the draft stays, nothing else can be sent",
+  t.includes("Removed. Reading your library again: trail-checklist isn't in it. Tasks that have it keep their revision. Your unsaved text is still here.") &&
+    (await gwRead(p, "trail")).removed === true &&
+    (await p.evaluate(() => document.querySelector("#k-body").value)) === "An edit that isn't saved." &&
+    (await p.evaluate(() => ["save", "share", "remove"].every((k) => document.querySelector(`[data-k="${k}"]`).disabled))) &&
+    (await announced(p)) === "Removed",
+);
+await p.click('[data-k="save-as-new"]');
+await wait(p, 150);
+check("S7 R1 Save text as a new skill takes the draft", (await text(p, "#b-section-title")) === "Save text as a new skill" && (await p.evaluate(() => document.querySelector("#k-body").value)) === "An edit that isn't saved.");
 await p.close();
 p = await open(LIB + "&skill=trail");
 await p.click('[data-k="remove"]');
 await wait(p, 120);
 check("S7 with nothing unsaved, Remove doesn't mention an edit", !(await confirmText(p)).includes("unsaved"));
+await p.click('#confirm-dialog [data-b="confirm-ok"]');
+await wait(p);
+check("F-362 S7 removed: said from the read-back, the row gone", (await dialog(p)).includes("Removed. Reading your library again: trail-checklist isn't in it. Tasks that have it keep their revision.") && !(await p.$('[data-k-skill="trail"]')) && (await gwRead(p, "trail")).removed === true && (await announced(p)) === "Removed");
 await p.close();
 p = await open(LIB + "&skill=trail&remove=conflict");
 await p.click('[data-k="remove"]');
 await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await wait(p);
-check("S7 R4 a stale Remove: nothing removed, the page as read again", (await dialog(p)).includes("Someone else saved this skill since you opened it. Nothing was removed. This is what the gateway has now.") && (await gwRead(p, "trail")).rev !== undefined);
+g = await gwRead(p, "trail");
+check("S7 R4 a stale Remove with nothing unsaved: nothing removed, the page as read again", (await dialog(p)).includes(`The gateway refused this removal because it read a different revision. Reading it again found revision ${g.rev.slice(0, 12)}.`) && !(await dialog(p)).includes("Your unsaved text") && g.removed !== true && (await p.evaluate(() => document.querySelector("#k-body").value)) === g.body);
+await p.close();
+p = await open(LIB + "&skill=trail&remove=conflict");
+await typeInto(p, "#k-body", "My route notes, not saved.");
+await p.click('[data-k="remove"]');
+await p.click('#confirm-dialog [data-b="confirm-ok"]');
+await wait(p);
+g = await gwRead(p, "trail");
+check(
+  "S7 R1 a stale Remove with unsaved text: refused, the draft and the gateway's newer text both kept, compared",
+  (await dialog(p)).includes(`The gateway refused this removal because it read a different revision. Reading it again found revision ${g.rev.slice(0, 12)}. Your unsaved text is still here.`) &&
+    (await p.evaluate(() => document.querySelector("#k-body").value)) === "My route notes, not saved." &&
+    (await p.evaluate(() => document.querySelector("[data-k-theirs]")?.textContent)) === g.body &&
+    g.body.includes("a head torch") &&
+    (await announced(p)) === "Not removed",
+);
 await p.close();
 
 p = await open(LIB + "&skill=kitchen");

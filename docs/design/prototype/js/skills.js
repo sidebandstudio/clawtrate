@@ -215,6 +215,7 @@
 
   function openPage(id) {
     K.page = id;
+    K.gone = false; // the page holds a draft of a skill a read showed removed
     K.status = null;
     K.compare = null;
     K.pending = null;
@@ -249,7 +250,7 @@
     if (sizeOf(d) > LIMIT) out.body = "Too long for the gateway: SKILL.md may be at most 1,048,576 bytes, frontmatter included. Letters outside English count as more than one byte.";
     return out;
   };
-  const saveable = () => dirty() && !K.pending && online() && Object.keys(problems(K.draft)).length === 0;
+  const saveable = () => dirty() && !K.pending && !K.gone && online() && Object.keys(problems(K.draft)).length === 0;
 
   const rev = (r) => `<span class="k-rev mono" aria-label="Revision ${r}" title="${r}">${r.slice(0, 12)}</span>`;
   const tag = (word, tone = "") => `<span class="k-tag"${tone ? ` data-tone="${tone}"` : ""}>${word}</span>`;
@@ -312,15 +313,17 @@
   function fieldsHtml(editable) {
     const d = K.draft;
     const pr = problems(d);
+    // During Remove the two fields are read-only until the result (section 2, Writes).
+    const frozen = K.pending === "Removing…" ? " readonly" : "";
     if (!editable)
       return (
         `<div class="k-field"><span class="k-label">Use when…</span><p class="k-ro" id="k-desc-text">${esc(d.description)}</p></div>` +
         `<div class="k-field"><span class="k-label">Instructions</span><pre class="k-plain" id="k-body-text">${esc(d.body)}</pre></div>`
       );
     return (
-      `<div class="k-field"><label class="k-label" for="k-desc">Use when…</label><input class="input" id="k-desc" data-k-field="description" value="${esc(d.description)}" aria-describedby="k-desc-help" />` +
+      `<div class="k-field"><label class="k-label" for="k-desc">Use when…</label><input class="input" id="k-desc" data-k-field="description" value="${esc(d.description)}" aria-describedby="k-desc-help"${frozen} />` +
       `<p class="${pr.desc ? "b-field-error" : "b-hint"}" id="k-desc-help">${pr.desc || (pr.descMissing ? "Say when a bot should use this skill." : bytes(d.description) >= 900 ? `${bytes(d.description).toLocaleString("en-US")} of 1,024 bytes.` : "When a bot should use it. The gateway shows this to the bot.")}</p></div>` +
-      `<div class="k-field"><label class="k-label" for="k-body">Instructions</label><textarea class="input k-editor" id="k-body" data-k-field="body" rows="12" spellcheck="false" aria-describedby="k-body-help">${esc(d.body)}</textarea>` +
+      `<div class="k-field"><label class="k-label" for="k-body">Instructions</label><textarea class="input k-editor" id="k-body" data-k-field="body" rows="12" spellcheck="false" aria-describedby="k-body-help"${frozen}>${esc(d.body)}</textarea>` +
       `<p class="${pr.body ? "b-field-error" : "b-hint"}" id="k-body-help">${pr.body || (pr.bodyMissing ? "Write what the bot should do." : "Plain text. Shown to the bot as written.")}</p></div>`
     );
   }
@@ -366,7 +369,7 @@
         ? `<div class="b-row"><span class="b-row-main"><span>Include in defaults for new tasks</span><small id="k-enabled-line">${
             r.enabled ? "A task a person starts can begin with it, if it is among the first 64 included." : "Tasks don't begin with it. It can still be attached to a task."
           }</small></span>` +
-          `<button type="button" class="b-switch" role="switch" aria-checked="${r.enabled}" aria-label="Include in defaults for new tasks" aria-describedby="k-enabled-line" data-k="enable"${editable && !K.pending && online() ? "" : " disabled"}></button></div>`
+          `<button type="button" class="b-switch" role="switch" aria-checked="${r.enabled}" aria-label="Include in defaults for new tasks" aria-describedby="k-enabled-line" data-k="enable"${editable && !K.pending && !K.gone && online() ? "" : " disabled"}></button></div>`
         : "") +
       `</dl>`;
     if (mine(s) && editable) {
@@ -380,8 +383,8 @@
       ? writeBar("Changing skills needs write access.")
       : editable && !K.compare
         ? `<div class="b-actions k-foot">${button(K.pending === "Saving…" ? "Saving…" : "Save", `data-k="save" data-size="sm"${saveable() ? "" : " disabled"}`, "primary")}<span class="spacer"></span>` +
-          (mine(s) ? button(r.shared ? "Stop sharing" : "Share on this gateway", `data-k="share" data-size="sm"${K.pending || !online() ? " disabled" : ""}`) : "") +
-          button("Remove skill…", `data-k="remove" data-size="sm" data-tone="danger"${K.pending || !online() ? " disabled" : ""}`, "quiet") +
+          (mine(s) ? button(r.shared ? "Stop sharing" : "Share on this gateway", `data-k="share" data-size="sm"${K.pending || K.gone || !online() ? " disabled" : ""}`) : "") +
+          button("Remove skill…", `data-k="remove" data-size="sm" data-tone="danger"${K.pending || K.gone || !online() ? " disabled" : ""}`, "quiet") +
           `</div>`
         : "";
     return { title: `<span class="k-title">${esc(r.slug)}</span>`, back: backTo("Back to skills", "to-list"), body, foot };
@@ -407,7 +410,7 @@
     let body = CONTENT + (K.pending ? pendingLine(K.pending) : "") + (K.status || "");
     if (!online()) body += note(`<p>Not connected to the gateway. What you type stays here; Save waits for the connection.</p>`, "warn");
     body +=
-      `<div class="k-field"><label class="k-label" for="k-slug">Name</label><input class="input mono" id="k-slug" data-k-field="slug" maxlength="80" value="${esc(d.slug)}" autocomplete="off" spellcheck="false" aria-describedby="k-slug-help" data-b-focus />` +
+      `<div class="k-field"><label class="k-label" for="k-slug">Name</label><input class="input mono" id="k-slug" data-k-field="slug" maxlength="80" value="${esc(d.slug)}" autocomplete="off" spellcheck="false" aria-describedby="k-slug-help" data-b-focus${K.pending ? " readonly" : ""} />` +
       `<p class="${pr.name || K.nameTaken ? "b-field-error" : "b-hint"}" id="k-slug-help">${K.nameTaken ? `You already have a skill called ${esc(K.nameTaken)}. Choose another name.` : pr.name || "Lowercase letters, digits and hyphens, starting with a letter or digit, up to 63 characters."}</p></div>`;
     body += fieldsHtml(true);
     const foot = `<div class="b-actions k-foot">${button(K.pending ? "Saving…" : "Save", `data-k="save" data-size="sm"${saveable() && !K.nameTaken ? "" : " disabled"}`, "primary")}</div>`;
@@ -470,7 +473,7 @@
     K.pending = null;
     const typedSince = K.draft.description !== sub.description || K.draft.body !== sub.body;
     const r = mode === "readfail" ? { error: "UNAVAILABLE" } : read(sub.id);
-    const mineNow = typedSince ? `<p>You typed more after you chose Save; that isn't saved.</p>` : "";
+    const mineNow = typedSince ? `<p>You typed more after you chose Save. That text is still here, unsaved.</p>` : "";
     const adopt = () => {
       K.read = r;
       if (!typedSince) K.draft = { slug: r.slug, description: r.description, body: r.body };
@@ -569,10 +572,16 @@
           announce("Couldn't tell whether it was saved");
           return rerender();
         }
+        // What was typed after the click stays, unsaved, on the new skill's page.
+        const laterDraft = { ...K.draft };
+        const typedSince = laterDraft.description !== sub.description || laterDraft.body !== sub.body;
         K.nameTaken = null;
         K.saveAsNew = false;
         openPage(found.id);
-        K.status = statusNote(`<p>Saved revision ${rev(found.rev)}. It is included in defaults, so new tasks a person starts can begin with it.</p>`);
+        if (typedSince) K.draft = { slug: found.slug, description: laterDraft.description, body: laterDraft.body };
+        K.status = statusNote(
+          `<p>Saved revision ${rev(found.rev)}. It is included in defaults, so new tasks a person starts can begin with it.</p>` + (typedSince ? `<p>You typed more after you chose Save. That text is still here, unsaved.</p>` : ""),
+        );
         announce("Saved");
         rerender();
         $("#b-section-title", settings())?.focus();
@@ -601,21 +610,38 @@
       later(READ, () => {
         K.pending = null;
         const after = read(sub.id);
+        const kept = dirty(); // unsaved text on the page, against the page's own read
         if (after.removed) {
+          const words = `Removed. Reading your library again: ${esc(sub.slug)} isn't in it. Tasks that have it keep their revision.`;
+          announce("Removed");
+          if (kept) {
+            // The draft stays on the removed skill's page; only "Save text as a new skill" can take it.
+            K.gone = true;
+            K.status = statusNote(`<p>${words} Your unsaved text is still here.</p><div class="b-actions">${button("Save text as a new skill", 'data-k="save-as-new" data-size="sm"')}</div>`, "warn");
+            rerender();
+            return paintTask();
+          }
           K.page = null;
           K.draft = null;
-          K.listStatus = statusNote(`<p>Removed. Reading your library again: ${esc(sub.slug)} isn't in it. Tasks that have it keep their revision.</p>`);
+          K.listStatus = statusNote(`<p>${words}</p>`);
           rerender();
           $("#b-section-title", settings())?.focus();
-          announce("Removed");
           return paintTask();
         }
+        if (answer?.code === "SKILL_LIBRARY_CONFLICT") {
+          const words = `<p>The gateway refused this removal because it read a different revision. Reading it again found revision ${rev(after.rev)}.${kept ? " Your unsaved text is still here." : ""}</p>`;
+          if (kept) K.compare = { theirs: after };
+          else {
+            K.read = after;
+            K.draft = { slug: after.slug, description: after.description, body: after.body };
+          }
+          K.status = statusNote(words, "warn");
+          announce("Not removed");
+          return rerender();
+        }
         K.read = after;
-        K.draft = { slug: after.slug, description: after.description, body: after.body };
-        K.status = statusNote(
-          answer?.code ? `<p>Someone else saved this skill since you opened it. Nothing was removed. This is what the gateway has now.</p>` : `<p>Couldn't tell whether it was removed. Reading it again: it is still in your library.</p>`,
-          "warn",
-        );
+        if (!kept) K.draft = { slug: after.slug, description: after.description, body: after.body };
+        K.status = statusNote(`<p>Couldn't tell whether it was removed. Reading it again: it is still in your library.</p>`, "warn");
         announce("Not removed");
         rerender();
       });
@@ -965,7 +991,7 @@
 
   document.addEventListener("input", (event) => {
     const f = event.target.closest("[data-k-field]");
-    if (f && K.draft) {
+    if (f && K.draft && !f.readOnly) {
       K.draft[f.dataset.kField] = f.value;
       if (f.dataset.kField === "slug" && K.nameTaken && f.value !== K.nameTaken) K.nameTaken = null;
       refreshForm();
@@ -989,7 +1015,11 @@
 
   // Leaving a page with unsaved text asks first (section 5).
   const unsaved = () => B.settings.section === "skills" && K.page && dirty() && canWrite();
+  // While a skill write is pending, Back, Close, Escape and changing section wait for its result.
+  const pendingWrite = () => B.settings.section === "skills" && K.page && Boolean(K.pending);
+  const waitForIt = () => announce(`${K.pending} Waiting for the gateway's answer.`);
   function leave(then) {
+    if (pendingWrite()) return waitForIt();
     if (!unsaved()) return then();
     D.confirmBox({
       title: "Leave without saving?",
@@ -1006,6 +1036,10 @@
   };
   // Escape on the dialog goes through the same question as Close.
   settings().addEventListener("cancel", (event) => {
+    if (pendingWrite() && !document.querySelector("#confirm-dialog[open]")) {
+      event.preventDefault();
+      return waitForIt();
+    }
     if (unsaved() && !document.querySelector("#confirm-dialog[open]")) {
       event.preventDefault();
       leave(closeSettings);
@@ -1016,14 +1050,14 @@
     "click",
     (event) => {
       const close = event.target.closest('#settings-dialog [data-b="close"]');
-      if (close && unsaved()) {
+      if (close && (pendingWrite() || unsaved())) {
         event.stopPropagation();
         event.preventDefault();
         return leave(closeSettings);
       }
       // Moving to another Settings section with unsaved text asks too.
       const section = event.target.closest("#settings-dialog [data-b-section]");
-      if (section && section.dataset.bSection !== "skills" && unsaved()) {
+      if (section && section.dataset.bSection !== "skills" && (pendingWrite() || unsaved())) {
         event.stopPropagation();
         event.preventDefault();
         return leave(() => {
@@ -1130,7 +1164,7 @@
           title: `Remove ${esc(K.read.slug)}?`,
           text:
             "It leaves your library and new tasks won't begin with it. Tasks that have it keep their revision until it is detached there. You can't undo this; a new skill can take its name." +
-            (dirty() ? " Your unsaved edit on this page is lost too." : ""),
+            (dirty() ? " If the skill is removed, your unsaved text stays here. You can save it as a new skill." : ""),
           action: "danger",
           label: "Remove",
           run: remove,
