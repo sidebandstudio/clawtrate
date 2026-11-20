@@ -14,7 +14,7 @@ import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
-import { appEnv, packagedExecutable } from "./global-setup.ts";
+import { launchPlace, packagedExecutable } from "./global-setup.ts";
 import {
   integrityLevels,
   mainWindowTitle,
@@ -197,11 +197,14 @@ test("hands a second launch to the running app instead of starting another", asy
   // The same data folder, so the same single-instance lock. The second process
   // must exit by itself, successfully, and leave the first one and its one window.
   // Never a packaged app without a sandbox, even one that only hands over to the running app.
+  // The run's temporary home, temporary folder and working folder, as the first launch had.
+  const place = launchPlace(process.env.CLAWTRATE_PACKAGED_PLACE!);
   const second = spawn(
     packagedExecutable(APP),
     [`--user-data-dir=${USER_DATA}`, `--clawtrate-setup-sandbox=${SANDBOX}`],
     {
-      env: appEnv(),
+      cwd: place.cwd,
+      env: place.env,
       stdio: "ignore",
     },
   );

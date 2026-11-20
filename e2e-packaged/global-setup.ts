@@ -42,7 +42,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
 import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
@@ -249,6 +249,50 @@ export function appEnv(): NodeJS.ProcessEnv {
 }
 
 /**
+ * The environment and working folder of every packaged launch, the second
+ * included: the app's own, with the run's temporary home and temporary
+ * folder, in a working folder of the run's own. Made under `dir`.
+ */
+export function launchPlace(dir: string): { env: NodeJS.ProcessEnv; cwd: string } {
+  const home = join(dir, "home");
+  const tmp = join(dir, "tmp");
+  const cwd = join(dir, "work");
+  for (const folder of [home, tmp, cwd]) mkdirSync(folder, { recursive: true, mode: 0o700 });
+  return { env: { ...appEnv(), HOME: home, TMPDIR: tmp, TEMP: tmp, TMP: tmp }, cwd };
+}
+
+/** The exit of each packaged app this run started, recorded the moment it was spawned. */
+const exits = new WeakMap<ChildProcess, Promise<void>>();
+export function recordExit(child: ChildProcess): ChildProcess {
+  exits.set(child, new Promise((resolve) => child.once("exit", () => resolve())));
+  return child;
+}
+
+/**
+ * Whether the recorded app exited within `ms`: its recorded exit event, or the
+ * kernel saying its PID is gone. Never a wait that started after it exited.
+ */
+export async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  const gone = async () => {
+    for (;;) {
+      await sleep(200);
+      try {
+        process.kill(child.pid!, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      }
+    }
+  };
+  const ended = await Promise.race([
+    (exits.get(child) ?? new Promise<void>(() => {})).then(() => true),
+    gone(),
+    sleep(ms).then(() => false),
+  ]);
+  return ended;
+}
+
+/**
  * The packaged app's launch arguments: its own data folder, the debugging
  * port this check drives it over, always a sandbox, and the checkout whose
  * run records prove the sandbox's instance (a packaged app has no checkout of
@@ -358,10 +402,11 @@ export default async function globalSetup() {
     const problems: string[] = [];
     // Quit the app the way the system does at logout, and wait for it and its helpers.
     if (appProcess && appProcess.exitCode === null && appProcess.signalCode === null) {
-      const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
       appProcess.kill("SIGTERM");
-      if ((await Promise.race([exited, sleep(15_000).then(() => "timeout")])) === "timeout") {
+      if (!(await exitedWithin(appProcess, 15_000))) {
+        // The graceful shutdown failed: that is reported, and only the recorded app is ended.
         problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
+        forceEnd(appProcess.pid!);
       }
     }
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
@@ -432,17 +477,19 @@ export default async function globalSetup() {
     saveRecord(RECORDS, record);
     const sandbox = setupSandbox(dir, name);
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
+    const place = launchPlace(dir);
+    process.env.CLAWTRATE_PACKAGED_PLACE = dir;
     const gated = gatedSpawn(
       spawn,
       packagedExecutable(app),
       launchArgs(userData, sandbox, CHECKOUT),
       {
-        cwd: dir,
-        env: appEnv(),
+        cwd: place.cwd,
+        env: place.env,
         stdio: ["ignore", logFd, logFd],
       },
     );
-    appProcess = gated.child;
+    appProcess = recordExit(gated.child);
     const found = processIdentity(appProcess.pid!);
     if (found.state !== "alive") {
       gated.abort();
@@ -521,10 +568,9 @@ async function windowsSetup() {
         `the app exited before it was asked to close, with ${appProcess.exitCode ?? appProcess.signalCode}`,
       );
     } else if (appProcess) {
-      const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
       const refused = askToClose(appProcess.pid!);
       if (refused) problems.push(`asking the app to close failed: ${refused}`);
-      else if ((await Promise.race([exited, sleep(15_000).then(() => "timeout")])) === "timeout") {
+      else if (!(await exitedWithin(appProcess, 15_000))) {
         problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
       } else if (appProcess.exitCode !== 0) {
         problems.push(`the app exited with ${appProcess.exitCode ?? appProcess.signalCode}`);
@@ -545,11 +591,15 @@ async function windowsSetup() {
   try {
     const sandbox = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
-    appProcess = spawn(exe, launchArgs(userData, sandbox, CHECKOUT), {
-      cwd: dirname(userData),
-      env: appEnv(),
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+    const place = launchPlace(dir);
+    process.env.CLAWTRATE_PACKAGED_PLACE = dir;
+    appProcess = recordExit(
+      spawn(exe, launchArgs(userData, sandbox, CHECKOUT), {
+        cwd: place.cwd,
+        env: place.env,
+        stdio: ["ignore", "ignore", "inherit"],
+      }),
+    );
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
