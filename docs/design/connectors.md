@@ -193,7 +193,7 @@ When `browse` comes back with `remoteError`, or `categories` and `featured` fail
 - "About": the readme as plain text (the first 12 lines, "Show all" for the rest), its version, and the verification and security summary as given.
 - At the foot, "Add" (primary), or the access bar below admin.
 
-Everything the catalog and a plugin give (a name, a summary, an author, the readme) is text, escaped, never markup: the readme is shown as plain text, not rendered Markdown. So an address in it, and the catalog's `repositoryUrl`, `documentationUrl`, `author.imageUrl` and the like, are text that is never fetched or opened (`docs/decisions.md`, "Addresses a gateway hands the client", its last row). A connector's resources, pictures and app views (`mcp.app.*`) never load by themselves.
+Everything the catalog and a plugin give (a name, a summary, an author, the readme) is text, escaped, never markup: the readme is shown as plain text, not rendered Markdown. So an address in it, and the catalog's `repositoryUrl`, `documentationUrl`, `author.imageUrl` and the like, are text that is never fetched or opened (`docs/decisions.md`, "Addresses a gateway hands the client", its last row). A connector's resources, pictures and app views (`mcp.app.*`) never load by themselves. Render gateway strings with text insertion or context-appropriate escaping in every position, including names, headings, row and control labels, metadata, settings fields, tool results and notices. Values used in attributes and local navigation parameters are encoded for that context. Only the controls and addresses classified in the address decision can open a destination.
 
 **The confirmation** (role `alertdialog`, focus on Cancel):
 
@@ -522,6 +522,7 @@ F-220 stays `todo` with its gap named: Clawtrate chat has no per-person identity
 ### What the engine supplies
 
 - A catalog store that keeps the last overview, its time, and whether it came with `remoteError`.
+- Gateway strings are text in every position (section 6): text insertion or context-appropriate escaping for names, headings, labels, metadata, settings fields, tool results and notices; attribute and navigation values encoded for their context.
 - One write at a time per window: a second change waits for the read-back of the first.
 - A server write carries the `config.get` `hash` read when the person reviewed it, and the exact entry of section 12; its result comes only from the read-back's comparison.
 - The command and the profile option for `openclaw mcp login` and `logout` come from the host, as the approve command does (`bots.md` §2).

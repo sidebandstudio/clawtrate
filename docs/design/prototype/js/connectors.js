@@ -17,7 +17,7 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills", "marked"];
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -69,6 +69,12 @@
     "search-index": { kind: "command", command: "/opt/example/bin/search-server", args: ["--stdio", "--index", "./notes"], last: "unavailable" },
     "team-notes": { kind: "remote", url: "https://teamnotes.example/mcp", headers: [], signin: "each", last: "notyet" },
   };
+  // ?marked=1: gateway strings that carry inert markup, which must render as text (section 6).
+  if (params.get("marked") === "1") {
+    Object.assign(APPS[0], { name: "Quillnote <em>beta</em>", summary: "Notes <em>and</em> notebooks.", author: "quillnote-<em>labs</em>", refusal: "fetch failed <em>offline</em>" });
+    APPS.find((a) => a.id === "postlark").missing = ["<em>Account</em> address"];
+    SERVERS["notes-work"].diagnostic = "fetch failed <em>refused</em>";
+  }
   const app = (id) => APPS.find((a) => a.id === id) || APPS[0];
   // The command server the person typed, carried from the form to the confirmation and the write.
   const reviewed = () => {
@@ -86,19 +92,19 @@
 
   const initial = (name, size = "") => `<span class="c-initial"${size ? ` data-size="${size}"` : ""} aria-hidden="true">${esc(name[0])}</span>`;
   const link = (label, to, extra = {}, { variant, size = "sm", attrs = "" } = {}) =>
-    `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="${size}" href="${go(to, extra)}"${attrs ? ` ${attrs}` : ""}>${label}</a>`;
-  const pill = (text, tone = "") => `<span class="c-pill"${tone ? ` data-tone="${tone}"` : ""}>${text}</span>`;
+    `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="${size}" href="${esc(go(to, extra))}"${attrs ? ` ${attrs}` : ""}>${esc(label)}</a>`;
+  const pill = (text, tone = "") => `<span class="c-pill"${tone ? ` data-tone="${tone}"` : ""}>${esc(text)}</span>`;
   const note = (tone, lead, text, extra = "") =>
     `<div class="b-note"${tone ? ` data-tone="${tone}"` : ""} role="${tone === "danger" ? "alert" : "status"}">` +
-    `${icon(tone ? "warning" : "clock")}<div><p>${lead ? `<b>${lead}</b>` : ""}${lead && text ? " " : ""}${text}</p>${extra}</div></div>`;
-  const group = (text) => `<h4 class="b-group">${text}</h4>`;
+    `${icon(tone ? "warning" : "clock")}<div><p>${lead ? `<b>${esc(lead)}</b>` : ""}${lead && text ? " " : ""}${esc(text)}</p>${extra}</div></div>`;
+  const group = (text) => `<h4 class="b-group">${esc(text)}</h4>`;
   const facts = (rows) => `<dl class="facts c-facts">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
   const copyButton = (label, text) =>
     `<button type="button" class="copy" aria-label="Copy ${esc(label)}" title="Copy ${esc(label)}" data-copy="${esc(text)}">${icon("copy")}</button>`;
   const command = (text, label) => `<div class="command-line"><code>${esc(text)}</code>${copyButton(label, text)}</div>`;
   const result = (tone, mark, title, text, actions = "") =>
     `<div class="b-result c-result"><span class="empty-mark"${tone ? ` data-tone="${tone}"` : ""}>${icon(mark)}</span>` +
-    `<h3>${title}</h3><p>${text}</p>${actions ? `<div class="b-actions c-actions">${actions}</div>` : ""}</div>`;
+    `<h3>${esc(title)}</h3><p>${text}</p>${actions ? `<div class="b-actions c-actions">${actions}</div>` : ""}</div>`;
   const proto = (label, buttons) =>
     `<div class="c-proto" role="group" aria-label="Prototype"><span>Prototype: ${label}</span>${buttons.join("")}</div>`;
   const steps = (list) =>
@@ -106,13 +112,13 @@
     list
       .map(([text, state]) => {
         const mark = state === "done" ? icon("check") : state === "failed" ? icon("x") : "";
-        return `<li data-state="${state}"${state === "running" ? ' aria-current="step"' : ""} aria-label="${esc(text)}, ${state}"><span class="s-step-mark">${mark}</span><span>${text}</span><span class="s-step-time"></span></li>`;
+        return `<li data-state="${state}"${state === "running" ? ' aria-current="step"' : ""} aria-label="${esc(text)}, ${state}"><span class="s-step-mark">${mark}</span><span>${esc(text)}</span><span class="s-step-time"></span></li>`;
       })
       .join("") +
     `</ol>`;
   const goes = (gone, stays, read = null) =>
-    `<div class="c-goes"><h4>Goes</h4><ul>${gone.map((t) => `<li data-mark="${read ? read : "goes"}">${icon(read ? "check" : "x")}<span>${t}</span></li>`).join("")}</ul>` +
-    `<h4>Stays</h4><ul>${stays.map((t) => `<li data-mark="stays">${icon("check")}<span>${t}</span></li>`).join("")}</ul></div>`;
+    `<div class="c-goes"><h4>Goes</h4><ul>${gone.map((t) => `<li data-mark="${read ? read : "goes"}">${icon(read ? "check" : "x")}<span>${esc(t)}</span></li>`).join("")}</ul>` +
+    `<h4>Stays</h4><ul>${stays.map((t) => `<li data-mark="stays">${icon("check")}<span>${esc(t)}</span></li>`).join("")}</ul></div>`;
 
   // The access bar of bots.md §2, in an admin action's place.
   const accessBar = (what) => {
@@ -147,7 +153,7 @@
 
   // A catalog row and its end, from its `local` facts (section 4).
   const rowEnd = (a) => {
-    if (a.local === "install") return admin ? link("Add", "add-confirm", { id: a.id }, { attrs: `aria-label="Add ${a.name}"` }) : "";
+    if (a.local === "install") return admin ? link("Add", "add-confirm", { id: a.id }, { attrs: `aria-label="Add ${esc(a.name)}"` }) : "";
     if (a.local === "unavailable") return `<span class="c-faint">Not available</span>`;
     return statePill(a);
   };
@@ -156,8 +162,8 @@
   const row = (a, to = "app") => {
     const state = a.local === "install" ? "Add" : a.local === "unavailable" ? "Not available" : { enabled: "Added", disabled: "Turned off", "needs-setup": "Needs setup", error: "Not working" }[a.local];
     return (
-      `<li class="c-row" data-app="${a.id}"><a class="c-row-main" href="${go(a.local === "install" || a.local === "unavailable" ? "app" : to, { id: a.id })}" aria-label="${esc(`${a.name}, ${state}, ${a.summary}`)}">` +
-      `${initial(a.name)}<span class="c-row-text"><span class="c-row-name">${a.name}</span><span class="c-row-sub">${a.bundled ? "Comes with OpenClaw · " : ""}${a.summary}</span></span></a>` +
+      `<li class="c-row" data-app="${a.id}"><a class="c-row-main" href="${esc(go(a.local === "install" || a.local === "unavailable" ? "app" : to, { id: a.id }))}" aria-label="${esc(`${a.name}, ${state}, ${a.summary}`)}">` +
+      `${initial(a.name)}<span class="c-row-text"><span class="c-row-name">${esc(a.name)}</span><span class="c-row-sub">${a.bundled ? "Comes with OpenClaw · " : ""}${esc(a.summary)}</span></span></a>` +
       `<span class="c-row-end">${rowEnd(a)}</span></li>`
     );
   };
@@ -179,19 +185,19 @@
       `<h2 class="visually-hidden" id="c-window-title">${label || (iphone ? "Plugins" : "Connect apps")}</h2>` +
       `<div class="c-frame" data-pane="${pane}">` +
       `<nav class="c-nav" aria-label="Connect apps"><div class="c-nav-head"><p class="c-nav-title">${label || (iphone ? "Plugins" : "Connect apps")}</p>` +
-      `<a class="icon-button c-close" href="${go("home")}" aria-label="Close">${icon("x")}</a></div>` +
+      `<a class="icon-button c-close" href="${esc(go("home"))}" aria-label="Close">${icon("x")}</a></div>` +
       NAV.filter(([id]) => !(iphone && id === "add-server")).map(([id, text]) => `<a class="c-nav-item" href="${go(id)}"${id === current ? ' aria-current="page"' : ""}>${text}${icon("chevron")}</a>`).join("") +
       `</nav>` +
       `<section class="c-section" aria-labelledby="c-section-title">` +
       `<div class="c-section-head">${back ? `<a class="icon-button c-back" href="${back}" aria-label="Back">${icon("back")}</a>` : `<a class="icon-button c-back c-to-nav" href="${go("nav")}" aria-label="Back">${icon("back")}</a>`}` +
-      `<h3 id="c-section-title" tabindex="-1">${title}</h3><a class="icon-button c-close" href="${go("home")}" aria-label="Close">${icon("x")}</a></div>` +
+      `<h3 id="c-section-title" tabindex="-1">${esc(title)}</h3><a class="icon-button c-close" href="${go("home")}" aria-label="Close">${icon("x")}</a></div>` +
       `<div class="c-section-body">${body}</div>${foot ? `<div class="c-section-foot">${foot}</div>` : ""}` +
       `</section></div></div></div>`
     );
   };
   const confirm = (title, text, buttons, extra = "") =>
     `<div class="c-scrim c-scrim-top"><div class="c-confirm" role="alertdialog" aria-modal="true" aria-labelledby="c-confirm-title" aria-describedby="c-confirm-text">` +
-    `<h2 id="c-confirm-title">${title}</h2><div id="c-confirm-text">${text}</div>${extra}<div class="b-actions c-actions">${buttons.join("")}</div></div></div>`;
+    `<h2 id="c-confirm-title">${esc(title)}</h2><div id="c-confirm-text">${text}</div>${extra}<div class="b-actions c-actions">${buttons.join("")}</div></div></div>`;
 
   // Browse (sections 4 and 5) -------------------------------------------------------------
 
@@ -244,14 +250,14 @@
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
     if (off) return ["Turned off. Its tools aren't offered to any bot.", [admin ? link("Turn on", "connector", { id: a.id, now: "on", said: "on" }) : ""]];
     if (a.local === "needs-setup") return [`Needs setup. Open Settings on the gateway to finish setup.${a.missing?.length ? ` The gateway reports missing: ${a.missing.join(", ")}.` : ""}`, []];
-    if (a.local === "error") return [`Not working: ${esc(a.error)}`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
+    if (a.local === "error") return [`Not working: ${a.error}`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     if (a.bundled) return ["Added. Not loaded yet: it loads when a bot first needs it.", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     return ["Added", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
   };
   const accountRow = (a) => {
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
     if (!a.servers || !a.servers.some(([, oauth]) => oauth)) return "";
-    if (off) return group("Accounts") + `<p class="c-line">The gateway reports sign-ins only while ${a.name} is turned on.</p>`;
+    if (off) return group("Accounts") + `<p class="c-line">The gateway reports sign-ins only while ${esc(a.name)} is turned on.</p>`;
     const state = params.get("auth") || a.auth || "unauthenticated";
     const words = {
       unauthenticated: pill("Needs sign-in.", "warn"),
@@ -262,9 +268,9 @@
     }[state];
     return (
       group("Accounts") +
-      `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name"><span class="mono">${a.servers.find(([, o]) => o)[0]}</span> · Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words}</span></span>` +
+      `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name"><span class="mono">${esc(a.servers.find(([, o]) => o)[0])}</span> · Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words}</span></span>` +
       `<span class="c-row-end"></span></li></ul>` +
-      `<p class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${a.servers.find(([, o]) => o)[0]}.</p>` +
+      `<p class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${esc(a.servers.find(([, o]) => o)[0])}.</p>` +
       `<div class="c-actions">${link("Check again", "connector", { id: a.id, checked: "1", ...(params.get("auth") ? { auth: params.get("auth") } : {}) })}</div>` +
       (params.get("checked") ? `<p class="c-line">Read again at 5:12 PM.</p>` : "")
     );
@@ -281,12 +287,12 @@
         readonlyNote() +
         (params.get("busy") === "1" ? note("warn", "The gateway is busy with another change.", "Try again in a moment.", `<div class="c-actions">${link("Try again", "turnoff-confirm", { id: a.id })}</div>`) : "") +
         (said === "on" ? note("", `Turned on ${a.name}.`, `The gateway lists it as added.`) : said === "off" ? note("", `Turned off ${a.name}.`, "The gateway lists it as turned off.") : "") +
-        `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${a.name}</p><p class="c-faint">${a.bundled ? "Comes with OpenClaw" : `by ${a.author}`} · ${a.version}</p></div></div>` +
-        `<p class="c-state" data-c="state">${state}</p>` +
-        `<p class="c-text">${a.summary}</p>` +
+        `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${esc(a.name)}</p><p class="c-faint">${a.bundled ? "Comes with OpenClaw" : `by ${esc(a.author)}`} · ${esc(a.version)}</p></div></div>` +
+        `<p class="c-state" data-c="state">${esc(state)}</p>` +
+        `<p class="c-text">${esc(a.summary)}</p>` +
         (a.bundled ? `<p class="c-line">Comes with OpenClaw, so it can be turned off but not removed.</p>` : "") +
         group("Tools") +
-        `<ul class="c-list">${(a.servers || [[a.id, false]]).map(([s]) => `<li><span class="mono">${s}</span>, a tool server</li>`).join("")}${(a.skills || []).map((k) => `<li>${k}, a skill</li>`).join("")}</ul>` +
+        `<ul class="c-list">${(a.servers || [[a.id, false]]).map(([s]) => `<li><span class="mono">${esc(s)}</span>, a tool server</li>`).join("")}${(a.skills || []).map((k) => `<li>${esc(k)}, a skill</li>`).join("")}</ul>` +
         `<p class="c-line">Which bots may use these is in each bot's settings.</p>` +
         accountRow(a) +
         `<div class="c-actions">${actions.join("")}${removable && admin ? link("Remove…", "remove-confirm", { id: a.id }, { variant: "quiet" }) : ""}</div>` +
@@ -302,18 +308,18 @@
     const s = SERVERS[name];
     const last = params.get("last") || s.last;
     const lastRun = {
-      tools: `<p class="c-state">Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${name}__search, ${name}__read_page, ${name}__add_page, …</p></details>`,
-      notyet: `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint">MCP servers "${name}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.</p></details>`,
-      unavailable: `<p class="c-state" data-tone="warn">Gateway tool listing for Pip's task, read at 5:12 PM:</p><p class="mono c-warn">MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : "fetch failed | connect ECONNREFUSED"}; server unavailable.</p>`,
+      tools: `<p class="c-state">Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${esc(name)}__search, ${esc(name)}__read_page, ${esc(name)}__add_page, …</p></details>`,
+      notyet: `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint">MCP servers "${esc(name)}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.</p></details>`,
+      unavailable: `<p class="c-state" data-tone="warn">Gateway tool listing for Pip's task, read at 5:12 PM:</p><p class="mono c-warn">${esc(`MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : s.diagnostic || "fetch failed | connect ECONNREFUSED"}; server unavailable.`)}</p>`,
       none: `<p class="c-state">Not reported: the gateway's tool listing for this task doesn't mention this server.</p>`,
     }[last];
     const rowsList = [
-      ["Name on the gateway", `<span class="mono">${name}</span>`],
+      ["Name on the gateway", `<span class="mono">${esc(name)}</span>`],
       ["Kind", s.kind === "remote" ? "Added by address" : "Runs a command"],
       ...(s.kind === "remote"
         ? [
-            ["Address", `<span class="mono">${s.url}</span>`],
-            ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${h}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
+            ["Address", `<span class="mono">${esc(s.url)}</span>`],
+            ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${esc(h)}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
             ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Uses the gateway\'s requester sign-in. Set up and use it in a channel where the gateway identifies each sender." : "None"],
           ]
         : [["Command", `<span class="mono">${esc([s.command, ...s.args].join(" "))}</span>`]]),
@@ -398,7 +404,7 @@
     return {
       title: `Sign in to ${t.name}`,
       back: t.back,
-      body: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t) + `<div class="c-actions"><a class="button" data-size="sm" href="${t.back}">Back to ${t.name}</a></div>`,
+      body: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t) + `<div class="c-actions"><a class="button" data-size="sm" href="${esc(t.back)}">Back to ${esc(t.name)}</a></div>`,
     };
   };
   // The gateway's command-line sign-in, in full (section 10).
@@ -454,7 +460,7 @@
     `<div class="c-picker-body"><h2 id="c-picker-title">What do you use every day?</h2>` +
     `<p class="c-text">Pick the apps you use. Nothing is connected now; they come first in Connect apps.</p>` +
     search("Search apps") +
-    `<ul class="c-tiles" id="c-tiles">${TILES.map((t) => `<li><label class="c-tile">${initial(t)}<span>${t}</span><input type="checkbox" value="${t}" /></label></li>`).join("")}</ul>` +
+    `<ul class="c-tiles" id="c-tiles">${TILES.map((t) => `<li><label class="c-tile">${initial(t)}<span>${esc(t)}</span><input type="checkbox" value="${esc(t)}" /></label></li>`).join("")}</ul>` +
     `<div class="c-actions c-picker-actions"><a class="button" data-variant="quiet" data-size="sm" href="${go("home")}">Skip</a>` +
     `<a class="button" data-variant="primary" data-size="sm" id="c-next" href="${go("browse")}">Next</a></div>` +
     `</div></div></div>`;
@@ -496,13 +502,13 @@
         title: a.name,
         back: go("browse"),
         body:
-          `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${a.name}</p><p class="c-faint">by ${a.author}${a.official ? " · Official" : ""}</p></div></div>` +
-          `<p class="c-text">${a.summary}</p>` +
+          `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${esc(a.name)}</p><p class="c-faint">by ${esc(a.author)}${a.official ? " · Official" : ""}</p></div></div>` +
+          `<p class="c-text">${esc(a.summary)}</p>` +
           group("What it adds") +
-          `<ul class="c-list">${(a.servers || []).map(([s, o]) => `<li><span class="mono">${s}</span>, a tool server${o ? " that signs in with OAuth" : ""}</li>`).join("")}${(a.skills || []).map((k) => `<li>${k}, a skill</li>`).join("")}</ul>` +
+          `<ul class="c-list">${(a.servers || []).map(([s, o]) => `<li><span class="mono">${esc(s)}</span>, a tool server${o ? " that signs in with OAuth" : ""}</li>`).join("")}${(a.skills || []).map((k) => `<li>${esc(k)}, a skill</li>`).join("")}</ul>` +
           group("About") +
           `<p class="c-text c-readme">${esc(a.readme || a.summary).replace(/\n/g, "<br />")}</p>` +
-          `<p class="c-faint">Version ${a.version}</p>` +
+          `<p class="c-faint">Version ${esc(a.version)}</p>` +
           (a.local === "unavailable" ? `<p class="c-line">Not available for this gateway's version.</p>` : "") +
           granted(),
         foot: a.local === "install" ? (admin ? link("Add", "add-confirm", { id: a.id }, { variant: "primary" }) : accessBar("Adding apps needs admin access.")) : "",
@@ -515,7 +521,7 @@
         windowHtml({ title: a.name, back: go("app", { id: a.id }), body: "" }) +
         confirm(
           `Add ${a.name} to the gateway?`,
-          `<p>Package: <span class="mono">@${a.author}/${a.id}</span>, from ${official ? "the gateway's official catalog" : "ClawHub"}. ${official ? "The gateway picks the release from its catalog." : `Version ${a.version}, the release reviewed here.`}</p>` +
+          `<p>Package: <span class="mono">@${esc(a.author)}/${esc(a.id)}</span>, from ${official ? "the gateway's official catalog" : "ClawHub"}. ${official ? "The gateway picks the release from its catalog." : `Version ${esc(a.version)}, the release reviewed here.`}</p>` +
             `<p>The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.</p>`,
           [link("Cancel", "app", { id: a.id }, { variant: "quiet", attrs: "data-autofocus" }), link("Add", params.get("ask") || "add-progress", { id: a.id }, { variant: "primary" })],
           proto("the gateway first asks for", [link("A review", "add-confirm", { id: a.id, ask: "add-consent" }, { variant: "quiet" }), link("An install warning", "add-confirm", { id: a.id, ask: "add-warning" }, { variant: "quiet" }), link("Nothing", "add-confirm", { id: a.id }, { variant: "quiet" })]),
@@ -542,9 +548,9 @@
           ]),
       }),
     "add-done": () => windowHtml({ title: `Adding ${A().name}`, body: result("ok", "check", `Added ${A().name}.`, "The gateway lists it as installed and turned on.", link(`Open ${A().name}`, "connector", { id: A().id, auth: "unauthenticated" }, { variant: "primary" })) }),
-    "add-restart": () => windowHtml({ title: `Adding ${A().name}`, body: result("", "warning", `Added ${A().name}.`, `The gateway says it needs a restart before ${A().name} works. Clawtrate doesn't restart the gateway.`) }),
-    "add-refused": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "x", `Couldn't add ${A().name}:`, "fetch failed. The gateway lists nothing new.", link("Try again", "add-confirm", { id: A().id })) }),
-    "add-partial": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "warning", `${A().name} was installed but didn't start:`, "quillnote: the module could not be loaded.", link(`Open ${A().name}`, "connector", { id: "boxwharf" })) }),
+    "add-restart": () => windowHtml({ title: `Adding ${A().name}`, body: result("", "warning", `Added ${A().name}.`, esc(`The gateway says it needs a restart before ${A().name} works. Clawtrate doesn't restart the gateway.`)) }),
+    "add-refused": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "x", `Couldn't add ${A().name}:`, esc(`${A().refusal || "fetch failed"}. The gateway lists nothing new.`), link("Try again", "add-confirm", { id: A().id })) }),
+    "add-partial": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "warning", `${A().name} was installed but didn't start:`, esc("quillnote: the module could not be loaded."), link(`Open ${A().name}`, "connector", { id: "boxwharf" })) }),
     "add-checking": () =>
       windowHtml({
         title: `Adding ${A().name}`,
@@ -562,7 +568,7 @@
           rows(APPS.filter((a) => !a.bundled && ["disabled", "needs-setup"].includes(a.local)), "connector") +
           `<details class="c-fold"><summary>Comes with OpenClaw (${APPS.filter((a) => a.bundled).length})</summary>${rows(APPS.filter((a) => a.bundled), "connector")}</details>` +
           group("Tool servers") +
-          `<ul class="c-rows">${Object.entries(SERVERS).map(([n, s]) => `<li class="c-row"><a class="c-row-main" href="${go("server", { id: n })}" aria-label="${n}, ${s.kind === "remote" ? "added by address" : "runs a command"}">${initial(n)}<span class="c-row-text"><span class="c-row-name mono">${n}</span><span class="c-row-sub">${s.kind === "remote" ? `Added by address · ${s.url}` : `Runs a command · ${esc(s.command)}`}</span></span></a></li>`).join("")}</ul>` +
+          `<ul class="c-rows">${Object.entries(SERVERS).map(([n, s]) => `<li class="c-row"><a class="c-row-main" href="${esc(go("server", { id: n }))}" aria-label="${esc(n)}, ${s.kind === "remote" ? "added by address" : "runs a command"}">${initial(n)}<span class="c-row-text"><span class="c-row-name mono">${esc(n)}</span><span class="c-row-sub">${esc(s.kind === "remote" ? `Added by address · ${s.url}` : `Runs a command · ${s.command}`)}</span></span></a></li>`).join("")}</ul>` +
           (admin ? `<div class="c-actions">${link("Add a custom connector", "add-server")}</div>` : ""),
       }),
     connector: () => windowHtml(connectorPage()),
@@ -584,7 +590,7 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          `<p data-c="package">The package <span class="mono">@${a.author}/${a.id}</span>, with: ${a.name}, ${a.name} sync.</p>` +
+          `<p data-c="package">The package <span class="mono">@${esc(a.author)}/${esc(a.id)}</span>, with: ${esc(a.name)}, ${esc(a.name)} sync.</p>` +
             goes(["the package's files on the gateway's machine", "its settings on the gateway", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
           proto("the read-back", [link("The read fails", "removed-unconfirmed", { id: a.id }, { variant: "quiet" })]),
@@ -593,7 +599,7 @@
     },
     removed: () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, `No longer installed: ${a.name}, ${a.name} sync. The gateway's list shows each with installed: false.`) + goes(["the package's files", "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, esc(`No longer installed: ${a.name}, ${a.name} sync. The gateway's list shows each with installed: false.`)) + goes(["the package's files", "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
     },
     "removed-unconfirmed": () => {
       const a = app(params.get("id") || "tasktide");
@@ -655,11 +661,11 @@
       return windowHtml({
         title: "Add a custom connector",
         body:
-          result("ok", "check", `Added ${esc(name)}.`, cmd ? `The gateway lists this server. The gateway can start this program when it needs this server.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists this server.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
+          result("ok", "check", `Added ${name}.`, cmd ? `The gateway lists this server. The gateway can start this program when it needs this server.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists this server.", link(`Open ${name}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
       });
     },
-    "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${esc(params.get("name") || "notes-work")}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
+    "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${params.get("name") || "notes-work"}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
     "add-server-checking": () => {
       const name = params.get("name") || "notes-work";
       return windowHtml({
@@ -669,8 +675,8 @@
           proto("the read-back", [link("Matches what you reviewed", "add-server-saved", { name }, { variant: "quiet" }), link("Has no such entry", "add-server-notadded", { name }, { variant: "quiet" }), link("Differs, or the read fails", "add-server-unconfirmed", { name }, { variant: "quiet" })]),
       });
     },
-    "add-server-notadded": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `${esc(params.get("name") || "notes-work")} wasn't added.`, "The gateway's settings have no such entry.", link("Try again", "add-server")) }),
-    "add-server-unconfirmed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "Couldn't confirm the change.", `The gateway's settings have an entry named ${esc(params.get("name") || "notes-work")}, and its address differs from the one you reviewed.`, `<div class="c-actions">${link("Check again", "add-server-checking", { name: params.get("name") || "notes-work" })}</div>`) }),
+    "add-server-notadded": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `${params.get("name") || "notes-work"} wasn't added.`, "The gateway's settings have no such entry.", link("Try again", "add-server")) }),
+    "add-server-unconfirmed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "Couldn't confirm the change.", `The gateway's settings have an entry named ${params.get("name") || "notes-work"}, and its address differs from the one you reviewed.`, `<div class="c-actions">${link("Check again", "add-server-checking", { name: params.get("name") || "notes-work" })}</div>`) }),
     "add-server-changed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "The gateway's settings changed.", "Review the current entry before trying again.", `<div class="c-actions">${link("Back to the form", "add-server")}</div>`) }),
     "signin-cli": () => windowHtml(signin()),
     chat: () => "",
@@ -776,7 +782,7 @@
             (offline ? `<p class="c-line">The catalog didn't answer this search.</p>` : "") +
             (apps.length ? rows(apps, offline ? "connector" : "app") : `<p class="c-line">No apps match.</p>`) +
             group("Skills") +
-            (offline ? `<p class="c-line">Searching skills needs the catalog.</p>` : skillsFailed ? `<p class="c-line">Skills search didn't answer.</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${s.name}</span><span class="c-row-sub">${s.text}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
+            (offline ? `<p class="c-line">Searching skills needs the catalog.</p>` : skillsFailed ? `<p class="c-line">Skills search didn't answer.</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${esc(s.name)}</span><span class="c-row-sub">${esc(s.text)}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
       document.getElementById("c-live").textContent = apps.length || skills.length ? `${apps.length} apps, ${skills.length} skills` : "No apps match";
     });
   }

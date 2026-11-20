@@ -196,6 +196,31 @@ for (const [query, words] of STATES) {
   await t.close();
 }
 
+// Change 1: gateway strings with inert markup render as text, and nothing opens.
+{
+  const cases = [
+    ["screen=browse&marked=1", "Quillnote <em>beta</em>", "Notes <em>and</em> notebooks."],
+    ["screen=app&id=quillnote&marked=1", "Quillnote <em>beta</em>", "quillnote-<em>labs</em>"],
+    ["screen=connector&id=postlark&marked=1", "<em>Account</em> address"],
+    ["screen=add-refused&id=quillnote&marked=1", "fetch failed <em>offline</em>"],
+    ["screen=server&id=notes-work&last=unavailable&marked=1", "fetch failed <em>refused</em>"],
+  ];
+  for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
+    for (const [q, ...words] of cases) {
+      const p = await open(q, { width, height: width === 390 ? 844 : 900 });
+      const requests = [];
+      p.on("request", (r) => {
+        if (/^https?:/.test(r.url())) requests.push(r.url());
+      });
+      const t = await text(p);
+      const lack = missing(t, words);
+      const marks = await p.evaluate(() => document.querySelectorAll("#c-root em").length);
+      check(`${label}: ${q}: gateway markup is shown as text, and nothing is requested (change 1)`, !lack && marks === 0 && requests.length === 0, [lack, marks ? `${marks} <em> elements` : "", ...requests].filter(Boolean).join(" | "));
+      await p.close();
+    }
+  }
+}
+
 // Part 2: the walks, clicked through, each destination asserted -----------------------------------
 async function walk(name, start, stepsList, finalWords = []) {
   const p = await open(start);
