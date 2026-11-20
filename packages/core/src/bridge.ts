@@ -162,8 +162,12 @@ export type BridgeCommand =
   | { type: "readArtifact"; key: string; artifactId: string; part: ArtifactPart }
   /** One item's record, for Raw (`artifacts.get`). */
   | { type: "readArtifactRecord"; key: string; artifactId: string }
-  /** A page of the gateway's canvas that the open task names (`canvas.document.view`). */
-  | { type: "readPage"; key: string; docId: string }
+  /**
+   * A Page one occurrence in the open task's current transcript names
+   * (`canvas.document.view`): the task, its current session, and the item
+   * that holds the occurrence. Asked only when the person exports it.
+   */
+  | { type: "readPage"; key: string; sessionId: string | null; itemId: string; docId: string }
   /** A link's preview, on the person's gesture: `http:` and `https:` only. */
   | { type: "previewLink"; url: string }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
@@ -955,6 +959,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "readPage",
         key: sessionKey(command.key),
+        sessionId:
+          command.sessionId === null || command.sessionId === undefined
+            ? null
+            : id(command.sessionId, "session id"),
+        itemId: id(command.itemId, "item id"),
         docId: id(command.docId, "page id"),
       };
     case "previewLink": {
@@ -1394,7 +1403,11 @@ class ViewerSession implements BridgeSession {
       case "readArtifactRecord":
         return client.readArtifactRecord(this.mine(command.key), command.artifactId);
       case "readPage":
-        return client.readPage(this.mine(command.key), command.docId, this.fileOptions());
+        return client.readPage(
+          this.mine(command.key),
+          { sessionId: command.sessionId, itemId: command.itemId, docId: command.docId },
+          this.fileOptions(),
+        );
       case "previewLink":
         return client.previewLink(command.url);
       case "newTask":

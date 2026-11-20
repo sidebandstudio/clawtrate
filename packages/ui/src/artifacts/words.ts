@@ -145,17 +145,21 @@ export function clock(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-/** For each page block, whether a later message names the same page: "A newer version is below". */
-export function newerPageVersions(items: TranscriptItem[]): Set<string> {
+/**
+ * Page cards whose document a later message of the same transcript names
+ * again, as `<item id>:<doc id>`: "Shown again below". The gateway names no
+ * revision of a Page, so nothing says one share is newer than another.
+ */
+export function shownAgainBelow(items: TranscriptItem[]): Set<string> {
   const seen = new Set<string>();
-  const newer = new Set<string>();
+  const again = new Set<string>();
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i]!;
     for (const block of item.blocks) {
-      if (block.kind !== "page") continue;
-      if (seen.has(block.docId)) newer.add(`${item.id}:${block.docId}`);
+      if (block.kind !== "page" || !block.docId.trim()) continue;
+      if (seen.has(block.docId)) again.add(`${item.id}:${block.docId}`);
       seen.add(block.docId);
     }
   }
-  return newer;
+  return again;
 }

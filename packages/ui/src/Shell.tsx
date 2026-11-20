@@ -495,6 +495,8 @@ export function Shell({
         <ArtifactsProvider
           taskKey={taskKey ?? ""}
           bot={bot?.name ?? "The bot"}
+          taskTitle={task?.title ?? ""}
+          sessionId={task?.sessionId ?? null}
           transcript={taskKey ? transcript : undefined}
           changedAt={task?.updatedAt ?? null}
           online={state.connection.status === "connected"}

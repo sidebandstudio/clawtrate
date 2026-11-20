@@ -4167,16 +4167,33 @@ export class ClawtrateClient {
   }
 
   /**
-   * A page of the gateway's canvas that this task's transcript names: a page
-   * no message of the task names is not read for it.
+   * A Page one occurrence names: read only when that occurrence is confirmed
+   * in the task's current transcript (the item holds a `page` block with this
+   * id) and the task is still on the session the opener saw. Anything else is
+   * not read.
    */
-  readPage(key: string, docId: string, options: FileReadOptions = {}): Promise<PageRead> {
-    const named = this.state.transcripts[key]?.items.some((item) =>
-      item.blocks.some((block) => block.kind === "page" && block.docId === docId),
+  readPage(
+    key: string,
+    occurrence: { sessionId: string | null; itemId: string; docId: string },
+    options: FileReadOptions = {},
+  ): Promise<PageRead> {
+    const transcript = this.state.transcripts[key];
+    const task = Object.values(this.state.tasksByBot)
+      .flat()
+      .find((each) => each.key === key);
+    // The session the opener saw is the task's session now, both unknown included.
+    const sameSession = (task?.sessionId ?? null) === occurrence.sessionId;
+    const named = transcript?.items.some(
+      (item) =>
+        item.id === occurrence.itemId &&
+        item.blocks.some((block) => block.kind === "page" && block.docId === occurrence.docId),
     );
-    if (!named)
-      return Promise.resolve({ status: "failed", message: "This task names no such page." });
-    return this.artifactRead((ctx) => readPage(ctx, docId), options);
+    if (!named || !sameSession)
+      return Promise.resolve({
+        status: "failed",
+        message: "This task's messages don't name this page now.",
+      });
+    return this.artifactRead((ctx) => readPage(ctx, occurrence.docId), options);
   }
 
   /** A link's preview, fetched by the host on the person's gesture (`LinkPreviewer`). */

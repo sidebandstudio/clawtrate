@@ -62,7 +62,7 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await cardsDrawn(page);
       await toTop(page);
-      await expect(page.getByTestId("page-card")).toBeVisible();
+      await expect(page.getByTestId("page-card").first()).toBeVisible();
       await expect(page.getByTestId("link-card")).toBeVisible();
     },
   },
@@ -208,19 +208,16 @@ const SCENES: Scene[] = [
     },
   },
   {
-    name: "artifacts-viewer-page",
+    // No platform draws a Page yet: the view says so, and nothing of it is read.
+    name: "artifacts-page-unavailable",
     rows: "F-115",
     query: ARTIFACTS,
     ready: async (page) => {
       await cardsDrawn(page);
       await toTop(page);
-      await page.getByTestId("page-card").getByRole("button").click();
-      await expect(page.getByTestId("viewer-page")).toBeVisible();
-      await expect(
-        page
-          .frameLocator("[data-testid=viewer-page]")
-          .getByRole("heading", { name: "E-book apps compared" }),
-      ).toBeVisible();
+      await page.getByTestId("page-card").first().getByRole("button").click();
+      await expect(page.getByTestId("page-unavailable")).toBeVisible();
+      await expect(page.locator("iframe")).toHaveCount(0);
     },
   },
 ];

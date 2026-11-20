@@ -610,14 +610,6 @@ button.artifact-main:hover {
   min-width: 140px;
 }
 
-.viewer-page {
-  width: min(100%, 880px);
-  height: 100%;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: #ffffff;
-}
-
 @container app (max-width: 687px) {
   .viewer-stage {
     padding: 8px 12px 16px;
@@ -636,4 +628,117 @@ button.artifact-main:hover {
   .viewer-nav {
     display: none;
   }
+}
+
+/* A Page, full window (library.md, section 6), in the app's own theme. */
+.page-view {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: 56px minmax(0, 1fr);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.page-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-title {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.page-title strong {
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.page-title span {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.page-frame-unavailable {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  padding: 24px;
+  text-align: center;
+}
+
+.page-frame-unavailable p {
+  margin: 0;
+}
+
+.page-export {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 60;
+  display: grid;
+  gap: 12px;
+  width: min(480px, calc(100vw - 32px));
+  padding: 20px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.page-export h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.page-export p {
+  margin: 0;
+}
+
+.page-export-choices {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.page-export-choices label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.page-export-choices label > span {
+  display: grid;
+}
+
+.page-export-choices label > span > span,
+.page-export-note {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.page-export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.reader-address code {
+  overflow-wrap: anywhere;
+  user-select: text;
 }

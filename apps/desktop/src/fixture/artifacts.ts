@@ -74,7 +74,7 @@ function growthPicture(): Uint8Array {
 const REPORT =
   "# Borrowing e-books\n\n## Found\n\n- Your library lends through Shelfwise.\n- Holds take about nine days.\n\n## Left\n\n- Renew the card before March.\n";
 const PAGE =
-  '<!doctype html><html><body style="font:15px/1.5 system-ui,sans-serif;margin:32px 40px;color:#111213"><h2>E-book apps compared</h2><p>Sort by titles, wait time or cost.</p><table style="width:100%;border-collapse:collapse"><tr><th align=left>App</th><th align=left>Titles</th><th align=left>Typical wait</th></tr><tr><td>Shelfwise</td><td>48,000</td><td>9 days</td></tr><tr><td>PageLoop</td><td>31,000</td><td>14 days</td></tr><tr><td>Readmore</td><td>22,000</td><td>6 days</td></tr></table><script>document.body.dataset.ran=\'yes\'</script><img src="https://tracker.example/pixel.png" alt=""></body></html>';
+  '<!doctype html><html><body style="font:15px/1.5 system-ui,sans-serif;margin:32px 40px;color:#111213"><h2>E-book apps compared</h2><p>Sort by titles, wait time or cost.</p><table style="width:100%;border-collapse:collapse"><tr><th align=left>App</th><th align=left>Titles</th><th align=left>Typical wait</th></tr><tr><td>Shelfwise</td><td>48,000</td><td>9 days</td></tr><tr><td>PageLoop</td><td>31,000</td><td>14 days</td></tr><tr><td>Readmore</td><td>22,000</td><td>6 days</td></tr></table><p>Read <a href="https://library.example/compare">the comparison</a>.</p><form action="https://library.example/sort"><button>Sort</button></form><script>document.body.dataset.ran=\'yes\'</script><img src="https://tracker.example/pixel.png" alt=""></body></html>';
 
 type FixtureItem = {
   artifact: Omit<Artifact, "key" | "position" | "messageSeq">;
@@ -255,6 +255,8 @@ function transcriptItems(at: number): TranscriptItem[] {
           code: "delivery-failed",
           media: "document",
         },
+        // The same Page shared again: its earlier card says it is shown again below.
+        { kind: "page", docId: "apps-compared", title: "E-book apps compared" },
       ],
       model: "scripted/dev-1",
       seq: 6,

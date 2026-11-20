@@ -37,6 +37,8 @@ let op: OperatorSession;
 let page: Page;
 /** Requests the page made to anything but its own host. */
 const away: string[] = [];
+/** Page reads the interface asked its host for, over the bridge socket. */
+const pageReads: string[] = [];
 const files = handoverFiles();
 
 async function pairedPage(browser: Browser, url: string): Promise<Page> {
@@ -51,6 +53,12 @@ async function pairedPage(browser: Browser, url: string): Promise<Page> {
     if (!["data:", "blob:"].includes(target.protocol) && target.host !== own)
       away.push(request.url());
   });
+  next.on("websocket", (socket) =>
+    socket.on("framesent", (frame) => {
+      if (String(frame.payload).includes('"type":"readPage"'))
+        pageReads.push(String(frame.payload));
+    }),
+  );
   await next.goto(url);
   await next.getByRole("button", { name: "Use the development gateway" }).click();
   await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
@@ -233,12 +241,23 @@ test("F-116 F-304: a link card and a page, and four items at once with Download 
   const pageCard = page.getByTestId("page-card");
   await expect(pageCard).toBeVisible({ timeout: 30_000 });
   await shoot("card-page");
+  // No platform draws a Page yet: the view says so, and the host reads nothing of it
+  // (`canvas.document.view`) until the person chooses Export.
   await pageCard.getByRole("button", { name: "Trail guide, page. Open" }).click();
-  await expect(
-    page.frameLocator("[data-testid=viewer-page]").getByRole("heading", { name: "Trail guide" }),
-  ).toBeVisible({ timeout: 30_000 });
-  await shoot("viewer-page");
+  await expect(page.getByTestId("page-unavailable")).toContainText(
+    "Clawtrate can't show pages here yet.",
+  );
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await shoot("page-unavailable");
+  await page.waitForTimeout(500);
+  expect(pageReads).toEqual([]);
+  await page.keyboard.press("ControlOrMeta+e");
+  const exporting = page.getByRole("dialog", { name: "Export Trail guide" });
+  await expect(exporting.getByRole("radio").first()).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => pageReads.length).toBe(1);
+  await exporting.getByRole("button", { name: "Cancel" }).click();
   await page.keyboard.press("Escape");
+  await expect(page.getByTestId("page-view")).toHaveCount(0);
 
   await handOver("Everything Saturday", "#hand-several");
   await openTask("Everything Saturday");

@@ -287,7 +287,9 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
     } else if (block.type === "canvas") {
       const preview = asRecord(block.preview);
       const docId = str(preview?.viewId);
-      if (docId) blocks.push({ kind: "page", docId, title: str(preview?.title) });
+      // A Page is a canvas preview with a document id; an MCP app's view is not one.
+      if (docId && docId.trim() && preview?.mcpApp === undefined)
+        blocks.push({ kind: "page", docId, title: str(preview?.title) });
     } else if (block.type === "attachment_error") {
       const attachment = asRecord(block.attachment);
       blocks.push({

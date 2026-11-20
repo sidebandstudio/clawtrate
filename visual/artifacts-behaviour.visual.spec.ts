@@ -356,8 +356,12 @@ test.describe("the media viewer", () => {
     await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("button", { name: "Speed: 1.5×" })).toBeVisible();
   });
+});
 
-  test("F-115: a page shows in a frame with no scripts, nothing fetched from anywhere and no access to the app", async ({
+test.describe("a Page", () => {
+  const reads = async (page: Page) => (await sent(page)).filter((c) => c.type === "readPage");
+
+  test("F-115: a Page's card and its Sent in chat row open the Page view, which says pages aren't shown here and reads, parses and frames nothing", async ({
     page,
   }) => {
     const away = offsite(page);
@@ -365,31 +369,92 @@ test.describe("the media viewer", () => {
     await cardsDrawn(page);
     await page.locator(".transcript").hover();
     await page.mouse.wheel(0, -10000);
-    await page
-      .getByTestId("page-card")
-      .getByRole("button", { name: "E-book apps compared, page. Open" })
-      .click();
-    const frame = page.frameLocator("[data-testid=viewer-page]");
-    await expect(frame.getByRole("heading", { name: "E-book apps compared" })).toBeVisible();
-    await expect(page.getByTestId("viewer-page")).toHaveAttribute("sandbox", "");
-    // The frame's own policy comes first in its head: it loads nothing from anywhere, and
-    // the page's script is gone before it is shown.
-    const frameDocument = (await page.getByTestId("viewer-page").getAttribute("srcdoc")) ?? "";
-    expect(frameDocument).toMatch(
-      /^<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:;/,
+    // The same Page in a later message: the earlier card says so, and claims no version.
+    const cards = page.getByTestId("page-card");
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0).locator(".artifact-sub")).toHaveText("Page · Shown again below");
+    await expect(cards.nth(1).locator(".artifact-sub")).toHaveText("Page");
+    await expect(page.getByText(/newer version/i)).toHaveCount(0);
+    const opener = cards
+      .nth(0)
+      .getByRole("button", { name: "E-book apps compared, page. Shown again below. Open" });
+    await opener.click();
+    const view = page.getByTestId("page-view");
+    await expect(view).toHaveAccessibleName("E-book apps compared");
+    await expect(view.getByRole("button", { name: "Close the page (Esc)" })).toBeFocused();
+    await expect(page.getByTestId("page-unavailable")).toHaveText(
+      "Clawtrate can't show pages here yet.You can export this page as a file.",
     );
-    expect(frameDocument).not.toContain("<script");
-    // Its script did not run, and its picture from another address was not fetched.
-    expect(await frame.locator("body").getAttribute("data-ran")).toBeNull();
+    // Nothing of the Page was read, and nothing is framed: not in the media viewer either.
+    await expect(page.locator("iframe")).toHaveCount(0);
+    await expect(viewer(page)).toHaveCount(0);
+    expect(await reads(page)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+    await expect(opener).toBeFocused();
+
+    // Sent in chat lists the Page, and its row opens the same view through the same gate.
+    await page.getByRole("button", { name: "Show work panel" }).first().click();
+    await page.getByRole("tab", { name: "Files" }).click();
+    const rows = page.getByTestId("sent-in-chat").getByTestId("sent-page");
+    await expect(rows).toHaveCount(2);
+    await rows.first().click();
+    await expect(page.getByTestId("page-unavailable")).toBeVisible();
+    await expect(page.locator("iframe")).toHaveCount(0);
+    expect(await reads(page)).toEqual([]);
     expect(away).toEqual([]);
-    const reads = (await sent(page)).filter((c) => c.type === "readPage");
-    expect(reads.length).toBeGreaterThan(0);
-    for (const read of reads)
-      expect(read).toEqual({
+  });
+
+  test("F-115: Export reads the Page once, for its occurrence, and saves the Clawtrate version with nothing that runs, navigates or loads, or the original", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    expect(await reads(page)).toEqual([]);
+    await page.keyboard.press("ControlOrMeta+e");
+    const dialog = page.getByRole("dialog", { name: "Export E-book apps compared" });
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // One read, for this occurrence: the task, its current session, the message and the Page.
+    expect(await reads(page)).toEqual([
+      {
         type: "readPage",
         key: "agent:main:library-loans",
+        sessionId: "main-library-loans",
+        itemId: "loans-2",
         docId: "apps-compared",
-      });
+      },
+    ]);
+    await dialog.getByRole("radio", { name: /^Clawtrate version/ }).check();
+    const [shown] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    expect(shown.suggestedFilename()).toBe("E-book apps compared.html");
+    const inert = readFileSync((await shown.path())!, "utf8");
+    expect(inert).toMatch(
+      /^<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:;/,
+    );
+    for (const gone of ["<script", "<form", "<a ", "href=", "action=", "src=", "tracker.example"])
+      expect(inert, gone).not.toContain(gone);
+    // The link's words and the table stay; the button no longer submits anything.
+    expect(inert).toContain("the comparison");
+    expect(inert).toContain('<button type="button">Sort</button>');
+    await expect(announcer(page)).toHaveText("Download started: E-book apps compared.html");
+
+    await page.keyboard.press("ControlOrMeta+e");
+    await dialog.getByRole("radio", { name: /^As Juniper made it/ }).check();
+    const [original] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    expect(readFileSync((await original.path())!, "utf8")).toContain(
+      "<script>document.body.dataset.ran='yes'</script>",
+    );
+    expect(away).toEqual([]);
   });
 });
 

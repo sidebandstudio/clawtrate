@@ -500,14 +500,17 @@ function PageCard({
   api,
   docId,
   title,
-  newer,
+  again,
   itemId,
+  sentAt,
 }: {
   api: ArtifactsApi;
   docId: string;
   title: string;
-  newer: boolean;
+  /** A later message of this transcript names the same Page. */
+  again: boolean;
   itemId: string;
+  sentAt: number | null;
 }) {
   const key = `page:${itemId}:${docId}`;
   return (
@@ -515,17 +518,15 @@ function PageCard({
       <button
         type="button"
         className="artifact-main"
-        aria-label={`${title}, page.${newer ? " A newer version is below." : ""} Open`}
-        onClick={(event) =>
-          api.openViewer([{ type: "page", docId, title, key }], 0, event.currentTarget)
-        }
+        aria-label={`${title}, page.${again ? " Shown again below." : ""} Open`}
+        onClick={(event) => api.openPage({ itemId, docId, title, sentAt }, event.currentTarget)}
       >
         <span className="artifact-tile">
           <DocumentIcon />
         </span>
         <span className="artifact-text">
           <span className="artifact-name">{title}</span>
-          <span className="artifact-sub">{newer ? "Page · A newer version is below" : "Page"}</span>
+          <span className="artifact-sub">{again ? "Page · Shown again below" : "Page"}</span>
         </span>
         <span className="artifact-open" aria-hidden="true">
           Open
@@ -598,7 +599,8 @@ export function MessageArtifacts({ item }: { item: TranscriptItem }) {
             api={api}
             docId={block.docId}
             title={block.title ?? "Page"}
-            newer={api.newerPages.has(`${item.id}:${block.docId}`)}
+            again={api.shownAgainBelow.has(`${item.id}:${block.docId}`)}
+            sentAt={item.timestamp}
             itemId={item.id}
           />
         ) : null,

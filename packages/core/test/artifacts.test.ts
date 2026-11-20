@@ -761,8 +761,28 @@ describe("nothing remote loads by itself", () => {
     await client.previewLink("https://library.example/ebooks");
     expect(previewed).toEqual(["https://library.example/ebooks"]);
     expect(fetched).toEqual([]);
-    // A page this task does not name is not read for it.
-    expect(await client.readPage(KEY, "another-page")).toMatchObject({ status: "failed" });
+    // A Page is read only for an occurrence the task's current transcript holds, on its session.
+    gateway.handlers["canvas.document.view"] = () => ({ html: "<h1>Trail guide</h1>" });
+    const itemId = item.id;
+    const reads = () => gateway.calls("canvas.document.view").length;
+    for (const occurrence of [
+      { sessionId: null, itemId, docId: "another-page" },
+      { sessionId: null, itemId: "another-item", docId: "trail-guide" },
+      { sessionId: "a-later-session", itemId, docId: "trail-guide" },
+    ]) {
+      expect(await client.readPage(KEY, occurrence), JSON.stringify(occurrence)).toMatchObject({
+        status: "failed",
+      });
+    }
+    expect(reads()).toBe(0);
+    const sessionId =
+      Object.values(client.state.tasksByBot)
+        .flat()
+        .find((task) => task.key === KEY)?.sessionId ?? null;
+    expect(await client.readPage(KEY, { sessionId, itemId, docId: "trail-guide" })).toMatchObject({
+      status: "content",
+    });
+    expect(reads()).toBe(1);
     client.stop();
   });
 
@@ -872,10 +892,8 @@ describe("nothing remote loads by itself", () => {
     expect(() =>
       parseBridgeCommand({ type: "previewLink", url: `https://a.example/${"x".repeat(3000)}` }),
     ).toThrow();
-    expect(parseBridgeCommand({ type: "readPage", key: KEY, docId: "trail-guide" })).toEqual({
-      type: "readPage",
-      key: KEY,
-      docId: "trail-guide",
-    });
+    const page = { type: "readPage", key: KEY, sessionId: null, itemId: "i", docId: "trail-guide" };
+    expect(parseBridgeCommand(page)).toEqual(page);
+    expect(() => parseBridgeCommand({ ...page, itemId: "" })).toThrow();
   });
 });

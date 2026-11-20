@@ -1,54 +1,29 @@
-// The media viewer (work-pane.md, section 14): pictures, videos and pages in
-// one modal dialog over the whole window, on the dark theme's ground in
-// either theme. Escape closes, Left and Right move, ⌘C copies the picture,
-// ⌘S saves; focus starts on Close, stays inside, and returns to what opened it.
-//
-// A page is the gateway's canvas document shown in a frame of its own: an
-// opaque origin (`sandbox` without `allow-same-origin`), under a policy that
-// lets it load nothing from anywhere and run no script. It never runs inside
-// the app's window with the app's privileges.
+// The media viewer (work-pane.md, section 14): pictures and videos in one
+// modal dialog over the whole window, on the dark theme's ground in either
+// theme. Escape closes, Left and Right move, ⌘C copies the picture, ⌘S saves;
+// focus starts on Close, stays inside, and returns to what opened it. A Page
+// is not shown here: it opens in the Page view (`page-view.tsx`).
 
 import { type Artifact } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useBridge } from "../bridge.tsx";
 import { BackIcon, ChevronIcon, CloseIcon, CopyIcon, DownloadIcon } from "../icons.tsx";
 import { Menu, type MenuEntry } from "../Menu.tsx";
-import { collect, useArtifacts, type Content, type ViewerEntry } from "./context.tsx";
+import { useArtifacts, type Content, type ViewerEntry } from "./context.tsx";
 import { downloadName } from "./words.ts";
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const;
 /** The video speed, kept for the session (section 14). */
 let sessionSpeed = 1;
 
-/** What a page may do in the viewer's frame: nothing but draw itself. */
-export const PAGE_POLICY =
-  "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:";
-
-/**
- * A page's HTML for the frame: parsed aside (a parsed document loads nothing),
- * its scripts removed, and the frame's policy put first in its head, so it
- * binds before anything the page asks for.
- */
-export function framedPage(html: string): string {
-  const page = new DOMParser().parseFromString(html, "text/html");
-  for (const script of page.querySelectorAll("script, base, meta[http-equiv]")) script.remove();
-  const policy = page.createElement("meta");
-  policy.httpEquiv = "Content-Security-Policy";
-  policy.content = PAGE_POLICY;
-  page.head.prepend(policy);
-  return `<!doctype html>${page.documentElement.outerHTML}`;
-}
-
-type Loaded = Content | { status: "loading" } | { status: "page"; html: string };
+type Loaded = Content | { status: "loading" };
 
 function entryTitle(entry: ViewerEntry) {
-  return entry.type === "page" ? entry.title : entry.artifact.title;
+  return entry.artifact.title;
 }
 
 export function MediaViewer() {
   const api = useArtifacts();
-  const bridge = useBridge();
   const viewer = api?.viewer ?? null;
   const dialog = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -63,7 +38,7 @@ export function MediaViewer() {
   // Swipes on a touch screen: left and right move, down closes.
   const swipe = useRef<{ x: number; y: number } | null>(null);
   const entry = viewer ? viewer.entries[viewer.index] : undefined;
-  const key = entry ? (entry.type === "page" ? entry.key : entry.artifact.key) : null;
+  const key = entry ? entry.artifact.key : null;
 
   useEffect(() => {
     if (viewer) closeRef.current?.focus();
@@ -74,29 +49,8 @@ export function MediaViewer() {
     let live = true;
     const at = `${key}:${attempt}`;
     const setLoaded = (value: Loaded) => live && setGot({ at, value });
-    if (entry.type === "page") {
-      bridge
-        .invoke({ type: "readPage", key: api.taskKey, docId: entry.docId })
-        .then(async (read) => {
-          if (read.status !== "content")
-            return {
-              status: "failed" as const,
-              message:
-                read.status === "too-large"
-                  ? "The page is larger than Clawtrate shows."
-                  : read.message,
-            };
-          const data = await collect(bridge, read.transfer, read.bytes);
-          return { status: "page" as const, html: new TextDecoder().decode(data) };
-        })
-        .catch((reason: unknown) => ({
-          status: "failed" as const,
-          message: reason instanceof Error ? reason.message : String(reason),
-        }))
-        .then(setLoaded);
-    } else {
-      void api.content(entry.artifact).then(setLoaded);
-    }
+    void api.content(entry.artifact).then(setLoaded);
+
     return () => {
       live = false;
     };
@@ -161,17 +115,6 @@ export function MediaViewer() {
         {thumb?.status === "ready" && <img src={thumb.url} alt="" />}
         <span className="glyph" data-state="working" aria-hidden="true" />
       </div>
-    );
-  } else if (loaded.status === "page") {
-    stage = (
-      <iframe
-        className="viewer-page"
-        title={title}
-        sandbox=""
-        referrerPolicy="no-referrer"
-        srcDoc={framedPage(loaded.html)}
-        data-testid="viewer-page"
-      />
     );
   } else if (loaded.status === "ready" && loaded.kind === "image") {
     stage = (
@@ -262,8 +205,7 @@ export function MediaViewer() {
     stage = (
       <div className="viewer-failed" role="alert">
         <p>
-          {entry.type === "page" ? "This page can't be shown here." : `Couldn't load ${title}.`}{" "}
-          {why}
+          {`Couldn't load ${title}.`} {why}
         </p>
         <button
           type="button"
@@ -443,7 +385,7 @@ function Thumb({
   onChoose: () => void;
 }) {
   const api = useArtifacts();
-  const artifact: Artifact | null = entry.type === "artifact" ? entry.artifact : null;
+  const artifact: Artifact = entry.artifact;
   const preview = artifact ? api?.preview(artifact) : undefined;
   return (
     <button

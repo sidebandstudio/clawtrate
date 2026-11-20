@@ -9,6 +9,7 @@ import { useBridge } from "../bridge.tsx";
 import { clockTime, stampTime } from "../format.ts";
 import {
   BackIcon,
+  DocumentIcon,
   CopyIcon,
   DownloadIcon,
   ExternalIcon,
@@ -452,11 +453,36 @@ export function SentInChat({ onOpen }: { onOpen: (artifact: Artifact) => void })
   const api = useArtifacts();
   if (!api?.list) return null;
   const items = [...api.list.artifacts].reverse();
-  if (items.length === 0) return null;
+  // Pages are not artifacts: the transcript names them, and each row opens the same Page view.
+  const pages = [...api.pages].reverse();
+  if (items.length === 0 && pages.length === 0) return null;
   return (
     <section className="files-group" data-testid="sent-in-chat">
       <h3>Sent in chat</h3>
       <ul className="file-list">
+        {pages.map((page) => (
+          <li key={`page:${page.itemId}:${page.docId}`}>
+            <button
+              type="button"
+              className="file-row"
+              data-row={`page:${page.itemId}:${page.docId}`}
+              data-testid="sent-page"
+              aria-label={`${page.title}, page${page.sentAt !== null ? `, sent ${clockTime(page.sentAt)}` : ""}`}
+              onClick={(event) => api.openPage(page, event.currentTarget)}
+            >
+              <span className="file-icon" aria-hidden="true">
+                <DocumentIcon />
+              </span>
+              <span className="file-name">{page.title}</span>
+              <span className="file-time">
+                {page.sentAt !== null ? clockTime(page.sentAt) : ""}
+              </span>
+              <span className="file-sub">
+                {page.sentAt !== null ? `Sent ${clockTime(page.sentAt)} · Page` : "Page"}
+              </span>
+            </button>
+          </li>
+        ))}
         {items.map((artifact) => {
           const sent = api.sentAt(artifact);
           const preview = artifact.kind === "image" ? api.preview(artifact) : undefined;

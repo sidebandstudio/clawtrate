@@ -30,7 +30,13 @@ import {
 } from "react";
 import { useBridge } from "../bridge.tsx";
 import { downloadBytes } from "../work/download.ts";
-import { downloadable, downloadName, fetchable, newerPageVersions } from "./words.ts";
+import {
+  downloadable,
+  downloadName,
+  fetchable,
+  shownAgainBelow as pagesShownAgain,
+} from "./words.ts";
+import { PageView, type PageOccurrence } from "./page-view.tsx";
 
 export type Preview =
   { status: "loading" } | { status: "ready"; url: string } | { status: "none"; reason: string };
@@ -48,9 +54,11 @@ export type Content =
     }
   | Exclude<ArtifactRead, { status: "content" }>;
 
-export type ViewerEntry =
-  | { type: "artifact"; artifact: Artifact }
-  | { type: "page"; docId: string; title: string; key: string };
+/** The media viewer shows pictures and videos; a Page opens in its own view (`page-view.tsx`). */
+export type ViewerEntry = { type: "artifact"; artifact: Artifact };
+
+/** One Page a message of the open task names, in the transcript's order. */
+export type PageMention = { itemId: string; docId: string; title: string; sentAt: number | null };
 
 export type Playing = { key: string; task: string; time: number; duration: number | null };
 
@@ -64,8 +72,12 @@ export type ArtifactsApi = {
   refresh: () => void;
   /** The items under each transcript item, by its id, in the gateway's order. */
   byItem: Map<string, Artifact[]>;
-  /** Page cards a later message names again, as `<item id>:<doc id>`: "A newer version is below". */
-  newerPages: ReadonlySet<string>;
+  /** Page cards a later message of this transcript names again, as `<item id>:<doc id>`: "Shown again below". */
+  shownAgainBelow: ReadonlySet<string>;
+  /** Every Page the transcript names, newest last. */
+  pages: PageMention[];
+  /** Open one occurrence of a Page in the Page view, behind its gate. */
+  openPage: (page: PageMention, opener: HTMLElement | null) => void;
   /** When the message that carried an item was sent, as the transcript has it. */
   sentAt: (artifact: Artifact) => number | null;
   preview: (artifact: Artifact) => Preview | undefined;
@@ -165,6 +177,8 @@ export function placeArtifacts(
 export function ArtifactsProvider({
   taskKey,
   bot,
+  taskTitle,
+  sessionId,
   transcript,
   changedAt,
   online,
@@ -175,6 +189,9 @@ export function ArtifactsProvider({
 }: {
   taskKey: string;
   bot: string;
+  taskTitle: string;
+  /** The task's current session, as its row names it; a Page read checks it is still the same. */
+  sessionId: string | null;
   transcript: Transcript | undefined;
   /** When the gateway last said the task's session changed (its row's `updatedAt`). */
   changedAt: number | null;
@@ -229,7 +246,25 @@ export function ArtifactsProvider({
       ),
     [items, list, taskKey, transcript?.hasMore],
   );
-  const newerPages = useMemo(() => newerPageVersions(items ?? []), [items]);
+  const shownAgainBelow = useMemo(() => pagesShownAgain(items ?? []), [items]);
+  const pages = useMemo(
+    () =>
+      (items ?? []).flatMap((item) =>
+        item.blocks.flatMap((block) =>
+          block.kind === "page"
+            ? [
+                {
+                  itemId: item.id,
+                  docId: block.docId,
+                  title: block.title ?? "Page",
+                  sentAt: item.timestamp,
+                },
+              ]
+            : [],
+        ),
+      ),
+    [items],
+  );
   const sentAt = useCallback(
     (artifact: Artifact) => {
       for (const [itemId, placed] of byItem)
@@ -507,6 +542,27 @@ export function ArtifactsProvider({
     [],
   );
 
+  // The Page view: one occurrence at a time, modal over the whole window.
+  const [page, setPage] = useState<PageOccurrence | null>(null);
+  const openPage = useCallback(
+    (mention: PageMention, from: HTMLElement | null) => {
+      opener.current = from;
+      audio.current?.pause();
+      setPlaying(null);
+      setPage({ taskKey, sessionId, ...mention, bot, task: taskTitle });
+      onModal(true);
+    },
+    [bot, onModal, sessionId, taskKey, taskTitle],
+  );
+  const closePage = useCallback(() => {
+    setPage(null);
+    onModal(false);
+    const back = opener.current;
+    requestAnimationFrame(() => {
+      if (back?.isConnected) back.focus();
+    });
+  }, [onModal]);
+
   const showInChat = useCallback(
     (key: string) =>
       onShowInChat(() => {
@@ -538,7 +594,9 @@ export function ArtifactsProvider({
       error,
       refresh,
       byItem,
-      newerPages,
+      shownAgainBelow,
+      pages,
+      openPage,
       sentAt,
       preview,
       wantPreview,
@@ -567,7 +625,9 @@ export function ArtifactsProvider({
       error,
       refresh,
       byItem,
-      newerPages,
+      shownAgainBelow,
+      pages,
+      openPage,
       sentAt,
       preview,
       wantPreview,
@@ -599,6 +659,7 @@ export function ArtifactsProvider({
       >
         {announcement}
       </p>
+      {page && <PageView occurrence={page} onClose={closePage} announce={announce} />}
     </ArtifactsContext.Provider>
   );
 }
