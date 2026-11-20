@@ -111,6 +111,32 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
     });
   }
 
+test("F-231: focusing a track as Updates opens keeps the next arrow key on that track", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=main&updates=not-checked&save=failed&tracks=two", "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  // Move focus at the first opportunity after the section's controls enter the document.
+  await page
+    .getByRole("button", { name: "Updates", exact: true })
+    .evaluate((button: HTMLButtonElement) => {
+      const observer = new MutationObserver(() => {
+        const track = document.querySelector<HTMLInputElement>(".updates-section input:checked");
+        if (!track) return;
+        observer.disconnect();
+        track.focus();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      button.click();
+    });
+  await settle(page);
+  await expect(page.getByRole("radio", { name: "Stable" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("group", { name: "Update status" })).toContainText(
+    "Couldn't save the track. Stable is still selected.",
+  );
+});
+
 test("F-030: opens Updates from the footer and keeps keyboard focus on the chosen track", async ({
   page,
 }) => {

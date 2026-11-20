@@ -1285,6 +1285,16 @@ export function listProcesses(): { pid: number; command: string }[] | null {
   });
 }
 
+/** The process can exit after its identity was checked and before the signal arrives. */
+function signalIfPresent(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    return process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 /** How long the browser's processes get to exit by themselves, then after each signal. */
 export const BROWSER_EXIT_WAITS = { own: 10_000, term: 5_000, kill: 3_000 };
 
@@ -1329,8 +1339,7 @@ export async function settleBrowserProcesses(
     if (left.length === 0) break;
     for (const proc of left) {
       if (processState(proc.pid, proc.identity, inst.identify) === "alive") {
-        process.kill(proc.pid, signal);
-        stopped += 1;
+        if (signalIfPresent(proc.pid, signal)) stopped += 1;
       }
     }
     await waitGone(ms);
@@ -1361,7 +1370,7 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
   if (state() !== "alive") return state() === "dead";
   const children = childProcesses(target.pid, identify);
   if (state() !== "alive") return state() === "dead";
-  process.kill(target.pid, "SIGTERM");
+  signalIfPresent(target.pid, "SIGTERM");
   // A lookup can fail for a moment while a process exits, so the wait goes on
   // through "unknown"; only a process proven alive is ever killed.
   const settled = async (ms: number) => {
@@ -1375,8 +1384,7 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
   };
   let forced = false;
   if ((await settled(15_000)) === "alive") {
-    process.kill(target.pid, "SIGKILL");
-    forced = true;
+    forced = signalIfPresent(target.pid, "SIGKILL");
     await settled(5_000);
   }
   if (state() !== "dead") {
@@ -1389,8 +1397,10 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
     `Stopped the ${target.role} (pid ${target.pid})${forced ? " after a forced kill" : ""}`,
   );
   for (const child of children) {
-    if (processState(child.pid, child.identity, identify) === "alive") {
-      process.kill(child.pid, "SIGTERM");
+    if (
+      processState(child.pid, child.identity, identify) === "alive" &&
+      signalIfPresent(child.pid, "SIGTERM")
+    ) {
       console.log(`Stopped a leftover child of the ${target.role} (pid ${child.pid})`);
     }
   }
