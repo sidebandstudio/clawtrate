@@ -519,8 +519,9 @@ function RunView({
   onOpenTask: (botId: string, key: string) => void;
 }) {
   const bridge = useBridge();
-  const command = routine.payload === "other";
-  const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`);
+  // The run's own session says it was an agent turn, whatever the routine was edited to since.
+  const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`) === true;
+  const command = routine.payload === "other" && !isolated;
   // A current target runs detached, so its execution key can look like an isolated run.
   const targetAtRun =
     routine.updatedAt === null || routine.updatedAt <= run.runAt + (run.durationMs ?? 0);
@@ -531,7 +532,7 @@ function RunView({
       (routine.target === "main" && !isolated ? mainKey : null);
   const shared =
     session !== null ||
-    routine.payload === "systemEvent" ||
+    (routine.payload === "systemEvent" && !isolated) ||
     (routine.target !== "isolated" && (!run.sessionKey || targetAtRun));
   const main = session === mainKey;
   const conversation = main
@@ -739,14 +740,6 @@ export function RoutinesView({
   const bot = routine ? ownerOf(bots, routine.botId) : undefined;
   // A rail row names its run by when it started; once the routine's runs have it, it is bound.
   const named = nav.run !== null && !isRun(nav.run) ? nav.run.runAt : null;
-  const running = named !== null && named === routine?.runningAt;
-  const [found, retryFound] = useRuns(gateway, named === null || running ? undefined : routine);
-  const match =
-    found.status === "ready" ? found.value.find((each) => each.runAt === named) : undefined;
-  useEffect(() => {
-    if (match) onNav({ ...nav, run: match });
-  }, [match, nav, onNav]);
-  const run = isRun(nav.run) ? nav.run : undefined;
   // A routine removed while its page is open keeps its last values on screen.
   const [kept, setKept] = useState<{ routine: Routine; bot: Bot } | null>(null);
   if (routine && bot && (kept?.routine !== routine || kept.bot.id !== bot.id))
@@ -757,6 +750,17 @@ export function RoutinesView({
       : nav.routine && kept?.routine.id === nav.routine
         ? kept
         : null;
+  const running = named !== null && named === routine?.runningAt;
+  const [found, retryFound] = useRuns(
+    gateway,
+    named === null || running ? undefined : (routine ?? shown?.routine),
+  );
+  const match =
+    found.status === "ready" ? found.value.find((each) => each.runAt === named) : undefined;
+  useEffect(() => {
+    if (match) onNav({ ...nav, run: match });
+  }, [match, nav, onNav]);
+  const run = isRun(nav.run) ? nav.run : undefined;
   const deleted =
     shown !== null &&
     !routine &&
