@@ -331,6 +331,50 @@ test.describe("message actions", () => {
     await expect(input).toHaveValue("The first reply\ntyped meanwhile");
   });
 
+  test("F-067: a reply refused after another thread was opened comes back to its own thread, not the one shown", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        refuse?: () => void;
+      };
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "sendMessage"
+          ? new Promise((_, reject) => {
+              w.refuse = () => reject(new Error("The gateway refused it."));
+            })
+          : original(command);
+    });
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("The first reply");
+    await page.keyboard.press("Enter");
+    await expect(input).toHaveValue("");
+    // Another message's thread is opened from the keyboard (the panel covers its toolbar) while
+    // the first reply is still being taken.
+    await report(page).getByRole("button", { name: "Reply in a thread" }).last().focus();
+    await page.keyboard.press("Enter");
+    await expect(thread.getByTestId("thread-message").first()).not.toContainText(
+      "Nothing alarming that I can see from here.",
+    );
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
+    await page.waitForTimeout(200);
+    await expect(input).toHaveValue("");
+    await expect(thread.locator(".thread-error")).toHaveCount(0);
+    // Back in the first thread, the refused words and the reason are there.
+    await answer(page).getByRole("button", { name: "Reply in a thread" }).last().focus();
+    await page.keyboard.press("Enter");
+    await expect(thread.getByTestId("thread-message").first()).toContainText(
+      "Nothing alarming that I can see from here.",
+    );
+    await expect(input).toHaveValue("The first reply");
+    await expect(thread.locator(".thread-error")).toContainText("The gateway refused it.");
+  });
+
   test("F-067: a reply that leaves the outbox without history holding it is never announced as sent", async ({
     page,
   }) => {

@@ -501,8 +501,17 @@ function RepliesLink({ message }: { message: MessageRef }) {
 export function ThreadView({ messageId, onClose }: { messageId: string; onClose: () => void }) {
   const env = useMessages();
   const bridge = useBridge();
-  const [text, setText] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // Each thread keeps its own words and error, so a send refused after another thread was opened
+  // comes back to the thread it was typed in, not the one on screen.
+  const [drafts, setDrafts] = useState<Record<string, { text: string; error: string | null }>>({});
+  const { text, error } = drafts[messageId] ?? { text: "", error: null };
+  const setText = (next: string | ((current: string) => string), id = messageId) =>
+    setDrafts((all) => {
+      const now = all[id] ?? { text: "", error: null };
+      return { ...all, [id]: { ...now, text: typeof next === "string" ? next : next(now.text) } };
+    });
+  const setError = (next: string | null, id = messageId) =>
+    setDrafts((all) => ({ ...all, [id]: { text: all[id]?.text ?? "", error: next } }));
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
