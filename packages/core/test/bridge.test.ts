@@ -25,6 +25,22 @@ describe("parseBridgeCommand", () => {
   });
 });
 
+describe("parseBridgeCommand for a reaction", () => {
+  it("F-283: a reaction's direction is a boolean or absent; any other value is refused, never taken as add", () => {
+    const base = {
+      type: "setReaction",
+      key: "agent:otto:disk-space",
+      messageId: "m1",
+      emoji: "👍",
+    };
+    expect(parseBridgeCommand(base)).toMatchObject({ remove: false });
+    expect(parseBridgeCommand({ ...base, remove: true })).toMatchObject({ remove: true });
+    expect(parseBridgeCommand({ ...base, remove: false })).toMatchObject({ remove: false });
+    expect(() => parseBridgeCommand({ ...base, remove: "true" })).toThrow("invalid flag");
+    expect(() => parseBridgeCommand({ ...base, remove: 1 })).toThrow("invalid flag");
+  });
+});
+
 describe("parseBridgeCommand for the live conversation", () => {
   const key = "agent:otto:disk-space";
 
