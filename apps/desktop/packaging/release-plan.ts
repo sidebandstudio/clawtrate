@@ -7,6 +7,10 @@ import { FEED_FORMAT, FILE_KEYS, parseReleaseDate, type FileKey } from "../src/m
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, makeFeed, sha512Base64 } from "./feed.ts";
 
+function fullCommit(commit: string) {
+  return /^[0-9a-f]{40}$/.test(commit) && commit.length === 40;
+}
+
 export function feedFingerprint(url: string) {
   return createHash("sha256").update(url).digest("hex");
 }
@@ -57,7 +61,7 @@ export function plan(candidate: Candidate) {
   const holds: string[] = [];
   const files = [];
   const validTrack = track === "stable" || track === "nightly";
-  const validCommit = /^[0-9a-f]{40}$/.test(commit) && commit.length === 40;
+  const validCommit = fullCommit(commit);
   const validDate = parseReleaseDate(buildDate) === buildDate;
   if (!validTrack || !parsed || versionTrack(parsed) !== track)
     issues.push("Version and track must match.");
@@ -134,7 +138,13 @@ export function plan(candidate: Candidate) {
 /** Assemble once. Rechecks read the retained feed without repairing it. */
 export function assemble(candidate: Candidate) {
   const { dir, version, buildDate, commit, feedUrl } = candidate;
-  if (!parseVersion(version) || buildAddressProblem(feedUrl)) return;
+  if (
+    !parseVersion(version) ||
+    !fullCommit(commit) ||
+    parseReleaseDate(buildDate) !== buildDate ||
+    buildAddressProblem(feedUrl)
+  )
+    return;
   for (const key of FILE_KEYS) {
     const stat = lstatSync(join(dir, artifactName(version, key)), { throwIfNoEntry: false });
     if (stat && (!stat.isFile() || !stat.size || stat.size > MAX_DOWNLOAD_BYTES)) return;

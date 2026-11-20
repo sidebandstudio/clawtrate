@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -179,4 +180,36 @@ it("refuses unsigned Windows and distinguishes the packager's readback from its 
   ] as const)
     expect(macReadback("Signature of dist/mac-arm64/Clawtrate.app: " + log + ".", mac)).toBe(kind);
   expect(macReadback("Signing plan: certificate", mac)).toBe("unknown");
+});
+
+it("rechecks the saved candidate from the command line and preserves the feed on refusal", () => {
+  const check = () =>
+    spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dirname, "../packaging/release-plan.ts"),
+        "check",
+        c.dir,
+        c.track,
+        c.version,
+        c.commit,
+        c.buildDate,
+        c.feedUrl,
+      ],
+      { encoding: "utf8" },
+    );
+  expect(check().status).toBe(0);
+  for (const key of FILE_KEYS)
+    write(key + ".json", {
+      ...read(key + ".json"),
+      signing: key === "win-x64" ? "unsigned" : "ad hoc",
+    });
+  const held = check();
+  expect(held.status).toBe(2);
+  expect(held.stdout).toContain("stable 0.2.0 not publishable");
+  expect(read("release-plan.json")).toMatchObject({ issues: [], verdict: "not publishable" });
+  const feed = read("update-feed.json");
+  writeFileSync(file(), "changed");
+  expect(check().status).toBe(1);
+  expect(read("update-feed.json")).toEqual(feed);
 });
