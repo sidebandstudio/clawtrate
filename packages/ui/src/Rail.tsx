@@ -935,7 +935,8 @@ export function Rail({
   // move to the previous or next bot. The drawer, while open, keeps them out.
   useEffect(() => {
     const open = (bot: Bot) => {
-      if (bot.id === selection.bot?.id) return;
+      // Routines covers the conversation: the selected bot's is not on screen yet.
+      if (bot.id === selection.bot?.id && !routinesOpen) return;
       const inList = listRef.current?.contains(document.activeElement) ?? false;
       selection.selectBot(bot.id);
       onOpen();
@@ -989,7 +990,7 @@ export function Rail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- newTask reads the latest render's state
-  }, [inert, openSearch, onOpen, selection, ordered, interactive]);
+  }, [inert, openSearch, onOpen, selection, ordered, interactive, routinesOpen]);
 
   const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
