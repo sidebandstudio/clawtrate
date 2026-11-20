@@ -4898,14 +4898,23 @@ export class ClawtrateClient {
       }),
       onConnectHello: async (hello, context) => {
         await lifecycle.acceptHello(hello, context.plan);
-        if (!hello.auth.deviceToken) return;
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
-          if (generation !== this.generation || this.settings?.url !== settings.url) return;
-          if (!this.settings.token) return;
-          // Paired: drop the bootstrap secret, the device token replaces it.
-          await this.saveSettings({ ...this.settings, token: null });
+          const current = this.settings;
+          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!current.token) return;
+          // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
+          const paired =
+            Boolean(hello.auth.deviceToken) ||
+            (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
+          if (!paired) return;
+          try {
+            await this.saveSettings({ ...current, token: null });
+          } catch {
+            // The settings keep the secret, so the next hello tries again; this one goes on.
+            this.log("warn", "Could not remove the shared gateway token from this device.");
+          }
         });
       },
       onHello: (hello) => {

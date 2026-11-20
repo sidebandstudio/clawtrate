@@ -282,14 +282,14 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
           />
         </label>
         <label className="field">
-          <span className="visually-hidden">Gateway token, needed for the first pairing only</span>
+          <span className="visually-hidden">Gateway token, for pairing</span>
           <input
             className="input"
             name="token"
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder="Token, for the first pairing only"
+            placeholder="Gateway token, for pairing"
             autoComplete="off"
           />
         </label>
@@ -330,7 +330,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
         </div>
         <p className="field-hint">
           {PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access
-          only, and the token is used once.
+          only.
         </p>
       </form>
     </section>

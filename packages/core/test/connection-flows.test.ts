@@ -514,4 +514,53 @@ describe("connecting", () => {
       parseBridgeCommand({ type: "disconnect", gatewayUrl: `ws://${"a".repeat(2048)}` }),
     ).toThrow("invalid url");
   });
+
+  it("a shared token that could not be removed after pairing is removed on the next hello", async () => {
+    const gateway = new FakeGateway();
+    let hellos = 0;
+    // The first hello pairs this device; a later one need not send the device token again.
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: (hellos += 1) === 1 ? helloOk(["operator.read"], "device-token") : helloOk(),
+    });
+    const storage = memoryStorage();
+    const set = storage.set.bind(storage);
+    let failed = false;
+    storage.set = (key, value) => {
+      // Dropping the shared token fails, once.
+      if (key === "connection" && !failed && JSON.parse(value).token === null) {
+        failed = true;
+        return Promise.reject(new Error("The disk is full."));
+      }
+      return set(key, value);
+    };
+    const logged: string[] = [];
+    const host = {
+      ...testHost(gateway, storage),
+      log: (_: string, message: string) => void logged.push(message),
+    };
+    const client = new ClawtrateClient(host, FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    await until(() => failed);
+    await sleep(50);
+    expect(client.state.connection.status, "this hello still connects").toBe("connected");
+    expect(gateway.sockets, "on the same socket").toHaveLength(1);
+    expect(storage.data.has(tokenKey(URL)), "the device token is saved").toBe(true);
+    expect(JSON.parse(storage.data.get("connection")!).token, "the file still holds it").toBe(
+      "bootstrap",
+    );
+    expect(logged).toContain("Could not remove the shared gateway token from this device.");
+
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+    );
+    const last = gateway.connects.at(-1) as { auth?: { token?: string; deviceToken?: string } };
+    expect(last.auth?.token ?? last.auth?.deviceToken).toBe("device-token");
+    await until(() => JSON.parse(storage.data.get("connection")!).token === null);
+    expect(JSON.parse(storage.data.get("connection")!)).toEqual({ url: URL, token: null });
+    client.stop();
+  });
 });
