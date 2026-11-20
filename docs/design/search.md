@@ -4,7 +4,7 @@ What Cmd/Ctrl+K opens: one palette over the bots, task names, messages, files, l
 
 What must be true is in `docs/parity.md`, rows F-033, F-240 and F-268. What the gateway does is in `docs/research/search.md`, from OpenClaw's source and a development instance. This document decides appearance, wording and input, and for every state it names the gateway fact behind it. Section 13 lists those facts. Section 14 lists the parity rows whose wording changes, and the one that needs a decision. Section 15 is for builders.
 
-One rule sits above the rest: **a group says what it searched, and "no match" is said only of that.** The gateway's message search returns its best 25 matches and has no way to go further back; files are searched one bot at a time; links exist only in conversations this device has loaded. So every group carries its coverage in plain words, and a part that was not searched is named as not searched, never shown as empty.
+One rule sits above the rest: **a group says what it searched, and "no match" is said only of that.** The gateway's message search returns at most 25 matches and has no way to go further back; files are searched one bot at a time; links exist only in conversations this device has loaded. So every group carries its coverage in plain words, and a part that was skipped, failed, timed out, was cut off or was searched only in part is named as such, never shown as empty. "No results" is said only when every source in view finished over all it covers, and the live region says only what the screen says.
 
 The prototype shows all of it: `prototype/search.html` is the app with the palette added, and its address picks any state (section 15). The styles are in `prototype/css/search.css` and the behaviour in `prototype/js/search.js`. `prototype/tools/checks/search.mjs` checks them.
 
@@ -78,7 +78,7 @@ Every source is read tier: `agents.list`, `cron.list`, `sessions.search`, `sessi
 
 ### Announcements
 
-The palette has its own polite live region. It speaks once results for a query settle (section 12), and when a group fails. Moving through results is announced by the screen reader from the active option, not by the live region.
+The palette has its own polite live region. It is drawn from the same state as the list, so it never says more than the screen: it speaks once nothing in view is pending (section 12). Moving through results is announced by the screen reader from the active option, not by the live region.
 
 ## 3. Opening the palette
 
@@ -144,11 +144,11 @@ A search costs the gateway little: on about 400 tasks it took 10 to 20 ms, the f
 
 ## 7. Results: groups, rows, Show all
 
-**A group** has a heading row (not an option): its name and, after a dot, its count of results shown ("Messages · 25"), and under it the coverage line for what was searched (section 8 for messages; the table below for the rest). Groups with no results are not drawn; section 10 says how "no match" is told. A group shows its first 5 rows, then the action row "Show all 25 messages", which shows the rest in place and leaves the other groups as they are.
+**A group** has a heading row (not an option): its name and, after a dot, its count of results shown ("Messages · 25"), and under it the coverage line for what was searched (section 8 for messages; the table below for the rest). A group is drawn when it has results or was not searched in full. A group searched in full with no results is not drawn; it is named in "No matches in" (section 10). A group shows its first 5 rows, then the action row "Show all 25 messages", which shows the rest in place and leaves the other groups as they are.
 
 | Group    | Coverage line, complete                                | When it is partial                                                                                                                                                                               |
 | -------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Bots     | none                                                   | "Couldn't load the gateway's bots. Showing the bots loaded before." (from the status strip's state)                                                                                              |
+| Bots     | none                                                   | "Couldn't load the gateway's bots. Showing the bots loaded before." (from the status strip's state); with no list loaded yet, "The gateway's bots haven't loaded yet." Either way the group is drawn, even with no name matching |
 | Tasks    | "By name, in this device's task list"                  | "By name, in this device's task list, which holds the most recent tasks only"                                                                                                                    |
 | Files    | "Names in the workspaces of Juniper, Otto and Pip"     | "Not searched: Marlow, none of whose tasks works in its workspace." "Otto: stopped after 500 names or 5,000 entries." "Searched 8 of 12 bots' workspaces", with "Search the other 4 bots' files" |
 | Links    | "Only from the 2 conversations this device has loaded" | With none loaded: "No conversation is loaded on this device yet", and the group is drawn, never counted as no match                                                                              |
@@ -231,15 +231,15 @@ A deleted bot's messages and a deleted task's messages are gone from the next se
 
 ## 10. Nothing found, partial, failed, offline
 
-**No match in a group** is told once, at the end of the list, in one line naming the groups that were searched in full and had none: "No match in Bots, Tasks, Links, Routines and Settings." A group that was not searched, failed, or was searched only in part is never in that line: it is drawn with its own heading and coverage line, for example "Files", "No match in the workspaces of Juniper, Otto and Pip.", "Not searched: Marlow, none of whose tasks works in its workspace."
+**No matches in.** Once nothing in view is pending, the sources that finished over all they cover and found nothing are listed at the end under "No matches in Bots, Tasks, Links, Routines and Settings", each with what it covered ("Links: Links in the 2 conversations this device has loaded."). A source that was skipped, failed, timed out, was cut off or was searched only in part is never in that list: it is drawn as a group, with its own lines.
 
-**No match anywhere.** When every source answered in full and none matched, the list holds a title, "No results for "ephyr"", and the same lines as section 4, each saying what it searched. A source searched only in part gives its own lines there in place of the general one ("Files: No match in the workspaces of Juniper, Otto and Pip. Not searched: Marlow, none of whose tasks works in its workspace."). When a source failed or was not asked, there is no such title: that source's group is drawn, and the others are named in the "No match in" line. When Messages had none, its line adds the gateway's rule: "Messages match whole words; the last word may be the start of one." That is the reason "ephyr" finds nothing in "Zephyrine" (research §2).
+**No results.** Only when every source in view finished over all it covers and none matched does the list hold a title, "No results for "ephyr"", with each source and what it covered. Messages adds the gateway's rule: "Messages match the words you type; the end of your query can match the start of a word." That is why "ephyr" finds nothing in "Zephyrine" (research §2). None of these is ever an all-clear, and each keeps its group in view: a bot list that is empty or failed to load; a task list that was cut short or failed to load; no conversation loaded (Links); a workspace not verified, not asked, refused, timed out or capped; Files not asked below 2 characters; a request still pending or given up; a disconnected gateway; a message reply with `indexing` or `archivedTranscriptsExcluded`; a routine list with more pages.
 
 **Partial.** Section 7 and section 8 give each source's partial coverage line. A group can be partial and still have results; the line is always under its heading.
 
-**Failed.** A source that fails shows its heading and one line on `--danger-soft`: "Couldn't search messages: <the gateway's message>." with the action row "Try again", which asks that source again. The other groups are not touched. The live region says "Messages couldn't be searched." For Files, a failure is per bot, in the coverage line.
+**Failed and timed out.** A source that fails shows its heading and one line on `--danger-soft`: "Couldn't search messages: <the gateway's message>." with the action row "Try again", which asks that source again. A request that has not answered in 8 seconds is given up the same way: "Couldn't search messages: the gateway didn't answer in 8 seconds." The other groups are not touched. For Files, a failure is per bot, in the coverage line.
 
-**Searching.** A gateway group that has been asked shows its heading with "Searching…" in its coverage line and two skeleton rows, from the moment it is asked until it answers. The rows of an earlier answer are not left under a new query.
+**Searching.** A gateway group that has been asked shows its heading with "Searching…" in its coverage line and two skeleton rows, from the moment it is asked until it answers. The rows of an earlier answer are not left under a new query (section 6).
 
 **Offline or reconnecting.** The gateway's groups are not asked. Each shows its heading and "Not searched: Home gateway isn't connected. Search runs again when it reconnects." The device's groups still filter what was loaded before.
 
@@ -274,7 +274,7 @@ On the phone's scope bar, Left and Right move between scopes and choose them, Ho
 
 **Names.** A row's name says what it is and where it leads: "Bot Otto, Operations"; "Task Weekly backup check, Otto, 2:14 PM"; "Message in Disk almost full on the media box, from you, Nov 16: Yes, clear the transcode cache."; "File notes/disk-2026-11-16.md, Otto"; "Link energy.example/heat-pumps/sizing, in Heat pump vs. gas furnace. Shift+Enter opens it in your browser."; "Routine Weekday tide digest, Pip, off. Opens Pip."; "Setting Accounts". A row that cannot open adds its line from section 9.
 
-**What the live region says.** 400 ms after the last group answers for a query: the count by group, then each partial or failed part: "14 results: 2 bots, 1 task, 8 messages, 3 files. More messages match. Marlow's files weren't searched." When nothing matched: "No results for ephyr." When a source fails: "Messages couldn't be searched." When search each bot finishes: "Searched each of 4 bots: 53 messages."
+**What the live region says.** It is drawn from the same state as the list, 400 ms after the last source in view answers, and never while one is pending: the count by group, then "No matches in" and the sources it names, then each source that was not searched in full: "3 results: 3 messages. No matches in Bots, Tasks, Links, Routines and Settings. 1 bot's workspace was not searched." Others: "Messages couldn't be searched.", "More messages match.", "Some messages are still being indexed.", "No conversation is loaded, so no links were searched.", "Files weren't searched: type 2 or more characters." It says "No results for ephyr." only when the list does. On the phone it speaks for the chosen scope only. An announcement waiting for a query is dropped when the text changes. When "Search each bot for more" finishes: "4 of 4 bots answered. 30 messages returned.", naming any bot that couldn't be searched.
 
 **Contrast and targets** follow `visual-language.md` §13. The ring on an opened message is `--accent-line`, a mark, never text.
 
