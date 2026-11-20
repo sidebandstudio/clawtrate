@@ -80,13 +80,27 @@ async function openNewTask(client: ClawtrateClient, tag: string): Promise<string
   return key;
 }
 
+/**
+ * What the gateway has in flight and waiting in the task. An input it withdrew stays listed as
+ * `cancelled`, and waits for nothing.
+ */
+async function gatewayWork(op: OperatorSession, key: string) {
+  const history = await op.request<{
+    inFlightRun?: { runId?: string };
+    pendingInputs?: { items?: Array<{ runId?: string; state?: string }> };
+  }>("chat.history", { sessionKey: key, limit: 1 });
+  return {
+    inFlight: history.inFlightRun ? (history.inFlightRun.runId ?? "unnamed") : null,
+    pending: (history.pendingInputs?.items ?? [])
+      .filter((item) => item.state !== "cancelled")
+      .map((item) => [item.runId, item.state]),
+  };
+}
+
 /** Whether the gateway has nothing in flight or waiting in the task. */
 async function gatewayIdle(op: OperatorSession, key: string): Promise<boolean> {
-  const history = await op.request<{
-    inFlightRun?: unknown;
-    pendingInputs?: { items?: unknown[] };
-  }>("chat.history", { sessionKey: key, limit: 1 });
-  return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
+  const work = await gatewayWork(op, key);
+  return work.inFlight === null && work.pending.length === 0;
 }
 
 const runs = (client: ClawtrateClient, key: string) => client.state.transcripts[key]?.runs ?? [];
@@ -206,10 +220,14 @@ test("F-097: a run stopped during a connection gap ends on the gateway's word, a
     // Stop is offered on the current run and names it. The gateway lets only the device that
     // started a run abort it, so that device stops it.
     expect(runningRunId(client.state.transcripts[key]!, current)).toBe(current);
+    const ended = op.terminal(current, 30_000);
     await op.request("chat.abort", { sessionKey: key, runId: current });
+    expect((await ended).state).toBe("aborted");
     await expect.poll(() => runs(client, key)[1]?.state, { timeout: 15_000 }).toBe("stopped");
-    // The gateway may hold the task until the stopped tool call returns.
-    await expect.poll(() => gatewayIdle(op, key), { timeout: 60_000 }).toBe(true);
+    // Polled as what is left, so a cleanup that fails names the run that holds the task.
+    await expect
+      .poll(() => gatewayWork(op, key), { timeout: 30_000 })
+      .toEqual({ inFlight: null, pending: [] });
   } finally {
     await close();
   }
