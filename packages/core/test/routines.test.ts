@@ -876,6 +876,15 @@ describe("F-189: creating a routine", () => {
     expect(requests).toEqual([]);
   });
 
+  it("sends nothing for a draft that never learned its gateway, though a gateway is confirmed now", async () => {
+    const { routines, requests } = engine({ "cron.add": () => job() }, initialRoutinesState, ADMIN);
+    expect(await routines.create(input, "draft-1", {}, null)).toMatchObject({
+      status: "not-sent",
+      reason: "gateway",
+    });
+    expect(requests).toEqual([]);
+  });
+
   it("sends nothing to a confirmed replacement gateway either: the write waits for its draft's own gateway", async () => {
     const once = job();
     const expected = parseRoutine(once)!;

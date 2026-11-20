@@ -212,7 +212,10 @@ export function Editor({
   const [tried, setTried] = useState(false);
   // The draft as the person had it when they chose to see the other version.
   const [mine, setMine] = useState<Draft | null>(null);
-  const [gateway] = useState(connection.gatewayId);
+  const [gateway, setGateway] = useState(connection.gatewayId);
+  // The hello that was current when the editor opened: a later one is another
+  // connection, whose identity cannot be told from this draft's gateway's.
+  const [openedAt] = useState(connection.connectedAt);
   const attempt = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   const payload = accepted?.payload ?? "agentTurn";
@@ -226,7 +229,14 @@ export function Editor({
     [],
   );
 
-  // A draft belongs to the gateway it was opened on.
+  // A draft belongs to the gateway it was opened on. One that opened before the
+  // identity was read binds when this connection confirms it; if another
+  // connection arrives first, the editor closes rather than guess.
+  if (gateway === null && connection.gatewayId !== null && connection.connectedAt === openedAt)
+    setGateway(connection.gatewayId);
+  useEffect(() => {
+    if (gateway === null && connection.connectedAt !== openedAt) onClose();
+  }, [gateway, connection.connectedAt, openedAt, onClose]);
   useEffect(() => {
     if (gateway !== null && connection.gatewayId !== null && connection.gatewayId !== gateway)
       onClose();

@@ -14,7 +14,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CopyValue } from "../AccessBar.tsx";
-import { useBridge } from "../bridge.tsx";
+import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { Dialog } from "../bots/Dialog.tsx";
 import { Note } from "../bots/parts.tsx";
 import { ChevronIcon } from "../icons.tsx";
@@ -458,6 +458,9 @@ function ZoneDialog({
   onClose: () => void;
 }) {
   const bridge = useBridge();
+  // A rewrite names the gateway the routines were read from; the engine refuses
+  // a write for another (routines.ts `blocked`).
+  const gateway = useClawtrateState().connection.gatewayId;
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ZoneResult | null>(null);
@@ -541,7 +544,7 @@ function ZoneDialog({
           original,
           edit: { ...original, schedule },
           expected: { ...original, updatedAt: routine.updatedAt },
-          gateway: null,
+          gateway,
         });
         if (answer.status === "saved") outcome.changed.push(routine.name);
         else if (answer.status === "unknown") outcome.pending.push({ routine, schedule });

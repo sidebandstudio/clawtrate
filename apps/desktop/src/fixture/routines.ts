@@ -480,6 +480,11 @@ export function routineCommand(
         : [...all, next],
     );
   const admin = () => get().connection.canAdmin;
+  // A write names the gateway its draft came from, as the engine refuses one
+  // that does not (routines.ts `blocked`): a save before the identity is read,
+  // or after another gateway confirmed, is not sent.
+  const bound = (gateway: string | null) =>
+    gateway !== null && gateway === get().connection.gatewayId;
   const later = <T>(ms: number, value: () => T) =>
     new Promise<T>((resolve) => setTimeout(() => resolve(value()), ms));
   // How the next save ends; a refusal or a conflict once, then saves work.
@@ -491,6 +496,7 @@ export function routineCommand(
   switch (command.type) {
     case "createRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (!bound(command.gateway)) return Promise.resolve({ status: "not-sent", reason: "gateway" });
       const input: NewRoutine = command.input;
       const made = base({
         ...input,
@@ -522,6 +528,7 @@ export function routineCommand(
       return later(300, () => kept(command.id) ?? null);
     case "updateRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (!bound(command.gateway)) return Promise.resolve({ status: "not-sent", reason: "gateway" });
       const routine = kept(command.id);
       if (!routine) return Promise.resolve({ status: "deleted" });
       const end = outcome();

@@ -4,7 +4,7 @@
 // what a connection without admin access sees. The same writes are checked
 // against a real gateway in e2e/routines-edit.spec.ts. The fixture's routines
 // are made up (apps/desktop/src/fixture/routines.ts).
-import type { ClawtrateState } from "../packages/core/src/index.ts";
+import type { ClawtrateState, ConnectionState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, SIZES } from "./fixture.ts";
 
@@ -40,9 +40,26 @@ async function fillNew(page: Page, name = "Weekly reading list") {
   await editor(page).getByLabel("Instruction").fill("List the three articles worth reading first.");
 }
 
+/** A value from the fixture's connection state, read by a no-op set. */
+async function connectionValue(page: Page, field: "gatewayId") {
+  return page.evaluate((field) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    let value: string | null = null;
+    fixture.setState((state) => {
+      value = state.connection[field];
+      return state;
+    });
+    return value;
+  }, field);
+}
+
 /** Change the fixture's connection, as the host's next snapshot would. */
-async function setAdmin(page: Page, admin: boolean) {
-  await page.evaluate((on) => {
+async function setConnection(page: Page, change: Partial<ConnectionState>) {
+  await page.evaluate((change) => {
     const fixture = (
       window as unknown as {
         clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
@@ -50,9 +67,13 @@ async function setAdmin(page: Page, admin: boolean) {
     ).clawtrateFixture;
     fixture.setState((state) => ({
       ...state,
-      connection: { ...state.connection, canAdmin: on },
+      connection: { ...state.connection, ...change },
     }));
-  }, admin);
+  }, change);
+}
+
+async function setAdmin(page: Page, admin: boolean) {
+  await setConnection(page, { canAdmin: admin });
 }
 
 test.describe("1440", () => {
@@ -198,6 +219,38 @@ test.describe("1440", () => {
     await setAdmin(page, true);
     await save(page).click();
     await expect(view(page).getByRole("heading", { name: "Survives" })).toBeVisible();
+  });
+
+  test("F-189: a save before the gateway confirms its identity is refused, and the same draft saves once it is", async ({
+    page,
+  }) => {
+    await open(page);
+    const gatewayId = await connectionValue(page, "gatewayId");
+    await setConnection(page, { gatewayId: null });
+    await fillNew(page);
+    await save(page).click();
+    await expect(editor(page)).toContainText("The gateway hasn't confirmed its identity yet");
+    // The gateway this draft belongs to confirms: the editor binds to it and saves.
+    await setConnection(page, { gatewayId });
+    await save(page).click();
+    await expect(editor(page)).toHaveCount(0);
+    await expect(view(page).getByRole("heading", { name: "Weekly reading list" })).toBeVisible();
+  });
+
+  test("F-189: an editor that opened while the identity was loading closes when another gateway confirms", async ({
+    page,
+  }) => {
+    await open(page);
+    const gatewayId = await connectionValue(page, "gatewayId");
+    await setConnection(page, { gatewayId: null });
+    await fillNew(page);
+    // The gateway the draft was made on confirms while the editor is open.
+    await setConnection(page, { gatewayId });
+    // A replacement gateway connects: its hello, then its identity read.
+    await setConnection(page, { connectedAt: Date.now() + 5_000 });
+    await setConnection(page, { gatewayId: null });
+    await setConnection(page, { gatewayId: "another gateway" });
+    await expect(editor(page)).toHaveCount(0);
   });
 
   test("F-350: the switch and the page pause and resume, shown as Paused in the list", async ({

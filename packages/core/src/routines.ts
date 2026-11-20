@@ -834,7 +834,10 @@ export class RoutinesEngine {
     if (!this.ctx.connected()) return "offline";
     const identity = this.ctx.identity();
     if (identity === null) return "gateway";
-    if (gateway != null && identity !== gateway) return "gateway";
+    // A draft names the gateway it was opened on; a write without one, or for
+    // another, is refused: the routine is at one address, and another gateway
+    // can be there in its place by now.
+    if (gateway !== undefined && identity !== gateway) return "gateway";
     if (owner !== null && this.ctx.withdrawn(owner)) return "offline";
     return this.ctx.admin() ? null : "admin";
   }
@@ -871,7 +874,7 @@ export class RoutinesEngine {
     input: NewRoutine,
     key: string,
     owner: object | null = null,
-    gateway: string | null = null,
+    gateway?: string | null,
   ): Promise<RoutineWrite> {
     const blocked = this.blocked(owner, gateway);
     if (blocked) return { status: "not-sent", reason: blocked };
@@ -947,7 +950,7 @@ export class RoutinesEngine {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
-    gateway: string | null = null,
+    gateway?: string | null,
   ): Promise<RoutineWrite> {
     let blocked = this.blocked(owner, gateway);
     if (blocked) return { status: "not-sent", reason: blocked };
