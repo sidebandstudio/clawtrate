@@ -5327,7 +5327,7 @@ export class ClawtrateClient {
               ? parsePluginApproval(event.payload)
               : parseSystemAgentApproval(event.payload);
         if (card) {
-          if (this.waiting.restoreApproval(card, this.now())) this.publishTasks();
+          if (this.restoreWait(card)) this.publishTasks();
           this.routeApproval(admitApproval(card));
         }
         return;
@@ -5611,14 +5611,19 @@ export class ClawtrateClient {
             : [];
         for (const item of items) {
           const card = source.parse(item);
-          if (card?.status === "pending")
-            changed = this.waiting.restoreApproval(card, this.now()) || changed;
+          if (card?.status === "pending") changed = this.restoreWait(card) || changed;
         }
       } catch (error) {
         this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
       }
     }
     if (changed) this.publishTasks();
+  }
+
+  /** A pending request's task waits on it, unless the gateway already reported its outcome. */
+  private restoreWait(card: ApprovalCard): boolean {
+    if (this.approvalOutcomes.has(capId(card.id, MAX_ID_CHARS))) return false;
+    return this.waiting.restoreApproval(card, this.now());
   }
 
   /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */

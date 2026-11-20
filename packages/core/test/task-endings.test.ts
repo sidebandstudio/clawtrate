@@ -131,6 +131,39 @@ describe("F-057: the task's status in the rail", () => {
     }
   });
 
+  it("a request that arrives after its outcome adds no wait to its task", async () => {
+    const gateway = grantingGateway();
+    const rows = [{ key: KEY, agentId: "otto", sessionId: "s-1", status: "done", updatedAt: 900 }];
+    gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    const task = () => client.state.tasksByBot.otto?.find((each) => each.key === KEY);
+    const request = {
+      id: "late-request",
+      request: { command: "sleep 2", host: "gateway", sessionKey: KEY, runId: "run-1" },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 600_000,
+    };
+    try {
+      await until(() => task() !== undefined);
+      gateway.emit("exec.approval.resolved", {
+        id: request.id,
+        decision: "allow-once",
+        request: request.request,
+      });
+      gateway.emit("exec.approval.requested", request);
+      await until(() => transcript().approvals[0]?.status === "allowed");
+      await sleep(30);
+      expect(task()?.status).toBe("done");
+      expect(task()?.waitingFor ?? null).toBeNull();
+    } finally {
+      client.stop();
+    }
+  });
+
   it("an older run's failed result or blocked end leaves the newer gateway row Done, with no failed count", async () => {
     const gateway = grantingGateway();
     const rows = [
