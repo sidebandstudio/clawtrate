@@ -96,6 +96,9 @@
     { id: "i12", task: "m11", kind: "file", title: "old-route.md", type: "Markdown", size: "88 B", time: "Oct 20", day: 30, seq: 5, src: "artifacts" },
     { id: "k4", task: "m12", kind: "link", title: "Club site draft", href: "https://club.example/draft", time: "Oct 12", day: 38, seq: 2, src: "history" },
     { id: "pj", task: "j2", kind: "page", title: "E-book apps compared", doc: "ebook-apps", time: "3:02 PM", day: 0, seq: 2, src: "history" },
+    // Occurrences a route can name that the transcript doesn't confirm: a view id no longer in the task, and an app view.
+    { id: "ps", task: "m2", kind: "page", title: "Trail guide", doc: "trail-guide", time: "5:20 PM", day: 0, seq: 30, src: "history", stale: true },
+    { id: "pm", task: "m2", kind: "page", title: "Route planner", doc: "ebook-apps", time: "5:21 PM", day: 0, seq: 31, src: "history", mcpApp: true },
     // The person's pictures in Saturday's trail plan, from the image listing: four in its first reply, one after its cursor.
     // preview: the listing carried bytes the address decision allows ("ok"), or retrieving them failed ("failed").
     ...[1, 2, 3, 4, 5].map((n) => ({
@@ -180,8 +183,8 @@
   }
 
   /**
-   * A Page's HTML for the frame (library.md, section 6): parsed by DOMParser,
-   * which runs no script and loads nothing; then everything that runs,
+   * A Page's HTML for the frame (library.md, section 6). DOMParser is used here for the local Chromium fixture.
+   * A production renderer requires a parser that cannot start requests (§6). Then everything that runs,
    * navigates or loads is taken out, forms are unwrapped with their controls
    * kept, and only pictures the address decision allows stay. The policy goes
    * first in its head, and the frame around it is sandbox="".
@@ -189,7 +192,7 @@
   const REMOVE = "script, noscript, base, meta[http-equiv], link, iframe, frame, frameset, object, embed, portal, applet, template";
   const DROP = ["href", "xlink:href", "action", "formaction", "target", "ping", "srcdoc", "manifest", "codebase", "archive", "longdesc", "usemap", "integrity"];
   const LOADS = ["src", "srcset", "poster", "data", "background", "lowsrc", "dynsrc"];
-  const POLICY = "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'";
+  const POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'";
   const MAX_PICTURE = 2 * 1024 * 1024;
   // A data: picture stays only when its bytes are PNG, JPEG, WebP or GIF, match its label, and decode to 2 MiB at most.
   function allowedPicture(value) {
@@ -244,6 +247,13 @@
     return { html: `<!doctype html>${doc.documentElement.outerHTML}`, scripts, links: [...new Set(links)] };
   }
   CT.framedPage = framedPage;
+
+  // Why an occurrence can't be confirmed in its task's transcript, or nothing when it can.
+  function unconfirmed(x) {
+    if (x.mcpApp) return "This is an app view. It needs scripts, which Clawtrate doesn't run.";
+    if (x.stale || !x.doc) return `Clawtrate couldn't confirm this page in ${taskTitle(x.task)}.`;
+    return "";
+  }
 
   // The gateway's answer to canvas.document.view, counted.
   const LIMIT = 5 * 1024 * 1024; // 5 MiB of UTF-8, for drawing and for export alike
@@ -313,7 +323,7 @@
   }
   // What one task's reads give the bot's Library: the bot's own items, from the sources that answered.
   function listed(x) {
-    if (x.by === "person" || x.src === "uploads") return false;
+    if (x.by === "person" || x.src === "uploads" || x.stale || x.mcpApp) return false;
     if (x.kind === "link" && !canonical(x.href)) return false; // an address that isn't one stays text in the message
     const s = sources(x.task);
     if (x.src === "artifacts" && s.artifacts === "failed") return false;
@@ -675,7 +685,7 @@
   // Every way to a Page arrives here: a conversation card, a Library row, the media viewer's former page route.
   function openPage(id, from) {
     const x = item(id);
-    if (!x || x.kind !== "page" || !x.doc) return; // only a page block with a view id, in its own task's transcript
+    if (!x || x.kind !== "page") return;
     opener = from || document.activeElement;
     openerScroll = $("#transcript")?.scrollTop ?? null;
     const b = botOf(x.task);
@@ -729,6 +739,9 @@
   function loadPage(x) {
     if (!view || view._x !== x) return;
     const name = esc(botOf(x.task).name);
+    // The occurrence first, for drawing and export alike: a view id on a canvas block in this task's transcript, not an app view.
+    const why = unconfirmed(x);
+    if (why) return setState("unconfirmed", `<div class="page-state" role="status"><p><strong>${esc(why)}</strong></p></div>`);
     // Before this platform's zero-request check passes, nothing is read, parsed or drawn; Export reads when chosen.
     if (gateClosed())
       return setState("unavailable", `<div class="page-state" role="status"><p><strong>Clawtrate can't show pages here yet.</strong></p><p>You can export this page as a file${canWrite() ? `, or ask ${name} about it in the chat` : ""}.</p></div>`);
@@ -915,7 +928,7 @@
       .slice(0, 120);
     return `${base || "Page"}.html`;
   }
-  const exportReady = () => (view ? ["shown", "unavailable"].includes(view.dataset.state) : Boolean(sheet));
+  const exportReady = () => (view ? ["shown", "unavailable"].includes(view.dataset.state) : Boolean(sheet) && !unconfirmed(sheet._x));
 
   function openExport(x = view?._x, from = document.activeElement) {
     if (!x || !exportReady()) return; // the button and ⌘E share this guard
@@ -1131,11 +1144,14 @@
       `<header class="page-sheet-bar"><button type="button" class="icon-button" data-ps="close" aria-label="Close" title="Close">${icon("x")}</button>` +
       `<strong id="sheet-title">${esc(x.title)}</strong><span></span></header>` +
       `<div class="page-sheet-body"><p class="page-sheet-sub">Page · ${esc(b.name)} · ${esc(x.time)}</p>` +
-      `<p class="page-sheet-lead">Clawtrate for iPhone can't show pages yet.</p><p>You can ask ${esc(b.name)} about this page, or share it as a file.</p>` +
+      (unconfirmed(x)
+        ? `<p class="page-sheet-lead">${esc(unconfirmed(x))}</p>`
+        : `<p class="page-sheet-lead">Clawtrate for iPhone can't show pages yet.</p><p>You can ask ${esc(b.name)} about this page, or share it as a file.</p>`) +
       (canWrite()
         ? `<button type="button" class="button" data-variant="primary" data-ps="message">Message about ${esc(x.title)}</button>`
         : `<button type="button" class="button" data-variant="primary" data-ps="request-access">Request access to message</button>`) +
-      `<button type="button" class="button" data-ps="share">Share as file…</button></div>`;
+      (unconfirmed(x) ? "" : `<button type="button" class="button" data-ps="share">Share as file…</button>`) +
+      `</div>`;
     $(".app").appendChild(sheet);
     $(".shell").inert = true;
     $('[data-ps="close"]', sheet).focus();

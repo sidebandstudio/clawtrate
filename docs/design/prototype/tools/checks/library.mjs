@@ -285,7 +285,7 @@ const srcdoc = await q(p, () => document.querySelector(".page-frame").getAttribu
 const sandbox = await q(p, () => document.querySelector(".page-frame").getAttribute("sandbox"));
 check(
   "R1 the frame: sandbox with no permissions; no script, link, form, frame, refresh or outside address left; the policy with form-action and base-uri first",
-  sandbox === "" && !/<(script|a|form|iframe|link|base|object|embed)[\s>]|\shref=|\saction=|http-equiv="refresh"|https?:\/\//i.test(srcdoc.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "")) && /<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'[^"]*form-action 'none'; base-uri 'none'">/.test(srcdoc),
+  sandbox === "" && !/<(script|a|form|iframe|link|base|object|embed)[\s>]|\shref=|\saction=|http-equiv="refresh"|https?:\/\//i.test(srcdoc.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "")) && srcdoc.includes(`<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">`),
 );
 check("R1 a PNG picture the address decision allows stays; an outside picture and an SVG labelled as data go, their alt text left", /id="pixel" src="data:image\/png;base64,/.test(srcdoc) && /<img id="remote" alt="Map of the routes">/.test(srcdoc) && /<img id="badtype" alt="Badge">/.test(srcdoc));
 check("R1 the form is unwrapped and its submit button can submit nothing", !/<form/i.test(srcdoc) && /<button type="button" id="go">/.test(srcdoc) && /id="note"/.test(srcdoc));
@@ -303,6 +303,7 @@ await p.waitForTimeout(300);
 check("F-374 a checkbox, a menu, a field and a folded section change the view", (await frame.isChecked("#dry")) && (await frame.inputValue("#sort")) === "Climb" && (await frame.getAttribute("details", "open")) !== null);
 check("a link's words stay as plain text, and a click on them leaves the Page in place", (await frame.evaluate(() => !document.querySelector("a") && [...document.querySelectorAll("span")].some((s) => s.textContent === "park's conditions page"))) && Boolean(pageFrame(p)));
 check("R1 the Trail guide fixture made no network requests, navigated no frame, opened no window, by pointer and by keyboard", seen.requests.length === 0 && seen.navigations.length === 0 && seen.popups === 0 && seen.dialogs === 0, JSON.stringify(seen));
+check("E1 the rendering walk, counted apart: one read, one parse, one frame, zero requests, zero frame navigations", await q(p, () => JSON.stringify(window.CT.library.counters) === '{"reads":1,"parses":1,"mounts":1}') && seen.requests.length === 0 && seen.navigations.length === 0, JSON.stringify(seen));
 await p.click('[data-pv="links"]');
 check("R2 Links (3): the full canonical addresses; no user name and password, no relative address", await q(p, () => [...document.querySelectorAll(".page-links .menu-item")].map((x) => x.textContent).join() === "https://trails.example/conditions,https://maps.example/ridge,http://localhost:8080/admin"));
 await p.keyboard.press("ArrowDown");
@@ -367,6 +368,44 @@ for (const [label, query, act] of [
     check("R1 only Export reads and parses the entrypoint, and still nothing is drawn", after.reads === 1 && after.parses === 1 && after.mounts === 0 && seen.requests.length === 0);
     check("R5 not drawn here, the first choice is the Clawtrate version", await q(p, () => [...document.querySelectorAll(".export-choice strong")].map((x) => x.textContent).join() === "Clawtrate version,As Marlow made it"));
   }
+  await p.close();
+}
+for (const size of [{ width: 1440, height: 900 }, phoneSize]) {
+  for (const [label, query, act] of [
+    ["its Page card", "&bot=juniper&task=j2", (p) => p.click("#card-page .artifact-main")],
+    ["its legacy query", "&bot=juniper&task=j2&viewer=page", async () => {}],
+  ]) {
+    const w = await b.newPage({ viewport: size });
+    w.on("pageerror", (e) => out.push("PAGEERROR " + e));
+    await w.goto(pageUrl("work.html") + "?chrome=0&theme=light" + query + (size.width === 390 ? "&width=phone" : ""));
+    await w.waitForTimeout(200);
+    await act(w);
+    await w.waitForTimeout(300);
+    check(
+      `E1 the standalone Work page at ${size.width}, ${label}: the viewer fails closed with no Page content, frame or library read`,
+      await w.evaluate(() => document.querySelector(".viewer .viewer-closed")?.textContent === "Clawtrate can't show pages here yet." && !document.querySelector(".viewer-page, iframe, .page-frame") && !window.CT.library),
+    );
+    if (label === "its Page card") {
+      await w.keyboard.press("Escape");
+      check(`E1 …at ${size.width}, Close returns focus to the card`, await w.evaluate(() => !document.querySelector(".viewer") && document.activeElement.closest("#card-page") !== null));
+    }
+    await w.close();
+  }
+}
+for (const [id, words] of [
+  ["ps", "Clawtrate couldn't confirm this page in Saturday's trail plan."],
+  ["pm", "This is an app view. It needs scripts, which Clawtrate doesn't run."],
+]) {
+  p = await open("");
+  await q(p, (i) => window.CT.openPage(i), id);
+  await p.waitForTimeout(500);
+  await p.keyboard.press("Meta+e");
+  await p.keyboard.press("Control+e");
+  await q(p, () => document.querySelector('[data-pv="export"]').click());
+  check(
+    `E1 an occurrence the transcript doesn't confirm (${id === "ps" ? "a stale view id" : "an app view"}): unavailable, and Export reads nothing`,
+    (await text(p, ".page-state strong")) === words && JSON.stringify(await counters(p)) === '{"reads":0,"parses":0,"mounts":0}' && (await q(p, () => !document.querySelector(".export-dialog") && document.querySelector('[data-pv="export"]').disabled)),
+  );
   await p.close();
 }
 p = await open("&bot=juniper&task=j2&viewer=page");

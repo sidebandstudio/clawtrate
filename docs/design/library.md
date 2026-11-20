@@ -226,6 +226,8 @@ A modal `dialog` over the whole window, labelled by the Page's title, in the app
 
 ### The frame
 
+<a id="the-occurrence"></a>**The occurrence.** For both rendering and export, activate and confirm the occurrence's task and current session before reading. Match the selected occurrence in that transcript and require a valid nonempty `preview.viewId` on a canvas block without `mcpApp`. Give an unavailable state if the occurrence cannot be confirmed. This applies to cached drawing, Files, pins, reload and any later search route. The transcript authority lives in the Page read path, not in a UI route or URL.
+
 **One gate, at every entry point.** A conversation card, a Library row and any other route to a Page (the Files hand-over, the media viewer's former page frame on #144) all open this view and pass the same gate. On each platform, desktop and web preview alike, a Page is drawn only once that platform's rendering path passes the zero-request check below. Until then the view shows the unavailable state (States, below): nothing is read, parsed or drawn, and Export reads the entrypoint only when the person chooses it. The iPhone keeps its sheet (section 8) until its own path passes.
 
 **What the builder does, in order, once the gate is open:**
@@ -238,7 +240,7 @@ A modal `dialog` over the whole window, labelled by the Page's title, in the app
 6. Unwrap forms, keeping their controls inert: a submit button becomes a plain button.
 7. Turn every link into plain text in the style of the sentence around it, and collect its address, as one canonical address under the decision on addresses, for the note's Links.
 8. Keep only bounded inline data the address decision allows: a `data:` picture whose decoded bytes are PNG, JPEG, WebP or GIF, match its label, and are 2 MiB at most. Anything else is removed, and its alt text shows.
-9. Put `default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'` first in its head.
+9. Put `default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'` first in its head.
 10. Create the frame with `sandbox=""` (no scripts, no forms, no popups, an opaque origin), no referrer, and the result as `srcdoc`, before it joins the window. Deny any navigation after that first document; on the desktop the window denies it, since the request filter admits the app's own files.
 
 **What the person sees in a link's place**: the link's own words, as plain text in the style of the sentence around them: not coloured or underlined as a link, not focusable, and a click on them does nothing. The note above the frame says links aren't followed and lists their addresses (below). A picture whose address was taken out shows its alternative text.
@@ -294,6 +296,7 @@ The file is saved on this device; Clawtrate uploads nothing.
 ```
 
 - **The bytes**: "As shown here" is the framed form of section 6, exactly; "As Marlow made it" is the entrypoint exactly as the gateway sent it. They always differ, since the Clawtrate version carries its policy and loses what loads or navigates, so the choice is always offered. Save or Share writes these bytes and makes no HTTP fetch. The export never adds a gateway address or credential.
+- **The occurrence**: Export and Share read only for a confirmed occurrence, exactly as drawing does (section 6, "The occurrence"); an unconfirmed one offers no file.
 - **Not drawn here**: on a platform where drawing is unavailable, the entrypoint is read over the gateway socket only after the person chooses Export or Share, with "Reading Trail guide from the gateway…" in the dialog, and a failure there with the gateway's words and "Try again". The first option is then named "Clawtrate version".
 - **Size**: the same 5 MiB of UTF-8 as drawing; a larger Page says "Trail guide is larger than Clawtrate exports (5 MiB)."
 - **The name**: one base name from the title's last part, with characters a file system reads as a path or reserves replaced, then `.html`: "Trips/Saturday: guide" gives `Saturday- guide.html`. The bot's title stays as the dialog's text.

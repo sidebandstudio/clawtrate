@@ -558,11 +558,11 @@ foot           Raw
 | A picture with no content at the gateway | The quiet tile and "The gateway lists this picture, but not its content, so it can't be shown or downloaded here." No Download, no Copy image                                                                                                      |
 | The device can't draw it                 | As "Anything else" above, with Download                                                                                                                                                                                                            |
 
-**"Sent in chat"** in the Files tab (section 3) lists the task's artifacts newest first, as file rows: the kind's icon (or a 32 px thumbnail for a picture whose preview was fetched), the title, and "Sent 5:37 PM · 37 KB". A page is listed with its type, "Page"; an item at another address with "from help.library.example". They come from the same one query as the cards (section 11), so the list and the cards always agree.
+**"Sent in chat"** in the Files tab (section 3) lists the task's artifacts newest first, as file rows: the kind's icon (or a 32 px thumbnail for a picture whose preview was fetched), the title, and "Sent 5:37 PM · 37 KB". A page is listed with its type, "Page"; an item at another address with "from help.library.example". Artifact rows come from the card's artifact reads. A Page row comes from a confirmed canvas block in this task's history and opens through the Page gate.
 
 ## 14. The media viewer
 
-Pictures, video, PDF pages and pages open in one viewer that fills the window (F-117).
+Pictures, video and PDF pages open in a full-window media viewer (F-117). A canvas Page in a card or in Files opens through the gate in `library.md` §6.
 
 - **Frame.** A `dialog`, modal, over the whole window. Its ground is the dark theme's stage (`--bg` of `[data-theme="dark"]`), in either theme: a picture is judged on a dark, quiet ground, and a light frame would glare around a dark video. All of its controls use the dark theme's tokens, so it adds no colour.
 - **Top bar**, 56 px, floating like the conversation's: at the left the item's title (15/500) and, when there are several, "2 of 3" (13, faint); at the right round buttons for Download, Copy image (pictures), and Close. Each has its name and tooltip: "Download usage.png", "Copy the image", "Close the viewer (Esc)".
