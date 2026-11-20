@@ -404,7 +404,13 @@ describe("the look on this computer", () => {
     const opener = sandboxOpener({
       file,
       platform: "darwin",
-      context: { platform: process.platform, home: at.home, uid: at.uid, checkout: at.checkout, identify },
+      context: {
+        platform: process.platform,
+        home: at.home,
+        uid: at.uid,
+        checkout: at.checkout,
+        identify,
+      },
       startGateway: () => Promise.reject(new Error("no gateway in this scenario")),
     });
     const opened = await opener.open();
