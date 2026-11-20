@@ -19,6 +19,8 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 /** Collections kept outside the registry's fields: why each one is bounded. */
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
+  "apps/desktop/src/main/github-star.ts:args":
+    "static, the eight fixed arguments of the star command",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",

@@ -462,6 +462,7 @@ export function Shell({
         <OpenTaskContext.Provider value={selection.selectTask}>
           <WorkLinksContext.Provider value={workLinks}>
             <Conversation
+              conversationOpen={!onePane || view === "detail"}
               task={task}
               bot={bot}
               taskCount={selection.tasks.length}

@@ -14,7 +14,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useBridge, useClawtrateState } from "./bridge.tsx";
+import { useBridge, useClawtrateState, useInvitationReplies } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
@@ -131,7 +131,7 @@ export function RunReply({ run }: { run: Run }) {
   // Cut off only if the reply was not complete when the run stopped or failed.
   const cut = !run.textComplete && (run.state === "stopped" || run.state === "failed");
   return (
-    <div className="turn" data-role="assistant" data-testid="live-turn">
+    <div className="turn" data-role="assistant" data-testid="live-turn" data-reply-run={run.id}>
       <div className="msg" data-role="assistant">
         <div
           className="bubble"
@@ -232,6 +232,7 @@ export function RunEnding({
   transcript: Transcript;
   taskKey: string;
 }) {
+  const invitationReplies = useInvitationReplies();
   const bridge = useBridge();
   const announce = useAnnounce();
   const bots = useClawtrateState().bots;
@@ -427,9 +428,11 @@ export function RunEnding({
                       attachmentIds: [],
                       ...(parent ? { replyToId: parent } : {}),
                     });
-                void again.catch((error: unknown) =>
-                  setRetryError(error instanceof Error ? error.message : String(error)),
-                );
+                void again
+                  .then(({ messageId }) => invitationReplies.sent(taskKey, messageId))
+                  .catch((error: unknown) =>
+                    setRetryError(error instanceof Error ? error.message : String(error)),
+                  );
               }}
             >
               Try again

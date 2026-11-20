@@ -718,7 +718,10 @@ describe("bridge commands for the live conversation", () => {
       text: "New one",
       label: null,
     });
-    expect(created).toEqual({ key: "agent:otto:dashboard:new" });
+    expect(created).toEqual({
+      key: "agent:otto:dashboard:new",
+      messageId: client.state.transcripts["agent:otto:dashboard:new"]!.outbox[0]!.id,
+    });
     expect(client.sessionInterest(created.key)).toBe(1);
     expect(
       await viewer.apply({ type: "readStepRaw", key: created.key, stepId: "tool:none" }),

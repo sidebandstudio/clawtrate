@@ -23,6 +23,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { useInvitationReplies } from "./bridge.tsx";
+import { StarNotice } from "./support/StarNotice.tsx";
 import { useBridge } from "./bridge.tsx";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
 import {
@@ -175,6 +177,8 @@ export function Composer({
   transcript,
   connected,
   notices,
+  conversationOpen,
+  covered,
   needsYou,
   onReview,
   onNotice,
@@ -191,6 +195,8 @@ export function Composer({
   transcript: Transcript | undefined;
   connected: boolean;
   notices: Notice[];
+  conversationOpen: boolean;
+  covered: boolean;
   needsYou: NeedsYou;
   onReview: () => void;
   onNotice: (notice: Omit<Notice, "id">) => void;
@@ -201,6 +207,7 @@ export function Composer({
   /** What the gateway said one message may carry; Clawtrate's own ceilings until it has. */
   limits: SendLimits | null;
 }) {
+  const invitationReplies = useInvitationReplies();
   const ceilings = limits ?? DEFAULT_LIMITS;
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
@@ -363,24 +370,26 @@ export function Composer({
       setPicker(null);
       try {
         if (how === "new-task") {
-          const { key } = await bridge.invoke({
+          const { key, messageId } = await bridge.invoke({
             type: "createTask",
             botId: bot.id,
             text: body,
             label: null,
           });
+          if (messageId) invitationReplies.sent(key, messageId);
           // The new task runs on its own; this viewer stays on this one.
           void bridge.send({ type: "closeSession", key });
           onAnnounce("Started as a new task");
           return;
         }
-        await bridge.invoke({
+        const { messageId } = await bridge.invoke({
           type: "sendMessage",
           key: taskKey,
           text: body,
           mode: how === "queue" ? "queue" : "auto",
           attachmentIds,
         });
+        invitationReplies.sent(taskKey, messageId);
         // A pending question holds every message, however it was sent.
         if (view.mode === "hold") onAnnounce("Held until you answer");
         else if (how === "queue" || view.stopping) onAnnounce("Queued");
@@ -409,6 +418,7 @@ export function Composer({
       files,
       tokens,
       bridge,
+      invitationReplies,
       bot.id,
       taskKey,
       draftKey,
@@ -811,6 +821,9 @@ export function Composer({
   return (
     <footer className="composer" data-testid="composer">
       <div className="composer-inner">
+        {conversationOpen && (
+          <StarNotice taskKey={taskKey} active={connected} covered={covered} field={focusRef} />
+        )}
         <div className="composer-shelf" aria-label="Waiting to send">
           {rows}
         </div>

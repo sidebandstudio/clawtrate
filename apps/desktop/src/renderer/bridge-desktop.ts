@@ -18,6 +18,8 @@ export async function createDesktopBridge(api: DesktopHostApi): Promise<Clawtrat
   });
   return {
     info: hello.info,
+    ...(hello.info.canStarWithCli ? { starWithCli: () => api.starWithCli() } : {}),
+    openProjectPage: () => api.openProjectPage(),
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);

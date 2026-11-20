@@ -14,6 +14,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ProjectLink } from "./support/StarNotice.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
@@ -67,13 +68,14 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines";
+type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "about";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["about", "About"],
 ];
 
 /** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
@@ -254,7 +256,15 @@ export function Settings({
     </button>
   );
 
-  const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const accountsSection = useAccountsSection({
+    active: section === "accounts",
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
   const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
   const machinesSection = useMachinesSection({
     active: section === "machines",
@@ -407,7 +417,9 @@ export function Settings({
             ? usageSection
             : section === "machines"
               ? machinesSection
-              : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+              : section === "about"
+                ? { title: "About", back: toNav, body: <ProjectLink about />, foot: null }
+                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

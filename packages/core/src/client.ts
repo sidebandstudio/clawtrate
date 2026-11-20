@@ -1827,7 +1827,12 @@ export class ClawtrateClient {
   async createTask(
     botId: string,
     text: string,
-    options: { label?: string; owner?: object; retryUnknown?: boolean } = {},
+    options: {
+      label?: string;
+      owner?: object;
+      retryUnknown?: boolean;
+      onStart?: (messageId: string) => void;
+    } = {},
   ): Promise<string> {
     const body = text.trim();
     if (!body) throw new Error("The message is empty.");
@@ -1892,6 +1897,7 @@ export class ClawtrateClient {
     this.putCreation(creation);
     let sent = false;
     try {
+      options.onStart?.(creation.id);
       // A viewer that goes away while access is approved takes its request with it (`withdraw`).
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       // The viewer went away while access settled: nothing is asked of the gateway.

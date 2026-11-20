@@ -744,6 +744,7 @@ export function Conversation({
   online,
   caughtUp,
   inert = false,
+  conversationOpen,
   granted,
 }: {
   task: Task | null;
@@ -772,6 +773,7 @@ export function Conversation({
   caughtUp: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
+  conversationOpen: boolean;
   /** Access arrived a moment ago. */
   granted: boolean;
 }) {
@@ -1113,6 +1115,8 @@ export function Conversation({
           taskKey={task.key}
           transcript={transcript}
           connected={caughtUp}
+          conversationOpen={conversationOpen}
+          covered={inert}
           limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({

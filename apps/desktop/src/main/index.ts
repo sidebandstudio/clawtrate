@@ -1,6 +1,7 @@
 // Electron main process: hosts the core client and serves state to the renderer over IPC.
 
 import {
+  PROJECT_URL,
   batchSnapshots,
   createBridgeSession,
   type BridgeSession,
@@ -25,6 +26,7 @@ import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { findGitHubCli, starRepository } from "./github-star.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
@@ -65,12 +67,14 @@ function isAppContent(raw: string): boolean {
 }
 
 /** Links leave the app only for the web: http and https open in the system browser. */
-function openExternally(raw: string): void {
+async function openExternally(raw: string): Promise<boolean> {
   try {
     const { protocol } = new URL(raw);
-    if (protocol === "http:" || protocol === "https:") void shell.openExternal(raw);
+    if (protocol !== "https:" && protocol !== "http:") return false;
+    await shell.openExternal(raw);
+    return true;
   } catch {
-    // not a URL: ignored
+    return false;
   }
 }
 
@@ -133,7 +137,7 @@ async function captureAndQuit(win: BrowserWindow, path: string): Promise<void> {
  */
 app.on("web-contents-created", (_event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    openExternally(url);
+    void openExternally(url);
     return { action: "deny" };
   });
   contents.on("will-navigate", (event) => event.preventDefault());
@@ -237,8 +241,20 @@ async function main(): Promise<void> {
   });
   const { client, info, policy } = runtime;
 
+  const cli = findGitHubCli();
+  ipcMain.handle(
+    "clawtrate:star",
+    (event, ...args: unknown[]) =>
+      event.senderFrame === window?.webContents.mainFrame &&
+      args.length === 0 &&
+      starRepository(cli),
+  );
+  ipcMain.handle(
+    "clawtrate:open-project",
+    (event) => event.senderFrame === window?.webContents.mainFrame && openExternally(PROJECT_URL),
+  );
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
-    info,
+    info: { ...info, canStarWithCli: cli !== null },
     state: client.state,
   }));
   // One bridge session per window, so a closed window releases its transcripts.
