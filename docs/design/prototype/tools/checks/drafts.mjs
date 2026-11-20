@@ -165,6 +165,25 @@ check("below admin there is no Disable drafts link", !(await text(p)).includes("
 await p.close();
 p = await open("view=draft&d=norecord");
 check("no record: Send is never offered", (await p.locator('[data-d="send"]').count()) === 0);
+check("no record: the region says the details are unavailable, tagged Waiting", (await p.getAttribute('[data-testid="draft"]', "aria-label")) === "Draft details unavailable. Waiting." && (await text(p, '[data-testid="draft"] .tag')) === "Waiting");
+await click(p, '[data-d="full"]');
+check("no record: opening the full request offers no Send and keeps the card", (await p.locator('[data-d="send"]').count()) === 0 && (await text(p)).includes("Couldn't read this draft.") && (await text(p)).includes("Hide full request"));
+await p.close();
+p = await open("view=draft&d=edited");
+await click(p, '[data-d="full"]');
+check(
+  "the second hold: opening the full request keeps the edited recipients and no Edit",
+  (await text(p)).includes("Edited email") && (await text(p)).includes("dana@example.com, sam@example.net") && (await p.locator('[data-d="edit"]').count()) === 0 && (await text(p)).includes("Hide full request"),
+);
+await click(p, '[data-d="full"]');
+check("the second hold: closing the full request keeps the second hold", (await text(p)).includes("Edited email") && (await p.locator('[data-d="edit"]').count()) === 0);
+await p.close();
+for (const q of ["view=vault&v=remove&access=read", "view=draft&d=disable&access=interactive", "view=vault&v=new&access=interactive", "view=vault&v=replace&access=read"]) {
+  p = await open(q);
+  check(`${q}: no dialog below admin`, (await p.locator("dialog").count()) === 0);
+  await p.close();
+}
+p = await open("view=draft&d=norecord");
 await p.close();
 p = await open("view=draft&d=editwaiting");
 check("before the newer approval is seen, no Send and no Discard: neither hold is pending", (await p.locator('[data-d="send"], [data-d="discard"]').count()) === 0);

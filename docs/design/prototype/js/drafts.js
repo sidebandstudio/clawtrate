@@ -61,6 +61,11 @@
     S.raw = true;
     S.d = "pending";
   }
+  // Show full request is a disclosure: it never changes the card's state or the approval's phase.
+  if (S.d === "full") {
+    S.full = true;
+    S.d = "pending";
+  }
   if (S.v === "envitem") {
     S.item = "BUILD_REGION";
     S.v = "item";
@@ -274,7 +279,8 @@
     const changed = editedView ? changedFields(kind) : [];
     const sending = st === "sending";
     const heading = editedView ? (kind === "email" ? "Edited email" : "Edited Slack message") : title(kind);
-    const region = `${heading} to ${recipient(m, kind)}. Ready to send.`;
+    const tag = st === "norecord" ? "Waiting" : "Ready to send";
+    const region = st === "norecord" ? `Draft details unavailable. ${tag}.` : `${heading} to ${recipient(m, kind)}. ${tag}.`;
     let decision = "";
     if (sending) decision = `<p class="d-say">${icon("clock")} Sending your decision…</p>`;
     if (st === "refused") decision = `<p class="d-say" data-tone="danger">The gateway refused this decision: approval already being resolved by another request. The draft is still waiting.</p>`;
@@ -303,20 +309,19 @@
         button("Edit", `data-d="edit"${sending ? " disabled" : ""}`) +
         `<span class="spacer"></span>` +
         button("Discard", 'data-d="discard"', "quiet");
-    const full =
-      st === "full"
-        ? `<div class="request-inset d-full"><dl class="d-facts"><dt>Tool</dt><dd><code>${TOOL[kind]}</code></dd><dt>Bot</dt><dd>Otto</dd><dt>Task</dt><dd>Disk almost full on the media box</dd><dt>Asked</dt><dd>5:42 PM, expires 5:52 PM</dd><dt>Held by</dt><dd>Clawtrate's drafts plugin: "Send this draft?"</dd></dl></div>`
+    const full = S.full
+      ? `<div class="request-inset d-full"><dl class="d-facts"><dt>Tool</dt><dd><code>${TOOL[kind]}</code></dd><dt>Bot</dt><dd>Otto</dd><dt>Task</dt><dd>Disk almost full on the media box</dd><dt>Asked</dt><dd>5:42 PM, expires 5:52 PM</dd><dt>Held by</dt><dd>Clawtrate's drafts plugin: "Send this draft?"</dd></dl></div>`
         : "";
     const contents = st === "norecord" ? "" : rowsOf(m, kind, changed) + bodyOf(m, kind, changed) + filesOf(kind, editedView ? "second" : "first");
     return (
       `<section class="card request d-card" data-kind="draft" data-state="pending" role="region" aria-label="${esc(region)}" data-testid="draft">` +
-      `<header class="request-head"><div><h3 class="request-title">${heading}</h3><p class="d-sub">${subline(kind)}</p>${matchLine}</div><span class="tag" data-tone="warn">Ready to send</span></header>` +
+      `<header class="request-head"><div><h3 class="request-title">${heading}</h3><p class="d-sub">${subline(kind)}</p>${matchLine}</div><span class="tag" data-tone="warn">${tag}</span></header>` +
       contents +
       (editedView && S.showOriginal ? originalOf(kind) : "") +
       (st === "edited" ? `<p class="d-hint">The gateway asks again because you edited it. This answer sends it.</p>` : "") +
       decision +
       `<div class="request-actions">${actions}</div>` +
-      `<p class="d-sentence"><button type="button" class="link-button" data-d="full">${st === "full" ? "Hide full request" : "Show full request"}</button></p>` +
+      `<p class="d-sentence"><button type="button" class="link-button" data-d="full">${S.full ? "Hide full request" : "Show full request"}</button></p>` +
       full +
       `<div class="d-foot">${pluginMark()}${S.access === "admin" && !editedView ? `<button type="button" class="link-button" data-d="disable">Disable drafts for Otto</button>` : ""}<button type="button" class="link-button" data-d="raw">${S.raw ? "Hide Raw" : "Raw"}</button></div>` +
       rawOf(kind, editedView) +
@@ -448,7 +453,7 @@
   }
 
   function disableDialog() {
-    if (S.d !== "disable") return "";
+    if (S.d !== "disable" || S.access !== "admin") return "";
     return (
       `<div class="b-dialog-shim"><dialog class="b-dialog d-dialog" data-kind="confirm" role="alertdialog" open aria-labelledby="dis-title" aria-describedby="dis-text" data-testid="disable-dialog">` +
       `<div class="b-head"><h2 id="dis-title">Send Otto's emails and messages without drafts?</h2></div>` +
@@ -713,7 +718,7 @@
 
   function vaultDialog() {
     const v = S.v;
-    if (S.view !== "vault") return "";
+    if (S.view !== "vault" || S.access !== "admin") return "";
     if (["new", "replace", "failed", "vsaving"].includes(v)) {
       const replace = v === "replace" || (["vsaving", "failed"].includes(v) && S.replacing);
       const entry = replace ? vaultEntries().find((x) => x.name === S.item) : null;
@@ -897,7 +902,7 @@
       case "fold":
         return go({ folded: !S.folded });
       case "full":
-        return go({ d: S.d === "full" ? "pending" : "full" });
+        return go({ full: !S.full });
       case "raw":
         return go({ raw: !(S.raw || S.s === "raw"), s: S.s === "raw" ? "pending" : S.s });
       case "review": {
