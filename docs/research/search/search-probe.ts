@@ -27,8 +27,10 @@
 //   q         searches every bot for each word given after it
 
 import { parseArgs } from "node:util";
-import { openInstance, openOperator } from "../../../tools/dev-gateway/src/cli.ts";
-import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
+import { openInstance } from "../../../tools/dev-gateway/src/cli.ts";
+import { provenEndpoint } from "../../../tools/dev-gateway/src/endpoint.ts";
+import { readRunRecord } from "../../../tools/dev-gateway/src/state-guard.ts";
+import { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 
 const { values, positionals } = parseArgs({
   args: process.argv.slice(2),
@@ -37,6 +39,7 @@ const { values, positionals } = parseArgs({
 });
 if (!values.instance) throw new Error("--instance <name> is required; the default instance is never probed");
 const inst = openInstance(values.instance);
+const initialRun = readRunRecord(inst.runFile);
 const experiment = positionals[0];
 
 type Rec = Record<string, unknown>;
@@ -46,8 +49,19 @@ const WRITE = ["operator.read", "operator.write"];
 const ADMIN = ["operator.read", "operator.write", "operator.admin"];
 const opened: OperatorSession[] = [];
 
+function endpoint() {
+  const proof = provenEndpoint({ instance: inst.name, home: inst.home, runDir: inst.runDir, checkout: inst.checkout });
+  if ("refusal" in proof) throw new Error(proof.refusal);
+  if (!initialRun || readRunRecord(inst.runFile)?.runId !== initialRun.runId) throw new Error("The named instance restarted during the probe");
+  return proof;
+}
+
 async function connect(name: string, scopes: string[]): Promise<OperatorSession> {
-  const op = await openOperator(inst, `Clawtrate search probe ${name}`, scopes, ["tool-events"]);
+  const { url, token } = endpoint();
+  const op = await OperatorSession.open({
+    url, token, scopes, caps: ["tool-events"], displayName: `Clawtrate search probe ${name}`,
+    approvePairing: async (requestId) => { await cli(["devices", "approve", requestId]); },
+  });
   opened.push(op);
   return op;
 }
@@ -89,8 +103,10 @@ async function history(op: OperatorSession, key: string): Promise<Rec[]> {
 }
 
 async function cli(args: string[]): Promise<string> {
-  const result = rec(await inst.runner.run(args));
-  return String(result.stdout ?? "");
+  endpoint();
+  const result = await inst.runner.run(args);
+  if (result.status !== 0) throw new Error(`Development gateway command failed: ${args[0]} ${args[1]}`);
+  return result.stdout;
 }
 
 const KEYS = {
@@ -213,27 +229,49 @@ function countBy(keys: string[]): Rec {
   return out;
 }
 
+async function archive(op: OperatorSession, key: string, heldSessionId?: string): Promise<string> {
+  const [, agentId, slug] = key.split(":");
+  const list = rec(await op.request("sessions.list", { agentId, search: slug, archived: "all", limit: 200 }));
+  const row = Array.isArray(list.sessions) ? list.sessions.find((item) => rec(item).key === key) : undefined;
+  const id = rec(row).sessionId;
+  if (typeof id !== "string" || !id || (heldSessionId !== undefined && heldSessionId !== id)) {
+    throw new Error(`Could not identify the original task ${key}`);
+  }
+  const reply = rec(await op.request("sessions.patch", { key, archived: true, expectedSessionId: id }));
+  if (typeof rec(reply.entry).archivedAt !== "number") throw new Error(`Archive unconfirmed for ${key}`);
+  console.log(`  archived ${key}: ${rec(reply.entry).archivedAt}`);
+  return id;
+}
+
+async function archiveAndDelete(op: OperatorSession, key: string, heldSessionId?: string): Promise<void> {
+  const id = await archive(op, key, heldSessionId);
+  const reply = rec(await op.request("sessions.delete", { key, archivedOnly: true, expectedSessionId: id }));
+  if (reply.key !== key || reply.deleted !== true) throw new Error(`Deletion unconfirmed for ${key}`);
+  console.log(`  deleted ${key}`);
+}
+
 async function gone(): Promise<void> {
   const op = await connect("write", WRITE);
   const archived = "agent:pip:probe-many-00";
   const deleted = "agent:pip:probe-many-01";
   console.log("Archive one task");
-  console.log("  patch:", JSON.stringify((await call(op, "sessions.patch", { key: archived, archived: true })).ok));
+  await archive(op, archived);
   await search(op, "default scope", { query: "pip-0", scope: { agentId: "pip" }, limit: 25 });
   await search(op, "archived all", { query: "pip-0", scope: { agentId: "pip", archived: "all" }, limit: 25 });
   await search(op, "keys", { query: "pip-0", sessionKeys: [archived], limit: 25 });
   console.log("Delete one task (archive, then delete with archivedOnly)");
-  await call(op, "sessions.patch", { key: deleted, archived: true });
-  const del = await call(op, "sessions.delete", { key: deleted, archivedOnly: true });
-  console.log("  delete:", del.ok ? JSON.stringify(del.value).slice(0, 300) : del.error);
+  await archiveAndDelete(op, deleted);
   await search(op, "keys", { query: "pip-1", sessionKeys: [deleted], limit: 25 });
   await search(op, "archived all", { query: "pip-1", scope: { agentId: "pip", archived: "all" }, limit: 25 });
   console.log("  history of the deleted task:", JSON.stringify(await call(op, "chat.history", { sessionKey: deleted, limit: 5 }).then((r) => (r.ok ? `${(r.value.messages as unknown[] | undefined)?.length} rows` : r.error))));
   console.log("A search result held while the task is deleted elsewhere");
   const held = await search(op, "before", { query: "marlow-2", scope: { agentId: "marlow" }, limit: 25 });
-  const heldKey = String(rec((held.value.results as Rec[] | undefined)?.[0]).sessionKey);
-  await call(op, "sessions.patch", { key: heldKey, archived: true });
-  await call(op, "sessions.delete", { key: heldKey, archivedOnly: true });
+  const hit = rec((held.value.results as Rec[] | undefined)?.[0]);
+  const heldKey = hit.sessionKey;
+  if (typeof heldKey !== "string" || !/^agent:marlow:probe-many-\d{2}$/.test(heldKey) || typeof hit.sessionId !== "string") {
+    throw new Error("The search did not return a seeded Marlow task with a session ID");
+  }
+  await archiveAndDelete(op, heldKey, hit.sessionId);
   const after = await call(op, "chat.history", { sessionKey: heldKey, limit: 5 });
   console.log(`  opening ${heldKey} afterwards: ${after.ok ? `${(after.value.messages as unknown[] | undefined)?.length} rows` : after.error}`);
   const sub = await call(op, "sessions.messages.subscribe", { key: heldKey });
@@ -242,8 +280,10 @@ async function gone(): Promise<void> {
   const admin = await connect("admin", ADMIN);
   const before = await search(op, "before", { query: "lanternfish", scope: { agentId: "otto" }, limit: 3 });
   const ottoKey = String(rec((before.value.results as Rec[] | undefined)?.[0]).sessionKey);
-  const delBot = await call(admin, "agents.delete", { agentId: "otto" });
-  console.log("  agents.delete:", delBot.ok ? JSON.stringify(delBot.value).slice(0, 300) : delBot.error);
+  if (!ottoKey.startsWith("agent:otto:probe-many-")) throw new Error("The search did not return a seeded Otto task");
+  const delBot = rec(await admin.request("agents.delete", { agentId: "otto" }));
+  if (delBot.ok !== true) throw new Error("Bot deletion was not confirmed");
+  console.log("  agents.delete: ok");
   await new Promise((r) => setTimeout(r, 1500));
   const agents = await call(op, "agents.list", {});
   console.log("  agents now:", JSON.stringify(((agents.value.agents as Rec[]) ?? []).map((a) => a.id)));
@@ -387,14 +427,10 @@ async function gone2(): Promise<void> {
   const deleted = `agent:pip:probe-many-${positionals[2] ?? "05"}`;
   const listed = async (key: string, archivedParam?: boolean | "all") => {
     const r = await call(op, "sessions.list", { agentId: "pip", limit: 200, search: key.split(":")[2], ...(archivedParam === undefined ? {} : { archived: archivedParam }) });
-    return ((r.value.sessions as Rec[] | undefined) ?? []).some((row) => row.key === key);
+    if (!r.ok || !Array.isArray(r.value.sessions)) throw new Error(`Could not read the task list for ${key}`);
+    return r.value.sessions.some((row) => rec(row).key === key);
   };
-  const sessionIdOf = async (key: string) => {
-    const r = await call(op, "sessions.list", { agentId: "pip", limit: 200, search: key.split(":")[2], archived: "all" });
-    return String(((r.value.sessions as Rec[] | undefined) ?? []).find((row) => row.key === key)?.sessionId ?? "");
-  };
-  const p1 = await call(op, "sessions.patch", { key: archived, archived: true, expectedSessionId: await sessionIdOf(archived) });
-  console.log(`  archive ${archived}: ${p1.ok ? JSON.stringify(rec(p1.value.entry).archivedAt ?? Object.keys(p1.value)) : p1.error}`);
+  await archive(op, archived);
   console.log(`    in sessions.list default ${await listed(archived)}, archived:true ${await listed(archived, true)}`);
   for (const [label, params] of [
     ["scope {}", { query: "lanternfish", scope: { agentId: "pip" }, limit: 25 }],
@@ -406,11 +442,7 @@ async function gone2(): Promise<void> {
     const keys = ((r.value.results as Rec[] | undefined) ?? []).map((h) => String(h.sessionKey));
     console.log(`    ${label}: ${r.ok ? `${keys.length} results, includes the archived task: ${keys.includes(archived)}` : r.error}`);
   }
-  const deletedId = await sessionIdOf(deleted);
-  const p2 = await call(op, "sessions.patch", { key: deleted, archived: true, expectedSessionId: deletedId });
-  console.log(`  archive before delete: ${p2.ok ? "ok" : p2.error}`);
-  const d = await call(op, "sessions.delete", { key: deleted, archivedOnly: true, expectedSessionId: deletedId });
-  console.log(`  delete ${deleted}: ${d.ok ? JSON.stringify(d.value).slice(0, 200) : d.error}`);
+  await archiveAndDelete(op, deleted);
   console.log(`    in sessions.list default ${await listed(deleted)}, archived:true ${await listed(deleted, true)}`);
   for (const [label, params] of [
     ["scope archived all", { query: "lanternfish", scope: { agentId: "pip", archived: "all" }, limit: 25 }],
@@ -450,6 +482,11 @@ try {
 } finally {
   for (const op of opened) {
     await op.close().catch(() => {});
-    await inst.runner.run(["devices", "remove", op.deviceId]).catch(() => {});
+    try {
+      await cli(["devices", "remove", op.deviceId]);
+    } catch (error) {
+      console.error("Could not remove the probe device:", error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
   }
 }
