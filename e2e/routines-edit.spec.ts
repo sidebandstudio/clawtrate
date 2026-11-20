@@ -331,7 +331,8 @@ test("F-189: saving again after a create went unanswered never overwrites what l
   expect(new Set(named.map((each) => each.declarationKey)).size).toBe(2);
 });
 
-test("F-189: a refused save says the gateway's reason and keeps what was typed", async () => {
+// The gateway refuses this one too ("has no upcoming run time"); the form says so first.
+test("F-195: a schedule that never runs is refused before it is sent, and keeps what was typed", async () => {
   const name = `Never fires ${STAMP}`;
   await openRoutines();
   await view().getByTestId("new-routine").click();
@@ -340,9 +341,8 @@ test("F-189: a refused save says the gateway's reason and keeps what was typed",
   await editor().locator("summary", { hasText: "More" }).click();
   await editor().getByLabel("Cron expression").fill("0 0 30 2 *");
   await save().click();
-  await expect(editor().getByTestId("editor-refused")).toContainText(
-    'The gateway didn\'t save this. invalid cron.add params: cron expression "0 0 30 2 *" has no upcoming run time',
-  );
+  await expect(editor()).toContainText("This never runs in the next eight years.");
+  await expect(editor().getByTestId("editor-refused")).toHaveCount(0);
   await expect(editor().getByLabel("Name")).toHaveValue(name);
   expect(await byName(name)).toBeUndefined();
   await editor().getByRole("button", { name: "Cancel" }).click();
