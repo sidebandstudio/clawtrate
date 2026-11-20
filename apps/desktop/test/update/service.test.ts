@@ -292,3 +292,16 @@ it("marks the command busy before notifying a throwing observer", async () => {
   for (const reply of await Promise.all(replies)) expect(reply.commandRefusal).toBe("busy");
   expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
 });
+
+it("neither startup nor track selection schedules a later check", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "setTimeout"] });
+  try {
+    const service = await start();
+    expect(vi.getTimerCount()).toBe(0);
+    await service.chooseTrack("nightly");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(server.requests).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
