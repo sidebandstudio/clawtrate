@@ -1,0 +1,482 @@
+# Notifications
+
+When Clawtrate shows a desktop notification, what it says, what clicking it opens, and the settings that decide it: a switch on this computer, a switch for each bot, a setting for each task that wins over the bot's, and quiet hours. This is the seventh part of the design, after `visual-language.md`, `conversation.md`, `bots.md`, `work-pane.md`, `setup.md` and `controls.md`, in the same language and with the same tokens.
+
+What must be true is in `docs/parity.md`, rows F-202 to F-204, F-207 and F-367 to F-369, and F-396 for the budget warning. What the gateway, Electron and the app's own code do is in `docs/research/notifications.md`; every state below names the fact it rests on, and section 13 lists them. Section 15 is for builders.
+
+One rule sits above the rest: **a notification says what this device received, and no more.** A device that can see an approval's pending record can say which bot is waiting and for what kind of approval, and open the card. A device that only saw the run wait can say that, and offers nothing to answer with. A setting says what was read back after it was saved.
+
+Seven facts from the research shape the design:
+
+- **An approval's pending record is visible only to the device whose message started the run, an admin device and a configured reviewer** (research §1 and §10, tried; source). Another device of the same person, at the same access, gets no request and is refused if it tries to answer; it sees only the run's `waiting-approval` phase. That stays true while the sending device is away.
+- **A question goes to every device that may answer questions** (research §2, tried), including one raised in another bot's task. A read-only device gets nothing that says a question waits.
+- **Every eligible device learns when a run ends while it is connected**, read-only included and whoever started it (research §3, tried), and **nothing is replayed to a device that was away** (research §10, tried).
+- **The person's preferences on the gateway (`users.prefs`) hold the switches and quiet hours** for every device of theirs, readable at read access and written at the interactive tier, with a compare-and-set and a 4,096-byte value (research §4, tried).
+- **Electron cannot tell the app whether notifications are allowed or whether a Focus or Do Not Disturb is on**, offers no lock-screen control, and shows nothing while the app is not running (research §6, documentation). Electron reports `show` when it shows a notification and `failed` if it encounters an error creating or showing one. Neither callback establishes permission, Focus, or whether a person saw a banner.
+- **Opening reads the task by its key, never the history**: a deleted task's history answers like an empty new task, and a read by key cannot tell a deleted task from one this connection may not see (research §8 and §10, tried).
+- **Clawtrate builds the native title from the bot name or "Clawtrate" and the body from the fixed sentences below** (section 4). It never reads message text, task titles, commands or their arguments, tool input, question text or approval titles to build a native notification. A bot name can contain any of that text if somebody put it in the name. The system can show a notification on a locked screen and keeps it in its list.
+
+The prototype walks every path to its outcome: `prototype/notifications.html`, with the state in the address (`prototype/README.md`). Its styles are in `prototype/css/notifications.css`, its behaviour in `prototype/js/notifications.js`, and `prototype/tools/checks/notifications.mjs` clicks through every walk and asserts each state's words and structure. A notification is drawn as Clawtrate's own picture of one, labelled as a picture, never in a system's art.
+
+## Contents
+
+1. How the pieces fit
+2. Shared rules: components, where settings are kept, saving, access, input, announcements
+3. When a notification is shown
+4. What a notification says
+5. Opening a notification
+6. Quiet hours
+7. Settings, Notifications
+8. A bot's Notifications page
+9. A task's setting
+10. What the system decides, and what Clawtrate cannot see
+11. Budget warnings
+12. Widths, themes, keyboard, screen readers, motion
+13. What each fact drives
+14. Parity rows
+15. For builders
+16. Not covered here
+
+## 1. How the pieces fit
+
+```
+the gateway's events          a run ends; an approval arrives; a question arrives; a run waits
+  the host (main process)       decides, in the order of section 3, and shows or holds
+    a system notification         the bot's name, or "Clawtrate", and the kind of event (section 4)
+      click                         the window, the bot, the task, the card (section 5)
+Settings (⌘,), Notifications  this computer: show, bot names, budget warnings
+                              yours: quiet hours, a switch for each bot
+Work pane, Settings tab       Notifications: one row (bots.md §8), opening the bot's page
+  the bot's page                its switch; the tasks with their own setting
+Work pane, Details tab        This task: Same as Otto, On or Off
+```
+
+The host decides because it holds the gateway connection in Electron's main process (research §7): it sees every event with or without a window, and only it can show a system notification (the session refuses web notifications). The interface tells the host which bot is on screen, as it tells it the badge count today.
+
+## 2. Shared rules
+
+### Components used
+
+| Component                                                                                                     | From                                         | Used for                                                            |
+| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------- |
+| Settings frame, section list, section head and Back                                                           | `bots.md` §2, §7; `settings.md` §3 in review | Settings, Notifications                                             |
+| Switch (`.b-switch`), choice list (`.b-choices`), note (`.b-note`), Select (`.b-select`) and its `.menu`      | `bots.md` §2                                 | Every switch, the bot list, notes, a task's setting                 |
+| Fact block (`.facts`), group word, the whole-row button with a chevron, a page in the tab with Back and title | `visual-language.md` §9, `bots.md` §8        | The Notifications row, the bot's page, the Details row              |
+| The access bar and its request                                                                                | `conversation.md` §3                         | Changing your settings on a read-only connection                    |
+| The status strip                                                                                              | `visual-language.md` §11                     | What happened when a notification could not open its task           |
+| The approval and question cards, the status line, the turn error, the run's reply                             | `conversation.md` §5, §12, §13, §17          | What a click opens; nothing about them changes                      |
+| The note for a wait this device cannot see                                                                    | `conversation.md` §3                         | What the opened task shows on a device that has no card (section 5) |
+| The budget line in the task                                                                                   | `controls.md` §17                            | What a budget warning opens                                         |
+
+### New components
+
+One, defined in `prototype/css/notifications.css` from existing tokens:
+
+| Component              | What it is                                                                                                                                                                                                                        | Tokens                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Time pair (`.n-times`) | Two native time fields side by side, "From" and "To", each a 52 px `.b-select`-shaped block with its label (12, faint) over the time (14/500), and under them one line naming the time zone. Below 688 px they stay side by side. | `--bg-bubble`, `--radius-md`, `--text-faint` |
+
+The prototype also draws **a picture of a system notification** (`.n-pic`): a card on `--bg-raised` with a dashed `--border-strong` outline and the label "Picture of a system notification". It is prototype chrome that stands for what the system draws, in no system's style, and it is not product code.
+
+No new tokens.
+
+### Where each setting is kept
+
+| Setting                                                              | Kept                                                                                      | Same on the person's other devices |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------- |
+| Show notifications, Show bot names in notifications, Budget warnings | This computer: the host's own settings file, as `settings.md` §2 keeps the app's settings | No                                 |
+| Quiet hours                                                          | `users.prefs`, key `clawtrate.notifications`, field `quiet`                               | Yes                                |
+| A bot's switch                                                       | `users.prefs`, key `clawtrate.notifications`, field `bots`, by bot id; absent means on    | Yes                                |
+| A task's setting                                                     | `users.prefs`, key `clawtrate.notifications.tasks`, by task key; absent means Same as bot | Yes                                |
+
+`quiet` has the shape the gateway's own browser push uses (research §5): `{enabled, startMinute, endMinute, timeZone}`, minutes from 0 to 1439 and an IANA zone, so a later phone design can read one value. Clawtrate never writes the gateway's `notifications.web.v1`.
+
+**When the gateway keeps no profile** (`users.prefs` answers `no_durable_identity`, research §4, read from source), the shared settings are kept on this computer instead, under that gateway's identity (`gateway.identity.get`), so one gateway's local settings never apply to another; Settings says so (section 7). They are never mixed: a value from the gateway is never copied to the device, or the reverse, without the person changing it.
+
+**Where it is kept, on screen.** Every saved state says where it is kept, in the words `bots-lifecycle.md` (in review) uses for the same store. Under this computer's switches: "Kept on this computer." Under quiet hours, the bots' switches, the bot's page and a task's setting: "Kept for you on this gateway, so your other devices show the same." When the gateway keeps no profile, those read instead: "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
+
+**When the person's preferences cannot be read** (the call fails or the connection never reached hello), no notification about a bot is shown until they are read: a notification that ignored someone's quiet hours or a switch they turned off would be worse than none. Settings says so.
+
+### Saving and reading back
+
+- **This computer's switches** are written by the host to its settings file, and the switch moves when the host answers with what the file holds after the write. A failed write leaves the switch as it was, with "Couldn't save. Try again."
+- **Your settings** are written with `users.prefs.set` and an `expectedEntries` holding the value last read, then read back with `users.prefs.get`; only what was read back is shown and announced. While the write is out, the control is disabled and its line reads "Saving…".
+  - `conflict`: the value is read again and shown, under a note: "The gateway's setting changed before this save. This is what's set now." It is shown only after a successful read. Nothing is written again by itself.
+  - **Refused, with the value confirmed**: the gateway refused the write and a read afterwards returned the value. The control shows that value, with "The gateway refused the change. Otto's notifications are On." and "Try again".
+  - **Unknown**: if no read after the write confirms the current value, use this state even if the write returned success, conflict or refusal. Nothing current is claimed: the line reads "Couldn't confirm the change. Otto's notifications were last read as On.", a note offers "Check again", your settings cannot be changed until a new read, and **every notification that depends on them stays off until a new read establishes the current switches and quiet hours** (section 3, step 2).
+  - **Order.** Each read carries the sequence of the write or refresh it follows; an older read never overwrites a newer one.
+  - `users.prefs.changed` naming either key, from another device, is read and shown without a word; the announcer says nothing for a change the person did not make here.
+
+### Access
+
+- This computer's switches change at any access.
+- Your settings are readable on every connection and written only on the interactive tier (`operator.write`, research §4). On a read-only connection their values are shown and their controls are disabled, and the access bar of `conversation.md` §3 sits at the foot of the group with "**Read-only.** Changing quiet hours and your bots' notifications needs more access." and "Request access", in all of that bar's states: "Asking the gateway…"; "Waiting for the gateway's owner." with the approve command; approved, when the controls are enabled and the section says "Access granted. You can change these now."; "The request was denied. Nothing changed. This device can still read." and "The request expired before it was approved.", each with "Request again"; "Couldn't send the request." with the reason and "Try again". Nothing here asks for admin.
+- Notifications themselves work at every access: what each tier receives is section 3's.
+
+### Input
+
+- Settings is the modal dialog of `bots.md` §7. A switch is a `button` with role `switch` and `aria-checked`; Space and Enter flip it. A disabled switch keeps its name and is announced "unavailable".
+- The time fields are native `input type="time"` with visible labels, so their keyboard is the system's; a change is saved when the field loses focus or Enter is pressed.
+- A task's setting is a `.b-select` that opens a `.menu` of three `menuitemradio`; Up and Down move, Enter chooses, Escape closes and returns focus to the select.
+
+### Announcements
+
+The Settings dialog's polite live region (`bots.md` §2), and the Work pane's in the tab, announce only what was read back: "Notifications on this computer are on" or "off", "Bot names are shown in notifications" or "Bot names are hidden in notifications", "Budget warnings are on" or "off", "Quiet hours are on, 22:00 to 07:00" or "Quiet hours are off", "Otto's notifications are on" or "off", "This task: Off" (and the other two), "The gateway refused the change", "Couldn't confirm the change", "Read from the gateway", "Access granted", "The gateway's setting changed before this save. This is what's set now.". The status strip announces its own words (section 5).
+
+## 3. When a notification is shown
+
+### What the events say
+
+**Eligible devices receive live events for tasks they can see.** The gateway sends an event only to connections whose scopes and session visibility allow it (`hasEventScope` and `canReceiveSessionEvent`, `<openclaw>/dist/server-start-D6vaUNGz.mjs` lines 4503-4534). Among the person's own devices, as tried:
+
+| Something happened                      | The device whose message started the run                                                         | An admin device, or a configured reviewer of the approval | Another device at the interactive tier                   | A read-only device                | Source                                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A run ended with a reply                | `chat` `final` with its text                                                                     | The same                                                  | The same                                                 | The same                          | Research §3, tried                                                                                                               |
+| A run failed                            | lifecycle `error` and `chat` `error`                                                             | The same                                                  | The same                                                 | The same                          | Research §3, tried                                                                                                               |
+| A run was stopped                       | `chat` `aborted`, lifecycle `end`, `status: "cancelled"`                                         | The same                                                  | The same                                                 | The same                          | Research §3, tried                                                                                                               |
+| A run waits for an approval             | The approval's requested event, its pending record in the list, and the phase `waiting-approval` | The same: it sees others' approvals                       | Only the phase `waiting-approval`                        | Only the phase `waiting-approval` | Research §1 and §10, tried; `isApprovalRecordVisibleToClient`, `<openclaw>/dist/approval-record-lookup-o5fS3cNj.mjs` lines 42-63 |
+| A run waits for an answer to a question | `question.requested`, and the question in the list                                               | The same                                                  | The same: any interactive device can answer or cancel it | Nothing that says it waits        | Research §2, tried                                                                                                               |
+
+**What notifies, exactly:**
+
+- **A reply**: one notification per run, from a `chat` `final` that is not `yielded`, is not a transcript-only message (the gateway's "nothing to say"), and carries a visible reply; the same tests the gateway's own push makes (`<openclaw>/dist/server-start-D6vaUNGz.mjs` lines 2629-2634).
+- **A failure**: one notification per run, from the core's own definitive terminal classification (`classifyLifecycleTerminal`, `packages/core/src/runs.ts`; `docs/decisions.md`, "Run endings"), never from an attempt error the gateway retries.
+- **A wait**: a card, and the card's words, only when this device can see the wait's pending record: a question on any interactive device; an approval on the device whose message started the run, on an admin device or on a configured reviewer device. Any other device is told only "A run is waiting for approval. This device doesn't have the approval request." A read-only device has no question to say anything about.
+- **Routines**: failures in ordinary tasks can show, including a routine that ran in that task. Isolated routines and cron completion events do not notify here. A routine that runs in an ordinary task arrives as a run of that task. Telling it apart would need an origin on the event or an exact correlation with the routine's own `cron` event, which this design does not rely on, so it offers no exclusion a builder could not implement from the events named here.
+
+The device that started the run is not always this one: a message sent from a phone, another computer or the web preview starts runs too. Clawtrate cannot tell which device it was; it knows only what it received.
+
+### Live events only
+
+**Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.** The gateway replays nothing to a device that was away: a device that connected after a reply, a question or an approval received none of their events (research §10). A reconnect, or the reconnect that follows an event gap (the core's `onGap`, `packages/core/src/client.ts`), reloads the task list, the open transcripts, the pending questions and the approvals this device can see (`bootstrap`, `loadWaitingQuestions`, `loadWaitingApprovals`), and the rail, the transcripts and the visible pending cards update. **It posts no catch-up notification.**
+
+A wait known only from the run's waiting phase cannot be checked again: the approval lists leave out requests this device cannot see, and the task row keeps saying `running` (research §1). So on a disconnect or an event gap, every phase-only wait is cleared from this device's marks and its notification withdrawn. After reconnect, a successful pending list confirms only the requests it includes. Restore those cards and their rail marks without posting notifications. Withdraw a prior pending-card notification if a successful list omits its request. On a failed list the cached card stays unconfirmed and its actions stay disabled.
+
+### The order
+
+Every event that could notify is put through these steps, in this order; the first that applies decides.
+
+| #   | Step                                                                                                                                                 | Outcome                                                                                                                                                                                                                         |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | This build cannot show notifications (section 10), or Show notifications is off on this computer, or the event was not received live while connected | Nothing                                                                                                                                                                                                                         |
+| 2   | Your settings have not been read, or a save could not be confirmed and no new read has followed                                                      | Nothing (section 2)                                                                                                                                                                                                             |
+| 3   | The event is not one that notifies                                                                                                                   | Nothing. Not notified: a stop, which someone chose; an end without a visible reply; a second notification for the same run; an isolated routine and a cron completion event; a helper's own task, which is not in the task list |
+| 4   | The task's setting                                                                                                                                   | On: go on. Off: nothing. Same as the bot: the bot's switch decides, on to go on, off for nothing. A budget warning skips this step for its own switch (section 11)                                                              |
+| 5   | The window is focused                                                                                                                                | On macOS and Windows: nothing when the event's bot is the one on screen; other bots go on. On Linux: nothing at all while the window is focused                                                                                 |
+| 6   | Quiet hours are on now                                                                                                                               | A wait whose pending record this device can see, or a budget warning, is held until they end (sections 6 and 11). A wait known only as a phase is not held, and anything else is not shown, ever                                |
+| 7   | Otherwise                                                                                                                                            | Shown                                                                                                                                                                                                                           |
+
+"The bot on screen" is the bot whose task the window shows. "Focused" is Electron's window focus (`BrowserWindow.isFocused`, its `focus` and `blur`, on every system); a window that is open but behind another app is not focused.
+
+### What each device shows for a wait
+
+| The wait    | This device has                                                                | Shown                                                                                    |
+| ----------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| An approval | Its pending record (it sent the message, or it is an admin or reviewer device) | "Wants to run a command" or "Needs your approval", and the card opens (sections 4 and 5) |
+| An approval | Only the run's waiting phase, at any tier                                      | "A run is waiting for approval. This device doesn't have the approval request."          |
+| A question  | The question (any interactive device)                                          | "Asked you a question", and the card opens                                               |
+| A question  | Nothing (read-only)                                                            | Nothing: there is nothing to say it from                                                 |
+
+**One per task.** A task has at most one notification at a time: a newer event for the task replaces the one shown. A notification is withdrawn when its task is opened in Clawtrate, when the wait it announced ends (answered, resolved, expired, or the run's end), and when Clawtrate quits or switches gateways. Withdrawing is Electron's `close()` and, on macOS, `Notification.remove` (research §6); a system may keep a copy the app cannot reach, which section 5 covers.
+
+**Several bots at once** each get their own. Clawtrate does not summarise.
+
+## 4. What a notification says
+
+A notification can be read by anyone who can see the screen, on a locked screen too depending on the system's settings, and the system keeps it in its notification list after the banner has gone. Electron gives the app no control over either and no reading of them (research §6). So: **Clawtrate builds the native title from the bot name or "Clawtrate" and the body from the fixed sentences below.** It never reads message text, task titles, commands or their arguments, tool input, question text or approval titles to build a native notification. A bot name can contain any of that text if somebody put it in the name. What the person reads in a task stays in the task a click opens.
+
+**The title** is the bot's name. It is the name the gateway lists, passed through this device's own scrub of the credentials it holds. Scrub the current connection's bootstrap token if still held, its device token, and each value and derived form the active sign-in currently holds. Run the same longest-first replacement as AccountsEngine inside the host, including the trimmed spelling. Pass only the scrubbed title to Electron. If the host cannot obtain the active connection's scrub inputs, use "Clawtrate" for that post. Keep at most 40 Unicode code points, including the ellipsis. Neither step is protection: the scrub removes only what this device itself holds, and cutting only limits the length, so a name can still carry text someone gave the bot. The name stays because a person with several bots has to tell which one finished or waits. **"Show bot names in notifications"** (section 7), on this computer and on by default, says that a name can appear on a locked screen and can stay in the system's notification list; with it off the title of new notifications is "Clawtrate", and names already posted can stay in that list.
+
+**The body** is a fixed sentence for the kind of event:
+
+| Event                                                                   | Body                                                                            | With bot names off                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| A run ended with a visible reply                                        | "Finished."                                                                     | "A bot finished."                                                   |
+| A run failed                                                            | "Its run failed."                                                               | "A bot's run failed."                                               |
+| An approval whose pending record this device can see, for a command     | "Wants to run a command."                                                       | "A bot wants to run a command."                                     |
+| An approval whose pending record this device can see, of another kind   | "Needs your approval."                                                          | "A bot needs your approval."                                        |
+| A question                                                              | "Asked you a question."                                                         | "A bot asked you a question."                                       |
+| A question this app can't answer (`conversation.md` §13)                | "Asked something this app can't answer yet."                                    | "A bot asked something this app can't answer yet."                  |
+| A run waiting for approval, on a device without the request (section 3) | "A run is waiting for approval. This device doesn't have the approval request." | The same                                                            |
+| A budget's 80 percent warning (section 11)                              | "Reached 80% of its budget. Shown only: nothing was stopped."                   | "A bot reached 80% of its budget. Shown only: nothing was stopped." |
+
+- The title names the bot whose task holds the card: the parent bot for a helper's approval, the asking bot for one raised by a bot another bot messaged (`conversation.md` §12, "Where the card is").
+- **Native identifiers are opaque local identifiers.** Each notification gets a new local id, and each bot a group id (`groupId`, macOS and Windows) made for it on this computer. Neither is a task key, a bot id or any text from the gateway; the host's record (section 5) maps them to what they stand for.
+- The notification has no buttons and no reply field: answering belongs to the card, where Deny is always visible and the full request can be read (`conversation.md` §12). Buttons would also need a signed app with a changed alert style on macOS (research §6).
+- The system's own sound plays; the app sets no sound of its own.
+
+## 5. Opening a notification
+
+The host keeps, for each notification it shows, what it was for: the gateway's identity (`gateway.identity.get`), the bot, the task key, the run's id, the approval or question id when there is one, and for a budget warning the budget's id, so a different budget cannot satisfy the lookup. None of it is in the notification. A click (Electron's `click`, research §6) brings the window forward (restored if minimised, made again on macOS if it was closed), then:
+
+| The notification was for                              | It opens                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A reply                                               | The task, scrolled to the end of that run (by its run id), with focus on the transcript                                                                                                                                                                          |
+| A failure                                             | The task, scrolled to that run's turn error                                                                                                                                                                                                                      |
+| An approval or a question whose pending record it saw | The task, with focus on the card, as "Review" does (`conversation.md` §14). If the card was answered meanwhile, it opens on the card as it now is                                                                                                                |
+| A wait it saw only as a phase                         | The task. The status line shows the wait, and a note in the place of `conversation.md` §3's says "A run is waiting for approval. This device doesn't have the approval request." On a read-only device the note keeps §3's own words                             |
+| A budget warning                                      | Open the recorded bot's task and focus its current budget line at 80–99 percent or its current budget note above the composer at 100 percent or more. If the confirmed task has neither, open the task and say "Clawtrate couldn't find that item in this task." |
+
+**The task is in another bot's list.** The notification names the bot whose task holds the card, and opening selects that bot in the rail, unfolds it, and opens that task: Marlow's task "Notes for Pip" for a question Marlow asked while working on Pip's message (research §2), the parent's task for a helper's approval (`conversation.md` §12, "Where the card is").
+
+**Before it opens anything, the host checks**, in this order; the first that fails decides:
+
+| Check                                                                                                                                  | When it fails                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The host has a live record for this notification                                                                                       | Clawtrate comes forward as it was, and nothing opens. This is a notification left from before Clawtrate was last started: on Windows its click starts Clawtrate with only the system's raw arguments, which hold nothing Clawtrate can trust (research §6)                                                                                                                                                                                                                                                                                                                        |
+| The record is of the gateway in use (its recorded identity, compared with the identity this connection already established)            | Nothing opens. The status strip: "That notification came from Studio gateway. Clawtrate is using Home gateway now." with "Your gateways" (`settings.md` §4, in review)                                                                                                                                                                                                                                                                                                                                                                                                            |
+| The connection is up                                                                                                                   | Only this gateway's cached data opens: the task from what was loaded, under the status strip's reconnecting state, "Reconnecting in 4s · showing saved messages" (`visual-language.md` §11). A cached approval or question shows its actions disabled, with "Clawtrate is reconnecting. You can answer once the gateway confirms this request is still open.", until the gateway lists the request again (`conversation.md` §19). When the task was never loaded, show its loading state. On reconnect, repeat the bot, task and item checks before opening or enabling anything. |
+| The bot is on the gateway (a fresh `agents.list`)                                                                                      | The current page stays, and the strip says "Clawtrate couldn't open that bot on this gateway."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| A fresh `sessions.describe {key}` on the recorded gateway returns a session this connection can see. The rail can be stale or partial. | If the read fails or returns `session: null`, open the confirmed bot's list, say "Clawtrate couldn't find that task on this gateway." and never open a composer or send on that key. `session: null` comes both for a deleted task and for one this connection may not see (research §8 and §10), so nothing says the task was deleted                                                                                                                                                                                                                                            |
+| The run or the card is in the confirmed task                                                                                           | The task opens, and the strip says "Clawtrate couldn't find that item in this task."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+**The record is cleared only once the window has received its target.** When the window has to be made again, the host keeps the record until the interface reports that it has opened what was asked, so a click is not lost to a window that was still loading.
+
+## 6. Quiet hours
+
+**Set** in Settings, Notifications (section 7): a switch, then From and To. A time is a whole minute; From may be later than To, which spans midnight ("22:00 to 07:00"). From and To the same is refused: "Start and end can't be the same time." and nothing is saved.
+
+**Whose clock.** Quiet hours are kept with the time zone of the device they were saved on, as an IANA zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`), and every device keeps them by that zone: 22:00 to 07:00 Lisbon time is the same hours everywhere. A device in another zone shows both, with tonight's interval converted: "22:00 to 07:00, Lisbon time, where they were set. Tonight that's 23:00 to 08:00 here." Saving the times again on that device sets its own zone, and the line says so before Save: "Saving here sets them in Berlin time."
+
+**One interval per start date.** Quiet hours are one interval for each date they start on, worked out in the saved zone: from From on that date to To on the same date, or on the next when To is earlier than From. Across a clock change:
+
+- A time that occurs twice (the clocks go back) starts the interval on its first occurrence and ends it on its last.
+- A time that does not occur (the clocks go forward) is taken as the first valid time after the jump.
+
+The start is included and the end is excluded. An interval whose endpoints coincide is empty. When intervals touch or overlap, treat them as one continuous quiet interval. "Quiet until" and release use that continuous interval's final end.
+
+So for 22:00 to 01:30 in New York on the night the clocks go back, quiet hours end at the second 01:30; for 22:00 to 02:30 on the night they go forward, they end at 03:00. "Quiet until" and any time converted to another zone come from that interval, never from the clock face. The prototype's `quietInterval` works these out, and its check asserts midnight, both changes and both ends.
+
+**During quiet hours** Clawtrate posts no new notifications. (A banner the system already shows, or keeps in its list, is the system's.) The rail's marks, the task rows and the dock or taskbar badge go on updating as they do now: they never depended on notifications.
+
+**When they end**, each held wait is shown, one notification each, only if a fresh pending record that this device can see says it still waits (the question or approval list read after the end), and only by section 3's order at that moment (a wait answered on another device, a bot switched off meanwhile, or the bot now on screen is not shown). A wait this device knows only from the run's waiting phase is not held at all: nothing could confirm it later. A budget warning that fell in quiet hours is shown after them, once, only on a fresh count for the same budget and period (section 11). A reply or a failure during quiet hours is never shown later: the rail and the task hold it. "When they end" is the interval's end, checked every minute and again when the computer wakes (`powerMonitor` `resume`). **Waking after the end replays nothing**: what arrived before the computer slept and was held is dropped, since no fresh pending record was read at the end, and nothing that happened while it slept was received at all (section 3).
+
+**Clawtrate must be running and connected for that.** It shows its notifications itself, so if it is not running when quiet hours end, nothing is shown then or later. If the connection is down when they end, every hold is dropped: nothing held is released without a fresh pending record. Missed events can appear in your tasks when it reconnects. On macOS it keeps running with its window closed; on Windows closing its window quits it (research §7). Settings says this in its words for each system.
+
+Every device uses the saved zone. Each device holds only the waits for which it received a pending record it can see. A waiting phase without the request is never held.
+
+**While they are on**, Settings shows one line under the times: "Quiet until 07:00, Lisbon time." and, when something is held, "1 item is held. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it."
+
+## 7. Settings, Notifications
+
+The Notifications section takes the place `settings.md` keeps for it in the section list (after Appearance, before System; in review on its own branch), and fills it as follows, top to bottom.
+
+**This computer**, a group word, then three switch rows of the choice-list kind:
+
+| Row                             | Line under it                                                                                                                                                                                                                      | Default |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Show notifications              | "When a bot finishes or waits for you."                                                                                                                                                                                            | On      |
+| Show bot names in notifications | "A bot's name can appear on a locked screen and can stay in your system's notification list." Off: "New notifications say "Clawtrate" and the kind of event. Previously posted names can stay in your system's notification list." | On      |
+| Budget warnings                 | "When a bot has used 80% of a budget."                                                                                                                                                                                             | On      |
+
+Under them a note, neutral, in the words for the system:
+
+- macOS: "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects. It shows them also with its window closed. It can't see whether macOS allows them or whether a Focus is on."
+- Windows: "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects. Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on."
+- Linux: "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects. None is shown while its window is focused."
+
+**When a post failed** (Electron's `failed`, "an error … while creating and showing the native notification", research §6), a `--warn-soft` note above the group: "Clawtrate couldn't post a notification at 5:41 PM. Check your system's notification settings." with "Dismiss". It is cleared by a later positive `show` callback or when the person dismisses it, never by the mere absence of a later error. It does not say why: `failed` cannot tell permission, a Focus or another layer apart, and permission and Focus stay unknown. Nothing here ever says notifications are working: the app cannot know.
+
+**Quiet hours**, a group word, then a switch row "Quiet hours" with the line "Clawtrate posts no new notifications during quiet hours. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it." With the switch on, the time pair (From, To), and under it the zone line of section 6. While they are on now, the "Quiet until" line of section 6.
+
+**Your bots**, a group word, then one switch row per bot in the gateway's order, each with its picture and name, and a line: "On", "Off", or "On · 1 task off" / "Off · 2 tasks on" when tasks have their own setting. The row's switch is the bot's switch; the line's count is not a control (the bot's page lists them, section 8).
+
+**Where each group is kept**, one line in `--text-faint` under the group, by section 2: under This computer, "Kept on this computer."; under Quiet hours and under Your bots, "Kept for you on this gateway, so your other devices show the same.", or, when the gateway keeps no profile, "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
+
+**When this build cannot show notifications** (section 10), This computer's three switches and the system's note are not shown. In their place, a neutral note: "This copy of Clawtrate can't show notifications on macOS. What your bots finish or wait on shows in the rail and on the dock's badge." (on Windows, "…on Windows. … in the rail and on the taskbar button."), and "Quiet hours and your bots' switches below apply on your other devices." Quiet hours and Your bots stay as above. When those are kept only on this computer (`no_durable_identity`), the second sentence is left out, and the pages of sections 8 and 9 say "This copy of Clawtrate can't show notifications on this computer." instead of what applies on other devices.
+
+**States.**
+
+| State                               | It shows                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading                             | This computer's group as usual; for Quiet hours and Your bots, two grey blocks pulsing, `aria-busy`, and "Reading your settings from the gateway…"                                                                                                                                                                                      |
+| Couldn't read                       | This computer's group as usual; a `--danger-soft` note: "Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots." with "Try again"                                                                                                                                   |
+| Read-only connection                | Every value; the shared switches and fields disabled; the access bar at the foot of the shared groups (section 2)                                                                                                                                                                                                                       |
+| Saving                              | The control disabled, its line "Saving…"                                                                                                                                                                                                                                                                                                |
+| Saved                               | The value read back, announced                                                                                                                                                                                                                                                                                                          |
+| Refused                             | The value read back, the line "The gateway refused the change. Otto's notifications are On." and "Try again"                                                                                                                                                                                                                            |
+| Couldn't confirm                    | The line "Couldn't confirm the change. Otto's notifications were last read as On." (or "Quiet hours were last read as Off."), a note "Couldn't confirm your notification settings with the gateway. Until Clawtrate reads them again, it shows no notifications about your bots." with "Check again"; your settings disabled until then |
+| Changed elsewhere                   | The note of section 2 above the group, with the value read again                                                                                                                                                                                                                                                                        |
+| Same start and end                  | "Start and end can't be the same time." under the time pair; nothing saved                                                                                                                                                                                                                                                              |
+| Show notifications off              | The rest stays readable and changeable; a line under the switch: "No notifications on this computer. Your other devices keep theirs."                                                                                                                                                                                                   |
+| This build can't show notifications | The note above in place of This computer's group; nothing on this screen says a notification will be shown here                                                                                                                                                                                                                         |
+
+## 8. A bot's Notifications page
+
+**The row.** `bots.md` §8's frame gains one row, in a group of its own, "Notifications", after Tools: "Notifications", with the bot's switch as its value ("On", "Off") and a chevron. When Show notifications is off on this computer the value reads "Off on this computer"; when this build cannot show notifications (section 10), "Not shown on this computer". The row opens the page; it is the only change to that frame.
+
+**The page**, inside the tab with a quiet round Back and the title "Notifications":
+
+- A switch row: "Notify me about Otto", line "When Otto finishes or waits for you." It is the same switch as Otto's row in Settings. Under it, where it is kept: "Kept for you on this gateway, so your other devices show the same." (or "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it.").
+- A group word "Tasks with their own setting", then one row per such task, its title and its setting ("On" or "Off") as a fact row; the setting is changed in that task's Details (section 9). With none: "No task has its own setting. Choose one in the task's Details."
+- Notes, when they apply: "Notifications are off on this computer." with "Settings" (opens Settings, Notifications); "Quiet until 07:00." while quiet hours are on; "This copy of Clawtrate can't show notifications. This switch applies on your other devices." when this build cannot show them.
+
+The page's states are section 7's for its controls: reading, couldn't read, read-only with the access bar, saving, refused, couldn't confirm, changed elsewhere, no room. The page lists overrides for tasks this device can confirm. Keep an override if the task is absent from the rail or cannot be read by key.
+
+## 9. A task's setting
+
+**In the Work pane's Details tab**, which is about the open task, one row in a group "Notifications": "This task", with a `.b-select` whose value is "Same as Otto (on)", "Same as Otto (off)", "On" or "Off". It opens a `.menu` of three radio items: "Same as Otto (on)" (with the bot's current value in the brackets), "On", "Off". Choosing saves, by section 2's rules, and the row shows what was read back. Under the row, where it is kept: "Kept for you on this gateway, so your other devices show the same." (or "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."); when this build cannot show notifications, "This copy of Clawtrate can't show notifications. This setting applies on your other devices."
+
+- **On** shows this task's notifications even while the bot is off; **Off** shows none while the bot is on; **Same as Otto** follows the bot. It wins over the bot's switch and nothing else: this computer's switch, focus and quiet hours still apply (section 3).
+- **Room.** The gateway keeps each preference as at most 4,096 bytes of its JSON in UTF-8, as it measures it (`<openclaw>/dist/user-preferences-9JKSYgKc.mjs` lines 26-42), and task keys can be long, so the number of task settings that fit depends on their keys. Before a write the host encodes the whole `clawtrate.notifications.tasks` value and measures it the same way. When On or Off for another task would not fit, nothing is written and the row says: "There's no room for another task setting. Set a task back to "Same as bot" first." with a link to the bot's page. Same as bot removes that entry and cannot hit the byte limit on a previously valid value.
+- The bots' switches and quiet hours share `clawtrate.notifications`. Measure the exact proposed JSON value in UTF-8 before every write to either preference. Turning a bot on removes its entry and cannot hit the byte limit on a previously valid value. If turning one off would exceed 4,096 bytes, keep the previous values and show "There's no room to save this switch with your quiet hours. Turn another bot back on first." beneath that switch, in Settings and on the bot's page. If a quiet-hours edit would exceed 4,096 bytes, keep the previous values and show "There's no room to save quiet hours. Turn a bot's notifications back on first." beneath Quiet hours.
+- On a read-only connection the row shows its value, the select is disabled, and the access bar is at the foot of the tab, as in section 7.
+
+## 10. What the system decides, and what Clawtrate cannot see
+
+- **Whether notifications are allowed**, and whether a Focus, Do Not Disturb or Focus Assist is on: the system's alone, and Electron reports neither (research §6). No rule here depends on them; Settings says Clawtrate can't see them.
+- **What the app can observe**: that a notification was shown (`show`), clicked (`click`), closed (`close`, not always), or could not be created and shown (`failed`). Only `failed` is shown to the person, and a later `show` clears it (section 7). Neither establishes why, or that a banner was seen.
+- **Signing.** macOS shows notifications only for a code-signed app (research §6). Clawtrate is signed ad hoc by default, and whether that is enough is not established. An unsigned or refused notification raises `failed`, which Settings reports.
+- **Windows** needs the app's AppUserModelID on a Start-menu shortcut, which the installer makes (research §7). Electron also names a ToastActivatorCLSID, which the installer does not set; whether a toast is shown and clicks reach the app without it is the first thing a builder checks (section 15).
+- **When a build cannot show notifications.** If the first step of section 15 finds that a build cannot show them (an app signed ad hoc on macOS, or the Windows installer's identity, may turn out to be such a case), or `Notification.isSupported()` answers false, that build shows none and promises none: the host never tries, the in-app marks and the dock or taskbar badge are all there is, and every screen here says so (sections 7 to 9). Which builds that covers is recorded in `docs/decisions.md` by that step; it is decided per build, never inferred from one `failed`.
+- **While Clawtrate is not running, or not connected,** nothing is shown, and nothing missed is posted later (section 3). A notification from before can only bring Clawtrate forward (section 5).
+- **Linux**: while Clawtrate's window is focused, no notification is shown. Nothing more is specified for Linux here.
+
+## 11. Budget warnings
+
+A budget's 80 percent warning (`controls.md` §17, F-396) is a notification under these rules. It reads the same usage the in-app line does: the budgets kept in `users.prefs` under `clawtrate.budgets`, and each budget's count from `UsageEngine.countBudgets` (`packages/core/src/usage-engine.ts`), a `BudgetCount` with `used`, `counting` and `error` for the budget's current `range`, the one `currentCount` and `budgetPercent` (`packages/core/src/usage.ts`) give to `BudgetLine` (`packages/ui/src/usage/ConversationUsage.tsx`). It differs from a bot's notifications in these ways:
+
+- **Its own switch.** Budget warnings, on this computer, takes the place of step 4: a bot switched off still warns about its budget, and a budget warning is not a task's.
+- **Its rule.** Use bot-wide budgets. When a successful count first shows 80–99 percent, apply §3. If quiet hours are the only reason to wait, keep one hold for that budget id and period start in its own zone. A count first observed at 100 percent or more does not create a hold or a notification. An already held warning can still post once at 100 percent or more. Record a native post attempt once per gateway, budget and period on this computer, across restarts, and do not attempt it again in that period. Holds are in memory. At quiet end, attempt all eligible waits before any eligible budget warnings, in separate slots. A wait cannot replace a budget warning or vice versa.
+
+At quiet end, have the usage engine read `clawtrate.budgets` with `users.prefs.get` and publish the successfully read preference before counting. Drop the hold if the read fails or its budget is absent, or if its period kind, zone or `rangeFor(...).startDate` differs from the hold. The held end date may differ within the same week. Await `countBudgets` on that connection, including its follow-up pass if a count was already running. Use the result in `usage.counts` after the promise settles, matched by `currentCount` to the range at release. Drop it if the connection generation or the confirmed budget changes while counting. "Fresh" means the result of that read. The gateway can answer from its own cache.
+
+| At the end                                                                                                                                                                                  | Outcome                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same budget and period, the confirmed limit, and the awaited count: `used` is a number, `counting` is false, `error` is null, and `budgetPercent` of the confirmed limit is at least 80 | The one 80 percent warning is shown, also when the budget was raised meanwhile and still qualifies, and also when the count has reached 100 percent or more |
+| The awaited count is under 80 percent of the confirmed limit                                                                                                                                | Dropped                                                                                                                                                     |
+| The count is still `counting` (`stillCounting` reads the gateway's `cacheStatus`, for instance `refreshing`)                                                                                | Unknown, so dropped                                                                                                                                         |
+| The preference read fails, there is no matching count, or the count has an `error`, even if it retained the earlier figure                                                                  | Dropped                                                                                                                                                     |
+| The period rolled over, or the budget was removed                                                                                                                                           | Dropped                                                                                                                                                     |
+| Clawtrate is not running, or not connected                                                                                                                                                  | Dropped, as every hold is (section 6)                                                                                                                       |
+
+The line in the bot's task is there either way. Its words are section 4's. Open the recorded bot's task and focus its current budget line at 80–99 percent or its current budget note above the composer at 100 percent or more. If the confirmed task has neither, open the task and say "Clawtrate couldn't find that item in this task." Like every other notification, the host shows it, not the interface.
+
+## 12. Widths, themes, keyboard, screen readers, motion
+
+| Concern       | Rule                                                                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1440 and 1100 | Settings is the 800 × 640 dialog; the Notifications section scrolls inside it                                                                                                                                                                                             |
+| 800           | The same dialog at the window's width less 32 px                                                                                                                                                                                                                          |
+| 390           | Settings is the sheet of `bots.md` §19: the list of sections first, the section replacing it with Back. Switch rows are 64 px; the time pair stays side by side. The Work pane is its full-width sheet, with the bot's page and the Details row as on desktop             |
+| Themes        | Only the product's tokens, light and dark. The picture of a notification uses `--bg-raised`, `--border-strong` and `--text-*` in both                                                                                                                                     |
+| Keyboard      | Every control in section 2's Input; the notification itself is the system's, and its keyboard path is the system's                                                                                                                                                        |
+| Screen reader | A switch is named by its row ("Show bot names in notifications", "Otto's notifications", "Quiet hours") and its line is its description; the time fields by "Quiet hours from" and "Quiet hours to"; the status strip is a `status` region. Announcements are section 2's |
+| Motion        | A switch's thumb slides in `--dur-quick`; with reduced motion it moves without sliding. Nothing else here moves                                                                                                                                                           |
+
+## 13. What each fact drives
+
+| #   | Fact                                                                                                                                                                                                    | Drives                                                                                                                               | Evidence                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| 1   | An approval's pending record is visible to the device whose message started the run, an admin device and a configured reviewer; another device's answer is refused; it waits for the sender             | A card only where the record is visible; the phase-only sentence elsewhere                                                           | Research §1, §10, tried; approval-record-lookup source  |
+| 2   | Eligible connections can see the lifecycle's `waiting-approval` and `approval-resolved`                                                                                                                 | The waiting notification on other devices, and its withdrawal                                                                        | Research §1, tried                                      |
+| 3   | A question reaches every connection with `operator.questions`, wherever its run began, also from another bot's task, and any of them can cancel it; a read-only device gets nothing that says it waits  | Questions notify on every interactive device; none on read-only                                                                      | Research §2, tried                                      |
+| 4   | Every eligible connection sees `chat` `final` with the reply, `error`, `aborted`, and lifecycle `end` with its reason; the gateway's push skips `yielded` and transcript-only finals                    | One finished per run from a visible reply; one failure per run from the core's classification; a stop not notified; the routine rule | Research §3, §10, tried; push source                    |
+| 5   | `users.prefs`: per profile, read at read access, written at the interactive tier, compare-and-set, 4,096 bytes, `users.prefs.changed`, `no_durable_identity`                                            | Where switches and quiet hours are kept; read-back; conflict; the measured room; "on this computer"                                  | Research §4, tried and source                           |
+| 6   | The gateway's own push: quiet hours in minutes with an IANA zone; dropped, not held                                                                                                                     | The quiet-hours shape; Clawtrate holds waits itself                                                                                  | Research §5, source                                     |
+| 7   | Electron: no permission or Focus reading; `failed`; `click`; buttons need signing on macOS; no lock-screen option; nothing while not running                                                            | Section 10; the default text; no buttons; the failed note                                                                            | Research §6, documentation                              |
+| 8   | The main process holds the connection; macOS runs with no window, Windows quits; the session refuses web notifications                                                                                  | The host decides and shows; the per-system notes                                                                                     | Research §7, source                                     |
+| 9   | A deleted task's history answers like a new task; `sessions.describe` by key answers `session: null` for a deleted task and for one this connection may not see; the rail's list is filtered and capped | Opening reads by key before saying anything; "couldn't find", never "deleted"; never sends                                           | Research §8, tried                                      |
+| 10  | `waiting.ts` already tracks waits and stops for every task                                                                                                                                              | What the engine supplies                                                                                                             | Research §7, source                                     |
+| 11  | A device that was away receives none of a run's events when it reconnects; the core reloads lists, open transcripts, questions and visible approvals on a reconnect or a gap                            | No catch-up notification; phase-only waits cleared on a disconnect or gap; holds need a fresh pending record                         | Research §10, tried; `client.ts` source                 |
+| 12  | `UsageEngine.countBudgets` gives each budget's `BudgetCount` for its current range, with `counting` while the gateway still counts                                                                      | The held budget warning's release rule                                                                                               | `packages/core/src/usage-engine.ts`, `usage.ts`, source |
+
+## 14. Parity rows
+
+The rows' statuses stay `todo`. Targets were changed only where the decisions on this design said so (the first review round); the gateway-dependency cells are reworded to the evidence.
+
+| Row   | Change                                                                                                                                                                                                                                                                                                                |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-202 | Dependency: the desktop switch is kept in `users.prefs` (live), or on the device on `no_durable_identity`; the iOS part as written                                                                                                                                                                                    |
+| F-203 | Dependency: desktop quiet hours `{enabled, startMinute, endMinute, timeZone}` in `users.prefs` (live), kept by each running desktop in the stored zone; the iOS part as written                                                                                                                                       |
+| F-204 | Target: `same` with a note that narrows it to live events received while connected, a card only where its pending record is visible (the sender, an admin or reviewer device), the phase-only sentence elsewhere, and no question on a read-only device (section 3). Dependency: as section 3 and research §1-§3, §10 |
+| F-207 | Target: the exact task and card when this device has them; otherwise what it could confirm, and why, with a task missing from the rail read by its key and never called deleted (section 5). Dependency: the record with the run id, `click`, `sessions.describe {key}`                                               |
+| F-367 | Dependency: the task settings' value of at most 4,096 bytes as the gateway measures it, refused before the write when it would not fit (section 9)                                                                                                                                                                    |
+| F-368 | Target: no new notification during quiet hours; a wait received live and still confirmed at the end, if Clawtrate is running and connected and the current settings allow it; in-app badges while a window is open (section 6)                                                                                        |
+| F-369 | Target: `same` with a note that the phone's part belongs to the phone notifications design. Dependency: the window's focus from Electron                                                                                                                                                                              |
+| F-396 | Dependency: section 11's notification, with the fixed native words of section 4 and its fresh-count rule at the end of quiet hours. The target as written                                                                                                                                                             |
+
+## 15. For builders
+
+### First: whether a notification appears at all
+
+Nothing establishes yet that a notification appears, on either system, in the app as it is packaged:
+
+- **macOS**: notifications need a code-signed app, and Clawtrate is signed ad hoc by default. Whether that is enough is not known (section 10, research §6, §7).
+- **Windows**: the installer gives the Start-menu shortcut the app's AppUserModelID, but no ToastActivatorCLSID, which Electron also names. Whether a toast appears, and whether its click reaches the app, is not known.
+
+So the first thing a builder does is check each: a toast from the NSIS install, with and without a ToastActivatorCLSID; a notification from the ad hoc build and from a signed one; in each, that it appears and that `click` arrives. The outcome goes in `docs/decisions.md`. **Where one cannot show notifications, the design falls back to the in-app marks and the badge only**, and that build takes section 10's "cannot show notifications" state, so no screen promises a notification there. Nothing else in this design is built for a platform before this step has answered for it.
+
+### What each part uses
+
+| Part                   | Uses                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The decision           | The host: the gateway's events, the core's waiting state, your settings as last read, this computer's switches, the window's focus and the bot on screen (from the interface)                                                                                                                                                                          |
+| Showing                | Electron's `Notification` in the main process: `title` (the scrubbed name or "Clawtrate"), a fixed `body`, an opaque local `id` and `groupId`, no `actions`; `close()` and on macOS `Notification.remove` to withdraw                                                                                                                                  |
+| Opening                | `click` on the live object, the host's record (with the run id), the identity this connection established, `agents.list`, the task list and `sessions.describe {key}`, then a bridge command to the interface: select the bot, open the task, focus the card or the run's end; the record is cleared when the interface reports it received the target |
+| Settings and the pages | `users.prefs.get` and `users.prefs.set` with `expectedEntries`; `users.prefs.changed`; the host's settings file for this computer's switches                                                                                                                                                                                                           |
+| Quiet hours            | One interval per start date in the stored zone with `Intl.DateTimeFormat` (first occurrence to last; a skipped time moves to the first valid time after it); a minute timer; `powerMonitor` `resume`                                                                                                                                                   |
+
+### What the host does
+
+- Keeps a record per shown notification (its opaque id, gateway identity, bot, task key, run id, card id, kind), at most one per task, dropped when withdrawn or once a click's target has been received; nothing of it on disk.
+- On quit (`before-quit`) withdraws every notification it shows; on switching gateways withdraws the old gateway's.
+- Holds waits during quiet hours in memory, by task and card id, and drops a held wait when it ends; holds at most one budget warning per budget and period start, apart from the waits.
+- Listens for `failed` and keeps its time for Settings; clears it on a later `show` or when the person dismisses the note.
+- On Windows, the global activation callback may bring the window forward on a click. It never navigates. Only the live notification's click handler with a matching host record can navigate. Electron documents the global callback firing in addition to instance click events (`Notification.handleActivation`, research §6).
+
+### What the engine supplies
+
+- The end of each run in a listed task, with its outcome and the reply's first words: from `chat` and `agent` events, as `runs.ts` already classifies them.
+- Waits per task (`waiting.ts`), with the card's id and kind where this device has the card.
+- Whether a task is in the list, and the task's bot.
+- Your notification settings as read, with `users.prefs.changed` applied, and a write with compare-and-set and read-back; `no_durable_identity` as its own state.
+
+### Order
+
+1. The first step above, for macOS and for Windows, recorded in `docs/decisions.md`; a build that cannot show notifications gets the fallback state.
+2. The host's decision and showing, for replies, failures, and the waits this device has cards for, with this computer's switch.
+3. Opening, with every check of section 5.
+4. Your settings in `users.prefs` and Settings, Notifications; the bot's row and page; the task's setting.
+5. Waits seen only as a phase; quiet hours; the bot-names switch.
+6. Budget warnings, posted by the host under section 11 from `UsageEngine.countBudgets`.
+
+### The prototype's states and walks
+
+`prototype/notifications.html` takes `theme`, `width` and `motion`, and:
+
+| Parameter                     | Values                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open`                        | `settings` (Settings, Notifications), `bot` (the bot's Notifications page), `details` (the task's setting), or none (the app with the notifications bar)                                                                                                                                            |
+| `event`                       | `finished`, `yielded`, `failed`, `stopped`, `approval`, `generic` (a plugin's approval), `question`, `unsupported` (a question this app can't answer), `marlow` (a question in Marlow's task for Pip's message), `routinetask` (a routine failing in an ordinary task), `routineisolated`, `budget` |
+| `device`                      | `sender` (the default), `admin` (an admin or reviewer device), `other` (another device at the interactive tier), `read` (read-only)                                                                                                                                                                 |
+| `focus`                       | `otto` or `pip`: the window is focused on that bot                                                                                                                                                                                                                                                  |
+| `quiet`                       | `1`: quiet hours are on now                                                                                                                                                                                                                                                                         |
+| `platform`                    | `none`: this build cannot show notifications (with `os=mac` or `os=windows`)                                                                                                                                                                                                                        |
+| `quietset`                    | `1`: quiet hours are set, 22:00 to 07:00, and not on now                                                                                                                                                                                                                                            |
+| `os`                          | `mac` (the default), `windows`, `linux`                                                                                                                                                                                                                                                             |
+| `master`, `names`, `budgetsw` | `0` or `1`: this computer's switches                                                                                                                                                                                                                                                                |
+| `bot`                         | `otto=off`: Otto's switch off. `task`: `on` or `off`, the setting of Otto's task "Weekly backup check"                                                                                                                                                                                              |
+| `click`                       | `unlisted` (not in the rail, found by key), `gone` (not found by key), `refused` (the read by key fails), `botgone`, `itemgone`, `offline`, `othergw`, `stale`: what the host finds when the notification is clicked                                                                                |
+| `prefs`                       | `reading`, `readfail`, `device` (`no_durable_identity`), `conflict`, `savefail` (refused, value confirmed), `unknown` (outcome unknown), `elsewhere` (a second device in Berlin)                                                                                                                    |
+| `access`                      | `read`: a read-only connection for the settings                                                                                                                                                                                                                                                     |
+| `req`                         | `asking`, `requested`, `denied`, `expired`, `failed`: the access request's state                                                                                                                                                                                                                    |
+| `conn`                        | `down`: the connection is down                                                                                                                                                                                                                                                                      |
+| `relist`                      | `same`, `missedq` (a question missed offline is listed), `omit` (the approval is no longer listed), `failed`: what the pending lists return on the next reconnect                                                                                                                                   |
+| `budgetend`                   | `still`, `raised`, `over100`, `below`, `refreshing`, `readfail`, `rollover`, `removed`: the fresh count when quiet hours end                                                                                                                                                                        |
+| `failed`                      | `1`: Electron reported `failed` for the last post                                                                                                                                                                                                                                                   |
+| `tasks`                       | `full`: the task settings fill the value almost to the gateway's 4,096 bytes                                                                                                                                                                                                                        |
+| `botsfull`                    | `1`: turning a bot off would not fit beside quiet hours                                                                                                                                                                                                                                             |
+
+The walks the check clicks: each event for each device to its notification, in both name states, or to the reason it is not shown, where only the scrubbed bot name is gateway text in the picture and opaque native ids; one notification per run; each notification's click to what it opens, and each failed check of section 5, with a cached card's answers disabled offline; a disconnect clearing phase-only waits and a reconnect posting nothing; quiet hours holding a wait and showing it when they end, dropping it when they end offline or on a wake past the end, and not showing a reply; every outcome of a held budget warning, and a wait posted before it; the quiet-hours interval at midnight and across both clock changes; focus on Otto silencing Otto and not Pip; Linux silencing everything while focused; each switch in Settings saved and read back, refused, unconfirmed and changed elsewhere; the time pair refusing equal times; the access request approved, denied, expired and failed; the failed note dismissed and cleared by a later post; the bot's page and the task's setting, including the measured room.
+
+## 16. Not covered here
+
+- Phone push and Live Activities (issue #77). The phone will share quiet hours, the bots' switches and the tasks' settings, which are kept with the person's profile; this computer's switches are this computer's.
+- Routines' and check-ins' own notifications: they belong to the routines section (`automation.md`), which another contributor designs; this design only says which of their events do not notify here (section 3). Links into the app (`links.md`).
+- The cards themselves, and what the conversation shows for a wait this device cannot answer at the interactive tier (`conversation.md`); this design uses §3's note and asks its owner for the words.
+- Notifications in the web preview: system notifications come from Electron's main process, and the preview host shows none.
+- Sounds, badges and the badge count, which stay as built.
+- A summary notification for many events, notification history inside Clawtrate, and snoozing.
+- Mentions of the person by other people (the gateway's `humanMentioned`).
+- Settings' other sections and its frame (`settings.md`, in review); a bot's other settings (`bots.md` §8).
