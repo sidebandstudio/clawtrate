@@ -9,10 +9,15 @@
 //                                                the rules plugin (default running; stopped: it
 //                                                answers that it enforces nothing; failed: its
 //                                                status fails; lost: its rules file is lost)
-//   saved=empty|error|loading|more|expiring      saved approvals (default: two grants and two entries;
+//   saved=empty|error|loading|more|expiring|omitted-only|edge
+//                                                saved approvals (default: two grants and two entries;
 //                                                more: three more, one of a routine that is gone;
-//                                                expiring: the live grant ends a minute from now)
-//   revoke=refused|gone                          how Revoke goes: the gateway refuses, or lists no such grant
+//                                                expiring: the live grant ends a minute from now;
+//                                                omitted-only: no entry shown, three left out;
+//                                                edge: rows the page can't remove or fully name)
+//   revoke=refused|refused-held|gone|gone-unread how Revoke goes: the gateway refuses (held: once
+//                                                released), or answers not-found (unread: and the
+//                                                read after it fails)
 //   remove=changed|hidden                        Remove finds the entry edited in place after the
 //                                                confirmation opened, or moved past the rows shown
 //   saved=long                                   two entries whose long patterns share their shown start
@@ -115,6 +120,7 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
       agentId: "otto",
       routineId: "7d1e4b20-1c3f-4a8e-b6d2-5e9f0a3c7b61",
       routineName: "Weekly cleanup",
+      routineGone: false,
       command: "du -sh /srv/media",
       cwd: "/srv/media",
       createdAtMs: now - 4 * DAY,
@@ -128,6 +134,7 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
       agentId: "otto",
       routineId: "c2a7f915-3d4e-4b1a-a0f8-6e2d9b5c1f37",
       routineName: "Nightly backup check",
+      routineGone: false,
       command: "ls /srv/backups",
       cwd: "/srv/backups",
       createdAtMs: now - 12 * DAY,
@@ -138,6 +145,26 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
     },
   ];
   if (params.saved === "expiring") list[0] = { ...list[0]!, expiresAtMs: now + MINUTE };
+  // `edge`: a grant whose binding the gateway couldn't read and that has no use count, and one
+  // whose routine name couldn't be read.
+  if (params.saved === "edge")
+    list.push(
+      {
+        ...list[0]!,
+        grantId: "e1d2c3b4-0000-4000-8000-000000000001",
+        routineName: "Log rotation",
+        command: "(unreadable)",
+        cwd: null,
+        useCount: null,
+        lastUsedAtMs: null,
+      },
+      {
+        ...list[0]!,
+        grantId: "e1d2c3b4-0000-4000-8000-000000000002",
+        routineName: null,
+        routineGone: false,
+      },
+    );
   if (params.saved === "more")
     for (let i = 0; i < 3; i += 1)
       list.push({
@@ -145,6 +172,7 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
         grantId: `5e0b${i}a3c-7d14-4c8e-92f6-3a1d8e4b0c7${i}`,
         // The last one's routine is gone: the gateway lists the grant with no routine name.
         routineName: i === 2 ? null : `Disk report ${i + 1}`,
+        routineGone: i === 2,
         command: `df -h /srv/disk${i + 1}`,
         cwd: null,
         createdAtMs: now - (5 + i) * DAY,
@@ -156,7 +184,24 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
 }
 
 function entries(now: number, params: PermissionParams): AllowlistEntry[] {
-  if (params.saved === "empty") return [];
+  if (params.saved === "empty" || params.saved === "omitted-only") return [];
+  if (params.saved === "edge")
+    // The file's `*` scope, and two entries of one bot sharing an id.
+    return [
+      { agentId: "*", entryId: "every-1", pattern: "/usr/bin/uptime", removal: "every-bot" },
+      { agentId: "otto", entryId: "shared", pattern: "/usr/bin/true", removal: "unidentified" },
+      { agentId: "otto", entryId: "shared", pattern: "/usr/bin/false", removal: "unidentified" },
+    ].map((each): AllowlistEntry => ({
+      ...each,
+      kind: "command",
+      argPattern: null,
+      commandText: null,
+      fromAlwaysAllow: false,
+      lastUsedAt: null,
+      addedAt: null,
+      shownWhole: true,
+      removal: each.removal as AllowlistEntry["removal"],
+    }));
   return [
     {
       agentId: "otto",
@@ -169,6 +214,7 @@ function entries(now: number, params: PermissionParams): AllowlistEntry[] {
       lastUsedAt: now - 6 * MINUTE,
       addedAt: null,
       shownWhole: true,
+      removal: "ok",
     },
     {
       agentId: "otto",
@@ -181,6 +227,7 @@ function entries(now: number, params: PermissionParams): AllowlistEntry[] {
       lastUsedAt: null,
       addedAt: now - 3 * DAY,
       shownWhole: true,
+      removal: "no-id",
     },
     // Two patterns longer than the page shows, alike in all it shows: neither can be confirmed.
     ...(params.saved === "long"
@@ -196,6 +243,7 @@ function entries(now: number, params: PermissionParams): AllowlistEntry[] {
           lastUsedAt: null,
           addedAt: null,
           shownWhole: false,
+          removal: "not-whole",
         }))
       : []),
   ];
@@ -373,6 +421,7 @@ export function permissionCommand(
       revoked.has(grant.grantId) ? { ...grant, revokedAtMs: revoked.get(grant.grantId)! } : grant,
     ),
     more: params.saved === "more",
+    omitted: 0,
   });
   // With `remove=changed`, another admin edits the first entry in place, under the same id,
   // once the person has confirmed its removal: the file is then another revision.
@@ -393,7 +442,7 @@ export function permissionCommand(
                 ? { ...each, pattern: "/usr/bin/true", argPattern: null }
                 : each,
             ),
-          omitted: 0,
+          omitted: params.saved === "omitted-only" ? 3 : 0,
           hash: revision(),
           snapshotDigest: sha256Hex(utf8Bytes(revision())),
         }
@@ -414,6 +463,30 @@ export function permissionCommand(
     }
     case "revokeGrant": {
       const { grantId } = command;
+      if (params.revoke === "gone-unread")
+        return Promise.resolve({
+          answer: "not-found",
+          error: null,
+          grant: null,
+          readError: "The gateway didn't answer within 60 seconds.",
+          grants: { status: "failed", message: "The gateway didn't answer within 60 seconds." },
+        });
+      // `refused-held`: the refusal is a delayed answer a test can hold while time passes.
+      if (params.revoke === "refused-held")
+        return new Promise((resolve) =>
+          later(() =>
+            resolve({
+              answer: null,
+              error: "The gateway refused the request: approval store unavailable.",
+              grant:
+                (grantList() as { items: RoutineGrant[] }).items.find(
+                  (each) => each.grantId === grantId,
+                ) ?? null,
+              readError: null,
+              grants: grantList(),
+            }),
+          ),
+        );
       if (params.revoke === "refused")
         return Promise.resolve({
           answer: null,

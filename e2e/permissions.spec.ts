@@ -291,7 +291,7 @@ test("F-178: approvals access alone shows a routine's grant with what it is boun
   const row = page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" });
   await expect(row).toContainText("Routine Weekly cleanup (otto) · Saved command ls in ");
   await expect(row).toContainText(/granted .+ · until .+ · not used yet/);
-  await expect(row).toContainText("The gateway enforces this");
+  await expect(row).not.toContainText("The gateway enforces this");
 
   // Its next run runs the command under the grant, with no card; the page shows the use.
   const second = await runRoutine(job, null);

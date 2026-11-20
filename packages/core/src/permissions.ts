@@ -165,8 +165,10 @@ export type RoutineGrant = {
   grantId: string;
   agentId: string;
   routineId: string;
-  /** Null once the routine is gone; the gateway keeps the grant listed. */
+  /** The routine's name; null when the gateway says none (`routineGone`) or it could not be read. */
   routineName: string | null;
+  /** The gateway named no routine (`cronJobName: null`): it no longer has the routine. */
+  routineGone: boolean;
   /** The exact command and folder it is bound to, as the gateway displays them. */
   command: string;
   cwd: string | null;
@@ -175,7 +177,8 @@ export type RoutineGrant = {
   expiresAtMs: number | null;
   revokedAtMs: number | null;
   lastUsedAtMs: number | null;
-  useCount: number;
+  /** How often it was used, as the gateway counts; null when it gives no count. */
+  useCount: number | null;
 };
 
 /** One entry of a machine's allowlist, in the approvals file's own terms. */
@@ -195,12 +198,25 @@ export type AllowlistEntry = {
   addedAt: number | null;
   /** The pattern and argument pattern are shown whole: only then can the person confirm its removal. */
   shownWhole: boolean;
+  /**
+   * Whether Remove can name this entry, judged on the bot's whole list in the file:
+   * `ok`; `no-id` (the file gives it none); `unidentified` (its id is shared, or is
+   * not one the bridge takes); `not-whole` (its details aren't shown whole);
+   * `every-bot` (the file's `*` scope, which Remove doesn't take).
+   */
+  removal: "ok" | "no-id" | "unidentified" | "not-whole" | "every-bot";
 };
 
 export type SavedApprovals = {
   readAt: number;
   grants:
-    | { status: "ready"; items: RoutineGrant[]; more: boolean }
+    | {
+        status: "ready";
+        items: RoutineGrant[];
+        more: boolean;
+        /** Listed grants that could not be read, so are not shown. */
+        omitted: number;
+      }
     | { status: "needs-approvals" }
     | { status: "failed"; message: string };
   /** The gateway's own machine's approvals file. Paired machines' files are not read here. */
@@ -230,13 +246,17 @@ function readGrant(value: unknown): RoutineGrant | null {
     agentId,
     routineId,
     routineName: cut(raw.cronJobName, MAX_PERMISSION_NAME),
+    routineGone: raw.cronJobName === null,
     command: cut(raw.command) ?? "(unreadable)",
     cwd: cut(raw.cwd),
     createdAtMs,
     expiresAtMs: time(raw.expiresAtMs),
     revokedAtMs: time(raw.revokedAtMs),
     lastUsedAtMs: time(raw.lastUsedAtMs),
-    useCount: typeof raw.useCount === "number" && raw.useCount >= 0 ? Math.floor(raw.useCount) : 0,
+    useCount:
+      typeof raw.useCount === "number" && Number.isFinite(raw.useCount) && raw.useCount >= 0
+        ? Math.floor(raw.useCount)
+        : null,
   };
 }
 
@@ -249,12 +269,18 @@ export async function readGrants(
     const answer = asRecord(
       await ctx.request("exec.approval.grants.list", { limit: MAX_GRANTS_LISTED + 1 }),
     );
-    const listed = Array.isArray(answer?.grants) ? answer.grants : [];
-    const items = listed
-      .slice(0, MAX_GRANTS_LISTED)
-      .map(readGrant)
-      .filter((each): each is RoutineGrant => each !== null);
-    return { status: "ready", items, more: listed.length > MAX_GRANTS_LISTED };
+    // No list at all is not an empty list.
+    if (!Array.isArray(answer?.grants))
+      return { status: "failed", message: "The gateway's answer has no list of grants." };
+    const listed = answer.grants;
+    const read = listed.slice(0, MAX_GRANTS_LISTED).map(readGrant);
+    const items = read.filter((each): each is RoutineGrant => each !== null);
+    return {
+      status: "ready",
+      items,
+      more: listed.length > MAX_GRANTS_LISTED,
+      omitted: read.length - items.length,
+    };
   } catch (error) {
     if (missingScope(error)) return { status: "needs-approvals" };
     return { status: "failed", message: errorText(error) };
@@ -343,6 +369,13 @@ export function approvalsSnapshot(value: unknown): ApprovalsSnapshot | { invalid
   return { hash, digest: sha256Hex(utf8Bytes(JSON.stringify(file))), file, agents };
 }
 
+/** The bot ids and entry ids the bridge takes for Remove (`botId` and `id` in bridge.ts). */
+const REMOVABLE_BOT = /^[\w.-]{1,128}$/;
+const REMOVABLE_ID = (id: string) =>
+  id.length > 0 &&
+  id.length <= 512 &&
+  ![...id].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
+
 /** Every entry of the approvals file, command and tool, bounded, in the file's order. */
 export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: number } {
   const agents = asRecord(asRecord(file)?.agents) ?? {};
@@ -363,14 +396,30 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
       );
       continue;
     }
-    for (const raw of Array.isArray(agent?.allowlist) ? agent.allowlist : []) {
+    const commands = Array.isArray(agent?.allowlist) ? agent.allowlist : [];
+    // How often each id occurs in the bot's whole list, rows past the display cap included.
+    const seen = new Map<unknown, number>();
+    for (const raw of commands) {
+      const id = asRecord(raw)?.id;
+      if (id !== undefined) seen.set(id, (seen.get(id) ?? 0) + 1);
+    }
+    for (const raw of commands) {
       const entry = asRecord(raw);
       const pattern = cut(entry?.pattern);
-      if (!entry || !pattern) continue;
+      if (!entry || !pattern) {
+        omitted += 1;
+        continue;
+      }
       const argPattern = cut(entry.argPattern, MAX_ENTRY_DETAIL);
+      const shownWhole =
+        pattern === entry.pattern &&
+        (entry.argPattern === undefined ||
+          entry.argPattern === "" ||
+          argPattern === entry.argPattern);
+      const entryId = wholeId(entry.id);
       add({
         agentId,
-        entryId: wholeId(entry.id),
+        entryId,
         kind: "command",
         pattern,
         argPattern,
@@ -378,18 +427,30 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
         fromAlwaysAllow: entry.source === "allow-always",
         lastUsedAt: time(entry.lastUsedAt),
         addedAt: null,
-        shownWhole:
-          pattern === entry.pattern &&
-          (entry.argPattern === undefined ||
-            entry.argPattern === "" ||
-            argPattern === entry.argPattern),
+        shownWhole,
+        removal:
+          entry.id === undefined
+            ? "no-id"
+            : agentId === "*"
+              ? "every-bot"
+              : !entryId ||
+                  seen.get(entry.id) !== 1 ||
+                  !REMOVABLE_ID(entryId) ||
+                  !REMOVABLE_BOT.test(agentId)
+                ? "unidentified"
+                : !shownWhole
+                  ? "not-whole"
+                  : "ok",
       });
     }
     for (const raw of Array.isArray(agent?.mcpTools) ? agent.mcpTools : []) {
       const entry = asRecord(raw);
       const server = cut(entry?.server, MAX_PERMISSION_NAME);
       const tool = cut(entry?.tool, MAX_PERMISSION_NAME);
-      if (!entry || !server || !tool) continue;
+      if (!entry || !server || !tool) {
+        omitted += 1;
+        continue;
+      }
       add({
         agentId,
         entryId: null,
@@ -401,6 +462,7 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
         lastUsedAt: time(entry.lastUsedAt),
         addedAt: time(entry.addedAt),
         shownWhole: server === entry.server && tool === entry.tool,
+        removal: "no-id",
       });
     }
   }

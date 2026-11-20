@@ -257,7 +257,7 @@ test.describe("behaviour", () => {
     await openFixture(page, `${ADMIN}&revoke=gone`, "light");
     await permissions("Saved approvals", grants)(page);
     await page.getByRole("button", { name: "Revoke" }).click();
-    await expect(page.getByText("The gateway has no such grant now.")).toBeVisible();
+    await expect(page.getByText("The gateway returned ‘not found’ for this revoke.")).toBeVisible();
     await expect(page.getByTestId("routine-grant")).toHaveCount(1);
   });
 
@@ -322,10 +322,10 @@ test.describe("behaviour", () => {
     ).toContainText("Added ");
     // The page names the lists it read, those it did not, and which entries it can remove.
     await expect(page.getByTestId("saved-read")).toHaveText(
-      "Read here: the routines' grants the gateway lists, and the allowlist in the approvals file of the gateway's own machine. Clawtrate's rules plugin makes no standing approval.",
+      "This page shows routines' grants and the allowlist in the gateway machine's approvals file when this connection can read them.",
     );
     await expect(page.getByTestId("saved-not-listed")).toHaveText(
-      "Not read here: placement grants, which the gateway keeps for some plugin commands on paired machines for up to 30 days and has no list for; the allowlists of paired machines; and any trust a plugin keeps for itself. Remove… is offered only for an allowlist entry with an id.",
+      "Not read here: placement grants, which the gateway keeps for some plugin commands on paired machines for up to 30 days and has no list for; the allowlists of paired machines; and any trust a plugin keeps for itself. With admin access, Clawtrate can remove a command entry it can identify in the current file.",
     );
     const tool = page.getByTestId("allowlist-entry").filter({ hasText: "coder__send_message" });
     await expect(tool).toContainText("No last use recorded");
@@ -452,6 +452,86 @@ test.describe("behaviour", () => {
     await expect(long.first().getByTestId("entry-not-removable")).toHaveText(
       "Clawtrate can't remove this entry because its pattern is too long to show in full.",
     );
+  });
+
+  test("F-178: a list with rows left out and none shown says so, never that the file lists nothing", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&saved=omitted-only`, "light");
+    await permissions("Saved approvals", grants)(page);
+    await expect(page.getByTestId("allowlist-none")).toHaveText("No entries shown.");
+    await expect(page.getByTestId("allowlist-omitted")).toHaveText("3 entries aren't shown.");
+    await expect(page.getByTestId("saved-empty")).toHaveCount(0);
+    await expect(page.getByText("lists no allowlist entries")).toHaveCount(0);
+  });
+
+  test("F-178: rows the page can't remove say why, and a grant claims no enforcement or use it wasn't given", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&saved=edge`, "light");
+    await permissions("Saved approvals")(page);
+    const rows = page.getByTestId("allowlist-entry");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.getByRole("button", { name: "Remove…" })).toHaveCount(0);
+    const every = rows.filter({ hasText: "/usr/bin/uptime" });
+    await expect(every).toContainText("/usr/bin/uptime · Every bot ·");
+    await expect(every.getByTestId("entry-not-removable")).toHaveText(
+      "Clawtrate can't remove entries for every bot here.",
+    );
+    for (const pattern of ["/usr/bin/true", "/usr/bin/false"])
+      await expect(rows.filter({ hasText: pattern }).getByTestId("entry-not-removable")).toHaveText(
+        "Clawtrate can't identify this entry for removal.",
+      );
+    const unread = page.getByTestId("routine-grant").filter({ hasText: "Log rotation" });
+    await expect(unread).toContainText("Saved command (unreadable)");
+    await expect(unread).toContainText("no use count recorded");
+    await expect(unread).not.toContainText("not used yet");
+    await expect(page.getByTestId("saved-approvals")).not.toContainText(
+      "The gateway enforces this",
+    );
+    await expect(
+      page.getByTestId("routine-grant").filter({ hasText: "Routine name not read" }),
+    ).toHaveCount(1);
+  });
+
+  test("F-178: a revoke answered not-found whose read afterwards failed shows both", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&revoke=gone-unread`, "light");
+    await permissions("Saved approvals", grants)(page);
+    await page
+      .getByTestId("routine-grant")
+      .filter({ hasText: "Weekly cleanup" })
+      .getByRole("button", { name: "Revoke" })
+      .click();
+    await expect(
+      page.getByText(
+        "The gateway returned ‘not found’ for this revoke. Couldn't read the grants back: The gateway didn't answer within 60 seconds.",
+      ),
+    ).toBeVisible();
+  });
+
+  test("F-178: a refused revoke whose grant ends while it waits shows it ended, with no Revoke, and says only that it is still listed", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&saved=expiring&revoke=refused-held`, "light");
+    await permissions("Saved approvals", grants)(page);
+    const live = page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" });
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { hold: () => void } }).clawtrateFixture.hold(),
+    );
+    await live.getByRole("button", { name: "Revoke" }).click();
+    await page.clock.setFixedTime(NOW.getTime() + 2 * 60_000);
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: { release: () => void } }
+      ).clawtrateFixture.release(),
+    );
+    await expect(live).toContainText("The gateway still lists this grant, not revoked.");
+    await expect(live).toContainText(" · ended ", { timeout: 45_000 });
+    await expect(live.getByRole("button", { name: "Revoke" })).toHaveCount(0);
+    await expect(live).not.toContainText("active");
+    await expect(live.getByTestId("grant-revoked")).toHaveCount(0);
   });
 
   test("F-178: below approvals the page reads nothing and asks for approvals access alone", async ({

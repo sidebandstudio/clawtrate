@@ -70,17 +70,6 @@
   height: 56px;
 }
 
-.c-enforced {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.c-enforced .icon {
-  width: 13px;
-  height: 13px;
-}
-
 .c-saved > .b-row {
   display: flex;
   align-items: flex-start;

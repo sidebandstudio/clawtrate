@@ -34,7 +34,7 @@ import {
 import { Avatar } from "../Avatar.tsx";
 import { useBridge } from "../bridge.tsx";
 import { clockTime, fullDate, rowTime } from "../format.ts";
-import { ChevronIcon, PlugIcon, ShieldIcon } from "../icons.tsx";
+import { ChevronIcon, PlugIcon } from "../icons.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
 import { AdminBar, Select } from "../bots/parts.tsx";
 import { useNow } from "../usage/parts.tsx";
@@ -98,23 +98,17 @@ export function pluginWords(plugin: RulesPluginState | "checking" | { failed: st
 function grantWhen(grant: RoutineGrant, now: number): string {
   const until =
     grant.expiresAtMs === null
-      ? "until revoked or the routine changes"
+      ? "no expiry recorded"
       : grant.expiresAtMs <= now
         ? `ended ${fullDate(grant.expiresAtMs)}`
         : `until ${fullDate(grant.expiresAtMs)}`;
   const used =
-    grant.useCount === 0
-      ? "not used yet"
-      : `used ${grant.useCount} ${grant.useCount === 1 ? "time" : "times"}${grant.lastUsedAtMs === null ? "" : `, last ${fullDate(grant.lastUsedAtMs)}`}`;
+    grant.useCount === null
+      ? "no use count recorded"
+      : grant.useCount === 0
+        ? "not used yet"
+        : `used ${grant.useCount} ${grant.useCount === 1 ? "time" : "times"}${grant.lastUsedAtMs === null ? "" : `, last ${fullDate(grant.lastUsedAtMs)}`}`;
   return `grant ${grant.grantId.slice(0, 4)} · granted ${fullDate(grant.createdAtMs)} · ${until} · ${used}`;
-}
-
-function GatewayMark() {
-  return (
-    <small className="c-enforced">
-      <ShieldIcon /> The gateway enforces this
-    </small>
-  );
 }
 
 // Activity (section 9) -------------------------------------------------------------------
@@ -476,8 +470,16 @@ function savedKey(connection: ConnectionState): string | null {
     : null;
 }
 
-/** Whether a listed entry can be confirmed for removal: its id, and its pattern shown whole. */
-const removable = (entry: AllowlistEntry) => entry.entryId !== null && entry.shownWhole;
+/** Whether a listed entry can be confirmed for removal, as the engine judged it on the whole file. */
+const removable = (entry: AllowlistEntry) => entry.removal === "ok";
+
+/** Why an entry offers no Remove. */
+const NOT_REMOVABLE: Record<Exclude<AllowlistEntry["removal"], "ok">, string> = {
+  "no-id": "Clawtrate can't remove this entry: the file gives it no id.",
+  unidentified: "Clawtrate can't identify this entry for removal.",
+  "not-whole": "Clawtrate can't remove this entry because its pattern is too long to show in full.",
+  "every-bot": "Clawtrate can't remove entries for every bot here.",
+};
 
 function SavedPart({
   connection,
@@ -535,7 +537,7 @@ function SavedPart({
         note = "";
         announce(result.answer === "already-revoked" ? "Already revoked" : "Revoked");
       } else if (result.answer === "not-found" && !listed) {
-        note = "The gateway has no such grant now.";
+        note = `The gateway returned ‘not found’ for this revoke.${result.readError ? ` Couldn't read the grants back: ${result.readError}` : ""}`;
         announce("Not found");
       } else {
         const why = result.error ? `Couldn't revoke. ${result.error}` : "Couldn't revoke.";
@@ -632,11 +634,16 @@ function SavedPart({
       ? [...grants.items].sort((a, b) => b.createdAtMs - a.createdAtMs)
       : [];
   const entries = allowlist.status === "ready" ? allowlist.items : [];
+  // Nothing shown is a verdict only on lists read whole: both read, no rows and none left out.
   const empty =
     grants.status === "ready" &&
     grantItems.length === 0 &&
+    grants.omitted === 0 &&
+    !grants.more &&
     allowlist.status === "ready" &&
-    entries.length === 0;
+    entries.length === 0 &&
+    allowlist.omitted === 0;
+  const entryBot = (agentId: string) => (agentId === "*" ? "Every bot" : botName(agentId));
   // Notes about entries the read afterwards no longer lists.
   const goneNotes = Object.entries(notes).filter(
     ([id, text]) =>
@@ -649,8 +656,8 @@ function SavedPart({
   return (
     <div data-testid="saved-approvals">
       <p className="b-hint c-lead" data-testid="saved-read">
-        Read here: the routines' grants the gateway lists, and the allowlist in the approvals file
-        of the gateway's own machine. Clawtrate's rules plugin makes no standing approval.
+        This page shows routines' grants and the allowlist in the gateway machine's approvals file
+        when this connection can read them.
       </p>
       {goneNotes.map(([id, text]) => (
         <p key={id} className="b-hint" role="status">
@@ -662,36 +669,43 @@ function SavedPart({
           <h3>Nothing in the two lists read</h3>
           <p>
             The gateway lists no routine's grant, and its machine's approvals file has no allowlist
-            entry. A routine's command allowed for some days, or a command allowed always on the
-            gateway's machine, would be listed here.
+            entry.
           </p>
         </div>
       ) : (
         <>
           <h4 className="b-group">Routines' grants</h4>
           {grants.status === "failed" ? (
-            <p className="b-hint" role="alert">
-              Couldn't load the routines' grants. {grants.message}
+            <p className="b-hint" role="alert" data-testid="grants-unread">
+              Not read. Couldn't load the routines' grants. {grants.message}
             </p>
           ) : grants.status === "needs-approvals" ? (
-            <p className="b-hint">Seeing saved approvals needs approvals access.</p>
+            <p className="b-hint" data-testid="grants-unread">
+              Not read. Seeing saved approvals needs approvals access.
+            </p>
           ) : grantItems.length === 0 ? (
-            <p className="b-hint">The gateway lists no routine's grant.</p>
+            <p className="b-hint">
+              {grants.omitted > 0 || grants.more
+                ? "No grants shown."
+                : "The gateway lists no routine's grant."}
+            </p>
           ) : (
             <dl className="facts c-saved" data-testid="routine-grants">
               {grantItems.map((grant) => {
                 const revoked = grant.revokedAtMs !== null;
                 const ended = grant.expiresAtMs !== null && grant.expiresAtMs <= now;
                 const note = notes[grant.grantId];
-                const gone = grant.routineName === null;
+                const routine = grant.routineGone
+                  ? "A routine the gateway no longer has"
+                  : grant.routineName === null
+                    ? "Routine name not read"
+                    : `Routine ${grant.routineName}`;
                 return (
                   <div key={grant.grantId} className="b-row" data-testid="routine-grant">
                     <span className="b-row-main">
                       <span className={revoked || ended ? "c-struck" : undefined}>
-                        {gone
-                          ? "A routine the gateway no longer has"
-                          : `Routine ${grant.routineName}`}{" "}
-                        ({botName(grant.agentId)}) · Saved command <code>{grant.command}</code>
+                        {routine} ({botName(grant.agentId)}) · Saved command{" "}
+                        <code>{grant.command}</code>
                         {grant.cwd ? (
                           <>
                             {" "}
@@ -705,9 +719,7 @@ function SavedPart({
                           Revoked {fullDate(grant.revokedAtMs)}. The routine's next matching command
                           no longer runs under this grant.
                         </small>
-                      ) : ended || gone ? null : (
-                        <GatewayMark />
-                      )}
+                      ) : null}
                       {note && (
                         <small role="status" data-tone="danger">
                           {note}
@@ -731,9 +743,12 @@ function SavedPart({
             </dl>
           )}
           {grantItems.length > 0 && (
+            <p className="b-hint">Command and folder text may be masked, escaped or shortened.</p>
+          )}
+          {grants.status === "ready" && grants.omitted > 0 && (
             <p className="b-hint">
-              Each saved command and folder is as the gateway shows it, with what looks like a
-              secret masked, invisible characters written as codes, and cut at 512 characters.
+              {grants.omitted} {grants.omitted === 1 ? "grant isn't" : "grants aren't"} shown: the
+              gateway's answer for {grants.omitted === 1 ? "it" : "them"} couldn't be read.
             </p>
           )}
           {grants.status === "ready" && grants.more && (
@@ -741,23 +756,29 @@ function SavedPart({
           )}
           <h4 className="b-group">The gateway machine's allowlist</h4>
           {allowlist.status === "failed" ? (
-            <p className="b-hint" role="alert">
-              Couldn't load the allowlist. {allowlist.message}
+            <p className="b-hint" role="alert" data-testid="allowlist-unread">
+              Not read. Couldn't load the allowlist. {allowlist.message}
             </p>
           ) : allowlist.status === "needs-admin" ? (
-            <p className="b-hint">Seeing the gateway machine's allowlist needs admin access.</p>
+            <p className="b-hint" data-testid="allowlist-unread">
+              Not read. Seeing the gateway machine's allowlist needs admin access.
+            </p>
           ) : entries.length === 0 ? (
-            <p className="b-hint">Its approvals file lists no allowed command.</p>
+            <p className="b-hint" data-testid="allowlist-none">
+              {allowlist.omitted > 0
+                ? "No entries shown."
+                : "The gateway's approvals file lists no allowlist entries."}
+            </p>
           ) : (
             <dl className="facts c-saved" data-testid="allowlist">
               {entries.map((entry, index) => {
                 const id = `entry:${entry.agentId}:${entry.entryId ?? index}`;
                 const note = notes[id];
                 return (
-                  <div key={id} className="b-row" data-testid="allowlist-entry">
+                  <div key={`${id}:${index}`} className="b-row" data-testid="allowlist-entry">
                     <span className="b-row-main">
                       <span>
-                        <code>{entry.pattern}</code> · {botName(entry.agentId)} · on the gateway's
+                        <code>{entry.pattern}</code> · {entryBot(entry.agentId)} · on the gateway's
                         machine{entry.fromAlwaysAllow ? " · from Always allow" : ""}
                       </span>
                       {entry.argPattern && (
@@ -777,17 +798,11 @@ function SavedPart({
                           that saved it.
                         </small>
                       )}
-                      {!entry.entryId ? (
+                      {entry.removal !== "ok" && (
                         <small data-testid="entry-not-removable">
-                          Clawtrate can't remove this entry: the file gives it no id.
+                          {NOT_REMOVABLE[entry.removal]}
                         </small>
-                      ) : !entry.shownWhole ? (
-                        <small data-testid="entry-not-removable">
-                          Clawtrate can't remove this entry because its pattern is too long to show
-                          in full.
-                        </small>
-                      ) : null}
-                      <GatewayMark />
+                      )}
                       {note && (
                         <small role="status" data-tone="danger">
                           {note}
@@ -825,9 +840,10 @@ function SavedPart({
             </p>
           )}
           {allowlist.status === "ready" && allowlist.omitted > 0 && (
-            <p className="b-hint">
-              {allowlist.omitted} more {allowlist.omitted === 1 ? "entry isn't" : "entries aren't"}{" "}
-              shown.
+            <p className="b-hint" data-testid="allowlist-omitted">
+              {allowlist.omitted}
+              {entries.length > 0 ? " more" : ""}{" "}
+              {allowlist.omitted === 1 ? "entry isn't" : "entries aren't"} shown.
             </p>
           )}
         </>
@@ -835,7 +851,8 @@ function SavedPart({
       <p className="b-hint" data-testid="saved-not-listed">
         Not read here: placement grants, which the gateway keeps for some plugin commands on paired
         machines for up to 30 days and has no list for; the allowlists of paired machines; and any
-        trust a plugin keeps for itself. Remove… is offered only for an allowlist entry with an id.
+        trust a plugin keeps for itself. With admin access, Clawtrate can remove a command entry it
+        can identify in the current file.
       </p>
       {confirm && (
         <Confirm

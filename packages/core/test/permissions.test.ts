@@ -15,6 +15,7 @@ import {
   MAX_GRANTS_LISTED,
   MAX_PERMISSION_NAME,
   MAX_PERMISSION_TEXT,
+  allowlistOf,
   approvalsSnapshot,
   fitJson,
   jsonChars,
@@ -288,6 +289,120 @@ describe("F-178: saved approvals, as the gateway lists them", () => {
       ["coder__send", 9, null],
       ["coder__read", null, null],
     ]);
+  });
+
+  it("says only what was read: an answer with no list fails, and rows that can't be shown are counted", async () => {
+    const read = (grants: unknown, file: unknown) =>
+      readSavedApprovals(
+        fake({
+          "exec.approval.grants.list": () => grants,
+          "exec.approvals.get": () => file,
+        }).ctx,
+        { canApprove: true, canAdmin: true },
+      );
+    // A misleading empty reply, and a file answer with no revision: neither is an empty list.
+    const empty = await read({}, { ...approvalsFile([LS_ENTRY]), hash: undefined });
+    expect(empty.grants).toMatchObject({ status: "failed" });
+    expect(empty.allowlist).toMatchObject({ status: "failed" });
+    // Rows that can't be shown are counted, also when none is shown.
+    const omittedOnly = await read(
+      { grants: [{ grantId: "no-routine" }] },
+      approvalsFile([{ pattern: "" }, { pattern: "" }]),
+    );
+    expect(omittedOnly.grants).toMatchObject({ status: "ready", items: [], omitted: 1 });
+    expect(omittedOnly.allowlist).toMatchObject({ status: "ready", items: [], omitted: 2 });
+  });
+
+  it("judges each entry's Remove on the bot's whole list: shared, overlong or control ids, every bot, no id", async () => {
+    const filler = Array.from({ length: MAX_ALLOWLIST_LISTED - 1 }, (_, i) => ({
+      pattern: `/opt/tool-${i}`,
+      id: `filler-${i}`,
+    }));
+    const file = {
+      ...approvalsFile([]),
+      file: {
+        version: 1,
+        agents: {
+          otto: {
+            allowlist: [
+              ...filler,
+              // Shown as the 60th row; its twin is past the display cap.
+              { pattern: "/usr/bin/true", id: "shared" },
+              { pattern: "/usr/bin/false", id: "shared" },
+            ],
+          },
+          pip: {
+            allowlist: [
+              { pattern: "/usr/bin/a", id: "x".repeat(513) },
+              { pattern: "/usr/bin/b", id: "tab\there" },
+              { pattern: "/usr/bin/c" },
+              { pattern: "/usr/bin/d", id: "fine" },
+            ],
+            mcpTools: [{ server: "coder", tool: "send", source: "allow-always", addedAt: 1 }],
+          },
+          "*": { allowlist: [{ pattern: "/usr/bin/uptime", id: "every-1" }] },
+        },
+      },
+    };
+    const { allowlist } = await readSavedApprovals(
+      fake({
+        "exec.approval.grants.list": () => ({ grants: [] }),
+        "exec.approvals.get": () => file,
+      }).ctx,
+      { canApprove: true, canAdmin: true },
+    );
+    if (allowlist.status !== "ready") throw new Error("not ready");
+    expect(allowlist.items.at(-1)).toMatchObject({ entryId: "shared", removal: "unidentified" });
+    expect(allowlist.items.slice(0, -1).every((each) => each.removal === "ok")).toBe(true);
+    // Past the cap: Pip's five and every bot's one are counted, the twin too.
+    expect(allowlist.omitted).toBe(1 + 5 + 1);
+    const pip = allowlistOf({
+      agents: { pip: file.file.agents.pip, "*": file.file.agents["*"] },
+    }).items.map((each) => [each.pattern, each.removal]);
+    expect(pip).toEqual([
+      ["/usr/bin/a", "unidentified"],
+      ["/usr/bin/b", "unidentified"],
+      ["/usr/bin/c", "no-id"],
+      ["/usr/bin/d", "ok"],
+      ["coder__send", "no-id"],
+      ["/usr/bin/uptime", "every-bot"],
+    ]);
+  });
+
+  it("a grant says only what the gateway gave: an unreadable binding, no use count, no routine name read", async () => {
+    const { grants } = await readSavedApprovals(
+      fake({
+        "exec.approval.grants.list": () => ({
+          grants: [
+            grant({ command: undefined, useCount: undefined }),
+            grant({ grantId: "g2", cronJobName: undefined }),
+            grant({ grantId: "g3", cronJobName: null, useCount: 0 }),
+          ],
+        }),
+      }).ctx,
+      { canApprove: true, canAdmin: false },
+    );
+    if (grants.status !== "ready") throw new Error("not ready");
+    expect(
+      grants.items.map((each) => [each.command, each.useCount, each.routineName, each.routineGone]),
+    ).toEqual([
+      ["(unreadable)", null, "Weekly cleanup", false],
+      ["ls", 0, null, false],
+      ["ls", 0, null, true],
+    ]);
+  });
+
+  it("a revoke answered not-found whose read afterwards fails gives both", async () => {
+    const result = await revokeGrant(
+      fake({
+        "exec.approval.grants.revoke": () => ({ outcome: "not-found" }),
+        "exec.approval.grants.list": () => {
+          throw new Error("socket closed");
+        },
+      }).ctx,
+      grant().grantId,
+    );
+    expect(result).toMatchObject({ answer: "not-found", grant: null, readError: "socket closed" });
   });
 
   it("is bounded where it enters: grants, entries and their text", async () => {
