@@ -62,8 +62,6 @@ export function WorkPanel({
   onFilePath,
   accounts,
   bots,
-  tasks,
-  transcripts,
   connection,
   info,
 }: {
@@ -85,9 +83,6 @@ export function WorkPanel({
   onFilePath: (path: string | null) => void;
   accounts: AccountsState;
   bots: readonly Bot[];
-  /** The bot's tasks, for a run in progress when its account changes. */
-  tasks: readonly Task[];
-  transcripts: Record<string, Transcript>;
   connection: ConnectionState;
   info: HostInfo;
 }) {
@@ -215,12 +210,9 @@ export function WorkPanel({
           {bot ? (
             <BotSettingsWithUsage
               bot={bot}
-              taskKey={task?.key ?? null}
               task={task}
               accounts={accounts}
               bots={bots}
-              tasks={tasks}
-              transcripts={transcripts}
               connection={connection}
               info={info}
               visible={tab === "settings"}

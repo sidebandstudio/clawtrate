@@ -474,7 +474,7 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   await settings.getByRole("radio", { name: /^Acme · Work/ }).click();
   await expect(
     settings.getByText(
-      /Second is locked to Acme · Home\. After saving, Second runs on Acme · Work first/,
+      /Second is locked to Acme · Home\. After saving, Second is bound to Acme · Work while the gateway.s order for Second still names only Acme · Home/,
     ),
   ).toBeVisible();
   await settings.getByRole("button", { name: "Save" }).click();
@@ -501,7 +501,7 @@ async function requestsSince(session: string, seq: number): Promise<Request[]> {
 const lastSeq = async () =>
   (await scripted<{ requests: Request[] }>("/scripted/requests")).requests.at(-1)?.seq ?? 0;
 
-test("F-473: changing a bot's account draws a grey line in its open task, and the next run uses the new account", async () => {
+test("F-473: changing a bot's account draws a grey line in its open task naming the binding read back, and the next run uses the new account", async () => {
   test.setTimeout(180_000);
   const settings = await accountPage();
   // The check before unlocked Second on the gateway: read its order again.
@@ -511,8 +511,8 @@ test("F-473: changing a bot's account draws a grey line in its open task, and th
   });
   await settings.getByRole("button", { name: "Change account" }).click();
   await settings.getByRole("radio", { name: /^Acme · Home/ }).click();
-  // Nothing runs: no note about a run in progress.
-  await expect(settings.getByText(/A run in progress finishes on/)).toHaveCount(0);
+  // Nothing predicts which account a run uses.
+  await expect(settings.getByText(/finishes on|next run/)).toHaveCount(0);
   await settings.getByRole("button", { name: "Save" }).click();
   await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Home.", {
     timeout: 20_000,
@@ -520,7 +520,7 @@ test("F-473: changing a bot's account draws a grey line in its open task, and th
   // The gateway records no line for it: Clawtrate draws one in the open task.
   // The check before changed Second's account too, from the same task: this line is the last.
   const line = page.getByTestId("client-event-line").last();
-  await expect(line).toHaveText("Second now runs on Acme · Home, from the next run.");
+  await expect(line).toHaveText("Second is now bound to Acme · Home.");
   await shots("account-change-line");
   expect(entry(await config(), "second")!.model).toEqual({
     primary: "acme/dev-1@acme:home",
@@ -540,7 +540,7 @@ test("F-473: changing a bot's account draws a grey line in its open task, and th
   expect(after.map((each) => each.account)).toEqual(after.map(() => "acme:home"));
 });
 
-test("F-473: a run in progress finishes on the account it started with; the line and the change say so, and the next run uses the new one", async () => {
+test("F-473: a run in progress finishes on the account it started with and the next run uses the new one, while the screen predicts neither", async () => {
   test.setTimeout(240_000);
   await accountPage();
   await page.getByRole("button", { name: "Back to settings" }).click();
@@ -558,13 +558,12 @@ test("F-473: a run in progress finishes on the account it started with; the line
   await page.getByRole("button", { name: /^Account: / }).click();
   await settings.getByRole("button", { name: "Change account" }).click();
   await settings.getByRole("radio", { name: /^Acme · Work/ }).click();
-  await expect(
-    settings.getByText("A run in progress finishes on Acme · Home. The next run uses Acme · Work."),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(settings.getByRole("button", { name: "Save" })).toBeEnabled({ timeout: 20_000 });
+  await expect(settings.getByText(/finishes on|next run|run in progress/)).toHaveCount(0);
   await shots("account-change-running");
   await settings.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("client-event-line").last()).toHaveText(
-    "Second now runs on Acme · Work. The run in progress finishes on Acme · Home.",
+    "Second is now bound to Acme · Work.",
     { timeout: 20_000 },
   );
   expect(entry(await config(), "second")!.model).toEqual({
@@ -590,6 +589,77 @@ test("F-473: a run in progress finishes on the account it started with; the line
     .toBeGreaterThan(0);
   const after = await requestsSince("agent:second:main", next);
   expect(after.map((each) => each.account)).toEqual(after.map(() => "acme:work"));
+});
+
+test("F-473: a task set to another account by another client keeps it after a change; the line names only the binding", async () => {
+  test.setTimeout(180_000);
+  // Another client sets one of Second's tasks to Work, while Second itself moves to Home.
+  const other = await admin.request<{ key: string }>("sessions.create", {
+    agentId: "second",
+    label: "Set elsewhere",
+  });
+  await admin.request("sessions.patch", { key: other.key, model: "acme/dev-1@acme:work" });
+  const settings = await accountPage();
+  await settings.getByRole("button", { name: "Change account" }).click();
+  await settings.getByRole("radio", { name: /^Acme · Home/ }).click();
+  await settings.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("client-event-line").last()).toHaveText(
+    "Second is now bound to Acme · Home.",
+    { timeout: 20_000 },
+  );
+  // Nothing on the page says which account the next run, or that task's, uses.
+  await expect(page.getByText(/finishes on|next run|run in progress/)).toHaveCount(0);
+  // The gateway lets the task's own account win: its run goes to Work.
+  const since = await lastSeq();
+  await admin.request("chat.send", {
+    sessionKey: other.key,
+    message: "#text",
+    idempotencyKey: `${other.key}-after-change`,
+  });
+  await expect
+    .poll(async () => (await requestsSince(other.key, since)).length, { timeout: 60_000 })
+    .toBeGreaterThan(0);
+  const served = await requestsSince(other.key, since);
+  expect(served.map((each) => each.account)).toEqual(served.map(() => "acme:work"));
+  expect(entry(await config(), "second")!.model).toEqual({
+    primary: "acme/dev-1@acme:home",
+    fallbacks: [],
+  });
+});
+
+test("F-473: a binding another client made while Change account was open is found before the write: no second change and no line", async () => {
+  test.setTimeout(120_000);
+  const settings = await accountPage();
+  await settings.getByRole("button", { name: "Change account" }).click();
+  await settings.getByRole("radio", { name: /^Acme · Work/ }).click();
+  const lines = await page.getByTestId("client-event-line").count();
+  // Another admin moves Second to Work with the dialog still open.
+  const before = await admin.request<{ hash: string; configRevisionHash?: string }>(
+    "config.get",
+    {},
+  );
+  await admin.request("config.patch", {
+    raw: JSON.stringify({
+      agents: {
+        entries: { second: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } },
+      },
+    }),
+    baseHash: before.hash,
+    replacePaths: ["agents.entries.second.model.fallbacks"],
+  });
+  await expect
+    .poll(async () => (entry(await config(), "second")!.model as Json).primary, {
+      timeout: 30_000,
+    })
+    .toBe("acme/dev-1@acme:work");
+  const revision = (await admin.request<{ hash: string }>("config.get", {})).hash;
+  await settings.getByRole("button", { name: "Save" }).click();
+  await expect(settings.getByTestId("bound-note")).toContainText("Acme · Work", {
+    timeout: 20_000,
+  });
+  // Nothing was written, and no line was drawn for a change Clawtrate didn't make.
+  expect((await admin.request<{ hash: string }>("config.get", {})).hash).toBe(revision);
+  await expect(page.getByTestId("client-event-line")).toHaveCount(lines);
 });
 
 test("F-473: a bot locked to its old account and moved to another of the provider: the gateway puts the new one first and still tries the old one", async () => {

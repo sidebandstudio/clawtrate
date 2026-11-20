@@ -628,6 +628,8 @@ export function accountCommand(
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
   params: AccountParams,
+  /** The task of a bot that is open here, as a host knows it. */
+  openTaskOf: (botId: string) => string | null = () => null,
 ): Promise<unknown> | undefined {
   const accounts = () => get().accounts;
   const put = (change: (a: AccountsState) => AccountsState) =>
@@ -1130,24 +1132,26 @@ export function accountCommand(
         }),
       }));
       // The line Clawtrate draws in the open task for its own change of account.
-      if (command.type === "changeBotAccount") {
+      const taskKey = openTaskOf(command.botId);
+      const changed =
+        command.type === "changeBotAccount" &&
+        (before?.account !== command.account || before?.provider !== command.provider);
+      if (command.type === "changeBotAccount" && changed && taskKey) {
         put((a) => ({
           ...a,
           changes: [
             ...a.changes,
             {
               botId: command.botId,
-              taskKey: command.taskKey ?? null,
+              taskKey,
               at: Date.now(),
               provider: command.provider,
               account: command.account,
-              previous: before?.account ?? null,
-              running: (command.running ?? false) && before?.account !== command.account,
             },
           ],
         }));
       }
-      return Promise.resolve();
+      return Promise.resolve(command.type === "changeBotAccount" ? { changed } : undefined);
     }
     case "removeBotFallbacks":
       put((a) => ({

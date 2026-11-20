@@ -17,6 +17,7 @@ import { isRefusedDecision } from "./approval-refusals.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import type { AccountChangeResult } from "./accounts.ts";
 import {
   MachinesEngine,
   type ApprovalsFile,
@@ -3881,9 +3882,9 @@ export class ClawtrateClient {
   }
 
   /** Read one bot's stored order and model again: the lock's evidence. */
-  checkLock(botId: string): Promise<void> {
-    if (this.state.connection.status !== "connected") return Promise.resolve();
-    return this.accounts.checkLock(botId);
+  async checkLock(botId: string): Promise<void> {
+    if (this.state.connection.status !== "connected") return;
+    await this.accounts.checkLock(botId);
   }
 
   startSignIn(methodId: string, botId: string | null): Promise<void> {
@@ -3951,9 +3952,9 @@ export class ClawtrateClient {
     provider: string,
     model: string,
     effort: string | null,
-    place: { taskKey: string | null; running: boolean } = { taskKey: null, running: false },
-  ): Promise<void> {
-    return this.accounts.changeAccount(botId, account, provider, model, effort, place);
+    taskKey: string | null = null,
+  ): Promise<AccountChangeResult> {
+    return this.accounts.changeAccount(botId, account, provider, model, effort, taskKey);
   }
 
   setBotModel(botId: string, model: string, effort: string | null): Promise<void> {

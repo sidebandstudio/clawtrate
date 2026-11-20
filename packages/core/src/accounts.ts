@@ -365,22 +365,30 @@ export type AccountWrite = {
 };
 
 /**
- * A change of a bot's account that Clawtrate made, kept to draw the grey
- * event line in the task that was open for that bot: the gateway records no
- * such line (row 15). `account` null is "Let the gateway choose".
+ * A change of a bot's account that Clawtrate made and a read of the gateway
+ * then showed, kept to draw the grey event line in the task the viewer that
+ * made it had open for that bot: the gateway records no such line (row 15).
+ * `account` is the binding that read returned; null is no fixed account.
  */
 export type AccountChange = {
   botId: string;
-  /** The task that was open for the bot when it changed; the line is drawn there. */
-  taskKey: string | null;
+  /** The viewer's open task of that bot, as the host knows it; the line is drawn there only. */
+  taskKey: string;
   at: number;
   provider: string;
   account: string | null;
-  /** The account the bot was on before, when it had one. */
-  previous: string | null;
-  /** A run was in progress: it finishes on `previous`. */
-  running: boolean;
 };
+
+/** What a change of a bot's account did: `changed` false when a read found it already so. */
+export type AccountChangeResult = { changed: boolean };
+
+/** The account changes a viewer may see: those of the tasks it has open (host-side). */
+export function changesFor(
+  changes: readonly AccountChange[],
+  open: ReadonlySet<string>,
+): AccountChange[] {
+  return changes.filter((change) => open.has(change.taskKey));
+}
 
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";

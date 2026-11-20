@@ -328,7 +328,7 @@ test("F-473: changing a locked bot's account: the note before saving, then the l
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
   await expect(
     page.getByText(
-      /Otto is locked to OpenAI · Work\. After saving, Otto runs on OpenAI · Home first/,
+      /Otto is locked to OpenAI · Work\. After saving, Otto is bound to OpenAI · Home while the gateway.s order for Otto still names only OpenAI · Work/,
     ),
   ).toBeVisible();
   await save.click();
@@ -976,7 +976,7 @@ for (const size of [WIDE, PHONE]) {
   });
 }
 
-test("F-473: Save draws a grey line in the open task naming the new account, and the run in progress when there is one", async ({
+test("F-473: Save draws a grey line in the open task naming the binding, and says nothing of which account a run uses", async ({
   page,
 }) => {
   // Otto has a run in progress in another task.
@@ -988,34 +988,28 @@ test("F-473: Save draws a grey line in the open task naming the new account, and
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
-  await expect(
-    page.getByText("A run in progress finishes on OpenAI · Work. The next run uses OpenAI · Home."),
-  ).toBeVisible();
+  // A task's own account, a pause or a fallback decide which account serves a run.
+  await expect(page.getByText(/finishes on|next run|run in progress/)).toHaveCount(0);
   await page.getByRole("button", { name: "Save" }).click();
   const line = page.getByTestId("transcript").getByTestId("client-event-line");
-  await expect(line).toHaveText(
-    "Otto now runs on OpenAI · Home. The run in progress finishes on OpenAI · Work.",
-  );
+  await expect(line).toHaveText("Otto is now bound to OpenAI · Home.");
   // Centred, grey, after the last message: drawn by Clawtrate from its own change.
   await expect(line).toHaveAttribute("data-side", "center");
   await expect(line).toHaveClass(/event-line/);
+  // The command names no task and no run: the host knows which task is open.
   const change = (await sent(page)).find((each) => each.type === "changeBotAccount");
-  expect(change).toMatchObject({
-    botId: "otto",
-    account: "openai:home",
-    taskKey: "agent:otto:disk-space",
-    running: true,
-  });
+  expect(change).toMatchObject({ botId: "otto", account: "openai:home" });
+  expect(change).not.toHaveProperty("taskKey");
+  expect(change).not.toHaveProperty("running");
   // To no fixed account.
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(line.last()).toHaveText(
-    "Otto now has no fixed account. The run in progress finishes on OpenAI · Home.",
-  );
+  await expect(line.last()).toHaveText("Otto now has no fixed account.");
+  await expect(page.getByTestId("transcript").getByText(/finishes on|next run/)).toHaveCount(0);
 });
 
-test("F-473: with no run in progress the line says the change applies from the next run, and only in the task that was open", async ({
+test("F-473: the line is drawn in the task that was open for the bot, with no run in progress", async ({
   page,
 }) => {
   await openFixture(
@@ -1026,15 +1020,10 @@ test("F-473: with no run in progress the line says the change applies from the n
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
-  await expect(page.getByText(/A run in progress finishes on/)).toHaveCount(0);
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("transcript").getByTestId("client-event-line")).toHaveText(
-    "Pip now runs on OpenAI · Work, from the next run.",
+    "Pip is now bound to OpenAI · Work.",
   );
-  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
-    taskKey: "agent:pip:week",
-    running: false,
-  });
 });
 
 /** New bot, on the sign-in methods, and one of them started. */

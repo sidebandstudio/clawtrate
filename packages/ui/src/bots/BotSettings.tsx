@@ -13,8 +13,6 @@ import {
   type Bot,
   type ConnectionState,
   type HostInfo,
-  type Task,
-  type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
@@ -22,7 +20,6 @@ import {
   BackIcon,
   CheckIcon,
   ChevronIcon,
-  ClockIcon,
   LockIcon,
   PlusIcon,
   ShieldIcon,
@@ -59,11 +56,8 @@ type View = "main" | "account" | "change" | "connect" | "runs";
 
 export function BotSettings({
   bot,
-  taskKey = null,
   accounts,
   bots,
-  tasks,
-  transcripts,
   connection,
   info,
   visible,
@@ -72,12 +66,8 @@ export function BotSettings({
   extraGroups = null,
 }: {
   bot: Bot;
-  /** The task open for this bot, where the grey line for an account change is drawn. */
-  taskKey?: string | null;
   accounts: AccountsState;
   bots: readonly Bot[];
-  tasks: readonly Task[];
-  transcripts: Record<string, Transcript>;
   connection: ConnectionState;
   info: HostInfo;
   visible: boolean;
@@ -472,9 +462,6 @@ export function BotSettings({
       targetProvider && model
         ? (pickEffort ?? firstEffort(accounts, targetProvider, model, binding.effort))
         : null;
-    const running = tasks.some((task) =>
-      transcripts[task.key]?.runs.some((run) => run.state === "running" || run.state === "waiting"),
-    );
     // Only a choice in the list as it stands now: an account the last read lost cannot be saved.
     const listedNow =
       toGateway || (accounts.status === "ready" && list.some((each) => each.id === chosen));
@@ -484,20 +471,25 @@ export function BotSettings({
       setSaving(true);
       setError(null);
       try {
-        await bridge.invoke({
+        const { changed: made } = await bridge.invoke({
           type: "changeBotAccount",
           botId: bot.id,
           account: toGateway ? null : chosen,
           provider: targetProvider,
           model,
           effort,
-          taskKey,
-          running,
         });
+        // From the read after the write: what the gateway's settings now show, or that it
+        // already had it.
+        const named = target ? accountName(target, accounts) : chosen;
         announce(
           toGateway
-            ? `${name} now has no fixed account`
-            : `${name} now runs on ${target ? accountName(target, accounts) : chosen}`,
+            ? made
+              ? `${name} now has no fixed account`
+              : `${name} already had no fixed account`
+            : made
+              ? `${name} is now bound to ${named}`
+              : `${name} was already bound to ${named}`,
         );
         setPick(null);
         setPickModel(null);
@@ -577,15 +569,6 @@ export function BotSettings({
             </p>
           </>
         )}
-        {changed && running && (
-          <Note icon={<ClockIcon />}>
-            <p>
-              {toGateway
-                ? `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. From the next run ${name} has no fixed account.`
-                : `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. The next run uses ${target ? accountName(target, accounts) : chosen}.`}
-            </p>
-          </Note>
-        )}
         {changed && lock && was && (toGateway || target?.provider === was.provider) && (
           <Note tone="warn" testId="locked-change-note">
             <p>
@@ -593,8 +576,8 @@ export function BotSettings({
                 ? `${name} is locked to ${accountName(was, accounts)}.`
                 : `${name} was locked to ${accountName(was, accounts)} when Clawtrate last checked, at ${clock(lock.asOf)}.`}{" "}
               {toGateway
-                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
-                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
+                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)} until its owner clears it on the gateway's machine. Account shows the command.`
+                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} is bound to ${accountName(target!, accounts)} while the gateway's order for ${name} still names only ${accountName(was, accounts)}, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
             </p>
           </Note>
         )}

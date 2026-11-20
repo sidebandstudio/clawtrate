@@ -344,6 +344,27 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
     const shown = viewerState({ ...initialState, transcripts }, new Set(["b"]));
     expect(Object.keys(shown.transcripts)).toEqual(["b"]);
   });
+
+  it("F-473: sends an account change's line only to a viewer with its task open", () => {
+    const change = (taskKey: string) => ({
+      botId: "otto",
+      taskKey,
+      at: 1,
+      provider: "acme",
+      account: "acme:home",
+    });
+    const state = {
+      ...initialState,
+      accounts: {
+        ...initialState.accounts,
+        changes: [change("agent:otto:a"), change("agent:pip:b")],
+      },
+    };
+    expect(viewerState(state, new Set()).accounts.changes).toEqual([]);
+    expect(viewerState(state, new Set(["agent:pip:b"])).accounts.changes).toEqual([
+      change("agent:pip:b"),
+    ]);
+  });
 });
 
 describe("uploads arriving together (F-074)", () => {

@@ -965,8 +965,6 @@ const accountChange = object<AccountChange>()({
   at: NUMBER,
   provider: ID,
   account: ID,
-  previous: ID,
-  running: FLAG,
 });
 const accountWrite = object<AccountWrite>()({
   what: ENUM,

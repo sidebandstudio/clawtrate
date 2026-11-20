@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNTS,
   accountWord,
+  changesFor,
   endingOf,
   enforceState,
   evaluateOrder,
@@ -27,7 +28,7 @@ import {
   worstCase,
   type ClawtrateState,
 } from "../src/index.ts";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -1882,33 +1883,99 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
 });
 
 describe("changing a bot's account (F-473)", () => {
-  it("F-473: a change keeps a line for the task open for the bot, naming the account it was on and a run in progress", async () => {
+  const TASK = "agent:otto:main";
+  const entry = (fake: AccountsGateway, botId: string) =>
+    (
+      (fake.config.agents as Record<string, unknown>).entries as Record<
+        string,
+        Record<string, unknown>
+      >
+    )[botId]!;
+
+  it("F-473: a change the read after it shows keeps a line for the task, with the account that read returned", async () => {
     const { client, accounts } = await accountsClient();
-    await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, {
-      taskKey: "agent:otto:main",
-      running: true,
-    });
+    expect(await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK)).toEqual(
+      {
+        changed: true,
+      },
+    );
+    expect(accounts().write).toMatchObject({ what: "account", status: "saved", error: null });
     expect(accounts().changes).toEqual([
       {
         botId: "otto",
-        taskKey: "agent:otto:main",
+        taskKey: TASK,
         at: expect.any(Number),
         provider: "acme",
         account: "acme:home",
-        previous: "acme:work",
-        running: true,
       },
     ]);
-    // To no fixed account, with no run in progress.
-    await client.changeBotAccount("otto", null, "acme", "dev-1", null, {
-      taskKey: "agent:otto:main",
-      running: false,
-    });
-    expect(accounts().changes.at(-1)).toMatchObject({
-      account: null,
-      previous: "acme:home",
-      running: false,
-    });
+    // To no fixed account.
+    await client.changeBotAccount("otto", null, "acme", "dev-1", null, TASK);
+    expect(accounts().changes.at(-1)).toMatchObject({ account: null });
+    client.stop();
+  });
+
+  it("F-473: a change whose read afterwards shows another binding is not saved and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // The gateway takes the patch, and its settings then name something else.
+    fake.gateway.handlers["config.patch"] = () => ({ ok: true });
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/The gateway took the change, but/);
+    expect(accounts().write).toMatchObject({ status: "unverified" });
+    expect(accounts().write?.error).toMatch(/acme\/dev-1@acme:work/);
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a change whose read afterwards fails is not saved and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      fake.failStatusFor = "otto";
+      return answer;
+    };
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/The gateway took the change, but/);
+    expect(accounts().write).toMatchObject({ status: "unverified" });
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a binding another client already made is found by the read before the write: nothing is written or drawn", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // Another admin moved Otto to Home after this screen last read it.
+    entry(fake, "otto").model = { primary: "acme/dev-1@acme:home", fallbacks: [] };
+    fake.revision += 1;
+    const patches = fake.gateway.calls("config.patch").length;
+    expect(await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK)).toEqual(
+      {
+        changed: false,
+      },
+    );
+    expect(fake.gateway.calls("config.patch")).toHaveLength(patches);
+    expect(accounts().write).toMatchObject({ status: "saved" });
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a write after another client's write since the read before it is refused, and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const get = fake.gateway.handlers["config.get"]!;
+    let reads = 0;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params);
+      // Someone else writes right after the read the change is decided on.
+      if ((reads += 1) === 1) fake.revision += 1;
+      return answer;
+    };
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/config changed/);
+    expect(accounts().write).toMatchObject({ status: "failed" });
+    expect(accounts().changes).toEqual([]);
     client.stop();
   });
 
@@ -1916,10 +1983,7 @@ describe("changing a bot's account (F-473)", () => {
     const { client, fake, accounts } = await accountsClient();
     fake.failPatch = "config.patch refused";
     await expect(
-      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, {
-        taskKey: "agent:otto:main",
-        running: false,
-      }),
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
     ).rejects.toThrow();
     expect(accounts().changes).toEqual([]);
     client.stop();
@@ -1934,14 +1998,53 @@ describe("changing a bot's account (F-473)", () => {
         "acme",
         "dev-1",
         null,
-        {
-          taskKey: `agent:otto:t${i}`,
-          running: false,
-        },
+        `agent:otto:t${i}`,
       );
     expect(accounts().changes).toHaveLength(MAX_ACCOUNT_CHANGES);
     expect(accounts().changes.at(-1)?.taskKey).toBe(`agent:otto:t${MAX_ACCOUNT_CHANGES}`);
     expect(accounts().changes[0]?.taskKey).toBe("agent:otto:t1");
+    client.stop();
+  });
+
+  it("F-473: the line goes to the task the host knows its viewer has open for that bot, never one the command names", async () => {
+    const fake = new AccountsGateway();
+    const rows = [
+      { key: TASK, agentId: "otto", sessionId: "s-otto", label: "Main", updatedAt: 1 },
+      { key: "agent:pip:main", agentId: "pip", sessionId: "s-pip", label: "Main", updatedAt: 1 },
+    ];
+    fake.gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    fake.gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => (client.state.tasksByBot.otto ?? []).length > 0);
+    // A task id handed in the command is not part of it.
+    const parsed = parseBridgeCommand({
+      type: "changeBotAccount",
+      botId: "otto",
+      account: "acme:home",
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      taskKey: "agent:pip:main",
+    });
+    expect(parsed).not.toHaveProperty("taskKey");
+    // A viewer with no task of Otto's open: the change lands, and no line is kept.
+    const idle = createBridgeSession(client);
+    await idle.apply({ ...parsed, account: "acme:studio" } as typeof parsed);
+    expect(accounts().changes).toEqual([]);
+    // A viewer with Otto's task open, and Pip's: the line goes to Otto's.
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "openSession", key: "agent:pip:main" });
+    await viewer.apply({ type: "openSession", key: TASK });
+    await viewer.apply(parsed);
+    expect(accounts().changes.map((change) => change.taskKey)).toEqual([TASK]);
+    // Only a viewer with that task open sees it.
+    expect(changesFor(accounts().changes, idle.openTasks())).toEqual([]);
+    expect(changesFor(accounts().changes, viewer.openTasks())).toHaveLength(1);
+    idle.dispose();
+    viewer.dispose();
     client.stop();
   });
 });

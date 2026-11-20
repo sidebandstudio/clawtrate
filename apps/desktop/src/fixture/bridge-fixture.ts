@@ -19,6 +19,7 @@ import {
   markQuestion,
   PAIRING_ENDED,
   type ApprovalCard,
+  botIdFromSessionKey,
   type BridgeCommand,
   type BridgeResultFor,
   type ClawtrateBridge,
@@ -527,6 +528,8 @@ export function createFixtureBridge(
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
+  /** The tasks the page opened, newest last. */
+  const openKeys = new Set<string>();
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   let held: Array<() => void> | null = null;
@@ -559,7 +562,13 @@ export function createFixtureBridge(
       sent.push(command);
       return machine;
     }
-    const account = accountCommand(command, () => state, set, accountParams);
+    const account = accountCommand(
+      command,
+      () => state,
+      set,
+      accountParams,
+      (botId) => [...openKeys].filter((key) => botIdFromSessionKey(key) === botId).at(-1) ?? null,
+    );
     if (account) {
       sent.push(command);
       return account;
@@ -636,7 +645,13 @@ export function createFixtureBridge(
         return;
       }
       case "openSession":
+        // Which tasks are open: what a host knows, and where an account change's line goes.
+        openKeys.delete(command.key);
+        openKeys.add(command.key);
+        return;
       case "closeSession":
+        openKeys.delete(command.key);
+        return;
       case "requestAccess":
         return;
       case "resolveApproval": {

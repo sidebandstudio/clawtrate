@@ -524,8 +524,6 @@ export function Shell({
             panelRef={panelRef}
             accounts={state.accounts}
             bots={state.bots}
-            tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
-            transcripts={state.transcripts}
             connection={state.connection}
             info={info}
           />

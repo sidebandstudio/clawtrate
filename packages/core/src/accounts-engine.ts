@@ -46,6 +46,7 @@ import {
   unreadEvidence,
   withoutSecret,
   type AccountChange,
+  type AccountChangeResult,
   type AccountsState,
   type MissingStep,
   type AccountWrite,
@@ -337,10 +338,13 @@ export class AccountsEngine {
    * sign-in): `models.authStatus {agentId, refresh: true}` and its model. A
    * read that fails keeps the last confirmation and says when it was.
    */
-  async checkLock(botId: string): Promise<void> {
+  async checkLock(botId: string): Promise<boolean> {
     const { ctx } = this;
     const before = ctx.get().bindings.find((each) => each.botId === botId);
-    if (!before) return this.load();
+    if (!before) {
+      await this.load();
+      return ctx.get().status === "ready";
+    }
     ctx.update((a) =>
       this.patchBinding(a, botId, (b) => ({
         ...b,
@@ -364,7 +368,7 @@ export class AccountsEngine {
             evidence: { ...b.evidence, status: "unavailable", error: reason },
           })),
         );
-        return;
+        return false;
       }
       const entry = asRecord(
         asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId],
@@ -375,6 +379,7 @@ export class AccountsEngine {
         const next = this.binding(botId, entry, view, current, at);
         return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
       });
+      return true;
     } catch (error) {
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
@@ -382,6 +387,7 @@ export class AccountsEngine {
           evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
         })),
       );
+      return false;
     }
   }
 
@@ -1067,8 +1073,13 @@ export class AccountsEngine {
    * One merge patch of the gateway's config (`config.patch`, admin), then the
    * gateway applying it: `config.get` reports the new revision as applied.
    */
-  private async patch(patch: RawRecord, replacePaths: string[] = []): Promise<void> {
-    const before = asRecord(await this.ctx.request("config.get", {}));
+  private async patch(
+    patch: RawRecord,
+    replacePaths: string[] = [],
+    base?: RawRecord | null,
+  ): Promise<void> {
+    // The read the caller decided on, when it made one: a write since then is refused.
+    const before = base ?? asRecord(await this.ctx.request("config.get", {}));
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
     await this.ctx.request("config.patch", {
       raw: JSON.stringify(patch),
@@ -1445,13 +1456,16 @@ export class AccountsEngine {
     ref: ModelRef,
     effort: string | null,
     creating: boolean,
+    base?: RawRecord | null,
   ): Promise<void> {
     const entry: RawRecord = { model: { primary: formatModelRef(ref), fallbacks: [] } };
     if (effort) entry.thinkingDefault = effort;
     try {
-      await this.patch({ agents: { entries: { [botId]: entry } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
+      await this.patch(
+        { agents: { entries: { [botId]: entry } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        base,
+      );
       this.unwritten.delete(botId);
     } catch (error) {
       if (!creating) throw error;
@@ -1468,57 +1482,72 @@ export class AccountsEngine {
     await this.removeFallbacks(botId);
   }
 
-  /** Change a bot's account, or to no fixed account, with its model and effort (section 11). */
+  /**
+   * Change a bot's account, or to no fixed account, with its model and effort
+   * (section 11). The gateway's settings are read first: a binding another
+   * client already made is not written or drawn again. After the write, the
+   * change is said to be saved, and its line kept for `taskKey`, only when a
+   * read of the gateway shows the binding; what is kept is what that read
+   * returned. Nothing here says which account a run uses.
+   */
   async changeAccount(
     botId: string,
     account: string | null,
     provider: string,
     model: string,
     effort: string | null,
-    place: { taskKey: string | null; running: boolean } = { taskKey: null, running: false },
-  ): Promise<void> {
+    taskKey: string | null = null,
+  ): Promise<AccountChangeResult> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
       throw new Error("That account belongs to another provider.");
-    const previous = this.ctx.get().bindings.find((b) => b.botId === botId)?.account ?? null;
-    this.setWrite({
-      what: "account",
-      target: botId,
-      status: "saving",
-      error: null,
-      at: this.ctx.now(),
-    });
+    const wanted = formatModelRef({ provider, model, account });
+    const write = (status: AccountWrite["status"], error: string | null) =>
+      this.setWrite({ what: "account", target: botId, status, error, at: this.ctx.now() });
+    write("saving", null);
+    let base: RawRecord | null;
     try {
-      await this.writeModel(botId, { provider, model, account }, effort, false);
-      await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
-      this.setWrite({
-        what: "account",
-        target: botId,
-        status: "saved",
-        error: null,
-        at: this.ctx.now(),
-      });
-      // The gateway records no line for it: Clawtrate draws one from its own write (row 15).
-      this.recordChange({
-        botId,
-        taskKey: place.taskKey,
-        at: this.ctx.now(),
-        provider,
-        account,
-        previous,
-        running: place.running && previous !== account,
-      });
+      base = asRecord(await this.ctx.request("config.get", {}));
     } catch (error) {
-      this.setWrite({
-        what: "account",
-        target: botId,
-        status: "failed",
-        error: errorText(error),
-        at: this.ctx.now(),
-      });
+      write("failed", errorText(error));
       throw error;
     }
-    await this.checkLock(botId);
+    const entry = asRecord(asRecord(asRecord(asRecord(base?.config)?.agents)?.entries)?.[botId]);
+    const configured = readModelConfig(entry?.model);
+    const already = configured.primary === wanted;
+    const settled =
+      already &&
+      configured.fallbacks !== null &&
+      configured.fallbacks.length === 0 &&
+      (effort === null || entry?.thinkingDefault === effort);
+    if (!settled) {
+      try {
+        await this.writeModel(botId, { provider, model, account }, effort, false, base);
+      } catch (error) {
+        write("failed", errorText(error));
+        throw error;
+      }
+    }
+    await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
+    // Said only from a read of the gateway made after the write.
+    const read = await this.checkLock(botId);
+    const now = this.ctx.get().bindings.find((b) => b.botId === botId) ?? null;
+    // Not said to be saved: the page keeps the form and this reason, and draws no line.
+    const unverified = (reason: string): never => {
+      write("unverified", reason);
+      throw new Error(reason);
+    };
+    if (!read || !now)
+      unverified("The gateway took the change, but reading its settings afterwards failed.");
+    if (now!.primary !== wanted)
+      unverified(
+        `The gateway took the change, but its settings for this bot now name ${now!.primary ?? "no model"}.`,
+      );
+    write("saved", null);
+    // The gateway records no line for it: Clawtrate draws one from its own write (row 15).
+    if (!already && taskKey !== null)
+      this.recordChange({ botId, taskKey, at: this.ctx.now(), provider, account: now!.account });
+    return { changed: !already };
   }
 
   /** Keep a change Clawtrate made, newest last, at most `MAX_ACCOUNT_CHANGES`. */

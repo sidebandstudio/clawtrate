@@ -325,23 +325,17 @@ function nameOf(id: string, accounts: Pick<AccountsState, "labels" | "accounts">
 
 /**
  * The grey line Clawtrate draws in a task for a change of a bot's account it
- * made (section 11): the gateway records none.
+ * made and then read back (section 11): the gateway records none. It names
+ * the binding the gateway's settings show, and nothing of which account a
+ * run uses: a task's own account, a pause or a fallback can decide that.
  */
 export function changeLine(
   change: AccountChange,
   accounts: Pick<AccountsState, "labels" | "accounts">,
   botName: string,
 ): string {
-  const was = change.previous ? nameOf(change.previous, accounts) : null;
-  const inProgress = change.running && was ? ` The run in progress finishes on ${was}.` : null;
-  if (change.account === null)
-    return inProgress
-      ? `${botName} now has no fixed account.${inProgress}`
-      : `${botName} now has no fixed account, from the next run.`;
-  const next = nameOf(change.account, accounts);
-  return inProgress
-    ? `${botName} now runs on ${next}.${inProgress}`
-    : `${botName} now runs on ${next}, from the next run.`;
+  if (change.account === null) return `${botName} now has no fixed account.`;
+  return `${botName} is now bound to ${nameOf(change.account, accounts)}.`;
 }
 
 /**
