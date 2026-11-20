@@ -1,4 +1,11 @@
-import { emptyActivity, newRun, type Transcript, type Run } from "@clawtrate/core";
+import {
+  MAX_OUTBOX,
+  MAX_TRACKED_TASKS,
+  emptyActivity,
+  newRun,
+  type Transcript,
+  type Run,
+} from "@clawtrate/core";
 import { expect, it, vi } from "vitest";
 import { countReply, InvitationReplies } from "../src/support/invitation.ts";
 const make = (change: Partial<Run> = {}) =>
@@ -181,4 +188,36 @@ it("F-519: a consumed preference stops collecting sends, including pending ackno
       () => true,
     ),
   ).toBe(false);
+});
+
+it("F-519: a full viewer tracker drops the oldest unmatched send", () => {
+  const watch = new InvitationReplies();
+  for (let i = 0; i <= MAX_OUTBOX * MAX_TRACKED_TASKS; i++) watch.sent("task", String(i));
+  const see = (id: string) =>
+    watch.observe(
+      { task: task([make({ messageId: id })]) },
+      "task",
+      () => true,
+      () => true,
+    );
+  expect(see("0")).toBe(false);
+  expect(see("1")).toBe(true);
+});
+
+it("F-519: a claim whose write commits but cannot be read back stays consumed", () => {
+  const store = storage();
+  store.setItem("", "5");
+  let written = false;
+  const unavailable = {
+    getItem: () => {
+      if (written) throw new Error("unavailable");
+      return store.getItem();
+    },
+    setItem: (key: string, value: string) => {
+      store.setItem(key, value);
+      written = true;
+    },
+  };
+  expect(countReply(() => unavailable)).toBe(false);
+  expect(countReply(() => store)).toBe(false);
 });

@@ -38,7 +38,7 @@ export function BridgeProvider({
   // A late send acknowledgement closes over the tracker of the gateway it went to.
   const replies = useMemo(
     () => new InvitationReplies(scope ? canCountReply : () => false),
-    [scope, bridge],
+    [scope],
   );
   return (
     <BridgeContext.Provider value={bridge}>

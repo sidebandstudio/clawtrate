@@ -1,3 +1,4 @@
+import { newRun, type ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -107,9 +108,9 @@ for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
       await expect(cli).toHaveAccessibleDescription(
         "Stars sidebandstudio/clawtrate as the account the GitHub CLI is signed in to on this computer.",
       );
-      await field.focus();
-      for (const control of [dismiss, browser, cli]) {
-        await page.keyboard.press("Shift+Tab");
+      await browser.focus();
+      for (const control of [cli, browser, dismiss]) {
+        await page.keyboard.press(control === cli ? "Shift+Tab" : "Tab");
         await expect(control).toBeFocused();
         await expect(control).toHaveCSS("outline-width", "2px");
         await expect(control).toHaveCSS("outline-offset", "2px");
@@ -182,3 +183,101 @@ test("F-521: a second dispatch in the same click cannot start the CLI twice", as
   );
   await expect(page.locator("body")).toHaveAttribute("data-cli-calls", "1");
 });
+
+for (const change of ["gateway", "task", "unfocused", "foreground"]) {
+  test(`F-519: an acknowledged send finishes with the ${change} view`, async ({ page }) => {
+    const key = "agent:otto:disk-space";
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+    await page.evaluate(() => {
+      const bridge = (
+        window as unknown as {
+          clawtrateFixture: { invoke(command: { type: string }): Promise<unknown> };
+        }
+      ).clawtrateFixture;
+      localStorage.setItem("clawtrate.star-invitation", "5");
+      const invoke = bridge.invoke;
+      bridge.invoke = (command) =>
+        command.type === "sendMessage"
+          ? Promise.resolve({ messageId: "local-message" })
+          : invoke(command);
+    });
+    const field = page.getByTestId("composer-input");
+    await field.fill("One local turn");
+    await field.press("Enter");
+    const update = async (completed: boolean) => {
+      const run = newRun(
+        "local-run",
+        {
+          origin: "local",
+          state: completed ? "completed" : "running",
+          bound: true,
+          messageId: "local-message",
+          text: "This reply belongs to the test turn.",
+          textComplete: completed,
+        },
+        Date.now(),
+      );
+      await page.evaluate(
+        ({ key, run }) => {
+          const bridge = (
+            window as unknown as {
+              clawtrateFixture: { setState(f: (s: ClawtrateState) => ClawtrateState): void };
+            }
+          ).clawtrateFixture;
+          bridge.setState((s) => {
+            const t = s.transcripts[key]!;
+            return {
+              ...s,
+              transcripts: {
+                ...s.transcripts,
+                [key]: { ...t, runs: [...t.runs.filter((r) => r.id !== run.id), run] },
+              },
+            };
+          });
+        },
+        { key, run },
+      );
+      await settle(page);
+    };
+    await update(false);
+    await expect(
+      page.getByText("This reply belongs to the test turn.", { exact: true }),
+    ).toBeVisible();
+    const other = page.getByRole("button", { name: /Weekly backup check/ });
+    const original = page.getByRole("button", { name: /Disk almost full/ });
+    if (change === "gateway") {
+      await page.evaluate(() => {
+        const bridge = (
+          window as unknown as {
+            clawtrateFixture: { setState(f: (s: ClawtrateState) => ClawtrateState): void };
+          }
+        ).clawtrateFixture;
+        bridge.setState((s) => ({
+          ...s,
+          connection: { ...s.connection, gatewayId: "other-gateway" },
+        }));
+      });
+      await settle(page);
+    }
+    if (change === "task") await other.click();
+    if (change === "unfocused")
+      await page.evaluate(() =>
+        Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false }),
+      );
+    await update(true);
+    if (change === "unfocused")
+      await page.evaluate(() => Reflect.deleteProperty(document, "hasFocus"));
+    if (change === "task") await original.click();
+    const notice = page.getByRole("region", { name: "GitHub invitation" });
+    if (change === "foreground") {
+      await expect(notice).toBeVisible();
+      await expect(field).toBeFocused();
+      await other.click();
+      await original.click();
+    }
+    await expect(notice).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("clawtrate.star-invitation"))).toBe(
+      change === "foreground" ? "6" : "5",
+    );
+  });
+}
