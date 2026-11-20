@@ -197,6 +197,7 @@ it("refuses text, truncated archives, swapped Mac architectures and a different 
     [mac, samples[mac].subarray(0, -12)],
     [mac, samples["mac-x64"]],
     ["win-x64", pe(0xaa64)],
+    ["win-x64", pe(0x014c)],
   ] as const) {
     const name = artifactName(c.version, key);
     writeFileSync(path(name), bytes);
