@@ -288,12 +288,18 @@ test.describe("1440", () => {
     await expect(rail(page, "Marlow")).toHaveCount(0);
   });
 
-  test("F-193: a running row opens the routine with its run in progress", async ({ page }) => {
+  test("F-193: a running row follows the same run into its conversation", async ({ page }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
-    await expect(view(page).getByTestId("routine-state")).toContainText("Running since");
-    await expect(view(page).locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
-    await expect(view(page).getByTestId("run-view")).toHaveCount(0);
+    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await change(
+      page,
+      `(store) => ({ ...store, routines: store.routines.map((each) =>
+        each.id === "routine-digest"
+          ? { ...each, runningAt: null, lastRunAt: each.runningAt }
+          : each) })`,
+    );
+    await expect(view(page).getByTestId("run-view")).toBeVisible();
   });
 
   test("F-193: another routine's run never shows under this one's heading while it loads, or when it fails", async ({

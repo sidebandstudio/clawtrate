@@ -226,7 +226,7 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
   await expect(botRow("Otto").first()).toHaveAttribute("data-state", "working");
   await expect(botRow("Otto").first()).toContainText(`Running ${name}`);
-  // Its row under Otto opens the routine, where the run in progress is.
+  // Its row under Otto follows this run into its recorded conversation.
   const otto = botRow("Otto").first();
   if ((await otto.getAttribute("aria-expanded")) === "false") {
     await otto.focus();
@@ -235,13 +235,13 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await view().getByRole("button", { name: "Back to routines" }).click();
   await page.getByTestId("routine-task").filter({ hasText: name }).click();
   await expect(view().getByRole("heading", { name })).toBeVisible();
-  await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
+  await expect(view().getByRole("status")).toHaveText("Running…");
   await started;
-  // finished: the mark clears and the run is listed with how it ended.
-  await expect(view().getByTestId("routine-state")).not.toContainText("Running", {
-    timeout: 30_000,
-  });
+  await expect(view().getByTestId("run-view")).toBeVisible({ timeout: 30_000 });
   await expect(botRow("Otto").first()).not.toContainText(`Running ${name}`);
+  await view()
+    .getByRole("button", { name: `Back to ${name}, all runs` })
+    .click();
   await expect(view().getByTestId("run-row")).toHaveCount(1);
   await expect(view().getByTestId("run-row").first()).toContainText("Succeeded");
   await expect(view().getByTestId("run-row").first()).toContainText("started by hand");

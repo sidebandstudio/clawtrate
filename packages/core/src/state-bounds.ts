@@ -1025,6 +1025,7 @@ export const ROUTINES: Bound = object<RoutinesState>()({
   schedulerOn: FLAG,
   routines: list(MAX_ROUTINES, routine),
   omitted: NUMBER,
+  revision: NUMBER,
   removed: object<NonNullable<RoutinesState["removed"]>>()({
     id: ID,
     ranOnce: FLAG,

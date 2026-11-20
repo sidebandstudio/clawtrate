@@ -89,13 +89,13 @@ export function Shell({
     return () => document.removeEventListener("focusin", onFocus);
   }, []);
 
-  const selection = useSelection(state, interactive);
+  const [routines, setRoutines] = useState<RoutinesNav | null>(null);
+  const conversationVisible = routines === null;
+  const selection = useSelection(state, interactive, conversationVisible);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
   const [view, setView] = useState<"list" | "detail">("detail");
-  // The Routines view takes the conversation's place while open (automation.md section 1).
-  const [routines, setRoutines] = useState<RoutinesNav | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -214,7 +214,11 @@ export function Shell({
   }, [togglePanel, drawerOpen, setPanel]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
-  const unread = unreadCount(state.tasksByBot, selection.unreadSeen, task?.key ?? null);
+  const unread = unreadCount(
+    state.tasksByBot,
+    selection.unreadSeen,
+    conversationVisible ? (task?.key ?? null) : null,
+  );
   useEffect(() => {
     onUnreadCount?.(unread);
   }, [unread, onUnreadCount]);
@@ -262,17 +266,21 @@ export function Shell({
   // opening reads it once; later, a new reply while it is open reads it again; leaving does too.
   const openedKey = useRef<string | null>(null);
   useEffect(() => {
-    if (!taskKey || !connectedNow) return;
+    if (!taskKey || !connectedNow || !conversationVisible) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;
       readTask(taskKey, true);
     } else if (taskUnread && marker === null) readTask(taskKey, false);
-  }, [taskKey, taskUnread, marker, connectedNow, readTask]);
+  }, [taskKey, taskUnread, marker, connectedNow, readTask, conversationVisible]);
+  const visibleRef = useRef(conversationVisible);
+  useEffect(() => {
+    visibleRef.current = conversationVisible;
+  }, [conversationVisible]);
   useEffect(() => {
     if (!taskKey) return;
     return () => {
       openedKey.current = null;
-      readTask(taskKey, false);
+      if (visibleRef.current) readTask(taskKey, false);
     };
   }, [taskKey, readTask]);
 

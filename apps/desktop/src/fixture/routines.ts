@@ -271,6 +271,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       schedulerOn: null,
       routines: [],
       omitted: 0,
+      revision: 0,
       removed: null,
     };
   if (params.state === "error")
@@ -280,6 +281,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       schedulerOn: null,
       routines: [],
       omitted: 0,
+      revision: 0,
       removed: null,
     };
   return {
@@ -289,6 +291,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
     routines:
       params.state === "empty" || params.state === "none" ? [] : fixtureRoutineList(now, params),
     omitted: params.state === "truncated" ? 12 : 0,
+    revision: 0,
     removed: null,
   };
 }

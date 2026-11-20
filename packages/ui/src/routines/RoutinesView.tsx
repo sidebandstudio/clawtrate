@@ -727,7 +727,7 @@ export function RoutinesView({
   // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
   const [botRead, retryBot] = useKeyedRead(
     store.omitted > 0 && nav.bot !== null
-      ? `${gateway}:${nav.bot}:${store.routines.length}:${store.omitted}`
+      ? `${gateway}:${nav.bot}:${store.revision}:${store.omitted}`
       : null,
     () => bridge.invoke({ type: "readBotRoutines", botId: nav.bot! }),
   );
@@ -739,7 +739,8 @@ export function RoutinesView({
   const bot = routine ? ownerOf(bots, routine.botId) : undefined;
   // A rail row names its run by when it started; once the routine's runs have it, it is bound.
   const named = nav.run !== null && !isRun(nav.run) ? nav.run.runAt : null;
-  const [found, retryFound] = useRuns(gateway, named === null ? undefined : routine);
+  const running = named !== null && named === routine?.runningAt;
+  const [found, retryFound] = useRuns(gateway, named === null || running ? undefined : routine);
   const match =
     found.status === "ready" ? found.value.find((each) => each.runAt === named) : undefined;
   useEffect(() => {
@@ -756,7 +757,12 @@ export function RoutinesView({
       : nav.routine && kept?.routine.id === nav.routine
         ? kept
         : null;
-  const deleted = nav.routine !== null && !routine && shown !== null;
+  const deleted =
+    shown !== null &&
+    !routine &&
+    (store.removed?.id === nav.routine ||
+      (store.status === "loaded" &&
+        (store.omitted === 0 || (botRead.status === "ready" && botRead.value.omitted === 0))));
   const ranOnce =
     deleted && store.removed?.id === nav.routine && store.removed.ranOnce ? store.removed : null;
   const modes = phone ? MODES.slice(0, 2) : MODES;
@@ -853,6 +859,9 @@ export function RoutinesView({
             </button>
           </Note>
         )}
+        {shown && !routine && !deleted && store.omitted > 0 && botRead.status === "error" && (
+          <Retry text="Couldn't refresh this routine." error={botRead.error} onRetry={retryBot} />
+        )}
         {shown ? (
           nav.run ? (
             run ? (
@@ -868,6 +877,10 @@ export function RoutinesView({
                 }
                 onOpenTask={onOpenTask}
               />
+            ) : running ? (
+              <p className="r-hint" role="status">
+                Running…
+              </p>
             ) : found.status === "error" ? (
               <Retry text="Couldn't load this run." error={found.error} onRetry={retryFound} />
             ) : found.status === "ready" && !match ? (

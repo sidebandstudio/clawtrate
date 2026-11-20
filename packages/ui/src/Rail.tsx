@@ -178,7 +178,7 @@ function RoutineRow({
         data-routine={routine.id}
         data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
         aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
-        onClick={() => onOpen(routine.id, routine.runningAt === null ? at : null)}
+        onClick={() => onOpen(routine.id, at)}
       >
         <ClockIcon className="task-pin" />
         <span className="task-title">{routine.name}</span>
@@ -557,7 +557,7 @@ export function Rail({
   const gateway = gatewayLabel(connection.gatewayUrl);
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
-  const onScreenKey = selection.task?.key ?? null;
+  const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";
   const sortLabel = SORT_ORDERS.find((order) => order.id === roster.prefs.sort)!.label;
 
@@ -598,11 +598,13 @@ export function Rail({
       ],
     [matches, arranged],
   );
+  const pinHasRoutines = (botId: string) =>
+    arranged.pinned.some(
+      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
+    );
   const owner = matches
     ? undefined
-    : arranged.pinned.find(
-        (bot) => selection.isOpen(bot.id) && (tasksByBot[bot.id]?.length ?? 0) > 1,
-      );
+    : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
 
   useEffect(() => {
     if (!announcement) return;
@@ -842,13 +844,14 @@ export function Rail({
 
   // A pinned tile. The grid has one task block, with one owner at a time.
   const clickPin = (bot: Bot, count: number) => {
-    if (count < 2) {
+    const hasRoutines = pinHasRoutines(bot.id);
+    if (count < 2 && !hasRoutines) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (bot.id === owner?.id) {
-      selection.toggleFold(bot.id);
+      selection.toggleFold(bot.id, hasRoutines);
     } else if (onePane || bot.id === selection.bot?.id) {
-      selection.unfoldOnly(bot.id, pinnedIds);
+      selection.unfoldOnly(bot.id, pinnedIds, hasRoutines);
     } else {
       selection.selectBot(bot.id);
       selection.release(pinnedIds.filter((id) => id !== bot.id));
@@ -1055,6 +1058,7 @@ export function Rail({
     const botId = row.dataset.bot ?? null;
     const isPin = row.classList.contains("pin");
     const isBot = isPin || row.classList.contains("bot");
+    const hasPinRoutines = isPin && botId !== null && pinHasRoutines(botId);
     if (
       event.altKey &&
       event.shiftKey &&
@@ -1080,9 +1084,14 @@ export function Rail({
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       rows[event.key === "Home" ? 0 : rows.length - 1]?.focus();
-    } else if (event.key === "ArrowRight" && isBot && botId && !selection.isOpen(botId)) {
+    } else if (
+      event.key === "ArrowRight" &&
+      isBot &&
+      botId &&
+      !selection.isOpen(botId, hasPinRoutines)
+    ) {
       event.preventDefault();
-      if (isPin) selection.unfoldOnly(botId, pinnedIds);
+      if (isPin) selection.unfoldOnly(botId, pinnedIds, hasPinRoutines);
       else selection.toggleFold(botId);
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -1095,7 +1104,8 @@ export function Rail({
         } else {
           row.closest(".bot-group")?.querySelector<HTMLElement>(":scope > .bot")?.focus();
         }
-      } else if (botId && selection.isOpen(botId)) selection.toggleFold(botId);
+      } else if (botId && selection.isOpen(botId, hasPinRoutines))
+        selection.toggleFold(botId, hasPinRoutines);
     } else if (
       isBot &&
       botId &&
@@ -1792,7 +1802,7 @@ export function Rail({
       summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       runningRoutine(bot.id),
     );
-    const several = tasks.length > 1;
+    const several = tasks.length > 1 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button

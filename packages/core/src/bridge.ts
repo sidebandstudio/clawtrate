@@ -1165,6 +1165,13 @@ class ViewerSession implements BridgeSession {
     return { key };
   }
 
+  private routineResult(result: BotRoutines | RoutineRun[] | CalendarRuns | RunConversation) {
+    const max = this.policy.maxResultChars;
+    if (max !== undefined && JSON.stringify(result).length > max)
+      throw new RangeError("The gateway returned more routine data than this view can receive.");
+    return result;
+  }
+
   private async run(command: BridgeCommand): Promise<unknown> {
     const { client, policy, owner } = this;
     if (this.disposed) throw new Error("this viewer has disconnected");
@@ -1197,17 +1204,19 @@ class ViewerSession implements BridgeSession {
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":
-        return client.readBotRoutines(command.botId);
+        return this.routineResult(await client.readBotRoutines(command.botId));
       case "readRoutineRuns":
-        return client.readRoutineRuns(command.id);
+        return this.routineResult(await client.readRoutineRuns(command.id));
       case "readCalendarRuns":
-        return client.readCalendarRuns(command.from, command.to);
+        return this.routineResult(await client.readCalendarRuns(command.from, command.to));
       case "readRunConversation":
-        return client.readRunConversation(command.id, {
-          runId: command.runId,
-          runAt: command.runAt,
-          sessionKey: command.sessionKey,
-        });
+        return this.routineResult(
+          await client.readRunConversation(command.id, {
+            runId: command.runId,
+            runAt: command.runAt,
+            sessionKey: command.sessionKey,
+          }),
+        );
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":
