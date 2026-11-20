@@ -3293,6 +3293,8 @@ export class ClawtrateClient {
     void this.readToolMapOnce(key, read.generation)
       .then((ok) => {
         if (this.toolReads.get(key) !== read) return;
+        // The retries count failures in a row: a read queued behind a success starts afresh.
+        if (ok) read.failures = 0;
         // A read that failed is tried again, a few times, a little later: without the map a
         // tool-server call history holds reads as a general card, and nothing else would read
         // the map again until the gateway's plugins change.
