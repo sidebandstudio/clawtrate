@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -258,9 +259,11 @@ export function runPlan(args: string[], print = console.log) {
       ...(otherFeed && otherFeed !== "-" ? { otherFeed } : {}),
       ...(otherFeedUrl && otherFeedUrl !== "-" ? { otherFeedUrl } : {}),
     };
+    const output = join(dir, "release-plan.json");
+    // An interrupted inspection must not leave the last check's verdict on display.
+    rmSync(output, { force: true });
     if (mode === "assemble") assemble(candidate);
     const record = plan(candidate);
-    const output = join(dir, "release-plan.json");
     {
       using staging = mkdtempDisposableSync(join(dir, ".release-plan-"));
       const next = join(staging.path, "release-plan.json");

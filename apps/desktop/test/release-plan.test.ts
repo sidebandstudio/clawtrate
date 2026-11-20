@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +11,7 @@ import {
   truncateSync,
 } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { assemble, plan, runPlan, type Candidate } from "../packaging/release-plan.ts";
@@ -302,6 +304,21 @@ it("reports absent evidence without claiming a different build was observed", ()
     "mac-arm64: missing feed entry.",
     "mac-arm64: missing or wrong build receipt.",
   ]);
+});
+
+it("invalidates a previous successful verdict if the inspector cannot start", () => {
+  const args = ["check", c.dir, c.track, c.version, c.commit, c.buildDate, c.feedUrl];
+  expect(runPlan(args, () => {})).toBe(0);
+  expect(read("release-plan.json").verdict).toBe("complete and consistent");
+  const command = fileURLToPath(new URL("../packaging/release-plan.ts", import.meta.url));
+  const result = spawnSync(process.execPath, [command, ...args], {
+    env: { ...process.env, PATH: c.dir },
+    encoding: "utf8",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Could not inspect the files or write a fresh record.");
+  expect(existsSync(path("release-plan.json"))).toBe(false);
+  expect(runPlan(args, () => {})).toBe(0);
 });
 
 it("compares both compiled feed addresses including absence and rejects ambiguous paths", () => {
