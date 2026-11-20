@@ -1,13 +1,14 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { _electron, expect, test, type ElectronApplication } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { chromium, expect, test, type Browser } from "@playwright/test";
+import { once } from "node:events";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, cpSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
-import { appEnv } from "./global-setup.ts";
+import { appEnv, debuggingPort } from "./global-setup.ts";
 
 test("F-231 checks only the chosen feed and downloads matching bytes on request", async () => {
   test.setTimeout(120000);
@@ -16,7 +17,8 @@ test("F-231 checks only the chosen feed and downloads matching bytes on request"
   const dir = mkdtempSync(join(desktop, ".screen-test-"));
   const server = await feedServer();
   const resume = Promise.withResolvers<void>();
-  let app: ElectronApplication | undefined;
+  let app: ChildProcess | undefined;
+  let browser: Browser | undefined;
   try {
     const key = fileKeyFor(process.platform, process.arch);
     if (!key) throw new Error("The desktop check needs a supported package target");
@@ -58,12 +60,24 @@ test("F-231 checks only the chosen feed and downloads matching bytes on request"
         main: "out/main/index.js",
       }),
     );
-    app = await _electron.launch({
-      executablePath: require("electron"),
-      args: [dir, "--user-data-dir=" + join(dir, "profile")],
-      env: { ...env, CLAWTRATE_DEV_INSTANCE: "update-screen-test" },
-    });
-    const page = await app.firstWindow();
+    const profile = join(dir, "profile");
+    app = spawn(
+      require("electron"),
+      [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
+      {
+        cwd: dir,
+        env: {
+          ...env,
+          CLAWTRATE_DEV_INSTANCE: process.env.CLAWTRATE_DEV_INSTANCE ?? "update-screen-test",
+        },
+        stdio: "ignore",
+      },
+    );
+    await once(app, "spawn");
+    const port = await debuggingPort(profile, app);
+    browser = await chromium.connectOverCDP("http://127.0.0.1:" + port);
+    const context = browser.contexts()[0]!;
+    const page = context.pages()[0] ?? (await context.waitForEvent("page"));
     await page.locator(".app").waitFor();
     await page.keyboard.press("ControlOrMeta+,");
     await page.getByRole("button", { name: "Updates", exact: true }).click();
@@ -119,8 +133,18 @@ test("F-231 checks only the chosen feed and downloads matching bytes on request"
   } finally {
     resume.resolve();
     try {
-      await app?.close();
+      await browser?.close();
     } finally {
+      if (app?.pid && app.exitCode === null && app.signalCode === null) {
+        const exited = once(app, "exit");
+        const force = setTimeout(() => app?.kill("SIGKILL"), 10000);
+        app.kill("SIGTERM");
+        try {
+          await exited;
+        } finally {
+          clearTimeout(force);
+        }
+      }
       await server.close();
       rmSync(dir, { recursive: true, force: true });
     }

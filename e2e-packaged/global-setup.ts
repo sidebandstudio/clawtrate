@@ -427,7 +427,7 @@ export default async function globalSetup() {
 }
 
 /** Waits for Chromium to write the debugging port it chose into the data folder, and reads it. */
-async function debuggingPort(userData: string, app: ChildProcess): Promise<number> {
+export async function debuggingPort(userData: string, app: ChildProcess): Promise<number> {
   const portFile = join(userData, "DevToolsActivePort");
   const deadline = Date.now() + 30_000;
   while (!existsSync(portFile)) {
