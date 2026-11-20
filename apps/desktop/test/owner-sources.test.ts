@@ -20,6 +20,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
   "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",
@@ -59,6 +60,12 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/permissions.ts:PERMISSION_CHOICES": "static, seven choices",
   "packages/core/src/permissions.ts:lineOf>open":
     "one line's tools that nothing removes, gone when the line is read",
+  "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
+  "packages/core/src/machines.ts:DEFAULTS_CHOICES":
+    "static, the four choices of a machine's defaults",
+  "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
+  "packages/core/src/machines.ts:readMachines>places":
+    "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
@@ -84,6 +91,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  "packages/core/src/routines.ts:initialRoutinesState.routines":
+    "the empty list before the first read; the state replaces it, never grows it",
   "packages/core/src/accounts.ts:initialAccountsState.accounts":
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.methods":
@@ -94,6 +103,15 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.counts": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.limits.providers":
+    "static, an empty list copied on write",
+  // One read: what a usage report or a count gathers while it is read, returned and dropped.
+  "packages/core/src/usage-engine.ts:inTurn>out":
+    "one read: the answers of one batch of usage requests, returned to its caller",
+  "packages/core/src/usage-engine.ts:sources>named":
+    "one read: the runs the sending tasks' results name, dropped when the report is answered",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",
@@ -125,6 +143,12 @@ const ALLOWED: Record<string, string> = {
     "one list read; the bounded cards of that list that belong to the task",
   "packages/core/src/client.ts:backfillQuestions>pendingBefore":
     "one list read; the task's pending questions, at most `MAX_PENDING_QUESTIONS_PER_TASK`",
+  "packages/core/src/client.ts:readRecipientRuns>historyIds":
+    "one history read; the run ids that read established, at most 40 messages' runs, dropped when it returns",
+  "packages/core/src/client.ts:readRecipientRuns>activeBefore":
+    "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
+  "packages/core/src/client.ts:readRecipientRuns>inferred":
+    "one history read; the run ids whose end that read does not establish, at most 40 messages' runs, dropped when it returns",
   // The renderer's side of the web bridge, in a browser tab, not the host.
   "packages/core/src/remote-bridge.ts:createRemoteBridge>listeners":
     "renderer; one per subscription, removed by its unsubscribe",
@@ -139,6 +163,7 @@ const ALLOWED: Record<string, string> = {
     "one upload's body while it arrives, within its declared length, dropped at the deadline",
   // The SSH transport of "Another computer".
   "apps/desktop/src/main/ssh/forward.ts:BACKOFF_MS": "static, five delays",
+  "apps/desktop/src/main/update/feed.ts:FILE_KEYS": "static, the three artifacts a feed names",
   "apps/desktop/src/main/ssh/known-hosts.ts:KEY_TYPES": "static, seven key types",
   "apps/desktop/src/main/ssh/look.ts:PROGRAM_PLACES": "static, five fixed places",
   "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the eight settings taken",

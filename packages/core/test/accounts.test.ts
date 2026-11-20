@@ -577,6 +577,29 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
+  it("a read of the bot list asked before a bot is made and answered after it does not hide the bot", async () => {
+    const { client, fake } = await accountsClient();
+    const list = fake.gateway.handlers["agents.list"]!;
+    const held = deferred<void>();
+    let asked = false;
+    // The next read takes the list as it is now, and answers only when let go.
+    fake.gateway.handlers["agents.list"] = async (params) => {
+      fake.gateway.handlers["agents.list"] = list;
+      asked = true;
+      const before = list(params);
+      await held.promise;
+      return before;
+    };
+    const reread = client.retryNow();
+    await until(() => asked);
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(client.state.bots.some((bot) => bot.id === "viral")).toBe(true);
+    held.resolve();
+    await reread;
+    expect(client.state.bots.some((bot) => bot.id === "viral")).toBe(true);
+    client.stop();
+  });
+
   it("an answer lost to a dropped connection is followed by a look that waits for a list read that succeeds", async () => {
     const { client, fake, accounts } = await accountsClient();
     const create = fake.gateway.handlers["agents.create"]!;

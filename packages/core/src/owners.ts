@@ -31,6 +31,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -40,13 +41,14 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
   MAX_PENDING_SAVES,
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { emptyActivity } from "./runs.ts";
+import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -140,9 +142,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * ID + MAX_RUN_TEXT_CHARS,
     row: "streamBaselines",
   },
-  // Raw payloads: their content is the table's budget; these are their keys.
+  // Raw payloads: their content is the table's budget; these are their keys. Each retained step
+  // and each retained run's failure has one, and one incoming entry before the table prunes.
   "raw.entries": {
-    max: T * MAX_STEPS_PER_TASK,
+    max: T * (MAX_STEPS_PER_TASK + MAX_RUN_LIST) + 1,
     each: 3 * ID + 1 + N,
     row: "rawPayloads",
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",
@@ -164,9 +167,19 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
-    each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
+    each:
+      ID +
+      jsonLength(emptyActivity) +
+      MAX_QUEUE_ALIASES * 2 * ID +
+      FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  foreignReads: {
+    max: MAX_FOREIGN_READ_SESSIONS,
+    each: ID + MAX_STEPS_PER_TASK * N,
+    row: "bookkeeping",
+  },
+  "foreignReads.*": { max: MAX_STEPS_PER_TASK, each: N, row: null },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,
@@ -212,6 +225,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "creationWaiters.*": { max: MAX_ACCESS_WAITERS, each: 0, row: null },
   checkingSlots: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
+  // The scopes a device-access request keeps: those of the admin tier the connection held.
+  heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
@@ -273,6 +288,9 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
   "permissions.ctx": "the client's own functions, handed to the permissions engine",
+  "routines.ctx": "the client's own functions, handed to the routines engine",
+  "usage.ctx": "the client's own functions, handed to the usage engine",
+  "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -284,6 +302,9 @@ export const CLIENT_PARTS: Record<string, string> = {
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
   permissions: "PermissionsEngine",
+  routines: "RoutinesEngine",
+  usage: "UsageEngine",
+  machines: "MachinesEngine",
   waiting: "WaitingIndex",
 };
 
@@ -388,6 +409,16 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
+/** The two strings in the desktop updater's private preference store. */
+export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
+  lastCheck: {
+    max: 1,
+    each: JSON.stringify({ track: "nightly", readAt: "2000-01-01T00:00:00.000Z" }).length,
+    row: "updatePreferences",
+  },
+};
+
 /** JSON characters each registry row adds to the host's worst case, with `viewers` bridge sessions. */
 export function ownerRows(viewers: number): Record<string, number> {
   const rows: Record<string, number> = {};
@@ -401,5 +432,6 @@ export function ownerRows(viewers: number): Record<string, number> {
   add(VIEWER_OWNERS, viewers);
   add(ATTACHMENT_OWNERS, 1);
   add(SAVE_OWNERS, 1);
+  add(UPDATE_PREFERENCE_OWNERS, 1);
   return rows;
 }
