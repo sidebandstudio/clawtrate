@@ -1,40 +1,27 @@
 // Feed addresses and the release date are compiled into the main bundle.
 import { DesktopUpdateService, type UpdateServiceOptions } from "./service.ts";
 
-import { windowsInstaller } from "../windows-install.ts";
 import { macInstaller } from "../mac-install.ts";
 import type { UpdateInstaller } from "./install.ts";
 import type { UpdateInstallRefusal } from "@clawtrate/core";
 
 declare const __CLAWTRATE_SIGNED_MAC__: boolean | undefined;
-declare const __CLAWTRATE_WINDOWS_PUBLISHER__: string | null | undefined;
+declare const __CLAWTRATE_SIGNED_WINDOWS__: boolean | undefined;
 
-function buildInstaller(
-  platform: string,
-  arch: string,
-  packaged: boolean,
-  requestQuit?: () => void,
-): UpdateInstaller {
-  const publisher =
-    typeof __CLAWTRATE_WINDOWS_PUBLISHER__ === "string" ? __CLAWTRATE_WINDOWS_PUBLISHER__ : null;
-  // A signed Windows build still needs an installed trial of NSIS's later opens.
-  const signedWindows =
-    packaged && platform === "win32" && !!publisher && /^[A-F0-9]{64}$/.test(publisher);
-  if (signedWindows && arch === "x64" && requestQuit)
-    return windowsInstaller(publisher!, requestQuit);
-  const signedMac =
-    platform === "darwin" &&
-    typeof __CLAWTRATE_SIGNED_MAC__ !== "undefined" &&
-    __CLAWTRATE_SIGNED_MAC__;
-  if (packaged && signedMac && (arch === "x64" || arch === "arm64")) return macInstaller(arch);
-  const unavailable: UpdateInstallRefusal =
-    (platform === "win32" && arch !== "x64") ||
-    (platform === "darwin" && arch !== "x64" && arch !== "arm64") ||
-    (platform !== "darwin" && platform !== "win32") ||
-    signedMac ||
-    signedWindows
-      ? "no-installer-path"
-      : "build-not-signed";
+function buildInstaller(platform: string, arch: string, packaged: boolean): UpdateInstaller {
+  let unavailable: UpdateInstallRefusal = "no-installer-path";
+  if (platform === "darwin" && (arch === "arm64" || arch === "x64")) {
+    if (packaged && typeof __CLAWTRATE_SIGNED_MAC__ !== "undefined" && __CLAWTRATE_SIGNED_MAC__)
+      return macInstaller(arch);
+    unavailable = "build-not-signed";
+  } else if (platform === "win32" && arch === "x64") {
+    unavailable =
+      packaged &&
+      typeof __CLAWTRATE_SIGNED_WINDOWS__ !== "undefined" &&
+      __CLAWTRATE_SIGNED_WINDOWS__
+        ? "windows-install-pending-trial"
+        : "build-not-signed";
+  }
   return { unavailable, inspect: async () => unavailable, launch: async () => unavailable };
 }
 
@@ -60,8 +47,7 @@ export function startDesktopUpdates(
     "feeds" | "releaseDate" | "loopbackHttpForTests" | "installer"
   >,
 ) {
-  const { version, packaged, platform, arch, downloadDir, store, changed, quitAfterLaunch } =
-    options;
+  const { version, packaged, platform, arch, downloadDir, store, changed } = options;
   return DesktopUpdateService.start({
     version,
     packaged,
@@ -70,8 +56,7 @@ export function startDesktopUpdates(
     downloadDir,
     store,
     changed,
-    installer: buildInstaller(platform, arch, packaged && !!quitAfterLaunch, quitAfterLaunch),
-    ...(quitAfterLaunch && { quitAfterLaunch }),
+    installer: buildInstaller(platform, arch, packaged),
     feeds: { stable: BUILD_FEED_ADDRESS, nightly: BUILD_NIGHTLY_FEED_ADDRESS },
     releaseDate: BUILD_RELEASE_DATE,
   });

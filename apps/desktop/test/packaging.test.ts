@@ -182,3 +182,10 @@ describe("packaging configuration", () => {
     }
   });
 });
+
+it("manual NSIS setup leaves app-close handling to the stock template", () => {
+  const include = readFileSync(join(APP, builderConfig({}, "45.3.2").nsis!.include!), "utf8");
+  expect(include).not.toMatch(
+    /customCheckAppRunning|getProcessInfo\.nsh|CLAWTRATE_EXITED_INSTALL_DIR/,
+  );
+});

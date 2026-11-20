@@ -24,22 +24,16 @@ export type DesktopUpdateFailure =
 export type UpdateInstallRefusal =
   | "no-verified-download"
   | "build-not-signed"
+  | "windows-install-pending-trial"
   | "no-installer-path"
   | "artifact-changed"
   | "mac-designated-requirement"
-  | "authenticode-trust"
-  | "publisher-mismatch"
-  | "installation-context"
   | "inspection-failed"
   | "running-signature-untrusted"
-  | "running-publisher-mismatch"
-  | "installer-product"
   | "installer-version"
   | "mac-archive"
   | "mac-bundle-identifier"
-  | "mac-architecture"
-  | "quit-blocked"
-  | "handoff-unconfirmed";
+  | "mac-architecture";
 
 export type UpdateInstallCapability =
   | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }

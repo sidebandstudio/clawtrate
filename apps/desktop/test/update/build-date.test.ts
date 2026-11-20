@@ -129,26 +129,33 @@ it.each([
   }
 });
 
-it("keeps signed Windows setup unavailable pending the installed sharing trial", async () => {
-  vi.stubGlobal("__CLAWTRATE_WINDOWS_PUBLISHER__", "AB".repeat(32));
-  const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
-  const dir = tempDir();
-  try {
-    const service = await startDesktopUpdates({
-      version: "1.0.0",
-      packaged: true,
-      platform: "win32",
-      arch: "x64",
-      downloadDir: join(dir.path, "updates"),
-      store: { get: async () => null, set: async () => {} },
-      changed() {},
-      quitAfterLaunch() {},
-    });
-    expect(service.get().install).toEqual({
-      kind: "unavailable-in-this-build",
-      reason: "no-installer-path",
-    });
-  } finally {
-    dir.remove();
-  }
-});
+it.each([undefined, "AB".repeat(32)])(
+  "signed Windows x64 keeps Restart unavailable pending the installed trial with or without a pin",
+  async (pin) => {
+    const flags = updateDefines(
+      { WIN_CSC_LINK: "fixture", CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256: pin },
+      new Date(),
+    );
+    vi.stubGlobal("__CLAWTRATE_SIGNED_WINDOWS__", JSON.parse(flags.__CLAWTRATE_SIGNED_WINDOWS__!));
+    const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
+    const dir = tempDir();
+    try {
+      const service = await startDesktopUpdates({
+        version: "1.0.0",
+        packaged: true,
+        platform: "win32",
+        arch: "x64",
+        downloadDir: join(dir.path, "updates"),
+        store: { get: async () => null, set: async () => {} },
+        changed() {},
+        quitAfterLaunch() {},
+      });
+      expect(service.get().install).toEqual({
+        kind: "unavailable-in-this-build",
+        reason: "windows-install-pending-trial",
+      });
+    } finally {
+      dir.remove();
+    }
+  },
+);

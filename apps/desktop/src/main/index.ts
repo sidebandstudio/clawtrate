@@ -244,7 +244,6 @@ async function main(): Promise<void> {
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
-    quitAfterLaunch: () => app.quit(),
     downloadDir: join(userDir, "updates"),
     store: createUpdatePreferenceStore(join(userDir, "update-preferences.json")),
     changed(snapshot) {

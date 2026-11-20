@@ -549,7 +549,7 @@ export class DesktopUpdateService {
       return this.reply("accepted");
     }
     if (reason) return fail(reason);
-    if (!installer.requestsQuit) this.options.quitAfterLaunch?.();
+    this.options.quitAfterLaunch?.();
     return this.reply("accepted");
   }
 }

@@ -810,10 +810,10 @@ it.each(["build-not-signed", "no-installer-path"] as const)(
 );
 
 it.each([
-  "authenticode-trust",
-  "publisher-mismatch",
+  "running-signature-untrusted",
+  "mac-archive",
   "mac-designated-requirement",
-  "installation-context",
+  "installer-version",
 ] as const)(
   "matching bytes alone cannot offer Restart when inspection reports %s",
   async (reason) => {
@@ -982,7 +982,7 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
 
 it.each([
   "attempt-not-saved",
-  "publisher-mismatch",
+  "mac-designated-requirement",
   "installer-failed",
   "artifact-changed",
 ] as const)("reports %s without quitting or retrying", async (reason) => {
@@ -993,7 +993,7 @@ it.each([
   const id = await offer(service);
   await service.download(id);
   if (reason === "attempt-not-saved") vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("write"));
-  if (reason === "publisher-mismatch") installer.inspect = async () => reason;
+  if (reason === "mac-designated-requirement") installer.inspect = async () => reason;
   if (reason === "installer-failed" || reason === "artifact-changed")
     installer.launch = vi.fn(async () => reason);
   expect((await service.restart(id)).snapshot).toMatchObject({
@@ -1123,15 +1123,15 @@ it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
   },
 );
 
-it("keeps the handoff visible through actual exit and leaves a blocked quit recoverable", async () => {
+it("keeps the handoff visible through actual exit after a definite launch failure", async () => {
   const installer = installStandIn();
-  installer.launch = async () => "quit-blocked";
+  installer.launch = async () => "installer-failed";
   const service = await start({ installer });
   const id = await offer(service);
   await service.download(id);
   expect((await service.restart(id)).snapshot.state).toMatchObject({
     kind: "handoff-failed",
-    reason: "quit-blocked",
+    reason: "installer-failed",
   });
   const next = await offer(service);
   await service.download(next);

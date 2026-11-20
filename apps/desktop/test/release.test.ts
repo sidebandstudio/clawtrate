@@ -213,25 +213,16 @@ describe("the constants the build writes for the update engine", () => {
   it("without a feed address the build has none, and its release date is the build's time", () => {
     expect(updateDefines({}, now)).toEqual({
       __CLAWTRATE_SIGNED_MAC__: "false",
-      __CLAWTRATE_WINDOWS_PUBLISHER__: "null",
+      __CLAWTRATE_SIGNED_WINDOWS__: "false",
       __CLAWTRATE_UPDATE_FEED__: "null",
       __CLAWTRATE_NIGHTLY_UPDATE_FEED__: "null",
       __CLAWTRATE_RELEASE_DATE__: JSON.stringify("2026-11-19T12:00:00.000Z"),
     });
   });
 
-  it("embeds the expected leaf fingerprint only with Windows signing configured", () => {
-    const pin = "ab".repeat(32);
-    expect(
-      updateDefines({ CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256: pin }, now)
-        .__CLAWTRATE_WINDOWS_PUBLISHER__,
-    ).toBe("null");
-    expect(
-      updateDefines({ WIN_CSC_LINK: "fixture", CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256: pin }, now)
-        .__CLAWTRATE_WINDOWS_PUBLISHER__,
-    ).toBe(JSON.stringify(pin.toUpperCase()));
-    expect(() => updateDefines({ CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256: "invalid" }, now)).toThrow(
-      /fingerprint/,
+  it("records signing requests separately for each platform", () => {
+    expect(updateDefines({ WIN_CSC_LINK: "fixture" }, now).__CLAWTRATE_SIGNED_WINDOWS__).toBe(
+      "true",
     );
     expect(updateDefines({ CSC_NAME: "fixture" }, now).__CLAWTRATE_SIGNED_MAC__).toBe("true");
   });
