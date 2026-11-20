@@ -4,7 +4,7 @@
 
 Clawtrate is an independent open-source project. It is not made by, affiliated with or endorsed by OpenClaw.
 
-> **Status: development gateways only.** This plugin is written from the requirements in Clawtrate's [gateway capability map](../../docs/research/gateway-capabilities.md#requirements-for-the-shipped-plugin), and its tests cover each of them. It has not yet had a security review of its own. Until it has, install it only on a development gateway, never on a gateway that holds real sign-ins.
+> **Status: development gateways only.** This plugin is written from the requirements in Clawtrate's [gateway capability map](../../docs/research/gateway-capabilities.md#requirements-for-the-shipped-plugin), and its tests cover each of them. It has not yet had a security review of its own. It registers nothing on a gateway that is not a named development instance started by Clawtrate's `pnpm dev-gateway` (the instance's state folder, profile and marker, and the plugin's copy inside that folder): there it adds no method, route, hook or service, whatever the configuration says, and logs why. Installing it on any other gateway is not supported yet; that is issue #29.
 
 ## What it adds
 
@@ -28,11 +28,7 @@ With the plugin:
 
 ## Installing and configuring it
 
-1. Install the plugin into the gateway's profile, for example from a checkout of Clawtrate:
-
-   ```bash
-   openclaw plugins install --link <checkout>/plugins/clawtrate-computer
-   ```
+1. Start a development instance with it: `pnpm dev-gateway start --instance <name> --with-plugin clawtrate-computer`. The tool copies the plugin into the instance and writes the configuration below. Installing it into any other gateway's profile is not supported yet (issue #29): the plugin would load and register nothing.
 
 2. Give each bot a managed browser profile of its own, on a port of its own, in the gateway's config. The profile must use the managed driver (no `cdpUrl`, no `driver`), and the default profile must not be a bot's:
 

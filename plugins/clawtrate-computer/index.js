@@ -23,6 +23,7 @@
 // session's access is revoked, or when the plugin stops.
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { developmentInstanceProblem } from "./lib/development.js";
 import {
   BOT_ACTIONS,
   DEFAULT_IMPORT_PROFILE,
@@ -1382,6 +1383,14 @@ export default {
   description:
     "A browser of its own for each configured bot, a live view of it, and a person's takeover and hand-back.",
   register(api) {
+    // Development gateways only, until the plugin is ready for others (README, issue #29): on
+    // any other gateway it registers no method, route, hook or service, and says why.
+    const problem = developmentInstanceProblem();
+    if (problem) {
+      const say = api.logger?.warn?.bind(api.logger) ?? console.warn;
+      say(`clawtrate-computer registers nothing here: ${problem}`);
+      return;
+    }
     createComputer(api);
   },
 };
