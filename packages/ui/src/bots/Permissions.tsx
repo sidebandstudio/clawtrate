@@ -22,6 +22,7 @@ import {
   type PermissionChoice,
   type PermissionLine,
   type PermissionWrite,
+  type ToolList,
 } from "@clawtrate/core";
 import {
   Fragment,
@@ -120,6 +121,13 @@ export function Mark({ mark }: { mark: LineMark }) {
     </span>
   );
 }
+
+const LIST_WORDS: Record<ToolList, (name: string) => string> = {
+  "every-allow": () => "The gateway's allow list for every bot",
+  "every-deny": () => "The gateway's deny list for every bot",
+  "bot-allow": (name) => `${name}'s allow list`,
+  "bot-deny": (name) => `${name}'s deny list`,
+};
 
 const list = (items: readonly string[]) =>
   items.length > 1
@@ -521,6 +529,18 @@ function Overview({
     <>
       <PluginLine view={view} name={name} />
       <NotEnforced view={view} />
+      {view.listsCut.length > 0 && (
+        <Note tone="warn" testId="lists-cut">
+          <p>
+            {list(view.listsCut.map((each) => LIST_WORDS[each](name)))}{" "}
+            {view.listsCut.length === 1 ? "is" : "are"} longer than this page reads (256 entries of
+            up to 128 characters), or {view.listsCut.length === 1 ? "has" : "have"} an entry it
+            can't read whole. The lines below leave out what was cut.
+            {view.listsCut.includes("bot-deny") &&
+              ` Clawtrate won't replace ${name}'s deny list, so its choices are off.`}
+          </p>
+        </Note>
+      )}
       <div className="c-glance" data-testid="glance">
         {blocks.map((block) => (
           <section

@@ -89,6 +89,9 @@ export type RulesSource =
 
 export type ExecPolicy = "deny" | "allowlist" | "ask" | "auto" | "full" | "legacy";
 
+/** The gateway's tool lists this page reads: for every bot, and the bot's own. */
+export type ToolList = "every-allow" | "every-deny" | "bot-allow" | "bot-deny";
+
 /** The settings `config.get` gives, as far as this page reads them. */
 export type ToolSettings = {
   /** The gateway's lists for every bot; `allow` is null when it sets none. */
@@ -104,6 +107,12 @@ export type ToolSettings = {
   botExecLegacy: boolean;
   /** Tool servers the gateway configures, by name. */
   servers: string[];
+  /**
+   * The lists not read whole: more than `MAX_LIST_ENTRIES` entries, an entry
+   * that isn't a name this page reads, or one given twice. A list cut here is
+   * never written back, since its replacement would drop what was cut.
+   */
+  cut: ToolList[];
   hash: string | null;
 };
 
@@ -132,6 +141,9 @@ function names(value: unknown): string[] {
   }
   return out;
 }
+
+/** Whether `names` read a list whole: every entry a name, once, within the bound. */
+const readWhole = (value: unknown) => !Array.isArray(value) || names(value).length === value.length;
 
 function execPolicy(value: unknown): { policy: ExecPolicy | null; legacy: boolean } {
   const exec = asRecord(value);
@@ -181,6 +193,16 @@ export function readToolSettings(answer: unknown, botId: string): ToolSettings {
     botExec: bot.policy,
     botExecLegacy: bot.legacy,
     servers,
+    cut: (
+      [
+        ["every-allow", tools?.allow],
+        ["every-deny", tools?.deny],
+        ["bot-allow", own?.allow],
+        ["bot-deny", own?.deny],
+      ] as const
+    )
+      .filter(([, list]) => !readWhole(list))
+      .map(([name]) => name),
     hash: typeof root?.hash === "string" ? root.hash : null,
   };
 }
@@ -514,6 +536,8 @@ export type BotPermissions = {
   versions: { bot: number | null; every: number | null };
   offered: { status: Offered["status"]; taskKey: string | null; reason: string | null };
   configHash: string | null;
+  /** The gateway's tool lists longer than this page reads, or not read whole. */
+  listsCut: ToolList[];
   lines: PermissionLine[];
   /** Lines past `MAX_LINES` not shown. */
   linesOmitted: number;
@@ -833,6 +857,7 @@ export function permissionsView(facts: PermissionFacts): BotPermissions {
       reason: offered.status === "failed" ? offered.reason.slice(0, 200) : null,
     },
     configHash: facts.settings.hash,
+    listsCut: facts.settings.cut,
     lines,
     linesOmitted: omitted,
   };
@@ -894,6 +919,8 @@ export function choiceRefusal(
     return "The gateway's settings deny this for every bot. Clawtrate can't change them.";
   if (line.kind === "question" && choice === "ask") return "A question already asks you.";
   if (!admin) return "Changing what a bot may do needs admin access.";
+  if (view.listsCut.includes("bot-deny"))
+    return "The bot's deny list in the gateway's settings is longer than this page reads, or has an entry it can't read whole. Clawtrate won't replace it, so it can't change it here.";
   if (choice === "ask") {
     if (!pluginHolds(view.plugin) || view.rules.from !== "now")
       return "Asking needs Clawtrate's rules plugin running.";
@@ -937,6 +964,10 @@ export function denyWrite(
           ),
       );
   if (next.length === current.length && next.every((e, i) => e === current[i])) return null;
+  if (next.length > MAX_LIST_ENTRIES)
+    throw new Error(
+      `That would make the bot's deny list longer than this page reads back (${MAX_LIST_ENTRIES} entries).`,
+    );
   const path = [...botPath(botId), "deny"];
   return { patch: nest(path, next.length > 0 ? next : null), replacePaths: [path.join(".")] };
 }

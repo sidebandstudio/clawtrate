@@ -366,6 +366,39 @@ describe("what a bot may do", () => {
     expect(botTools(first, "pip").deny).toBeUndefined();
   });
 
+  it("a deny list the page can't read whole is never replaced: longer than it reads, or with an entry it can't read", async () => {
+    const many = Array.from({ length: 260 }, (_, i) => `extra_${i}`);
+    for (const deny of [many, ["edit", "x".repeat(200)], ["edit", "edit"]]) {
+      const gw = new Gateway();
+      botTools(gw, "pip").deny = deny;
+      const engine = new PermissionsEngine(gw.ctx());
+      const view = await engine.read("pip");
+      expect(view.listsCut).toEqual(["bot-deny"]);
+      expect(choiceRefusal(view, line(view, "files"), "never", true)).toMatch(/won't replace it/);
+      await expect(
+        engine.choose("pip", "files", "never", {
+          configHash: view.configHash,
+          rulesVersion: view.versions.bot,
+        }),
+      ).rejects.toThrow(/won't replace it/);
+      expect(gw.writes()).toEqual([]);
+      expect(botTools(gw, "pip").deny).toEqual(deny);
+    }
+    // A list read whole that Never would take past what a read gives back isn't written either.
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = Array.from({ length: 255 }, (_, i) => `extra_${i}`);
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    expect(view.listsCut).toEqual([]);
+    const result = await engine.choose("pip", "files", "never", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toMatch(/longer than this page reads back/);
+    expect(gw.writes()).toEqual([]);
+  });
+
   it("F-177: a rule for every bot and the bot's own rule both apply on the bot's line; another bot's line shows only the rule for every bot", async () => {
     const gw = new Gateway();
     gw.scopes["*"] = {
