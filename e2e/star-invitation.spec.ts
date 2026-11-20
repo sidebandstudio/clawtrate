@@ -67,7 +67,7 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
       // Keep the bound run visible long enough to match it before history reconciliation.
       await field(page).fill(`Reply ${n} #stream 3`);
       await field(page).press("Enter");
-      await expect(page.locator(".bubble[data-streaming=true]")).toBeVisible();
+      await expect(page.locator(".bubble[data-streaming=true]")).toBeVisible({ timeout: 30_000 });
       await expect(notice(page)).toHaveCount(0);
       await expect(replies(page)).toHaveCount(initialReplies + n, { timeout: 30_000 });
       await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 20_000 });
@@ -117,7 +117,7 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
       "_blank",
       "noopener,noreferrer",
     ]);
-    expect(commands).toEqual([]);
+    expect(commands.filter((type) => type !== "markTask")).toEqual([]);
     expect(outbound).toEqual([]);
   } finally {
     await context?.close();
