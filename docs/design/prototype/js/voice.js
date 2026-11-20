@@ -92,6 +92,8 @@
     tempMic: null,
     namesShown: p("mic") !== "prompt",
     namesAsk: false,
+    settingsPane: "section", // on a phone: "nav" (the section list) or "section"
+    settingsSection: "voice",
     dictRoute: p("route") === "gateway" || p("route") === "device" ? p("route") : null,
     dictChoice: null,
     sel: { bot: p("bot") && bot(p("bot")) ? p("bot") : "otto", task: null },
@@ -133,7 +135,7 @@
     flags: { closeFail: false, createFail: false, voiceFail: false, dictFail: false, sendFail: false, prefFail: false, prefConflict: false },
     noVoices: false,
     os_prompt: null,
-    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], prefReads: [], downloads: 0, downloadRequests: [], hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
+    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], prefReads: [], handoffs: [], downloads: 0, downloadRequests: [], hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
   };
   if (S.prefs.mode === "unknown") for (const k of Object.keys(S.prefs.saved)) S.prefs.saved[k] = { voice: undefined, speed: undefined, lang: undefined };
   S.sel.task = p("task") && taskOf(p("task")) ? p("task") : bot(S.sel.bot).tasks[0].id;
@@ -261,6 +263,7 @@
     const { b, t } = taskOf(S.sel.task);
     $("#title-pill").innerHTML = `<span class="avatar" data-bot="${b.id}"></span><span class="title-pill-name">${esc(b.name)}</span><span class="title-pill-task">${esc(t.title)}</span>`;
     CT.hydrate($("#title-pill"));
+    $('.header-side[data-side="end"]').innerHTML = `<button type="button" class="icon-button" data-v="open-work" data-k="open-work" aria-label="Show work panel" title="Show work panel">${icon("panel")}</button>`;
   }
 
   // The transcript: history rows; voice rows grouped by the voice session in their ids (section 10).
@@ -446,6 +449,8 @@
     return "Opening the microphone…";
   };
 
+  const micMarkHtml = (on) => `<span class="mic-mark" data-on="${on}" data-testid="mic-mark">${on ? "Microphone on" : "Microphone off"}</span>`;
+
   function renderCall() {
     const slot = $("#call-slot");
     const c = S.call;
@@ -457,7 +462,7 @@
       return;
     }
     const b = bot(c.bot);
-    const micMark = (on) => `<span class="mic-mark" data-on="${on}" data-testid="mic-mark">${on ? "Microphone on" : "Microphone off"}</span>`;
+    const micMark = micMarkHtml;
     let top = "";
     let row = "";
     let notes = "";
@@ -508,7 +513,8 @@
         `<span class="spacer"></span>` +
         (c.state === "ending" ? "" : button(active ? "Hang up" : "Cancel", `data-v="hangup" data-k="hangup"${active ? ' data-tone="danger"' : ' data-variant="quiet"'}`)) +
         `</div>`;
-      if (c.muted && c.background) notes += `<p class="call-note" data-testid="call-note">Muted when Clawtrate went to the background. Unmute to go on.</p>`;
+      if (c.muted && c.workMuted) notes += `<p class="call-note" data-testid="call-note">Muted while Work was open. Unmute to go on.</p>`;
+      else if (c.muted && c.background) notes += `<p class="call-note" data-testid="call-note">Muted when Clawtrate went to the background. Unmute to go on.</p>`;
       else if (c.muted) notes += `<p class="call-note" data-testid="call-note">Muted. This device's microphone is off.</p>`;
       if (c.micStopped)
         notes +=
@@ -563,6 +569,7 @@
       : c.voiceMsg || (c.voicesReadFailed ? "Couldn't read the voices for this call." : !voices ? "Voice changes are unavailable for this call" : c.voice ? `This call: ${c.voice}.` : "Current voice unknown");
     d.innerHTML =
       `<div class="b-confirm v-call-settings" data-testid="call-settings"><h2 id="call-settings-title">${esc(`Voice chat settings for ${b.name}`)}</h2>` +
+      `<p class="v-row-note">${micMarkHtml(c.capture)}</p>` +
       `<div class="v-group"><h4>Voice</h4>${voiceRow}<p class="v-row-note" id="voice-note" data-testid="voice-note">${esc(voiceNote)}</p>` +
       `<p class="v-row-note" data-testid="voice-next">${esc(S.prefs.pending && S.prefs.pending.bot === c.bot && S.prefs.pending.field === "voice" && S.prefs.pending.value === null ? `Saving default for future calls… Saved now: ${saved.voice || "the provider's default voice"}.` : `Next calls: ${saved.voice === undefined ? "Saved value unknown." : saved.voice || "the provider's default voice"}.`)}</p>` +
       (saved.voice ? button("Default for future calls", 'data-v="voice-default" data-k="voice-default"', "quiet") : "") +
@@ -1613,24 +1620,30 @@
 
   // Settings › Voice (section 12) --------------------------------------------------------------------------
 
+  const phoneWidth = () => document.documentElement.dataset.width === "phone" || innerWidth <= 687;
+  const SETTINGS_SECTIONS = [["gateway", "Gateway"], ["accounts", "Accounts"], ["voice", "Voice"]];
   function openSettings() {
     S.settingsOpener = document.activeElement;
+    S.settingsSection = "voice";
+    S.settingsPane = phoneWidth() ? "nav" : "section";
     renderSettings();
     const d = $("#settings-dialog");
     if (!d.open) d.showModal();
-    requestAnimationFrame(() => $("#b-section-title")?.focus());
+    requestAnimationFrame(() => (S.settingsPane === "nav" ? $('[data-section="voice"]', d) : $("#b-section-title"))?.focus());
   }
 
   function renderSettings() {
     const d = $("#settings-dialog");
     const key = document.activeElement?.dataset?.k;
     const choices = S.namesShown ? DEVICES : ["System Default"];
+    // The tab stop comes from the visible, selectable devices, apart from the remembered choice.
+    const stop = choices.includes(S.storedMic) ? S.storedMic : choices[0];
     const micRows =
       `<ul class="b-choices" role="radiogroup" aria-label="Microphone">` +
       choices
         .map(
           (m) =>
-            `<li><button type="button" class="b-choice" role="radio" aria-checked="${S.storedMic === m}" tabindex="${S.storedMic === m ? 0 : -1}" data-v-mic="${esc(m)}" data-k="mic-${esc(m)}"><span class="b-choice-text"><span class="b-choice-title">${esc(m)}</span>${m === "USB Microphone" && S.mic === "missing" ? `<span class="b-choice-sub b-wrap">Not connected</span>` : ""}</span></button></li>`,
+            `<li><button type="button" class="b-choice" role="radio" aria-checked="${S.storedMic === m}" tabindex="${stop === m ? 0 : -1}" data-v-mic="${esc(m)}" data-k="mic-${esc(m)}"><span class="b-choice-text"><span class="b-choice-title">${esc(m)}</span>${m === "USB Microphone" && S.mic === "missing" ? `<span class="b-choice-sub b-wrap">Not connected</span>` : ""}</span></button></li>`,
         )
         .join("") +
       `</ul>`;
@@ -1643,7 +1656,9 @@
     const gw = gatewayRoute();
     const current = S.dictRoute || (dev.ok ? "device" : "gateway");
     const route = (id, title, r, sentence) =>
-      r.ok
+      !canWrite()
+        ? `<li><div class="b-choice" data-testid="route-text"><span class="b-choice-text"><span class="b-choice-title">${esc(title)}</span><span class="b-choice-sub b-wrap">${esc(r.ok ? sentence : r.why)}</span><span class="b-choice-sub b-wrap">Needs more access</span></span></div></li>`
+        : r.ok
         ? `<li><button type="button" class="b-choice" role="radio" aria-checked="${S.dictRoute === id}" tabindex="${current === id ? 0 : -1}" data-v-sroute="${id}" data-k="sroute-${id}"><span class="b-choice-text"><span class="b-choice-title">${esc(title)}</span><span class="b-choice-sub b-wrap" data-testid="settings-sentence">${esc(sentence)}</span></span></button></li>`
         : `<li><div class="b-choice" aria-disabled="true"><span class="b-choice-text"><span class="b-choice-title">${esc(title)}</span><span class="b-choice-sub b-wrap">${esc(r.why)}</span></span></div></li>`;
     const callLine =
@@ -1679,11 +1694,16 @@
       `</tbody></table><p class="b-hint" data-testid="bots-kept">${esc(where)}</p>` +
       BOTS.filter((b) => pr.notes[b.id] || (pr.pending && pr.pending.bot === b.id)).map((b) => `<p class="b-hint" data-testid="bot-note">${esc(`${b.name}: ${prefNote(b.id)}`)}</p>`).join("") +
       `</div>`;
+    const sec = S.settingsSection;
+    const title = SETTINGS_SECTIONS.find(([k]) => k === sec)[1];
+    const close = `<button type="button" class="icon-button b-close" data-variant="quiet" data-v="settings-close" data-k="settings-close" aria-label="Close settings">${icon("x")}</button>`;
     d.innerHTML =
-      `<div class="b-settings" data-pane="section"><nav class="b-nav" aria-label="Settings"><div class="b-nav-head"><h2 id="settings-title">Settings</h2></div>` +
-      `<button type="button" class="b-nav-item" aria-current="page">Voice${icon("chevron")}</button></nav>` +
-      `<section class="b-section" aria-labelledby="b-section-title"><button type="button" class="icon-button b-close" data-variant="quiet" data-v="settings-close" data-k="settings-close" aria-label="Close settings">${icon("x")}</button>` +
-      `<header class="b-section-head"><h3 id="b-section-title" tabindex="-1">Voice</h3></header><div class="b-section-body" data-testid="settings-voice">${body}</div></section></div>`;
+      `<div class="b-settings" data-pane="${S.settingsPane}"><nav class="b-nav" aria-label="Settings"><div class="b-nav-head"><h2 id="settings-title">Settings</h2>${close}</div>` +
+      SETTINGS_SECTIONS.map(([k, l]) => `<button type="button" class="b-nav-item" data-v="settings-nav" data-section="${k}" data-k="nav-${k}"${k === sec ? ' aria-current="page"' : ""}>${l}${icon("chevron")}</button>`).join("") +
+      `</nav>` +
+      `<section class="b-section" aria-labelledby="b-section-title">${close}` +
+      `<header class="b-section-head"><button type="button" class="icon-button b-back" data-b="to-nav" data-v="settings-back" data-k="settings-back" aria-label="Back to settings">${icon("back")}</button><h3 id="b-section-title" tabindex="-1">${title}</h3></header>` +
+      `<div class="b-section-body" data-testid="settings-${sec}">${sec === "voice" ? body : `<p class="b-hint">${esc(`${title} is drawn in bots.html; this page adds Voice after it.`)}</p>`}</div></section></div>`;
     CT.hydrate(d);
     if (key) $(`[data-k="${CSS.escape(key)}"]`, d)?.focus();
   }
@@ -1986,6 +2006,7 @@
           return resumeCapture(c, () => {
             c.muted = false;
             c.background = false;
+            c.workMuted = false;
             c.unmuting = true; // said once the track has started
           });
         } else {
@@ -2094,6 +2115,42 @@
       case "settings-close":
         $("#settings-dialog").close();
         return S.settingsOpener?.focus?.();
+      case "settings-nav":
+        S.settingsSection = el.dataset.section;
+        S.settingsPane = "section";
+        renderSettings();
+        return requestAnimationFrame(() => $("#b-section-title")?.focus());
+      case "settings-back":
+        // Back returns focus to the section it came from, in the list.
+        S.settingsPane = "nav";
+        renderSettings();
+        return requestAnimationFrame(() => $(`[data-section="${S.settingsSection}"]`)?.focus());
+      case "open-work": {
+        // A modal Work drawer hides the band: capture stops before it covers the mark.
+        if (c && liveCall(c) && c.state === "live" && (c.capture || !c.muted)) {
+          c.muted = true;
+          c.capture = false;
+          c.workMuted = true;
+          say("Muted");
+        }
+        let w = $("#work-dialog");
+        if (!w) {
+          w = document.createElement("dialog");
+          w.id = "work-dialog";
+          w.className = "b-dialog";
+          w.setAttribute("aria-label", "Work");
+          $("#root").append(w);
+          w.addEventListener("cancel", (e) => (e.preventDefault(), w.close(), render(), focusKey("open-work")));
+        }
+        w.innerHTML = `<div class="b-confirm" data-testid="work-sheet"><h2>Work</h2><p class="v-faint">The Work pane's contents are drawn in work.html.</p><div class="b-actions">${button("Close", 'data-v="work-close" data-k="work-close"')}</div></div>`;
+        render();
+        w.showModal();
+        return $('[data-v="work-close"]', w).focus();
+      }
+      case "work-close":
+        $("#work-dialog").close();
+        render();
+        return focusKey("open-work");
       case "allow-names":
         S.namesAsk = true;
         renderSettings();
@@ -2120,6 +2177,10 @@
         }
         return savePref(id, "reset");
       }
+      case "open-os":
+        // A simulated handoff to the system's own page, recorded only on this click.
+        S.io.handoffs.push(el.textContent);
+        return;
       case "back":
         S.view = "list";
         return render();

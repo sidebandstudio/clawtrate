@@ -907,8 +907,21 @@ check("8 phone: the composer's two buttons have a 44 px hit area", await q(p, ()
     const cy = Math.floor(r.top + r.height / 2);
     return [[0, -22], [0, 21], [-22, 0], [21, 0]].every(([dx, dy]) => el.contains(document.elementFromPoint(cx + dx, cy + dy)));
   })));
+await click(p, '[data-v="call-settings"]');
+check("8 390: the call settings sheet shows the live microphone mark", await q(p, () => document.querySelector('#call-settings-dialog [data-testid="mic-mark"]').textContent === "Microphone on"));
+check("8 390 settings sheet exposes the live microphone state", await p.locator('#call-settings-dialog [data-testid="mic-mark"]').isVisible());
+await p.keyboard.press("Escape");
 await click(p, '[data-v="hangup"]');
 check("8 phone: Hang up from there", (await phase(p)) === "Ending…");
+await p.close();
+p = await open("auto=0&state=live");
+await click(p, '[data-v="open-work"]');
+check("8 opening the modal Work fixture mutes capture until explicitly unmuted", await q(p, () => !window.voice.S.call.capture && window.voice.S.call.muted && document.querySelector("#work-dialog").open));
+await click(p, '[data-v="work-close"]');
+check("8 …after closing it, the band says so and stays muted", (await text(p, '[data-testid="call-note"]')) === "Muted while Work was open. Unmute to go on." && (await call(p)).muted);
+await click(p, '[data-v="mute"]');
+await ev(p, "capture");
+check("8 …until the person unmutes", (await call(p)).capture === true);
 await p.close();
 
 p = await open("auto=0&state=live");
@@ -953,6 +966,38 @@ await p.focus('[data-k="mic-System Default"]');
 await p.keyboard.press("ArrowRight");
 await wait(p, 40);
 check("8 Settings: the microphone group takes arrows too", await q(p, () => window.voice.S.storedMic === "MacBook Pro Microphone" && document.activeElement.getAttribute("aria-checked") === "true"));
+await p.close();
+p = await open("page=settings&width=phone", phone);
+await wait(p, 120);
+check("8 phone: Settings opens its section list, with Voice after the shell's sections", await q(p, () =>
+  document.querySelector(".b-settings").dataset.pane === "nav" && [...document.querySelectorAll(".b-nav-item")].map((x) => x.textContent).join() === "Gateway,Accounts,Voice"));
+await click(p, '[data-section="voice"]');
+await wait(p, 40);
+check("8 …Voice opens its section", await q(p, () => document.querySelector(".b-settings").dataset.pane === "section" && document.activeElement.id === "b-section-title"));
+await click(p, '[data-v="settings-back"]');
+await wait(p, 40);
+check("8 Settings list → Voice → Back returns to Voice", await q(p, () => document.querySelector(".b-settings").dataset.pane === "nav" && document.activeElement.dataset.section === "voice"));
+await p.close();
+p = await open("page=settings&mic=missing&auto=0");
+await wait(p, 120);
+await q(p, () => {
+  window.voice.S.namesShown = false;
+  window.voice.render();
+});
+check("8 missing saved microphone leaves a tabbable option without changing the selection", await q(p, () =>
+  [...document.querySelectorAll('[aria-label="Microphone"] [role="radio"]')].some((x) => x.tabIndex === 0) && window.voice.S.storedMic === "USB Microphone" &&
+  ![...document.querySelectorAll('[aria-label="Microphone"] [role="radio"]')].some((x) => x.getAttribute("aria-checked") === "true")));
+await p.close();
+p = await open("page=settings&access=read");
+await wait(p, 120);
+check("8 read-only routes cannot be changed", await q(p, () =>
+  !document.querySelector('[aria-label="Dictation"] [role="radio"]') && [...document.querySelectorAll('[data-testid="route-text"]')].every((x) => x.textContent.includes("Needs more access"))));
+await p.close();
+p = await open("auto=0&seen=1&mic=denied");
+await click(p, '[data-v="call"]');
+check("8 a system Settings handoff is not recorded before a click", (await io(p)).handoffs.length === 0);
+await click(p, '[data-v="open-os"]');
+check("8 only a click records the system Settings handoff", (await io(p)).handoffs.join() === "Open System Settings");
 await p.close();
 
 // 9. Supplied values as text; Saved only once confirmed -------------------------------------------------------
