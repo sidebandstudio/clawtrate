@@ -103,6 +103,31 @@ for (const [section, words] of [
 {
   const p = await open("open=settings&section=gateways&host=web");
   check("ownership: on the web preview, the shared host is named", (await text(p, '#settings-dialog [data-testid="owner-line"]')).startsWith("Saved on this preview's host, shared by every browser that uses it."));
+  const nav = await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .b-nav-item")].map((e) => e.textContent.trim()));
+  check("web preview: no System and no Updates", !nav.includes("System") && !nav.includes("Updates") && nav.includes("Appearance"), JSON.stringify(nav));
+  await p.close();
+}
+for (const section of ["system", "updates"]) {
+  const p = await open(`open=settings&section=${section}&host=web`);
+  check(`web preview: an address asking for ${section} gets Appearance`, (await text(p, "#b-section-title")) === "Appearance");
+  await p.close();
+}
+const MACHINES_LINE = "Machines and paired devices belong to this gateway. Seeing a machine's approvals needs admin access. Setting approvals, and renaming or removing another machine or device, needs admin access. Seeing paired devices needs device access. Without admin access, the gateway lists only this device. Renaming this device's own operator-only record needs device access.";
+for (const [name, query, words] of [
+  ["accounts, admin", "section=accounts", "Accounts are kept on this gateway. Connecting and changing accounts needs admin access."],
+  ["accounts, read-only", "section=accounts&access=read", "Accounts are kept on this gateway. Labels are shown to admin connections only, so accounts are named by provider and id here. Connecting and changing accounts needs admin access."],
+  ["integrations", "section=integrations", "Saved to your profile on this gateway. The T3 Code server and each bot's T3 Code are this gateway's, shared, and changing them needs admin access."],
+  ["integrations, no profile", "section=integrations&profile=none", "This gateway hasn't linked this connection to a profile. The T3 Code server and each bot's T3 Code are this gateway's, shared, and changing them needs admin access."],
+  ["permissions", "section=permissions", "Rules on this gateway apply to every bot."],
+  ["memory", "section=memory", "Shared memory is stored on this gateway."],
+  ["usage", "section=usage", "Usage comes from the gateway's usage records. Budgets are saved to your profile on this gateway. A host pinned read-only shows the budget values. On other hosts, saving a budget asks for write access if needed."],
+  ["usage, no profile", "section=usage&profile=none", "Usage comes from the gateway's usage records. This gateway keeps no preferences for this connection, so a budget can't be kept. A host pinned read-only shows the budget values. On other hosts, saving a budget asks for write access if needed."],
+  ["machines", "section=machines", MACHINES_LINE],
+]) {
+  const p = await open(`open=settings&${query}`);
+  const first = await p.evaluate(() => document.querySelector("#settings-dialog .b-section-body")?.firstElementChild?.dataset.testid);
+  const got = await text(p, '#settings-dialog [data-testid="owner-line"]');
+  check(`ownership: ${name} says where it lives, at the top of the page`, got === words && first === "owner-line" && p.errors.length === 0, got);
   await p.close();
 }
 

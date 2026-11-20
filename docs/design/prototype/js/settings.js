@@ -192,17 +192,19 @@
         ? owner("Saved on this preview's host, shared by every browser that uses it. Read-only access lets you switch, add or remove saved connections here.")
         : owner("Saved on this device. Read-only access lets you switch, add or remove saved connections here.");
 
-    // The section list, in the order of settings.md section 3. System and Updates are desktop only.
+    // The section list, in the order of settings.md section 3. System and Updates are desktop only: not on the
+    // iPhone, and not on the web preview host.
+    const desktop = () => !phone() && !S.web;
     const SECTIONS = CT.botsSections;
     function placeSections() {
       const keep = SECTIONS.filter(([id]) => !["gateways", "appearance", "system", "updates"].includes(id));
-      const mine = [["appearance", "Appearance"], ...(phone() ? [] : [["system", "System"], ["updates", "Updates"]])];
+      const mine = [["appearance", "Appearance"], ...(desktop() ? [["system", "System"], ["updates", "Updates"]] : [])];
       SECTIONS.splice(0, SECTIONS.length, keep[0], ["gateways", "Your gateways"], ...keep.slice(1), ...mine);
     }
     placeSections();
     document.addEventListener("ct:settings", () => {
       placeSections();
-      if (phone() && ["system", "updates"].includes(D.B.settings.section)) D.B.settings.section = "appearance";
+      if (!desktop() && ["system", "updates"].includes(D.B.settings.section)) D.B.settings.section = "appearance";
       rs();
       renderRequired();
     });
@@ -666,6 +668,32 @@
         `<span class="spacer"></span>${button("Remove this gateway…", `data-s="remove" data-gw="${S.inUse}" data-size="sm" data-tone="danger"`, "quiet")}</div>`;
       return { title: "Gateway", back: back("Back to settings", "to-nav"), body };
     };
+
+    // The pages other designs specify carry the same kind of line at the top of their body (settings.md section 3);
+    // each page's own access bar stays the last sentence about the changes it allows.
+    const NO_PROFILE = p("profile") === "none";
+    const INHERITED = {
+      accounts: () =>
+        "Accounts are kept on this gateway. " +
+        (isAdmin() ? "" : "Labels are shown to admin connections only, so accounts are named by provider and id here. ") +
+        "Connecting and changing accounts needs admin access.",
+      integrations: () =>
+        (NO_PROFILE ? "This gateway hasn't linked this connection to a profile." : "Saved to your profile on this gateway.") +
+        " The T3 Code server and each bot's T3 Code are this gateway's, shared, and changing them needs admin access.",
+      permissions: () => "Rules on this gateway apply to every bot.",
+      memory: () => "Shared memory is stored on this gateway.",
+      usage: () =>
+        "Usage comes from the gateway's usage records. " +
+        (NO_PROFILE ? "This gateway keeps no preferences for this connection, so a budget can't be kept." : "Budgets are saved to your profile on this gateway.") +
+        " A host pinned read-only shows the budget values. On other hosts, saving a budget asks for write access if needed.",
+      machines: () =>
+        "Machines and paired devices belong to this gateway. Seeing a machine's approvals needs admin access. Setting approvals, and renaming or removing another machine or device, needs admin access. Seeing paired devices needs device access. Without admin access, the gateway lists only this device. Renaming this device's own operator-only record needs device access.",
+    };
+    new MutationObserver(() => {
+      const line = INHERITED[D.B.settings.section];
+      const body = $(".b-section-body", settingsDialog);
+      if (line && body && !body.querySelector('[data-testid="owner-line"]')) body.insertAdjacentHTML("afterbegin", owner(esc(line())));
+    }).observe(settingsDialog, { childList: true, subtree: true });
 
     // Your gateways (section 4) --------------------------------------------------------------------------
 
@@ -1209,8 +1237,8 @@
     renderMenu();
     renderRequired();
     diskNote();
-    // The iPhone has no System and no Updates: an address that asks for one gets Appearance.
-    if (phone() && ["system", "updates"].includes(D.B.settings.section)) D.B.settings.section = "appearance";
+    // The iPhone and the web preview have no System and no Updates: an address that asks for one gets Appearance.
+    if (!desktop() && ["system", "updates"].includes(D.B.settings.section)) D.B.settings.section = "appearance";
     if (settingsDialog.open) rs(true);
     if (p("add") === "1") openAdd(true);
     if (p("remove") && gw(p("remove"))) openRemove(p("remove"));
