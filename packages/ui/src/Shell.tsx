@@ -1,7 +1,7 @@
 import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { movedOn, pressMark, useFocusOnCommit } from "./focus.ts";
@@ -298,6 +298,14 @@ export function Shell({
   // pane moves nothing except off what has just become inert.
   const drawerWasOpen = useRef(false);
   const panelWasOpen = useRef(panelOpen);
+  // A pane closed by an action that keeps its place (Show in chat, Routines) moves focus only
+  // where that action says. If focus went with the pane, the Work toggle holds it as the pane
+  // commits closed, so a key pressed meanwhile acts from a control in the app.
+  useLayoutEffect(() => {
+    if (panelOpen || !keepFocus.current) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) toggleRef.current?.focus({ preventScroll: true });
+  }, [panelOpen]);
   useEffect(() => {
     // Right after a resize the last measurement can lag a frame behind, so
     // focus is decided from the pane's width as it is now.
