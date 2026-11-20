@@ -83,6 +83,7 @@
   // Links in the loaded conversations, as the conversation's own link controls hold them. An
   // address the core refuses is plain text in the conversation, and in search.
   const LONG = "https://energy.example/heat-pumps/sizing-guide/appendix/heat-loss-worksheet?climate-zone=5A&rooms=kitchen,living,bedrooms,basement&units=imperial#step-4";
+  const demoHeatPumpHost = `[${(0xfd00).toString(16)}::40]`;
   const heatTranscript = () =>
     `<div class="stamp">Today 5:20 PM</div>` +
     turnHtml("user", "msg-j1-0", "What should I ask an installer before signing anything?") +
@@ -91,7 +92,7 @@
       "msg-j1-1",
       `<p>A heat pump is sized from a heat-loss calculation, not from the old furnace's rating. Ask for that first. The sizing guide at <a href="#" data-href="https://energy.example/heat-pumps/sizing-guide">energy.example/heat-pumps/sizing-guide</a> lists what it should include, and its worksheet is at <a href="#" data-href="${LONG}">the worksheet</a>.</p>` +
         `<p>Rebates change every year: <a href="#" data-href="https://energy.example/rebates/2026">energy.example/rebates/2026</a>. Ask these five, and get the answers in writing.</p>` +
-        `<p>Your thermostat's own page is at <a href="#" data-href="http://127.0.0.1:8080/status">127.0.0.1:8080/status</a>, and the heat pump's at <a href="#" data-href="http://[fd00::40]/heatpump">[fd00::40]/heatpump</a>, if you want today's run times.</p>` +
+        `<p>Your thermostat's own page is at <a href="#" data-href="http://127.0.0.1:8080/status">127.0.0.1:8080/status</a>, and the heat pump's at <a href="#" data-href="http://${demoHeatPumpHost}/heatpump">${demoHeatPumpHost}/heatpump</a>, if you want today's run times.</p>` +
         `<p>The installer's portal: <span class="plain-address" data-href="https://sam:hunter2@installer.example.com/portal">https://sam:hunter2@installer.example.com/portal</span></p>`,
     );
 

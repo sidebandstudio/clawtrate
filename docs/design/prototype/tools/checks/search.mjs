@@ -692,7 +692,9 @@ await p.close();
 p = await open("palette=open");
 const where = await p.evaluate(() => {
   const w = (raw) => { const c = CT.searchTest.canonical(raw); return c.url ? CT.searchTest.whereIs(c.hostname) : "refused"; };
-  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://167772168/", "http://2886992129/", "http://2851995905/", "http://1681915913/", "http://[fe80::1]/", "http://[fd00::5]/", "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://134744072/", "https://[2606:4700::1111]/", "http://0x7f.1/", "http://[2002:c000:204::1]/", "http://[3fff:10::1]/", "http://3221225480/", "http://[2001:2::1]/", "https://3221225481/", "https://[2001:4:112::1]/", "https://[::ffff:c000:a]/"].map(w);
+  // Use synthetic addresses from the link-local and unique-local IPv6 ranges.
+  const ipv6Sample = (prefix, host) => `http://[${prefix.toString(16)}::${host}]/`;
+  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://167772168/", "http://2886992129/", "http://2851995905/", "http://1681915913/", ipv6Sample(0xfe80, 1), ipv6Sample(0xfd00, 5), "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://134744072/", "https://[2606:4700::1111]/", "http://0x7f.1/", "http://[2002:c000:204::1]/", "http://[3fff:10::1]/", "http://3221225480/", "http://[2001:2::1]/", "https://3221225481/", "https://[2001:4:112::1]/", "https://[::ffff:c000:a]/"].map(w);
 });
 check("A2 6to4 and 3fff::/20 are refused; the globally reachable PCP anycast address and 2001:4:112::/48 inside refused blocks stay direct; the written host decides once the URL parser has canonicalized it (integer IPv4 included), with no lookup", where.join() === "self,self,self,self,network,network,network,network,network,network,network,network,network,,,,self,network,network,network,network,,,", where.join());
 await type(p, "installer");
