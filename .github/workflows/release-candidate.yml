@@ -37,6 +37,7 @@ jobs:
         with:
           node-version: 26
           package-manager-cache: false
+      - run: node apps/desktop/packaging/unsigned-environment.ts
       - id: select
         env:
           REQUESTED: ${{ inputs.version }}
@@ -47,19 +48,16 @@ jobs:
           build_date=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%S.000Z)
           printf 'version=%s\nepoch=%s\ndate=%s\n' "$version" "$SOURCE_DATE_EPOCH" "$build_date" >> "$GITHUB_OUTPUT"
 
-  build:
+  macos:
     needs: select
-    strategy:
-      matrix:
-        os: [macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
+    outputs:
+      digests: ${{ steps.native.outputs.digests }}
     timeout-minutes: 60
     env:
       SOURCE_DATE_EPOCH: ${{ needs.select.outputs.epoch }}
       VERSION: ${{ needs.select.outputs.version }}
     steps:
-      - if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -68,23 +66,66 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+      - run: node apps/desktop/packaging/unsigned-environment.ts
       - run: pnpm install --frozen-lockfile
       - shell: bash
-        run: node apps/desktop/packaging/candidate-build.ts staging "$VERSION"
+        run: node apps/desktop/packaging/candidate-build.ts candidate "$VERSION" --unsigned-only
+      - id: native
+        shell: bash
+        run: |
+          digests=$(node apps/desktop/packaging/check-unsigned.ts candidate "$VERSION")
+          echo "digests=$digests" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
-          name: build-${{ matrix.os }}
-          path: staging/
+          name: build-macos-15
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 3
+
+  windows:
+    needs: select
+    runs-on: windows-2025
+    outputs:
+      digests: ${{ steps.native.outputs.digests }}
+    timeout-minutes: 60
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.select.outputs.epoch }}
+      VERSION: ${{ needs.select.outputs.version }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: node apps/desktop/packaging/unsigned-environment.ts
+      - run: pnpm install --frozen-lockfile
+      - shell: bash
+        run: node apps/desktop/packaging/candidate-build.ts candidate "$VERSION" --unsigned-only
+      - id: native
+        shell: bash
+        run: |
+          digests=$(node apps/desktop/packaging/check-unsigned.ts candidate "$VERSION")
+          echo "digests=$digests" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-windows-2025
+          path: candidate/
           if-no-files-found: error
           retention-days: 3
 
   assemble:
-    needs: [select, build]
+    needs: [select, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       VERSION: ${{ needs.select.outputs.version }}
+      MAC_DIGESTS: ${{ needs.macos.outputs.digests }}
+      WIN_DIGEST: ${{ needs.windows.outputs.digests }}
       BUILD_DATE: ${{ needs.select.outputs.date }}
     steps:
       - uses: actions/checkout@v7
@@ -104,11 +145,11 @@ jobs:
       - name: Check the unsigned candidate
         run: |
           feed=$CLAWTRATE_UPDATE_FEED_URL
-          if [[ "$TRACK" == nightly ]]; then feed=$CLAWTRATE_NIGHTLY_UPDATE_FEED_URL; fi
-          result=0
-          node apps/desktop/packaging/release-plan.ts assemble candidate "$TRACK" "$VERSION" "$GITHUB_SHA" "$BUILD_DATE" "$feed" || result=$?
-          test "$result" = 2
-          jq -e '[.files[].signing] == ["ad hoc", "ad hoc", "unsigned"]' candidate/release-plan.json
+          other=$CLAWTRATE_NIGHTLY_UPDATE_FEED_URL
+          if [[ "$TRACK" == nightly ]]; then feed=$CLAWTRATE_NIGHTLY_UPDATE_FEED_URL; other=$CLAWTRATE_UPDATE_FEED_URL; fi
+          node apps/desktop/packaging/release-plan.ts assemble candidate "$TRACK" "$VERSION" "$GITHUB_SHA" "$BUILD_DATE" "$feed" "$other"
+          checked=$(jq -er '[.files[].sha512] | join(",")' candidate/release-plan.json)
+          test "$checked" = "$MAC_DIGESTS,$WIN_DIGEST"
       - uses: actions/upload-artifact@v7
         with:
           name: candidate-${{ needs.select.outputs.version }}

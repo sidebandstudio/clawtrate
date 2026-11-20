@@ -18,14 +18,11 @@ import { FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, sha512Base64 } from "./feed.ts";
 import { releaseDate } from "./update-defines.ts";
+import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 import { compiledAddresses } from "./candidate-addresses.ts";
 
 const app = fileURLToPath(new URL("../", import.meta.url));
 const dist = join(app, "dist");
-function succeeds(command: string, args: string[]) {
-  return spawnSync(command, args, { stdio: "ignore" }).status === 0;
-}
-
 export function macReadback(log: string, key: FileKey) {
   const prefix =
     "Signature of dist/" + (key === "mac-arm64" ? "mac-arm64" : "mac") + "/Clawtrate.app: ";
@@ -35,45 +32,6 @@ export function macReadback(log: string, key: FileKey) {
   if (lines[0] === prefix + "none.") return "unsigned";
   if (lines[0] === prefix + "certificate.") return "certificate";
   return "unknown";
-}
-
-function inspect(file: string, key: FileKey, log: string, temp: string) {
-  if (key === "win-x64") {
-    const status = execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "(Get-AuthenticodeSignature -LiteralPath $env:CANDIDATE_INSTALLER -ErrorAction Stop).Status.ToString()",
-      ],
-      { encoding: "utf8", env: { ...process.env, CANDIDATE_INSTALLER: file } },
-    ).trim();
-    return status === "Valid"
-      ? "authenticode-valid"
-      : status === "NotSigned"
-        ? "unsigned"
-        : "invalid";
-  }
-  const kind = macReadback(log, key);
-  if (kind !== "certificate") return kind;
-  const unpacked = join(temp, key);
-  mkdirSync(unpacked);
-  const bundle = join(unpacked, "Clawtrate.app");
-  execFileSync("ditto", ["-x", "-k", file, unpacked]);
-  if (
-    !succeeds("codesign", [
-      "--verify",
-      "--deep",
-      "--strict",
-      "-R=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists",
-      bundle,
-    ])
-  )
-    return "invalid";
-  return succeeds("xcrun", ["stapler", "validate", bundle])
-    ? "developer-id-notarized"
-    : "certificate";
 }
 
 function build(dir: string, version: string) {
@@ -112,13 +70,13 @@ function build(dir: string, version: string) {
       const name = artifactName(version, key);
       const path = join(dir, name);
       copyFileSync(join(dist, name), path);
-      const signing = inspect(path, key, win ? "" : readFileSync(log, "utf8"), temp);
+
       const receipt = {
         commit,
         buildDate,
         name,
         sha512: sha512Base64(path),
-        signing,
+        packagerReadback: win ? null : macReadback(readFileSync(log, "utf8"), key),
         feedAddresses,
       };
       writeFileSync(join(dir, key + ".json"), JSON.stringify(receipt, null, 2) + "\n");
@@ -131,7 +89,9 @@ function build(dir: string, version: string) {
 }
 
 if (import.meta.main) {
-  const [dir, version] = process.argv.slice(2);
+  const [dir, version, mode] = process.argv.slice(2);
   if (!dir || !version) throw new Error("Usage: candidate-build.ts NEW_FOLDER VERSION");
+  if (mode === "--unsigned-only" || process.env.GITHUB_ACTIONS === "true")
+    requireUnsignedEnvironment(process.env);
   build(dir, version);
 }
