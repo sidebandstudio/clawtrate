@@ -994,6 +994,8 @@ const routineSchedule = object<RoutineSchedule>()({
   expr: NAME,
   tz: NAME,
   everyMs: NUMBER,
+  anchorMs: NUMBER,
+  staggerMs: NUMBER,
   at: NAME,
   name: NAME,
 });

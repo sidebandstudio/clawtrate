@@ -382,7 +382,10 @@ test("F-189: a late save answer leaves a deleted routine's draft available as ne
   await editor().getByRole("button", { name: "Save as a new routine" }).click();
   await expect(editor()).toHaveCount(0);
   await expect(view().getByRole("heading", { name })).toBeVisible();
-  expect((await byName(name))?.id).not.toBe(job.id);
+  const copy = await byName(name);
+  expect(copy?.id).not.toBe(job.id);
+  // The copy runs when the original did: the gateway anchored it at creation.
+  expect(copy?.schedule).toEqual(job.schedule);
   await expect(get(job.id)).rejects.toThrow(/not found/iu);
 });
 
@@ -512,10 +515,9 @@ test("F-189: deleting a conditional, custom-payload or routed routine keeps the 
     { payload: { kind: "agentTurn", message: "#text", timeoutSeconds: 30 } },
     { delivery: { mode: "none", failureDestination: { mode: "announce", channel: "last" } } },
     // A copy would run again (cron.add takes no enabled), wake differently,
-    // lose its stagger, or delete itself after one run.
+    // or delete itself after one run.
     { enabled: false },
     { wakeMode: "next-heartbeat" },
-    { schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 30_000 } },
     { schedule: { kind: "at", at }, deleteAfterRun: false },
   ];
   for (const [index, variant] of variants.entries()) {
@@ -531,6 +533,24 @@ test("F-189: deleting a conditional, custom-payload or routed routine keeps the 
     await editor().getByTestId("editor-deleted").getByRole("button", { name: "Close" }).click();
     expect(await byName(name)).toBeUndefined();
   }
+});
+
+test("F-189: a recovery copy keeps a staggered schedule", async () => {
+  const name = `Staggered copy ${STAMP}`;
+  const job = await add({
+    ...scriptedRoutine(`Staggered ${STAMP}`),
+    schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 30_000 },
+  });
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await editor().getByLabel("Name").fill(name);
+  await call("cron.remove", { id: job.id });
+  await expect(editor().getByTestId("editor-deleted")).toBeVisible();
+  await editor().getByRole("button", { name: "Save as a new routine" }).click();
+  await expect(editor()).toHaveCount(0);
+  expect(await byName(name)).toMatchObject({
+    schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 30_000 },
+  });
 });
 
 test("F-350: the switch pauses and resumes it on the gateway, and the list says Paused", async () => {

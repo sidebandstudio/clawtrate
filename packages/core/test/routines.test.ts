@@ -158,6 +158,11 @@ describe("F-191: the routine list", () => {
 
   it("offers a copy after a deletion only when recovery can write the job again (F-189)", () => {
     expect(parseRoutine(job())?.canRecreate).toBe(true);
+    // The gateway anchors every new every-job; the copy carries the phase (below).
+    expect(
+      parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 } }))
+        ?.canRecreate,
+    ).toBe(true);
     const oneShot = job({
       schedule: { kind: "at", at: "2035-01-01T14:00:00.000Z" },
       deleteAfterRun: true,
@@ -168,18 +173,6 @@ describe("F-191: the routine list", () => {
     expect(parseRoutine(job({ enabled: false }))?.canRecreate).toBe(false);
     // The form writes wakeMode now alone.
     expect(parseRoutine(job({ wakeMode: "next-heartbeat" }))?.canRecreate).toBe(false);
-    // Pacing fields are dropped by the form's schedule.
-    expect(
-      parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 } }))
-        ?.canRecreate,
-    ).toBe(false);
-    expect(
-      parseRoutine(
-        job({
-          schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 5 },
-        }),
-      )?.canRecreate,
-    ).toBe(false);
     // The gateway defaults a new one-shot to deleting itself.
     expect(parseRoutine({ ...oneShot, deleteAfterRun: false })?.canRecreate).toBe(false);
   });
@@ -881,6 +874,42 @@ describe("F-189: creating a routine", () => {
       reason: "gateway",
     });
     expect(requests).toEqual([]);
+  });
+
+  it("a recovery copy keeps the schedule's anchor and stagger (F-189)", async () => {
+    const anchored = fieldsOf(
+      parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 } }))!,
+    );
+    const staggered = fieldsOf(
+      parseRoutine(
+        job({
+          schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 5 },
+        }),
+      )!,
+    );
+    const { routines, requests } = engine(
+      {
+        "cron.add": (params) => ({
+          created: true,
+          job: job(params.schedule as Record<string, unknown>),
+        }),
+      },
+      initialRoutinesState,
+      ADMIN,
+    );
+    await routines.create({ ...anchored, botId: "marlow" }, "draft-1");
+    expect(requests[0]!.params).toMatchObject({
+      schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 },
+    });
+    await routines.create({ ...staggered, botId: "marlow" }, "draft-2");
+    expect(requests[1]!.params).toMatchObject({
+      schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 5 },
+    });
+    // A new routine of the form's own carries neither: the gateway anchors it at now.
+    await routines.create({ ...fieldsOf(parseRoutine(job())!), botId: "marlow" }, "draft-3");
+    expect(requests[2]!.params).toMatchObject({
+      schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York" },
+    });
   });
 
   it("says why the gateway refused, and an answer that never came is unknown, not saved", async () => {

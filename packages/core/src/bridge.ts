@@ -685,6 +685,16 @@ function routineSchedule(value: unknown): RoutineSchedule {
     !(Number.isSafeInteger(everyMs) && (everyMs as number) > 0)
   )
     throw new Error("invalid schedule");
+  // The gateway's own schedule facts: a copy carries them so it runs when the
+  // original did; the form itself never writes them.
+  const pacing = (value: unknown): number | undefined => {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      throw new Error("invalid schedule");
+    return value;
+  };
+  const anchorMs = pacing(schedule.anchorMs);
+  const staggerMs = pacing(schedule.staggerMs);
   return {
     kind,
     expr: nullable(schedule.expr, (each) => shortText(each, 256, "schedule")),
@@ -692,6 +702,8 @@ function routineSchedule(value: unknown): RoutineSchedule {
     everyMs: (everyMs as number | null | undefined) ?? null,
     at: nullable(schedule.at, (each) => shortText(each, 64, "time")),
     name: nullable(schedule.name, (each) => shortText(each, 64, "schedule")),
+    ...(anchorMs !== undefined ? { anchorMs } : {}),
+    ...(staggerMs !== undefined ? { staggerMs } : {}),
   };
 }
 

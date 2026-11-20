@@ -57,6 +57,14 @@ export type RoutineSchedule = {
   /** `cron` and `at`: the IANA zone, or null for the gateway's own (cron) or UTC (at). */
   tz: string | null;
   everyMs: number | null;
+  /**
+   * `every`: the phase the gateway anchored the job at (it writes one for every
+   * new job), and `cron`: a stagger. Kept so a recovery copy runs as the
+   * original did; the form writes neither, and a patch of the schedule drops
+   * them again.
+   */
+  anchorMs?: number | null;
+  staggerMs?: number | null;
   /** `at`: the ISO time as written. */
   at: string | null;
   /** `other`: the gateway's kind (`on-exit`, `stream`, …). */
@@ -186,9 +194,20 @@ function parseSchedule(value: unknown): RoutineSchedule {
   const kind = str(schedule.kind);
   const base = { expr: null, tz: null, everyMs: null, at: null, name: null };
   if (kind === "cron" && str(schedule.expr))
-    return { ...base, kind, expr: str(schedule.expr), tz: str(schedule.tz) };
+    return {
+      ...base,
+      kind,
+      expr: str(schedule.expr),
+      tz: str(schedule.tz),
+      ...(num(schedule.staggerMs) !== null ? { staggerMs: num(schedule.staggerMs) } : {}),
+    };
   if (kind === "every" && num(schedule.everyMs))
-    return { ...base, kind, everyMs: num(schedule.everyMs) };
+    return {
+      ...base,
+      kind,
+      everyMs: num(schedule.everyMs),
+      ...(num(schedule.anchorMs) !== null ? { anchorMs: num(schedule.anchorMs) } : {}),
+    };
   if (kind === "at" && str(schedule.at))
     return { ...base, kind, at: str(schedule.at), tz: str(schedule.tz) };
   return { ...base, kind: "other", name: kind ?? "unknown" };
@@ -235,12 +254,11 @@ export function parseRoutine(value: unknown): Routine | null {
       !gated &&
       // A copy is made with `cron.add` and the form's fields alone, so a job
       // carrying anything the form cannot write again (a pause, a wake mode
-      // other than now, schedule pacing, a one-shot that does not delete
-      // itself) is offered no copy that would run differently (F-189).
+      // other than now, a one-shot that does not delete itself) is offered no
+      // copy that would run differently (F-189). The schedule's anchor and
+      // stagger are carried over in the copy itself.
       job.enabled !== false &&
       (job.wakeMode == null || job.wakeMode === "now") &&
-      asRecord(job.schedule)?.anchorMs == null &&
-      asRecord(job.schedule)?.staggerMs == null &&
       (schedule.kind !== "at" || job.deleteAfterRun !== false) &&
       wireSchedule(schedule) !== null &&
       Object.keys(payload).every(
@@ -479,6 +497,8 @@ const instant = (at: string | null) => (at === null ? null : Date.parse(at));
 export function sameSchedule(a: RoutineSchedule, b: RoutineSchedule): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "at") return instant(a.at) === instant(b.at);
+  // The anchor and stagger are not compared: the form writes neither, a patch
+  // of the schedule drops them, and they never differ on their own.
   return a.expr === b.expr && a.tz === b.tz && a.everyMs === b.everyMs && a.name === b.name;
 }
 
@@ -847,6 +867,12 @@ export class RoutinesEngine {
       return { status: "refused", error: "New routines run in an isolated conversation." };
     const schedule = wireSchedule(input.schedule);
     if (!schedule) return { status: "refused", error: "Clawtrate can't write this schedule." };
+    // A recovery copy runs when the original did: the gateway anchors a new
+    // every-job at now and takes no stagger unless the request carries one.
+    if (schedule.kind === "every" && input.schedule.anchorMs != null)
+      schedule.anchorMs = input.schedule.anchorMs;
+    if (schedule.kind === "cron" && input.schedule.staggerMs != null)
+      schedule.staggerMs = input.schedule.staggerMs;
     const epoch = this.epoch;
     try {
       const routine = answeredJob(
