@@ -1132,3 +1132,31 @@ it("keeps the handoff visible through actual exit and leaves a blocked quit reco
   };
   expect((await service.restart(next)).snapshot.state.kind).toBe("handing-off");
 });
+
+it("retires a changed file before publishing the first eligible snapshot", async () => {
+  const installer = installStandIn();
+  installer.inspect = async (file) => {
+    writeFileSync(file.path, Buffer.alloc(file.size, 7));
+    return null;
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({
+    kind: "failed",
+    reason: "artifact-changed",
+  });
+  expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
+  expect((await service.restart(id)).outcome).toBe("stale");
+  expect(installer.launch).not.toHaveBeenCalled();
+});
+it("withdraws Restart when the already inspected download is replaced", async () => {
+  const service = await start({ installer: installStandIn() });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id),
+    path = join(folder, readdirSync(folder)[0]!);
+  renameSync(path, path + ".old");
+  writeFileSync(path, fixture.body);
+  expect(service.get().install).toMatchObject({ reason: "artifact-changed" });
+  expect((await service.restart(id)).outcome).toBe("stale");
+});

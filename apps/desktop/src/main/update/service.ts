@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clearUpdateDirectory, prepareUpdateDirectory } from "../private-update-directory.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
+import { watchUpdateFile } from "../update-file-watch.ts";
 import { UpdateEngine } from "./engine.ts";
 import type { UpdateInstaller } from "./install.ts";
 import { readAttempt, attemptOutcome } from "./attempt.ts";
@@ -62,6 +63,7 @@ export class DesktopUpdateService {
   private engine: UpdateEngine | null = null;
   private work: Promise<void> | null = null;
   private pendingInstall: DesktopUpdateSnapshot["install"] | null = null;
+  private fileWatch: ReturnType<typeof watchUpdateFile> | null = null;
   private switching = false;
   private closed = false;
   private readonly shutdownSignal = new AbortController();
@@ -130,7 +132,27 @@ export class DesktopUpdateService {
   }
 
   get(): DesktopUpdateSnapshot {
+    if (this.snapshot.install.kind === "restart-available" && !this.fileWatch?.current())
+      this.changedFile();
     return this.snapshot;
+  }
+
+  private changedFile() {
+    if (this.snapshot.install.kind === "restart-available") {
+      this.retireFile();
+      this.publish({
+        kind: "failed",
+        stage: "download",
+        reason: "artifact-changed",
+        retry: "check",
+      });
+    }
+  }
+
+  private retireFile() {
+    this.fileWatch?.close();
+    this.fileWatch = null;
+    this.options.installer?.retire?.();
   }
 
   private publish(state: DesktopUpdateState) {
@@ -145,6 +167,11 @@ export class DesktopUpdateService {
     )
       install = { kind: "unavailable-in-this-build", reason: state.reason };
     this.pendingInstall = null;
+    if (install.kind === "restart-available" && !this.fileWatch?.current()) {
+      this.retireFile();
+      install = { kind: "unavailable-in-this-build", reason: "artifact-changed" };
+      state = { kind: "failed", stage: "download", reason: "artifact-changed", retry: "check" };
+    }
     this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
     try {
       this.options.changed(this.snapshot);
@@ -154,7 +181,13 @@ export class DesktopUpdateService {
   }
 
   private get restarting() {
-    return this.snapshot.state.kind === "preparing" || this.snapshot.state.kind === "handing-off";
+    return (
+      this.snapshot.state.kind === "preparing" ||
+      this.snapshot.state.kind === "handing-off" ||
+      this.snapshot.state.kind === "handed-to-system" ||
+      (this.snapshot.state.kind === "handoff-failed" &&
+        this.snapshot.state.reason === "handoff-unconfirmed")
+    );
   }
 
   private reply(outcome: DesktopUpdateOutcome): DesktopUpdateReply {
@@ -171,6 +204,7 @@ export class DesktopUpdateService {
       return this.reply("invalid");
     if (track === this.snapshot.selectedTrack) return this.reply("accepted");
     this.switching = true;
+    this.retireFile();
     const previous = this.engine;
     this.engine = null;
     previous?.cancel();
@@ -212,6 +246,7 @@ export class DesktopUpdateService {
     this.closed = true;
     this.pendingInstall = null;
     this.shutdownSignal.abort();
+    this.retireFile();
     this.engine?.cancel();
     this.engine = null;
     this.snapshot = {
@@ -278,6 +313,7 @@ export class DesktopUpdateService {
     if (expectedTrack !== selectedTrack) return this.reply("stale");
     if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
+    this.retireFile();
     this.engine?.cancel();
     const offerId = selectedTrack + "-" + randomUUID();
     let checkedAt: string | null = null;
@@ -400,14 +436,26 @@ export class DesktopUpdateService {
               result.version,
             );
             if (this.engine !== engine) return;
-            const reason = file
-              ? await installer.inspect(file).catch(() => "inspection-failed" as const)
-              : "artifact-changed";
+            if (!file) return downloadFailure("artifact-changed");
+            try {
+              this.fileWatch = watchUpdateFile(file.path, () => this.changedFile());
+            } catch {
+              return downloadFailure("artifact-changed");
+            }
+            const reason = await installer.inspect(file).catch(() => "inspection-failed" as const);
             if (this.engine !== engine) return;
-            if (reason === "artifact-changed") return downloadFailure(reason);
+            if (!this.fileWatch?.current() || reason === "artifact-changed") {
+              this.retireFile();
+              return downloadFailure("artifact-changed");
+            }
+            if (reason) this.retireFile();
             install = reason
               ? { kind: "unavailable-in-this-build", reason }
-              : { kind: "restart-available", offerId: id };
+              : {
+                  kind: "restart-available",
+                  offerId: id,
+                  ...(installer.completesOnQuit && { completesOnQuit: true }),
+                };
           }
           this.pendingInstall = install;
           return {
@@ -442,6 +490,7 @@ export class DesktopUpdateService {
       return this.reply("invalid");
     const version = state.version;
     const fail = (reason: UpdateInstallRefusal | "attempt-not-saved" | "installer-failed") => {
+      this.retireFile();
       this.publish({ kind: "handoff-failed", version, reason });
       return this.reply("accepted");
     };
@@ -452,6 +501,7 @@ export class DesktopUpdateService {
     const refused = await installer.inspect(file).catch(() => "inspection-failed" as const);
     if (this.closed) return this.reply("superseded");
     if (refused) return fail(refused);
+    if (!this.fileWatch?.current()) return fail("artifact-changed");
     try {
       await this.options.store.set(
         "attempt",
@@ -469,10 +519,19 @@ export class DesktopUpdateService {
     if (this.closed) return this.reply("superseded");
     this.publish({ kind: "handing-off", version, offerId: id });
     if (this.closed) return this.reply("superseded");
+    if (!this.fileWatch?.current()) return fail("artifact-changed");
+    let handed = false;
     const reason = await installer
-      .launch(file, this.shutdownSignal.signal)
+      .launch(file, this.shutdownSignal.signal, () => {
+        if (!this.closed && !handed && installer.completesOnQuit) {
+          handed = true;
+          this.publish({ kind: "handed-to-system", version, offerId: id });
+        }
+      })
       .catch(() => "installer-failed" as const);
     if (this.closed) return this.reply("superseded");
+    this.retireFile();
+    if (handed) return this.reply("accepted");
     if (reason) return fail(reason);
     this.options.quitAfterLaunch?.();
     return this.reply("accepted");
