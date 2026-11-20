@@ -1296,8 +1296,8 @@ describe("a sign-in page's address (ruling: one parsed address)", () => {
   });
 
   it("refuses a user name or password, another scheme, and what is not an address", () => {
-    expect(signInAddress("https://name:secret@sign-in.example/")).toBeNull();
-    expect(signInAddress("https://name@sign-in.example/")).toBeNull();
+    expect(signInAddress("https://name:secret@sign-in.example.com/")).toBeNull();
+    expect(signInAddress("https://name@sign-in.example.com/")).toBeNull();
     expect(signInAddress("javascript:alert(1)")).toBeNull();
     expect(signInAddress("file:///etc/passwd")).toBeNull();
     expect(signInAddress("/relative")).toBeNull();
@@ -1316,13 +1316,17 @@ describe("a sign-in page's address (ruling: one parsed address)", () => {
       "http://[::ffff:127.0.0.1]/",
     ])
       expect(signInAddress(raw)?.loopback, raw).toBe(true);
-    for (const raw of ["https://sign-in.example/", "http://10.0.0.2/", "http://[::ffff:10.0.0.2]/"])
+    for (const raw of [
+      "https://sign-in.example/",
+      "http://192.0.2.10/",
+      "http://[::ffff:192.0.2.10]/",
+    ])
       expect(signInAddress(raw)?.loopback, raw).toBe(false);
   });
 
   it("a step whose page has a password in it offers no page, and says it refused one", async () => {
     const { client, fake, accounts } = await accountsClient();
-    fake.deviceUrl = "https://user:hunter2@sign-in.example/device";
+    fake.deviceUrl = "https://user:hunter2@sign-in.example.com/device";
     await client.startSignIn(CHOICES.device, "pip");
     expect(accounts().signIn?.step).toMatchObject({ url: null, urlRefused: true });
     expect(JSON.stringify(client.state)).not.toContain("hunter2");
