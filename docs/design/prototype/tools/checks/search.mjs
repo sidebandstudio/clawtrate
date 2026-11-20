@@ -517,7 +517,7 @@ check("R7 the first Escape closes the confirmation only", (await paletteOpen(p))
 await p.keyboard.press("Escape");
 check("R7 the second Escape closes the palette", !(await paletteOpen(p)) && (await handoffs(p)).length === 0);
 await p.keyboard.press("Meta+k");
-await type(p, "192.168");
+await type(p, "fd00");
 await p.keyboard.press("Shift+Enter");
 await p.waitForTimeout(80);
 check("A2 a private address: may be on your own network", (await text(p, ".s-confirm-line")) === "Opens in your browser. This address may be on your own network.");
@@ -526,12 +526,12 @@ await p.close();
 p = await open("palette=open");
 const where = await p.evaluate(() => {
   const w = (raw) => { const c = CT.searchTest.canonical(raw); return c.url ? CT.searchTest.whereIs(c.hostname) : "refused"; };
-  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://10.0.0.8/", "http://172.20.1.1/", "http://169.254.1.1/", "http://100.64.0.9/", "http://[fe80::1]/", "http://[fd00::5]/", "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://8.8.8.8/", "https://[2606:4700::1111]/", "http://0x7f.1/"].map(w);
+  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://167772168/", "http://2886992129/", "http://2851995905/", "http://1681915913/", "http://[fe80::1]/", "http://[fd00::5]/", "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://134744072/", "https://[2606:4700::1111]/", "http://0x7f.1/"].map(w);
 });
-check("A2 the written host decides, with no lookup", where.join() === "self,self,self,self,network,network,network,network,network,network,network,network,network,,,,self", where.join());
+check("A2 the written host decides once the URL parser has canonicalized it (integer IPv4 included), with no lookup", where.join() === "self,self,self,self,network,network,network,network,network,network,network,network,network,,,,self", where.join());
 await type(p, "installer");
 const refused = await groupText(p, "links");
-check("R6 an address with a user name or password is plain text and can't be handed over", refused.includes("https://sam:hunter2@installer.example/portal") && (await p.evaluate(() => !document.querySelector('.s-row[data-kind="link"] .s-hint-more'))));
+check("R6 an address with a user name or password is plain text and can't be handed over", refused.includes("https://sam:hunter2@installer.example.com/portal") && (await p.evaluate(() => !document.querySelector('.s-row[data-kind="link"] .s-hint-more'))));
 await p.keyboard.press("Shift+Enter");
 check("R6 Shift+Enter on it does nothing", !(await p.evaluate(() => document.querySelector(".s-confirm"))) && (await handoffs(p)).length === 0);
 await p.keyboard.press("Enter");
