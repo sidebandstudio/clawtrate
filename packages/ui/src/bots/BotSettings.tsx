@@ -29,6 +29,7 @@ import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.ts
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
+import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -52,7 +53,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect" | "runs";
+type View = "main" | "account" | "change" | "connect" | "runs" | "memory";
 
 export function BotSettings({
   bot,
@@ -208,6 +209,23 @@ export function BotSettings({
     );
   }
 
+  if (view === "memory") {
+    return (
+      <div ref={rootRef} className="b-tab" data-testid="bot-settings">
+        <BotMemory
+          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${connection.gatewayId ?? ""}`}
+          botId={bot.id}
+          visible={visible}
+          name={name}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onBack={() => go("main", "[data-bs='memory']")}
+        />
+      </div>
+    );
+  }
+
   const runsOnRow = (
     <RunsOnRow
       botName={name}
@@ -250,6 +268,7 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
       </div>
@@ -385,6 +404,7 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
+        <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
         {foot}

@@ -2,6 +2,7 @@
 // implements the same ClawtrateBridge the desktop and web hosts do, holds
 // everything in memory, and never opens a socket or makes a request.
 
+import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
   applyQuestionResolved,
@@ -60,6 +61,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -145,6 +147,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovalsOmitted: 0,
     creations: [],
     accounts: initialState.accounts,
+    routines: initialState.routines,
     retention: initialState.retention,
   };
 }
@@ -475,6 +478,7 @@ export function createFixtureBridge(
     desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
+    routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
   } = {},
@@ -502,13 +506,21 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
+  const routineParams = options.routines ?? { state: "none" };
   let state =
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
-    state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+    state = withAccess(
+      {
+        ...state,
+        accounts: fixtureAccounts(now, accountParams),
+        routines: fixtureRoutines(now, routineParams),
+      },
+      accountParams,
+    );
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
@@ -551,7 +563,23 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
+  const memory = memoryCommands(now);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    if (
+      command.type === "listMemory" ||
+      command.type === "readMemory" ||
+      command.type === "writeMemory"
+    ) {
+      sent.push(command);
+      if (command.type === "writeMemory" && !state.connection.canAdmin)
+        throw new Error("Changing memory requires admin access.");
+      return memory(command);
+    }
+    const routine = routineCommand(command, () => state, now, routineParams);
+    if (routine) {
+      sent.push(command);
+      return routine;
+    }
     const usage = usageCommand(command, () => state, set, usageParams);
     if (usage) {
       sent.push(command);
