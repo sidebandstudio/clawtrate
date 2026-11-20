@@ -4,10 +4,13 @@
 
 import { useCallback, useLayoutEffect, useState } from "react";
 
-// Every key and pointer press the person makes, counted before any handler sees it.
+// Every key and pointer press the person makes, counted before any handler sees it. Events
+// the page makes itself (dispatched, not trusted) are not the person's.
 let presses = 0;
 if (typeof window !== "undefined") {
-  const count = () => void (presses += 1);
+  const count = (event: Event) => {
+    if (event.isTrusted) presses += 1;
+  };
   window.addEventListener("keydown", count, true);
   window.addEventListener("pointerdown", count, true);
 }
