@@ -826,9 +826,9 @@
     if (d.copy.model) {
       add("model", d.kind === "import" ? "Model" : "Model and account", src.model);
       add("fallbacks", "Fallback list: none", "none");
-      add("effort", "Effort", src.effort);
+      if (src.effort) add("effort", "Effort", src.effort);
     }
-    if (d.copy.instr) add("agents", "AGENTS.md", src.agents), add("soul", "SOUL.md", src.soul);
+    if (d.copy.instr) add("agents", "AGENTS.md", src.agents), d.kind === "import" && !src.soul ? null : add("soul", "SOUL.md", src.soul);
     if (d.kind !== "import" && d.copy.tools) add("tools", "Tool permissions", "the source's"), add("skills", "Skills", "the source's");
     return rows;
   }
@@ -1192,19 +1192,31 @@
   };
 
   // The file a person chose, as the fixtures have it: Wren, from another gateway.
+  // The file a person chose, as the fixtures have it. Its picture is real PNG bytes, decoded by
+  // the browser's own image decoder before the review. imp=badpng: a PNG signature and image data
+  // that inflates, with no header; imp=outsidepic: an outside address; imp=nosoul: no SOUL.md.
+  const WREN_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAZklEQVR42u3Xyw0AIAhEQZq0RIuyGq3ADwKyMUvi+c1JUYSjnNpKX520cBhEG3aFWOMmhFf8CuEdVyGi4seIVEB0fItIBbyKTxEEEEBAOoA3IV9DmIUEYiWDWEoh1nKIjwnM1+zbGbPvyavRa8LLAAAAAElFTkSuQmCC";
+  const BAD_PNG = "data:image/png;base64,iVBORw0KGgoAAAAMSURBVHicY2CgDAAAAEAAAbc0fO8=";
+  // The efforts the gateway's models.list reports for the file's model; impeffort=unlisted or unknown.
+  const EFFORTS = p("impeffort") === "unknown" ? null : p("impeffort") === "unlisted" ? ["low", "medium"] : ["low", "medium", "high"];
   const WREN = () => {
     const odd = p("imp") === "unavailable";
+    const model = odd ? "globex/atlas-2" : "openai/gpt-5.5";
+    const effort = "High";
+    // The effort is written only when the model is and the model lists that level.
+    const eff = odd ? "with-model" : !EFFORTS ? "unknown" : EFFORTS.includes(effort.toLowerCase()) ? true : "unlisted";
     return {
       name: "Wren",
       label: "Garden",
       writtenBy: "Clawtrate 0.4.0",
-      model: odd ? "globex/atlas-2" : "openai/gpt-5.5",
-      effort: "High",
+      picture: p("imp") === "badpng" ? BAD_PNG : p("imp") === "outsidepic" ? "https://pictures.example/wren.png" : WREN_PNG,
+      model,
+      effort: eff === true ? effort : null,
       agents: "# Wren\n\nYou keep the garden calendar.\nAsk before ordering seeds.\nNever water on a rain day.\n",
-      soul: "Patient and practical.\n",
+      soul: p("imp") === "nosoul" ? null : "Patient and practical.\n",
       settings: [
-        ["Model", odd ? "globex/atlas-2" : "openai/gpt-5.5", !odd],
-        ["Effort", "High", odd ? "with-model" : true],
+        ["Model", model, !odd],
+        ["Effort", effort, eff],
       ],
     };
   };
@@ -1216,7 +1228,51 @@
     field: "It has a field Clawtrate doesn't read: “tools”.",
     account: "Its model names an account, “openai/gpt-5.5@work”. A Clawtrate file names models without accounts.",
     picture: "Its picture isn't a PNG, JPEG, WebP or GIF image that decodes.",
+    outsidepic: "This file's picture is at an outside address. A Clawtrate file requires an inline raster picture.",
   };
+  const MAGIC = { "image/png": [0x89, 0x50, 0x4e, 0x47], "image/jpeg": [0xff, 0xd8, 0xff], "image/gif": [0x47, 0x49, 0x46], "image/webp": [0x52, 0x49, 0x46, 0x46] };
+  // Before review: an outside address is refused without opening it; a data: picture must be a raster
+  // type whose first bytes match its MIME, open in the platform's image decoder, and have sane dimensions.
+  async function checkPicture(url) {
+    if (!/^data:/.test(url)) return "outsidepic";
+    const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(url);
+    if (!m) return "picture";
+    const bytes = Uint8Array.from(atob(m[2]).slice(0, 4), (c) => c.charCodeAt(0));
+    if (!MAGIC[m[1]].every((x, i) => bytes[i] === x)) return "picture";
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      if (!img.naturalWidth || !img.naturalHeight || img.naturalWidth > 4096 || img.naturalHeight > 4096) return "picture";
+      return { size: [img.naturalWidth, img.naturalHeight] };
+    } catch {
+      return "picture";
+    }
+  }
+  CT.lifecycleCheckPicture = checkPicture;
+  CT.lifecycleImportPicture = () => WREN().picture;
+  function readImport(d) {
+    d.stage = "reading";
+    d.refused = null;
+    paint();
+    setTimeout(async () => {
+      if (!live(d)) return;
+      const fixed = ["version", "size", "type", "field", "account", "picture"].includes(p("imp")) && !d.triedOther ? p("imp") : null;
+      const pic = fixed ? null : d.triedOther ? await checkPicture(WREN_PNG) : await checkPicture(WREN().picture);
+      if (!live(d)) return;
+      const why = fixed || (typeof pic === "string" && !d.triedOther ? pic : null);
+      if (why) {
+        d.triedOther = true;
+        d.refusal = REFUSALS[why];
+        d.stage = "refused";
+      } else {
+        d.pictureSize = pic.size;
+        d.stage = "review";
+      }
+      paint(true);
+      announce(d.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
+    }, 400);
+  }
 
   VIEWS.import = (d) => {
     if (d.status === "working" || d.status === "done" || d.status === "lostcreate") return stepsView(d);
@@ -1224,26 +1280,37 @@
     if (d.stage === "refused")
       return sheet(
         "Import a bot",
-        note(`<p><b>Clawtrate can't read this file.</b> ${REFUSALS[p("imp")]} Nothing in it was used.</p>`, "danger"),
+        note(`<p><b>Clawtrate can't read this file.</b> ${d.refusal} Nothing in it was used.</p>`, "danger"),
         button("Choose another file…", 'data-lc="import-choose" data-size="lg" data-lc-focus', "primary"),
       );
     if (d.stage === "review") {
       const w = WREN();
-      const left = w.settings.filter(([, , ok]) => ok === false);
+      const left = w.settings.filter(([, , ok]) => ok !== true && ok !== "with-model");
       const writes = w.settings.filter(([, , ok]) => ok === true);
-      const word = (ok) => (ok === true ? "Will be written" : ok === "with-model" ? "Left out with the model" : "Not available here, left out");
+      const word = (ok) =>
+        ok === true
+          ? "Will be written"
+          : ok === "with-model"
+            ? "Left out with the model"
+            : ok === "unlisted"
+              ? `This gateway does not list that effort for ${esc(w.model)}. Left out.`
+              : ok === "unknown"
+                ? "Couldn't check this effort. Left out."
+                : "Not available here, left out";
       const row = ([k, v, ok]) => `<li data-state="${ok === true ? "write" : "left"}"><span>${k}: ${esc(v)}</span><span class="lc-step-word">${word(ok)}</span></li>`;
       return sheet(
         "Add Wren?",
-        `<span class="b-preview" role="img" aria-label="The file's picture">${CT.character("__wren")}</span>` +
+        `<span class="b-preview lc-file-pic" role="img" aria-label="The file's picture, ${d.pictureSize.join(" by ")} pixels"><img src="${WREN_PNG}" alt="" width="${d.pictureSize[0]}" height="${d.pictureSize[1]}" /></span>` +
           `<label class="b-label" for="lc-imp-name">Name</label><input class="input lc-dup-name" id="lc-imp-name" value="${esc(d.name)}" data-lc-impname maxlength="40" />` +
           (d.refused ? note(`<p><b>The gateway didn't make the bot:</b> “agent "${esc(d.refused)}" already exists”. Nothing was made.</p>`, "danger") : "") +
           `<p class="b-hint lc-center">Label: ${esc(w.label)} · wren.clawtrate-bot.json. The file says it was written by ${esc(w.writtenBy)}.</p>` +
           note(`<p>These files will become instructions the new bot may follow when it runs. Read them first: Clawtrate shows them and doesn't run them, and nothing is created until Add Bot.</p>`) +
           `<details class="lc-review" data-lc-row="agents"><summary>Instructions · AGENTS.md <span class="b-faint">· ${lines(w.agents)} lines, in full</span></summary><pre class="lc-theirs">${esc(w.agents)}</pre></details>` +
-          `<details class="lc-review" data-lc-row="soul"><summary>Personality · SOUL.md <span class="b-faint">· ${lines(w.soul)} line, in full</span></summary><pre class="lc-theirs">${esc(w.soul)}</pre></details>` +
-          `<details class="lc-review" data-lc-row="settings"><summary>Settings <span class="b-faint">· ${writes.length ? `${writes.length + 1} to write` : "nothing to write"}${left.length ? `, ${left.length} not available here` : ""}</span></summary><ul class="lc-result lc-settings">${w.settings.map(row).join("")}${left.length ? "" : `<li data-state="write"><span>Fallback list: none</span><span class="lc-step-word">Will be written</span></li>`}</ul>` +
-          (left.length ? `<p class="b-hint">With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one, and its effort is left out with it.</p>` : "") +
+          (w.soul
+            ? `<details class="lc-review" data-lc-row="soul"><summary>Personality · SOUL.md <span class="b-faint">· ${lines(w.soul)} line, in full</span></summary><pre class="lc-theirs">${esc(w.soul)}</pre></details>`
+            : `<p class="b-hint lc-omitted" data-lc-row="soul">Personality · SOUL.md · Not in the file. Nothing is written; the new bot keeps its starting file.</p>`) +
+          `<details class="lc-review" data-lc-row="settings"><summary>Settings <span class="b-faint">· ${writes.length ? `${writes.length + 1} to write` : "nothing to write"}${left.length ? `, ${left.length} ${w.settings[0][2] ? "left out" : "not available here"}` : ""}</span></summary><ul class="lc-result lc-settings">${w.settings.map(row).join("")}${w.settings[0][2] ? `<li data-state="write"><span>Fallback list: none</span><span class="lc-step-word">Will be written</span></li>` : ""}</ul>` +
+          (!w.settings[0][2] ? `<p class="b-hint">With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one, and its effort is left out with it.</p>` : "") +
           `</details>` +
           `<details class="lc-review" data-lc-row="never"><summary>Not created <span class="b-faint">· a Clawtrate file never carries these</span></summary>${neverList()}<p class="b-hint">Nor any account binding or sign-in store: the new bot gets its account the way New bot gives one.</p></details>`,
         isAdmin() ? button("Add Bot", `data-lc="import-add" data-size="lg"${d.name.trim() ? "" : " disabled"}`, "primary") : adminBar("Adding a bot needs admin access. You can read the whole file here first."),
@@ -1251,7 +1318,7 @@
     }
     return sheet(
       "Import a bot",
-      `<p class="b-lead">Choose a Clawtrate file. You'll see everything it would create before anything is.</p>` +
+      `<p class="b-lead">Choose a Clawtrate file. Review the settings and instructions the file would add before creating the bot.</p>` +
         `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("file")}</span><p>Drop a .clawtrate-bot.json file here</p>${button("Choose file…", 'data-lc="import-choose" data-size="sm" data-lc-focus')}<p class="b-hint">At most 5 MB. Reading it changes nothing on the gateway.</p></div>`,
       "",
     );
@@ -1628,18 +1695,7 @@
       case "export-reread":
         return readExport(L.dialog);
       case "import-choose":
-        {
-          const d = L.dialog;
-          d.stage = "reading";
-          d.refused = null;
-          paint();
-          return setTimeout(() => {
-            if (!live(d)) return;
-            d.stage = Object.keys(REFUSALS).includes(p("imp")) && !d.triedOther ? ((d.triedOther = true), "refused") : "review";
-            paint(true);
-            announce(d.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
-          }, 400);
-        }
+        return readImport(L.dialog);
       case "import-add":
         // A model this gateway doesn't offer is left out, and its effort and fallback list with it.
         L.dialog.copy.model = p("imp") !== "unavailable";
@@ -1740,6 +1796,6 @@
   if (start === "duplicate") openDialog("duplicate", null, { bot: p("delbot") || app.model.selectedBot, name: `${nameOf(p("delbot") || app.model.selectedBot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
   if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, exp: null, files: {}, read: "loading" }), readExport(L.dialog);
   if (start === "import") openDialog("import", $("#new-button"), { kind: "import", stage: p("imp") ? "reading" : null, name: "Wren", copy: { look: true, model: true, instr: true } });
-  if (start === "import" && p("imp")) setTimeout(() => { L.dialog.stage = Object.keys(REFUSALS).includes(p("imp")) ? ((L.dialog.triedOther = true), "refused") : "review"; paint(); }, 0);
+  if (start === "import" && p("imp")) readImport(L.dialog);
   if (start === "delete") openDialog("delete", null, { bot: p("delbot") || app.model.selectedBot, files: Boolean(p("files")), read: p("delread") || null });
 })();

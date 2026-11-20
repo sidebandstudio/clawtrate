@@ -448,21 +448,27 @@ function realPng(): string {
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
   return `data:image/png;base64,${png.toString("base64")}`;
 }
-/** Whether a data: picture is a PNG whose header and image data are sound (the test a client runs by decoding). */
-function decodesAsPng(url: string): boolean {
+/**
+ * A PNG-only sanity check, not a decoder: the signature, chunk lengths inside the buffer, and image
+ * data that inflates. A browser's decoder is what a client must use (docs/design/bots-lifecycle.md §9).
+ */
+function hasInflatablePngData(url: string): boolean {
   const m = /^data:image\/png;base64,(.+)$/.exec(url);
   if (!m) return false;
   const b = Buffer.from(m[1]!, "base64");
-  if (b.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return false;
+  if (b.length < 8 || b.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return false;
   const { inflateSync } = createRequire(import.meta.url)("node:zlib") as typeof import("node:zlib");
   let at = 8;
   const idat: Buffer[] = [];
   while (at < b.length) {
+    if (at + 12 > b.length) return false;
     const len = b.readUInt32BE(at);
-    const type = b.subarray(at + 4, at + 8).toString();
+    if (at + 12 + len > b.length) return false;
+    const type = b.subarray(at + 4, at + 8).toString("latin1");
     if (type === "IDAT") idat.push(b.subarray(at + 8, at + 8 + len));
     at += 12 + len;
   }
+  if (!idat.length) return false;
   try {
     return inflateSync(Buffer.concat(idat)).length > 0;
   } catch {
@@ -517,7 +523,7 @@ function parseBotFile(raw: Buffer): BotFile {
   if (typeof b.model === "string" && b.model.includes("@")) throw new Error(`model names an account: ${b.model}`);
   str(b.effort, FILE_LIMITS.text, "effort");
   str(b.picture, FILE_LIMITS.picture, "picture");
-  if (b.picture && !decodesAsPng(b.picture)) throw new Error("picture is not an image that decodes");
+  if (b.picture && !hasInflatablePngData(b.picture)) throw new Error("picture has no inflatable PNG data");
   for (const [f, text] of Object.entries(b.instructions ?? {})) {
     if (typeof text !== "string" || Buffer.byteLength(text) > FILE_LIMITS.instruction) throw new Error(`${f} is not text of at most ${FILE_LIMITS.instruction} bytes`);
   }
@@ -532,7 +538,7 @@ async function file() {
   try {
     // A source bot with every field the file carries set to a known value.
     const picture = realPng();
-    say("the source picture decodes:", decodesAsPng(picture), "characters:", picture.length);
+    say("the source picture has inflatable PNG data:", hasInflatablePngData(picture), "characters:", picture.length);
     const src = await create(o, "Probe Source", { avatar: picture });
     made.push(src);
     if (!src) return;
@@ -568,7 +574,7 @@ async function file() {
       "AGENTS.md": [hash(a.bot.instructions["AGENTS.md"]!), hash(b.bot.instructions["AGENTS.md"]!), a.bot.instructions["AGENTS.md"] === b.bot.instructions["AGENTS.md"]],
       "SOUL.md": [hash(a.bot.instructions["SOUL.md"]!), hash(b.bot.instructions["SOUL.md"]!), a.bot.instructions["SOUL.md"] === b.bot.instructions["SOUL.md"]],
       label: [a.bot.label, b.bot.label],
-      picture: [a.bot.picture?.length, b.bot.picture?.length, a.bot.picture === b.bot.picture, decodesAsPng(b.bot.picture ?? "")],
+      picture: [a.bot.picture?.length, b.bot.picture?.length, a.bot.picture === b.bot.picture, hasInflatablePngData(b.bot.picture ?? "")],
       model: [a.bot.model, b.bot.model],
       effort: [a.bot.effort, b.bot.effort],
     });

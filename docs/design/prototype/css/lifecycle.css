@@ -553,3 +553,10 @@
   width: 32px;
   height: 32px;
 }
+
+/* Import's review: the file's own picture, decoded, drawn at the preview size. */
+.lc-file-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

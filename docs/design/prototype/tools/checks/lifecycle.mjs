@@ -705,13 +705,14 @@ await p.locator("#rail-menu:not([hidden]) .menu-item").first().waitFor();
 check("F-265 the + menu has Import a bot…", (await text(p, "#rail-menu")).includes("Import a bot…"));
 await clickText(p, "#rail-menu", "Import a bot…");
 t = await dlg(p);
-check("F-265 Import asks for a Clawtrate file and says reading changes nothing", has(t, "Import a bot", "Choose a Clawtrate file. You'll see everything it would create before anything is.", "At most 5 MB. Reading it changes nothing on the gateway."));
+check("F-265 Import asks for a Clawtrate file and says reading changes nothing", has(t, "Import a bot", "Choose a Clawtrate file. Review the settings and instructions the file would add before creating the bot.", "At most 5 MB. Reading it changes nothing on the gateway.") && !t.includes("everything it would create"));
 await observeText(p, "#lc-dialog", "Reading wren.clawtrate-bot.json…");
 await clickText(p, "#lc-dialog", "Choose file…");
 check("F-265 the file is read first", (await sawText(p)));
 await waitText(p, "#lc-dialog", "Add Wren?");
 t = await dlg(p);
-check("F-265 the review shows the picture, name and label, and what the file says of itself", has(t, "Add Wren?", "Label: Garden · wren.clawtrate-bot.json. The file says it was written by Clawtrate 0.4.0.") && (await p.evaluate(() => document.querySelector("#lc-imp-name").value === "Wren" && Boolean(document.querySelector("#lc-dialog .b-preview svg")))));
+check("F-265 the review shows the picture, name and label, and what the file says of itself", has(t, "Add Wren?", "Label: Garden · wren.clawtrate-bot.json. The file says it was written by Clawtrate 0.4.0.") && (await p.evaluate(() => document.querySelector("#lc-imp-name").value === "Wren" && document.querySelector("#lc-dialog .b-preview img")?.naturalWidth === 32)));
+check("F-049 the file's picture is real bytes the browser's decoder opens, at their own size", (await p.evaluate(async () => JSON.stringify((await CT.lifecycleCheckPicture(CT.lifecycleImportPicture())).size))) === "[32,32]");
 check("F-265 it says the files will become instructions, and nothing is created until Add Bot", t.includes("These files will become instructions the new bot may follow when it runs. Read them first: Clawtrate shows them and doesn't run them, and nothing is created until Add Bot.") && (await p.evaluate(() => app.bots.length === 4)));
 check("F-265 every row is folded and expands", (await p.evaluate(() => [...document.querySelectorAll(".lc-review")].map((d) => d.dataset.lcRow + ":" + d.open).join(","))) === "agents:false,soul:false,settings:false,never:false");
 await click(p, '[data-lc-row="agents"] summary');
@@ -732,10 +733,50 @@ check("F-265 Open shows Wren in the list", (await text(p, "#bot-list")).includes
 await p.close();
 
 p = await open("lc=import&imp=unavailable");
+await waitText(p, "#lc-dialog", "Add Wren?");
 await click(p, '[data-lc-row="settings"] summary');
 t = await text(p, '[data-lc-row="settings"]');
 check("F-265 with its model left out, no fallback list is written either", !t.includes("Fallback list"));
 check("F-265 a model this gateway doesn't offer is left out, not guessed", has(t, "nothing to write, 1 not available here", "Model: globex/atlas-2Not available here, left out", "Effort: HighLeft out with the model", "With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one"));
+await clickText(p, "#lc-dialog", "Add Bot");
+await waitText(p, "#lc-dialog", "Wren is listed");
+check("F-265 a model left out is not written, nor its effort or fallback list", (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "config.patch" && ["model", "effort", "fallbacks"].includes(c[1])).length)) === 0);
+await p.close();
+
+p = await open("lc=import&imp=nosoul");
+await waitText(p, "#lc-dialog", "Add Wren?");
+check("F-265 a file without SOUL.md: the review says it is not in the file, not a write", (await text(p, '[data-lc-row="soul"]')).includes("Personality · SOUL.md · Not in the file. Nothing is written; the new bot keeps its starting file."));
+await clickText(p, "#lc-dialog", "Add Bot");
+await waitText(p, "#lc-dialog", "Wren is listed");
+check("F-265 ... and Add Bot writes no SOUL.md", (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "agents.files.set" && c[1] === "soul").length)) === 0 && !(await p.$('[data-lc-row-key="soul"]')));
+await p.close();
+
+for (const [effort, words] of [
+  ["unlisted", "Effort: HighThis gateway does not list that effort for openai/gpt-5.5. Left out."],
+  ["unknown", "Effort: HighCouldn't check this effort. Left out."],
+]) {
+  p = await open(`lc=import&imp=review&impeffort=${effort}`);
+  await waitText(p, "#lc-dialog", "Add Wren?");
+  await click(p, '[data-lc-row="settings"] summary');
+  check(`F-265 an effort the model ${effort === "unlisted" ? "doesn't list" : "couldn't be checked for"} is left out`, (await text(p, '[data-lc-row="settings"]')).includes(words));
+  await clickText(p, "#lc-dialog", "Add Bot");
+  await waitText(p, "#lc-dialog", "Wren is listed");
+  check(`F-265 ... and not in the patch (${effort})`, (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[1] === "effort").length)) === 0 && !(await p.$('[data-lc-row-key="effort"]')));
+  await p.close();
+}
+
+p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+const outsideRequests = [];
+p.on("request", (r) => !r.url().startsWith("file:") && !r.url().startsWith("data:") && outsideRequests.push(r.url()));
+p.on("pageerror", (e) => { failed += 1; out.push("PAGEERROR " + e); });
+await p.goto(base + "&lc=import&imp=outsidepic");
+await waitText(p, "#lc-dialog", "Clawtrate can't read this file.");
+t = await dlg(p);
+check("F-265 a picture at an outside address is refused before the review, without opening it", t.includes("This file's picture is at an outside address. A Clawtrate file requires an inline raster picture. Nothing in it was used.") && !t.includes("pictures.example") && outsideRequests.length === 0 && !(await p.$('[data-lc="import-add"]')));
+await p.close();
+p = await open("lc=import&imp=badpng");
+await waitText(p, "#lc-dialog", "Clawtrate can't read this file.");
+check("F-265 a malformed PNG whose image data inflates never reaches Add Bot: the browser's decoder refuses it", (await dlg(p)).includes("Its picture isn't a PNG, JPEG, WebP or GIF image that decodes.") && !(await p.$('[data-lc="import-add"]')));
 await p.close();
 
 for (const [imp, words] of [
