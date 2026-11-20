@@ -116,10 +116,10 @@ export function Choice<T extends string>({
               : null;
     if (to === null) return;
     event.preventDefault();
+    // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
+    // option it reached, and nothing a frame later takes focus back.
+    ref.current?.querySelector<HTMLElement>(`[data-value="${options[to]![0]}"]`)?.focus();
     onChange(options[to]![0]);
-    requestAnimationFrame(() =>
-      ref.current?.querySelector<HTMLElement>(`[data-value="${options[to]![0]}"]`)?.focus(),
-    );
   };
   return (
     <div
