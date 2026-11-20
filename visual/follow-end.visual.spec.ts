@@ -4,7 +4,7 @@
 // width, with or without the composer's menus. The phone, where the same
 // content meets the narrowest view, is the case.
 import { test, expect, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const PHONE = SIZES.find((size) => size.phone)!;
 
@@ -60,5 +60,32 @@ for (const theme of THEMES) {
         });
       }
     }
+
+    test("a reader who leaves after following is not dragged back", async ({ page }) => {
+      await openFixture(page, `scene=run-question&${OTTO_DISK}&panel=closed`, theme);
+      await expect(page.getByTestId("shelf-row")).toContainText("Held until you answer");
+      await expect.poll(async () => (await shortOf(page)).startsWith("0")).toBe(true);
+      // The reader follows the end again after the first layout has settled.
+      await page.getByTestId("composer-input").click();
+      await page.keyboard.type("Answering, one moment.");
+      await page.keyboard.press("Backspace");
+      await page.waitForTimeout(400);
+      await expect.poll(async () => (await shortOf(page)).startsWith("0")).toBe(true);
+      // The reader scrolls up a little and stays: a scroll the reader made is
+      // never taken for a clamp under a followed end.
+      const transcript = page.getByTestId("transcript");
+      const top = await transcript.evaluate((element) => {
+        element.scrollTop -= 30;
+        return element.scrollTop;
+      });
+      await settle(page);
+      expect(
+        await transcript.evaluate((element) => element.scrollTop),
+        "the reader's scroll-up holds",
+      ).toBe(top);
+      expect(await transcript.evaluate((element) => element.scrollTop)).toBeLessThan(
+        await transcript.evaluate((element) => element.scrollHeight - element.clientHeight),
+      );
+    });
   });
 }

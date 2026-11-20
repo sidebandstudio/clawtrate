@@ -300,6 +300,7 @@ function TranscriptView({
     if (over <= 0) return;
     element.scrollTop -= over;
     followTop.current = null;
+    lastClamp.current = null;
     following.current = false;
     setAtEnd(false);
   }, [toEnd]);
@@ -324,7 +325,12 @@ function TranscriptView({
       element.scrollTop >= lastClamp.current - 1;
     const near = kept || clamped || distance < NEAR_BOTTOM_PX;
     if (kept && distance > 1) toEnd();
-    else followTop.current = near ? element.scrollTop : null;
+    else {
+      followTop.current = near ? element.scrollTop : null;
+      // The marker is only for an uninterrupted following interval: a later
+      // scroll-up is the reader's, wherever it lands.
+      if (!near) lastClamp.current = null;
+    }
     following.current = near;
     setAtEnd(near);
     if (near) setSeenSize(contentSize);
