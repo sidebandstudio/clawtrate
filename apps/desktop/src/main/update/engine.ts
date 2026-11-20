@@ -4,7 +4,7 @@
 // docs/decisions.md, "Updates and release signing", has its rules.
 
 import type { UpdateTrack } from "@clawtrate/core";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   close as closeFile,
   createWriteStream,
@@ -116,7 +116,7 @@ export interface UpdateEngineOptions {
   readonly buildReleaseDate?: string | null;
   /** The running app's version, `app.getVersion()`. */
   readonly currentVersion: string;
-  /** A folder of the app's own for downloads; created 0700 if missing. */
+  /** The caller owns this offer's folder and removes abandoned downloads on startup. */
   readonly downloadDir: string;
   readonly platform: string;
   readonly arch: string;
@@ -238,8 +238,16 @@ export class UpdateEngine {
 
   private report(state: UpdateState): UpdateState {
     this.current = state;
-    this.options.onState?.(state);
+    void this.notifyObserver(state);
     return state;
+  }
+
+  private async notifyObserver(state: UpdateState): Promise<void> {
+    try {
+      await this.options.onState?.(state);
+    } catch {
+      // A failed notification cannot interrupt a transfer or change its outcome.
+    }
   }
 
   private get userAgent(): string {
@@ -301,7 +309,7 @@ export class UpdateEngine {
     const { releaseDate, file } = found;
     const dir = this.options.downloadDir;
     const name = `Clawtrate-${version}-${this.key}.${FILE_EXTENSION[this.key]}`;
-    const partial = join(dir, `${name}.partial`);
+    const partial = join(dir, `${name}.${randomUUID()}.partial`);
     const target = join(dir, name);
     const progress = (received: number) =>
       this.report({ kind: "downloading", version, releaseDate, received, total: file.size });
@@ -318,12 +326,14 @@ export class UpdateEngine {
     try {
       try {
         await mkdir(dir, { recursive: true, mode: 0o700 });
-        await rm(partial, { force: true });
       } catch {
         throw new DownloadFailed("write-failed");
       }
       // A declared length other than the feed's is refused before a byte is written.
       const response = await open(file.url, transfer, this.limits.maxDownloadBytes, this.userAgent);
+      response.once("close", () => {
+        if (!response.complete) transfer.recordCause("unreachable");
+      });
       const declared = response.headers["content-length"];
       if (declared !== undefined && Number(declared) !== file.size) {
         response.destroy();
@@ -350,9 +360,13 @@ export class UpdateEngine {
         ...args: Args
       ) => void;
       const record =
-        <Args extends unknown[]>(callback: DiskCallback<Args>): DiskCallback<Args> =>
+        <Args extends unknown[]>(
+          callback: DiskCallback<Args>,
+          operation: "write" | "open" | "close",
+        ): DiskCallback<Args> =>
         (error, ...args) => {
-          if (error) diskFailed = true;
+          // WriteStream retries EAGAIN for writes. Open and close errors are terminal.
+          if (error && !(operation === "write" && error.code === "EAGAIN")) diskFailed = true;
           callback(error, ...args);
         };
       const out = createWriteStream(partial, {
@@ -360,7 +374,7 @@ export class UpdateEngine {
         mode: 0o600,
         fs: {
           open(path: string, flags: string, mode: number, callback: DiskCallback<[number]>) {
-            openFile(path, flags, mode, record(callback));
+            openFile(path, flags, mode, record(callback, "open"));
           },
           write(
             fd: number,
@@ -370,7 +384,7 @@ export class UpdateEngine {
             position: number | undefined,
             callback: DiskCallback<[number, Buffer]>,
           ) {
-            writeFileChunk(fd, buffer, offset, length, position, record(callback));
+            writeFileChunk(fd, buffer, offset, length, position, record(callback, "write"));
           },
           writev(
             fd: number,
@@ -378,17 +392,20 @@ export class UpdateEngine {
             position: number | undefined,
             callback: DiskCallback<[number, Buffer[]]>,
           ) {
-            writeFileChunks(fd, buffers, position ?? null, record(callback));
+            writeFileChunks(fd, buffers, position ?? null, record(callback, "write"));
           },
           close(fd: number, callback: DiskCallback<[]>) {
-            closeFile(fd, record(callback));
+            closeFile(fd, record(callback, "close"));
           },
         },
       });
       try {
         await pipeline(response, counter, out, { signal: transfer.signal });
       } catch (error) {
-        if (diskFailed) throw new DownloadFailed("write-failed");
+        // If write/writev repeatedly makes no progress, WriteStream itself gives up.
+        const retriesExhausted =
+          error instanceof Error && "code" in error && error.code === "ERR_SYSTEM_ERROR";
+        if (diskFailed || retriesExhausted) throw new DownloadFailed("write-failed");
         if (error instanceof DownloadFailed) throw error;
         throw new FetchRefused(transfer.cause());
       }

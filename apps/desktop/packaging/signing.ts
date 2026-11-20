@@ -170,3 +170,11 @@ export function macSignatureKind(codesignOutput: string): "ad hoc" | "certificat
   if (/^Authority=/m.test(codesignOutput)) return "certificate";
   return "none";
 }
+
+export function checkMacSignature(
+  plan: SigningPlan["mac"],
+  result: { status: number | null; stderr: string | null },
+) {
+  const kind = result.status === 0 ? macSignatureKind(result.stderr ?? "") : "none";
+  return { kind, matches: kind === (plan === "developer-id" ? "certificate" : "ad hoc") };
+}
