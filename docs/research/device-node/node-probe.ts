@@ -30,6 +30,8 @@
 //   perm      a permission reported as granted later, and withdrawn
 //   share     what the share sheet and the Shortcuts actions would call
 //   events    which tiers hear about another device's node requests
+//   roleCredential  the node role's own credential: a node-only setup code from
+//             admin, used by a device paired as an operator; reuse; revocation
 //   local     on an instance started with --default-local-pairing: is a node
 //             with commands paired silently on loopback, and through a proxy
 //             that adds X-Forwarded-For
@@ -120,6 +122,8 @@ type ConnectOptions = {
   port?: number;
   /** Send the shared token. Off: the device token alone, as Clawtrate connects once paired. */
   shared?: boolean;
+  /** A setup code's bootstrap token, sent in place of the shared token. */
+  bootstrap?: string;
   onEvent?: (conn: Conn, frame: Frame) => void;
 };
 
@@ -143,7 +147,7 @@ function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refuse
     const node = options.role === "node";
     const client = new GatewayClient({
       url: options.port ? `ws://127.0.0.1:${options.port}` : url,
-      ...(options.shared === false ? {} : { token: connection!.token }),
+      ...(options.bootstrap ? { bootstrapToken: options.bootstrap } : options.shared === false ? {} : { token: connection!.token }),
       clientName: node ? "node-host" : "gateway-client",
       mode: node ? "node" : "ui",
       clientDisplayName: `Clawtrate research ${options.label}`,
@@ -651,14 +655,30 @@ async function share() {
       ];
     }
     say("the shared task's first message, as the gateway holds it:", seen);
-    say(
-      "the task's messages, read back:",
-      history.ok
-        ? messages.map((m) => ({ role: m.role, content: JSON.stringify(m.content ?? m.text ?? null).slice(0, 400), keys: Object.keys(m) }))
-        : history,
-    );
   }
-  // What the gateway says about a task's kind: a request's task key is checked against this.
+  // A share whose reply was lost is sent again with the same key and arguments: does the gateway make a second task?
+  const retryKey = crypto.randomUUID();
+  const retryArgs = { agentId: agents?.agents?.at(-1)?.id ?? agents?.defaultId, message: "Shared once, sent twice.", idempotencyKey: retryKey };
+  const firstSend = await tryCall(writer, "sessions.create", retryArgs);
+  const secondSend = await tryCall(writer, "sessions.create", retryArgs);
+  const changed = await tryCall(writer, "sessions.create", { ...retryArgs, message: "Shared once, changed before the retry." });
+  const keyOf = (r: { ok: boolean; result?: unknown; error?: string }) => (r.ok ? String((r.result as Record<string, unknown>)?.key).replace(/[0-9a-f-]{36}/, "<uuid>") : r.error);
+  say("sessions.create twice with one key and the same arguments:", {
+    first: keyOf(firstSend),
+    second: keyOf(secondSend),
+    sameTask: firstSend.ok && secondSend.ok && (firstSend.result as Record<string, unknown>).key === (secondSend.result as Record<string, unknown>).key,
+    secondKeys: secondSend.ok ? Object.keys(secondSend.result as object) : null,
+  });
+  say("the same key with different arguments:", { ok: changed.ok, error: changed.error, code: changed.code });
+  // Another person's device, paired at write, makes a task: what does this device's read say about it?
+  const other = await operator("another-person", ["read", "write"]);
+  const theirs = await tryCall(other, "sessions.create", { agentId: agents?.defaultId, message: "A task of another device.", idempotencyKey: crypto.randomUUID() });
+  const theirKey = theirs.ok ? String((theirs.result as Record<string, unknown>).key) : "";
+  const seenByReader = ((await tryCall(reader, "sessions.list", {})).result as { sessions?: Record<string, unknown>[] })?.sessions ?? [];
+  const row = seenByReader.find((r) => r.key === theirKey);
+  say("another device's task, as this device's read lists it:", row ? { kind: row.kind, chatType: row.chatType, listed: true } : { listed: false });
+  await other.close();
+  // What the gateway says about a task's kind. It classifies a task; it does not say whose it is.
   const listedSessions = await tryCall(reader, "sessions.list", {});
   const rows = (listedSessions.result as { sessions?: Record<string, unknown>[] })?.sessions ?? [];
   say(
@@ -666,6 +686,96 @@ async function share() {
     listedSessions.ok ? rows.slice(0, 6).map((r) => ({ key: String(r.key).replace(/[0-9a-f-]{36}/, "<uuid>"), kind: r.kind, chatType: r.chatType, channel: r.channel })) : listedSessions,
   );
   for (const c of [reader, writer]) await c.close();
+}
+
+/**
+ * The node role's own credential on Clawtrate's ordinary path: the device is
+ * paired as an operator and holds only its operator device token. An admin
+ * connection asks the gateway for a node-only setup code; the node connection
+ * presents its bootstrap token. No shared token is sent by that device.
+ */
+async function roleCredential() {
+  const admin = await operator("admin", ["admin", "pairing", "read", "write"]);
+  say("allowlist:", (await configAllow(admin, PROBE_COMMANDS)).ok);
+  await sleep(1500);
+  const id = identity();
+  const op = await operator("X-operator", ["read"], id);
+  say("X as an operator, device token only:", op.hello);
+  const bare = await node("X-node", id, { shared: false });
+  say("X as a node with only its operator token:", "conn" in bare ? { hello: bare.conn.hello } : { code: (bare.refused.details as Record<string, unknown>)?.code });
+  const writer = await operator("writer", ["read", "write"]);
+  say("setupCode at read and write:", await tryCall(writer, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false }).then((r) => ({ ok: r.ok, error: r.error })));
+  const minted = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  const m = (minted.result ?? {}) as Record<string, unknown>;
+  say("setupCode at admin:", minted.ok ? { keys: Object.keys(m), access: m.access, auth: m.auth, expiresInS: Math.round((Number(m.expiresAtMs) - Date.now()) / 1000) } : minted);
+  if (!minted.ok) return;
+  const payload = JSON.parse(Buffer.from(String(m.setupCode), "base64url").toString("utf8")) as Record<string, unknown>;
+  const bootstrapToken = String(payload.bootstrapToken ?? "");
+  secrets.push(bootstrapToken);
+  say("the setup code holds:", Object.keys(payload));
+  const before = devicesList().filter((d) => d.deviceId === short(id.deviceId));
+  const withCode = await node("X-node", id, { bootstrap: bootstrapToken });
+  say("X as a node with the node-only bootstrap token:", "conn" in withCode ? { hello: withCode.conn.hello } : withCode.refused);
+  await sleep(800);
+  say("X on the gateway before and after:", { before, after: devicesList().filter((d) => d.deviceId === short(id.deviceId)) });
+  const described = await tryCall(admin, "node.describe", { nodeId: id.deviceId });
+  const dd = (described.result ?? {}) as Record<string, unknown>;
+  say("node.describe after:", described.ok ? { approvalState: dd.approvalState, paired: dd.paired, connected: dd.connected, commands: dd.commands } : described);
+  say("node.pair.list pending for X:", pendingSummary(await admin.request("node.pair.list", {})).pending.filter((p) => p.nodeId === short(id.deviceId)));
+  if ("conn" in withCode) await withCode.conn.close();
+  const reuse = await node("Y-node", identity(), { bootstrap: bootstrapToken });
+  say("the same bootstrap token again, on another device:", "conn" in reuse ? { hello: reuse.conn.hello } : { code: (reuse.refused.details as Record<string, unknown>)?.code, message: reuse.refused.message });
+  if ("conn" in reuse) await reuse.conn.close();
+
+  // (a) The same device: admin approves the role upgrade, then a second code.
+  const upgrade = "refused" in withCode ? requestIdOf(withCode) : undefined;
+  if (upgrade) say("(a) admin approves X's role upgrade:", await tryCall(admin, "device.pair.approve", { requestId: upgrade }).then((r) => ({ ok: r.ok, error: r.error })));
+  say("(a) X on the gateway:", devicesList().filter((d) => d.deviceId === short(id.deviceId)));
+  const second = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  const token2 = String(JSON.parse(Buffer.from(String((second.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
+  secrets.push(token2);
+  const withSecond = await node("X-node", id, { bootstrap: token2 });
+  say("(a) X as a node with a second code:", "conn" in withSecond ? { hello: withSecond.conn.hello } : { code: (withSecond.refused.details as Record<string, unknown>)?.code, reason: (withSecond.refused.details as Record<string, unknown>)?.reason });
+  await sleep(800);
+  say("(a) X's surface:", pendingSummary(await admin.request("node.pair.list", {})).pending.filter((p) => p.nodeId === short(id.deviceId)).map((p) => ({ commands: p.commands, requiredApproveScopes: p.requiredApproveScopes })));
+  if ("conn" in withSecond) await withSecond.conn.close();
+  const xAgain = await node("X-node", id, { shared: false });
+  say("(a) X as a node again, its node device token only:", "conn" in xAgain ? { hello: xAgain.conn.hello } : { code: (xAgain.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in xAgain) await xAgain.conn.close();
+
+  // (b) A key of its own for the node: a device that is only a node.
+  const n = identity();
+  const third = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  const token3 = String(JSON.parse(Buffer.from(String((third.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
+  secrets.push(token3);
+  const fresh = await node("N-own-key", n, { bootstrap: token3 });
+  say("(b) a node with its own key and the code:", "conn" in fresh ? { hello: fresh.conn.hello } : fresh.refused);
+  await sleep(800);
+  const nd = await tryCall(admin, "node.describe", { nodeId: n.deviceId });
+  const ndr = (nd.result ?? {}) as Record<string, unknown>;
+  say("(b) node.describe:", nd.ok ? { approvalState: ndr.approvalState, paired: ndr.paired, connected: ndr.connected, commands: ndr.commands } : nd);
+  say("(b) on the gateway:", devicesList().filter((d) => d.deviceId === short(n.deviceId)));
+  say("(b) node.pair.list pending:", pendingSummary(await admin.request("node.pair.list", {})).pending.filter((p) => p.nodeId === short(n.deviceId)));
+  if ("conn" in fresh) await fresh.conn.close();
+  const nAgain = await node("N-own-key", n, { shared: false });
+  say("(b) reconnect with its node device token only:", "conn" in nAgain ? { hello: nAgain.conn.hello } : { code: (nAgain.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in nAgain) await nAgain.conn.close();
+  const rv = await tryCall(admin, "device.token.revoke", { deviceId: n.deviceId, role: "node" });
+  say("(b) admin revokes its node token:", { ok: rv.ok, error: rv.error });
+  const nAfter = await node("N-own-key", n, { shared: false });
+  say("(b) reconnect after the revocation:", "conn" in nAfter ? { hello: nAfter.conn.hello } : { code: (nAfter.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in nAfter) await nAfter.conn.close();
+  tokenStore.delete(`${n.deviceId}:node`);
+  const fourth = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  const token4 = String(JSON.parse(Buffer.from(String((fourth.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
+  secrets.push(token4);
+  const recovered = await node("N-own-key", n, { bootstrap: token4 });
+  say("(b) recovery with a new code:", "conn" in recovered ? { hello: recovered.conn.hello } : { code: (recovered.refused.details as Record<string, unknown>)?.code, reason: (recovered.refused.details as Record<string, unknown>)?.reason });
+  if ("conn" in recovered) await recovered.conn.close();
+  await op.close();
+  const opAgain = await operator("X-operator", ["read"], id);
+  say("X as an operator after the revocation:", opAgain.hello);
+  for (const c of [opAgain, writer, admin]) await c.close();
 }
 
 /** Which connections hear about another device's node requests. */
@@ -733,7 +843,7 @@ function devicesList() {
   return (parsed.paired ?? []).map((d) => ({ deviceId: short(d.deviceId), displayName: d.displayName, roles: d.roles, scopes: d.scopes }));
 }
 
-const experiments: Record<string, () => Promise<unknown>> = { drop, tiers, same, invoke, revoke, perm, share, events, local };
+const experiments: Record<string, () => Promise<unknown>> = { drop, tiers, same, invoke, revoke, perm, share, events, roleCredential, local };
 if (!experiment || !experiments[experiment]) {
   console.log(`usage: node-probe.ts <${Object.keys(experiments).join("|")}> --instance <name>`);
   process.exit(1);
