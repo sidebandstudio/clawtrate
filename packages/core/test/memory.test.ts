@@ -39,6 +39,24 @@ async function connected(identity: () => string) {
 }
 
 describe("memory writes", () => {
+  it("F-212: note edits and deletions stay read-only at the host", async () => {
+    const { client, gateway } = await connected(() => "gw-one");
+    try {
+      for (const content of ["Updated note.", null]) {
+        await expect(
+          client.writeMemory("otto", "memory/meeting.md", "gw-one", hex(1), content),
+        ).rejects.toThrow(/notes are read-only/i);
+      }
+      expect(
+        gateway.requests.filter(({ method }) =>
+          ["clawtrate-memory.write", "clawtrate-memory.delete"].includes(method),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-212: a draft held across a reconnect does not write to the gateway that now answers", async () => {
     let deviceId = "gw-one";
     const { client, gateway } = await connected(() => deviceId);

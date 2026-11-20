@@ -50,3 +50,34 @@ for (const size of SIZES.filter((size) => size.name === "1440" || size.phone)) {
     });
   });
 }
+
+test("F-211: replacing the gateway at the same address closes its note and reloads memory", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin`, "light");
+  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  const memory = page.getByTestId("memory-page");
+  const note = memory.getByRole("button", { name: "memory/meeting-notes.md" });
+  await note.click();
+  const text = memory.getByText("Discuss the next release at the weekly meeting.");
+  await expect(text).toBeVisible();
+
+  await page.evaluate(() => {
+    const { clawtrateFixture } = window as unknown as {
+      clawtrateFixture: { setState(change: (state: { connection: object }) => unknown): void };
+    };
+    clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: "replacement-gateway" },
+    }));
+  });
+  await expect(text).toHaveCount(0);
+  await expect(note).toBeVisible();
+  const listReads = await page.evaluate(() => {
+    const { clawtrateFixture } = window as unknown as {
+      clawtrateFixture: { sent: Array<{ type: string }> };
+    };
+    return clawtrateFixture.sent.filter((command) => command.type === "listMemory").length;
+  });
+  expect(listReads).toBeGreaterThan(1);
+});

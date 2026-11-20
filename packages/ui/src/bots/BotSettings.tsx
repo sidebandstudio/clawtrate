@@ -220,7 +220,7 @@ export function BotSettings({
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <BotMemory
-          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}`}
+          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${connection.gatewayId ?? ""}`}
           botId={bot.id}
           visible={visible}
           name={name}

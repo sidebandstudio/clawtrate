@@ -83,6 +83,8 @@ export async function writeMemory(
   expectedHash: string | null,
   content: string | null,
 ): Promise<void> {
+  const root = ROOT_MEMORY.some((name) => name === path);
+  if (!root && !MEMORY_NOTES_WRITABLE) throw new Error("Memory notes are read-only.");
   // A missing-file guard or matching hash is valid on two gateways at one
   // address, so ask the connected gateway who it is and hold the draft to it.
   const identity = asRecord(await request("gateway.identity.get", {}))?.deviceId;
@@ -90,7 +92,7 @@ export async function writeMemory(
     throw new Error(
       "This draft came from a different gateway. Reopen the memory screen and save again.",
     );
-  if (ROOT_MEMORY.some((name) => name === path)) {
+  if (root) {
     if (content === null) throw new Error("Root memory files can only be edited.");
     const result = asRecord(
       await request("agents.files.set", {
