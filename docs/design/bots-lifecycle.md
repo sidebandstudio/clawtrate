@@ -30,14 +30,17 @@ The prototype is `prototype/lifecycle.html`: `bots.html` with these screens adde
 
 ```
 rail                          the primary bot's star; a bot's menu: Rename, Duplicate…, Export…,
-                                Make primary bot or Replace with different bot, Delete…
+                                Make primary bot or Replace with different bot, Delete…;
+                                at the read tier, Export… only
   double-click a name           rename in place (F-026)
-"+" menu                      New task, New bot (bots.md §3), Import a bot…
+"+" menu                      New task, New bot (bots.md §3), Import a bot… (no "+" at the read tier)
+gateway menu                  Import a bot…, at every tier
 Work pane, its hero           the picture opens the picture editor; the name and the label edit in place
 Work pane, Settings tab       bots.md §8's frame, in this order:
   About                         Description (bots.md); Instructions: AGENTS.md and SOUL.md (section 6)
   Model                         bots.md §9-13, not redesigned here
-  Tools, Memory, Usage          controls.md and the work on its pages, not redesigned here
+  Tools, Memory, Usage          controls.md and the work on its pages, not redesigned here; the
+                                prototype loads controls.html's groups unchanged
   Runs on                       controls.md §14 and the work on where a bot runs
   Manage                        primary bot, Duplicate…, Export…, Delete… (sections 3, 8-10)
 transcript                    the event line for a change to the instructions (section 7)
@@ -76,7 +79,7 @@ Each is defined once, in `prototype/css/lifecycle.css`, from existing tokens.
 
 ### Access
 
-Reading is the read tier: every screen here shows its values to a read-only connection. Choosing a primary bot saves a preference for the gateway profile and needs the interactive tier (`users.prefs.set`, `operator.write`); the dialog's bar says "**Read-only.** Choosing a primary bot needs the interactive tier: it saves a preference on the gateway." with "Request access", the interactive tier's request of `conversation.md` §3. Everything that changes a bot needs admin (`agents.update`, `agents.files.set`, `config.patch`, `agents.create`, `agents.delete`): below admin the controls are absent or text, and the screen's foot has `bots.md` §2's admin bar with this screen's words: "Changing <Bot>'s picture needs admin access.", "Changing <Bot>'s instructions needs admin access.", "Duplicating <Bot> needs admin access." Admin access is asked for only by that bar's button, never by opening a screen. The commands of Export and Import are text for the gateway's owner, shown at every tier.
+Reading is the read tier: every screen here shows its values to a read-only connection. Choosing a primary bot saves a preference for the gateway profile and needs the interactive tier (`users.prefs.set`, `operator.write`); the dialog's bar says "**Read-only.** Choosing a primary bot needs the interactive tier: it saves a preference on the gateway." with "Request access", the interactive tier's request of `conversation.md` §3. Everything that changes a bot needs admin (`agents.update`, `agents.files.set`, `config.patch`, `agents.create`, `agents.delete`): below admin the controls are absent or text, and the screen's foot has `bots.md` §2's admin bar with this screen's words: "Changing <Bot>'s picture needs admin access.", "Changing <Bot>'s instructions needs admin access.", "Duplicating <Bot> needs admin access." Admin access is asked for only by that bar's button, never by opening a screen.
 
 ### Read back
 
@@ -293,7 +296,7 @@ Reading goes in this order: the size, then the JSON, then the format and its ver
 
 | The host reported                            | Title, and the sentence                                                                                                            | Then             |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `saved`                                      | "Saved <Bot>.clawtrate-bot.json, 4 KB", "The app saved it where you chose. Nothing was sent anywhere."                             | Done             |
+| `saved`                                      | "Saved <Bot>.clawtrate-bot.json, 4 KB", "Nothing was sent anywhere."                                                               | Done             |
 | No save on this host: the browser's download | "Download requested", "Your browser decides where the file goes and whether it keeps it. Nothing was sent anywhere else."          | Done             |
 | `cancelled`                                  | "Not saved", "You closed the save dialog. Nothing was written."                                                                    | Try again, Close |
 | `failed`, `unchanged`                        | "Couldn't save", "<the host's message>. The file that was there before, <name>, still holds what it held."                         | Try again, Close |
@@ -302,7 +305,7 @@ Reading goes in this order: the size, then the JSON, then the format and its ver
 | `failed`, `unknown`                          | "Couldn't save", "<the host's message>. Clawtrate couldn't tell what the file holds now."                                          | Try again, Close |
 | The read before it failed                    | On `--warn-soft`: "Couldn't read <Bot>'s instructions", "The gateway didn't answer. Nothing was saved."                            | Try again, Close |
 
-**Import a bot…** (F-265), in the "+" menu and the gateway menu, at every tier: reading a file changes nothing on the gateway (section 2). **Import a bot**: "Choose a Clawtrate file. You'll see everything it would create before anything is." and a drop area, "Drop a .clawtrate-bot.json file here", "Choose file…", "At most 5 MB. Reading it changes nothing on the gateway." Then "Reading wren.clawtrate-bot.json…", and either a refusal or the review.
+**Import a bot…** (F-265), in the gateway menu, which every tier has, and in the "+" menu, which the read tier doesn't (`bots.md` §2): reading a file changes nothing on the gateway (section 2), so a read-only connection can review a file in full, and admin is asked for only at Add Bot. **Import a bot**: "Choose a Clawtrate file. You'll see everything it would create before anything is." and a drop area, "Drop a .clawtrate-bot.json file here", "Choose file…", "At most 5 MB. Reading it changes nothing on the gateway." Then "Reading wren.clawtrate-bot.json…", and either a refusal or the review.
 
 | Refused for                       | On `--danger-soft`: "**Clawtrate can't read this file.** <reason> Nothing in it was used." Then "Choose another file…" |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |

@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="css/app.css" />
     <link rel="stylesheet" href="css/conversation.css" />
     <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/controls.css" />
     <link rel="stylesheet" href="css/lifecycle.css" />
     <link rel="stylesheet" href="css/prototype.css" />
     <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
@@ -18,6 +19,10 @@
     <script src="js/bots.js" defer></script>
     <script src="js/bot-settings.js" defer></script>
     <script src="js/t3.js" defer></script>
+    <!-- The Settings tab's other groups (Tools, Memory, Usage, Runs on), as controls.html has them. -->
+    <script src="js/controls.js" defer></script>
+    <script src="js/controls-memory.js" defer></script>
+    <script src="js/controls-usage.js" defer></script>
     <script src="js/lifecycle.js" defer></script>
   </head>
   <body>
@@ -71,6 +76,7 @@
                 <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="light" aria-checked="false">Light<span class="glyph" data-state="check"></span></button></li>
                 <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="dark" aria-checked="false">Dark<span class="glyph" data-state="check"></span></button></li>
                 <li class="menu-rule" role="separator"></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-lc="open-import">Import a bot…</button></li>
                 <li role="none"><button type="button" class="menu-item" role="menuitem" data-action="b-settings">Settings<kbd>⌘,</kbd></button></li>
                 <li role="none"><button type="button" class="menu-item" role="menuitem" data-tone="danger" data-action="disconnect">Disconnect</button></li>
               </ul>

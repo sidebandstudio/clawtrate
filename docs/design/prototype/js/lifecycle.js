@@ -108,7 +108,8 @@
 
   // A bot's menu: Duplicate, Export and Delete, or Replace for the primary bot.
   CT.railMenuExtra = (b, item) => {
-    if (!isAdmin() && B.access !== "write") return "";
+    // Export only reads, so a read-only connection has it too.
+    if (!isAdmin() && B.access !== "write") return `<li class="menu-rule" role="separator"></li>` + item("Export…", `data-lc="open-export" data-lc-bot="${b.id}"`);
     const primary = b.id === primaryId();
     return (
       `<li class="menu-rule" role="separator"></li>` +
@@ -889,7 +890,7 @@
   const neverList = () => `<ul class="lc-list">${NEVER.map((x) => `<li>${x}</li>`).join("")}</ul>`;
   const fileName = (name) => `${name.replace(/[^A-Za-z0-9 _-]+/g, "").trim() || "bot"}.clawtrate-bot.json`;
   const EXPORT_WORDS = {
-    saved: (f) => [`Saved ${f}, 4 KB`, "The app saved it where you chose. Nothing was sent anywhere."],
+    saved: (f) => [`Saved ${f}, 4 KB`, "Nothing was sent anywhere."],
     web: () => ["Download requested", "Your browser decides where the file goes and whether it keeps it. Nothing was sent anywhere else."],
     cancelled: () => ["Not saved", "You closed the save dialog. Nothing was written."],
     unchanged: (f) => ["Couldn't save", `The disk is full. The file that was there before, ${f}, still holds what it held.`],
@@ -1281,6 +1282,11 @@
       case "open-export":
         return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, exp: null, files: {} });
       case "open-import":
+        // From the gateway menu too, which every tier has; the "+" menu is absent at the read tier.
+        if (!$("#gateway-menu").hidden) {
+          $("#gateway-menu").hidden = true;
+          $$('[data-action="gateway-menu"]').forEach((x) => x.setAttribute("aria-expanded", "false"));
+        }
         return openDialog("import", $("#new-button"), { kind: "import", stage: null, name: "Wren", copy: { look: true, model: true, instr: true } });
       case "open-delete":
         return openDialog("delete", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, files: Boolean(p("files")), read: p("delread") || null });

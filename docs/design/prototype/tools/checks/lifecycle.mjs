@@ -671,6 +671,19 @@ await p.close();
 p = await open(`bot=otto&${settings}&access=read`);
 t = await panel(p);
 check("S2 below admin Manage offers Export only", t.includes("Export…") && !t.includes("Duplicate…") && !t.includes("Delete Otto"));
+check("S1 the Settings tab keeps its other groups as they are: Tools, Memory, Usage, Runs on", ["About", "Model", "Tools", "Memory", "Usage", "Runs on", "Manage"].every((w) => t.includes(w)) && t.indexOf("Runs on") < t.indexOf("Manage"));
+const readMenu = await railMenu(p, "otto");
+check("F-049 a read-only rail menu offers Export, and nothing that writes", readMenu.includes("Export…") && !readMenu.some((x) => /Duplicate|Delete|Make primary|Rename/.test(x)));
+await p.close();
+
+p = await open("access=read");
+check("F-265 a read-only connection has no + menu", !(await p.evaluate(() => document.querySelector("#new-button")?.offsetParent)));
+await click(p, '[data-action="gateway-menu"]');
+await p.waitForTimeout(60);
+check("F-265 the gateway menu has Import a bot… at the read tier", (await text(p, "#gateway-menu")).includes("Import a bot…"));
+await clickText(p, "#gateway-menu", "Import a bot…");
+t = await dlg(p);
+check("F-265 ... it opens the import, and the gateway menu closes", t.includes("Choose a Clawtrate file.") && (await p.evaluate(() => document.querySelector("#gateway-menu").hidden)));
 await p.close();
 
 // Phone and dark (section 11) ------------------------------------------------------------------------
