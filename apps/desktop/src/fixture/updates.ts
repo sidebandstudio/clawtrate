@@ -35,6 +35,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     checking: { kind: "checking" },
     "nothing-newer": { kind: "nothing-newer" },
     offered: { kind: "offered", ...offer },
+    inspecting: { kind: "downloading", version, received: 120000, expected: 120000 },
     downloading: { kind: "downloading", version, received: 41000, expected: 120000 },
     verified: { kind: "verified", version, size: 120000, offerId: offer.offerId },
     preferences: { kind: "not-checked" },

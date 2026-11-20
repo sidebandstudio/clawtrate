@@ -86,6 +86,8 @@ function updateRow(
         action: "Download",
       };
     case "downloading":
+      if (state.received >= state.expected)
+        return { line: `Checking the downloaded update for Clawtrate ${state.version}…` };
       return {
         line: `Downloading Clawtrate ${state.version}… ${state.received.toLocaleString()} of ${state.expected.toLocaleString()} bytes`,
       };
@@ -210,7 +212,7 @@ export function Updates({
   const { line, action } = updateRow(s, pending);
   const source = sourceFor(s);
   const state = s.state;
-  const downloading = !pending && state.kind === "downloading";
+  const downloading = !pending && state.kind === "downloading" && state.received < state.expected;
   const notice = preferenceLine(s);
   const capability = restartCapability(s);
   const unavailable =

@@ -8,6 +8,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
     test.use(contextFor(size, "light"));
     for (const state of [
       "ready",
+      "inspecting",
       "confirmation",
       "preparing",
       "handing-off",

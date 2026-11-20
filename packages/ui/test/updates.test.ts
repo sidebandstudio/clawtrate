@@ -187,6 +187,13 @@ it("F-231: announces download milestones while showing every reported byte count
   expect(download(110)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
   expect(download(119)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
   expect(download(119)).toContain("119 of 1,000 bytes");
+  for (const bytes of [1000,1001]) {
+    const html = download(bytes);
+    const checking = "Checking the downloaded update for Clawtrate 2.0.0…";
+    expect(html).toContain('<dd class="b-wrap-value">' + checking);
+    expect(html).toContain('role="status">' + checking);
+    expect(html).not.toMatch(/Downloading|<progress|100%/);
+  }
   expect(download(200)).toContain('role="status">Downloading Clawtrate 2.0.0… 20%');
 });
 
