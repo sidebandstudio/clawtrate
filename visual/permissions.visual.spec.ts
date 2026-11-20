@@ -583,6 +583,97 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "Loading…" })).toHaveCount(0);
   });
 
+  test("F-324: each Activity read is its own: a held older page from an earlier read never adds its rows, and Show older continues the newest read", async ({
+    page,
+  }) => {
+    const fixture = (method: "hold" | "release") =>
+      page.evaluate(
+        (name) =>
+          (window as unknown as { clawtrateFixture: Record<string, () => void> }).clawtrateFixture[
+            name
+          ]!(),
+        method,
+      );
+    const reconnect = (at: number) =>
+      page.evaluate((helloAt) => {
+        (
+          window as unknown as {
+            clawtrateFixture: {
+              setState: (change: (state: { connection: object }) => { connection: object }) => void;
+            };
+          }
+        ).clawtrateFixture.setState((state) => ({
+          ...state,
+          connection: { ...state.connection, connectedAt: helloAt },
+        }));
+      }, at);
+    const outcomeTo = async (name: string) => {
+      await page.getByTestId("activity-outcome").click();
+      await page.getByRole("menuitemradio", { name }).click();
+    };
+    const older = page.getByRole("button", { name: "Show older" });
+    const lastCursor = async () =>
+      (await sent(page))
+        .filter((each) => each.type === "readActivity")
+        .map((each) => (each as unknown as { cursor: string | null }).cursor)
+        .at(-1);
+
+    // All → Blocked → All while the first All's older page is held, released after the second All.
+    await openFixture(page, ADMIN, "light");
+    await permissions("Activity", rows)(page);
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await fixture("hold");
+    await older.click();
+    expect(await lastCursor()).toBe("older-1");
+    await outcomeTo("Blocked");
+    await expect(page.getByTestId("activity-row")).toHaveCount(1);
+    await outcomeTo("All");
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await fixture("release");
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await expect(older).toBeEnabled();
+    await older.click();
+    expect(await lastCursor()).toBe("older-3");
+    await expect(page.getByTestId("activity-row")).toHaveCount(7);
+
+    // A new connection while an older page is held: its rows never arrive, and Show older is free.
+    await openFixture(page, ADMIN, "light");
+    await permissions("Activity", rows)(page);
+    await fixture("hold");
+    await older.click();
+    await reconnect(NOW.getTime() + 60_000);
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await fixture("release");
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await expect(older).toBeEnabled();
+
+    // The same with an older page that fails: no stale error, and Show older is free.
+    await openFixture(page, `${ADMIN}&audit=older-error`, "light");
+    await permissions("Activity", rows)(page);
+    await fixture("hold");
+    await older.click();
+    await reconnect(NOW.getTime() + 60_000);
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await fixture("release");
+    await expect(page.getByText(/^Couldn't load older activity/)).toHaveCount(0);
+    await expect(older).toBeEnabled();
+  });
+
+  test("F-324: after a failed first page, Try again shows the new rows with no stale error and Show older free", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&audit=fail-once`, "light");
+    await permissions("Activity")(page);
+    await expect(page.getByRole("heading", { name: "Couldn't load activity" })).toBeVisible();
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    await expect(page.getByRole("heading", { name: "Couldn't load activity" })).toHaveCount(0);
+    const older = page.getByRole("button", { name: "Show older" });
+    await expect(older).toBeEnabled();
+    await older.click();
+    await expect(page.getByTestId("activity-row")).toHaveCount(7);
+  });
+
   test("permissions: it opens on Saved approvals, and its parts are one radio group with one tab stop, moved by the arrows", async ({
     page,
   }) => {

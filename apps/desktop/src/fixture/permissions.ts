@@ -17,7 +17,10 @@
 //                                                confirmation opened, or moved past the rows shown
 //   saved=long                                   two entries whose long patterns share their shown start
 // A hello later than the scene's (connectedAt in the future) reads the file as another revision.
-//   audit=empty|off|error|loading|end            activity (default: a page with older ones after it)
+//   audit=empty|off|error|loading|end|older-error|fail-once
+//                                                activity (default: a page with older ones after it;
+//                                                older-error: an older page fails; fail-once: the
+//                                                first page fails once)
 
 import {
   auditCallId,
@@ -350,6 +353,9 @@ function rows(state: ClawtrateState, logs: Log[], agentId: string | null, status
  * The Permissions commands, answered on the fixture's state. Returns undefined
  * for a command that is not one of them.
  */
+/** Activity pages read so far in this page's life: the fixture's own cursor. */
+let activityReads = 0;
+
 export function permissionCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
@@ -492,12 +498,27 @@ export function permissionCommand(
       if (params.audit === "error")
         return Promise.reject(new Error("The gateway didn't answer within 60 seconds."));
       const first = command.cursor === null;
+      // `fail-once`: the first page's first read fails, and Try again reads it.
+      if (first && params.audit === "fail-once" && !removed.has("audit-failed")) {
+        removed.add("audit-failed");
+        return Promise.reject(new Error("The gateway didn't answer within 60 seconds."));
+      }
+      // `older-error`: an older page fails, as a delayed answer a test can hold.
+      if (!first && params.audit === "older-error")
+        return new Promise((_, reject) =>
+          later(() => reject(new Error("The gateway didn't answer within 60 seconds."))),
+        );
+      if (first) activityReads += 1;
       const logs =
         params.audit === "empty" || params.audit === "off" ? [] : first ? log(now) : older(now);
       const page: ActivityPage = {
         readAt: now,
         rows: rows(get(), logs, command.agentId, command.status),
-        nextCursor: first && !["empty", "off", "end"].includes(params.audit ?? "") ? "older" : null,
+        // Each first page names its own cursor, so a test can tell which page Show older continues.
+        nextCursor:
+          first && !["empty", "off", "end"].includes(params.audit ?? "")
+            ? `older-${activityReads}`
+            : null,
         recording: params.audit === "off" ? "off" : "on",
         decisionsUnread: null,
       };

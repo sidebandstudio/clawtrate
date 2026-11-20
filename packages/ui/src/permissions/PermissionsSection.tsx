@@ -25,6 +25,8 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -314,8 +316,11 @@ export function PermissionsSection({
   } else {
     body = (
       <ActivityPart
-        connected={connected}
-        connectedAt={connectedAt}
+        connectionKey={
+          connected
+            ? JSON.stringify([connection.gatewayId, connection.gatewayUrl, connectedAt])
+            : null
+        }
         bots={bots}
         tasksByBot={tasksByBot}
         botName={botName}
@@ -369,38 +374,45 @@ export function PermissionsSection({
 
 /**
  * One read, made again whenever `key` changes (null: not now) or `retry` is
- * called. An answer counts only for the question it was asked for: the read's
- * own, and a continuation's (`setFor`) only while its question is still the one
- * on screen, so an older answer never replaces a newer one.
+ * called. Each question is its own token, never a string that can come round
+ * again: an answer counts only for its own token, the read's and a
+ * continuation's (`setFor`) alike, while that token is still the one on screen.
  */
 function useRead<T>(key: string | null, run: () => Promise<T>) {
   const [nonce, setNonce] = useState(0);
-  const asked = key === null ? null : `${key}\u0000${nonce}`;
-  const [answer, setAnswer] = useState<{ key: string; load: Load<T> } | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new token for each key and retry
+  const asked = useMemo<object | null>(() => (key === null ? null : {}), [key, nonce]);
+  const [answer, setAnswer] = useState<{ asked: object; load: Load<T> } | null>(null);
   const runRef = useRef(run);
-  const askedRef = useRef(asked);
+  const askedRef = useRef<object | null>(asked);
   useEffect(() => {
     runRef.current = run;
-    askedRef.current = asked;
   });
-  useEffect(() => {
-    if (asked === null) return;
-    let live = true;
-    runRef.current().then(
-      (value) => live && setAnswer({ key: asked, load: { status: "ready", value } }),
-      (error: unknown) =>
-        live && setAnswer({ key: asked, load: { status: "failed", message: errorText(error) } }),
-    );
+  useLayoutEffect(() => {
+    askedRef.current = asked;
     return () => {
-      live = false;
+      if (askedRef.current === asked) askedRef.current = null;
     };
   }, [asked]);
+  useEffect(() => {
+    if (asked === null) return;
+    runRef.current().then(
+      (value) => {
+        if (askedRef.current === asked) setAnswer({ asked, load: { status: "ready", value } });
+      },
+      (error: unknown) => {
+        if (askedRef.current === asked)
+          setAnswer({ asked, load: { status: "failed", message: errorText(error) } });
+      },
+    );
+  }, [asked]);
   const load: Load<T> =
-    answer !== null && answer.key === asked ? answer.load : { status: "loading" };
-  /** Whether `forKey` is still the question on screen. */
-  const current = (forKey: string | null) => forKey !== null && askedRef.current === forKey;
-  const setFor = (forKey: string | null, value: T) => {
-    if (current(forKey)) setAnswer({ key: forKey!, load: { status: "ready", value } });
+    answer !== null && answer.asked === asked ? answer.load : { status: "loading" };
+  /** Whether `token` is still the question on screen. */
+  const current = (token: object | null) => token !== null && askedRef.current === token;
+  const setFor = (token: object | null, value: T) => {
+    if (token !== null && current(token))
+      setAnswer({ asked: token, load: { status: "ready", value } });
   };
   return {
     load,
@@ -858,16 +870,15 @@ function SavedPart({
 // Activity -------------------------------------------------------------------------------
 
 function ActivityPart({
-  connected,
-  connectedAt,
+  connectionKey,
   bots,
   tasksByBot,
   botName,
   pluginListed,
   onShowInChat,
 }: {
-  connected: boolean;
-  connectedAt: number | null;
+  /** The gateway, its address and the hello this page reads on; null while disconnected. */
+  connectionKey: string | null;
   bots: readonly Bot[];
   tasksByBot: Record<string, Task[]>;
   botName: (id: string) => string;
@@ -877,7 +888,10 @@ function ActivityPart({
   const bridge = useBridge();
   const [bot, setBot] = useState<string>("all");
   const [outcome, setOutcome] = useState<AuditStatus | "all">("all");
-  const [older, setOlder] = useState<"idle" | "loading" | string>("idle");
+  /** "Show older" for the read it continues: any other read's is idle. */
+  const [olderOf, setOlderOf] = useState<{ asked: object; status: "loading" | string } | null>(
+    null,
+  );
   const [open, setOpen] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
   const ask = (cursor: string | null) =>
@@ -887,15 +901,17 @@ function ActivityPart({
       agentId: bot === "all" ? null : bot,
       status: outcome === "all" ? null : outcome,
     });
-  const read = useRead(connected ? `${bot}:${outcome}:${connectedAt}` : null, () =>
-    ask(null).then((page) => ({ page, rows: page.rows })),
+  const read = useRead(
+    connectionKey === null ? null : JSON.stringify([connectionKey, bot, outcome]),
+    () => ask(null).then((page) => ({ page, rows: page.rows })),
   );
+  const older: "idle" | "loading" | string =
+    olderOf !== null && olderOf.asked === read.asked ? olderOf.status : "idle";
   const load: Load<ActivityPage> =
     read.load.status === "ready" ? { status: "ready", value: read.load.value.page } : read.load;
   const rows = read.load.status === "ready" ? read.load.value.rows : [];
   const choose = (change: () => void) => {
     change();
-    setOlder("idle");
     setOpen(null);
   };
 
@@ -903,21 +919,27 @@ function ActivityPart({
     const current = read.load;
     if (current.status !== "ready" || !current.value.page.nextCursor) return;
     // The question this page continues: a newer filter, connection or retry drops its answer.
-    const forKey = read.asked;
-    setOlder("loading");
+    const asked = read.asked;
+    if (asked === null) return;
+    setOlderOf({ asked, status: "loading" });
+    // Only this read's own state is set or cleared: another read's rows and button are its own.
+    const settle = (status: "idle" | string) =>
+      setOlderOf((was) =>
+        was?.asked === asked ? (status === "idle" ? null : { asked, status }) : was,
+      );
     ask(current.value.page.nextCursor).then(
       (page) => {
-        if (!read.current(forKey)) return;
+        if (!read.current(asked)) return;
         const shown = current.value.rows;
         // A call whose start is on the next page is one row: the first one listed keeps it.
-        read.setFor(forKey, {
+        read.setFor(asked, {
           page,
           rows: [...shown, ...page.rows.filter((row) => !shown.some((each) => each.id === row.id))],
         });
-        setOlder("idle");
+        settle("idle");
       },
       (error: unknown) => {
-        if (read.current(forKey)) setOlder(`Couldn't load older activity. ${errorText(error)}`);
+        if (read.current(asked)) settle(`Couldn't load older activity. ${errorText(error)}`);
       },
     );
   };
