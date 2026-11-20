@@ -15,6 +15,7 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &computer=control      the Work pane's Computer states (computer.ts), with &firstwatch=1,
 //                          &takerace=grant, &access=read
+//   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
@@ -27,6 +28,7 @@ import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { computerParams } from "./computer.ts";
 import { accountParams } from "./accounts.ts";
+import { checkInParams } from "./check-ins.ts";
 import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
@@ -91,6 +93,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   computer: computerParams(params),
   accounts: accountParams(params),
+  checkIns: checkInParams(params),
   routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),

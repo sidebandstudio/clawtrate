@@ -6,6 +6,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
@@ -391,6 +392,12 @@ export type ClawtrateState = {
    * device's own. Absent where a host does not show it.
    */
   computer?: ComputerState;
+  /**
+   * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
+   * their own settings and the save under way. Absent until a screen reads them
+   * (`refreshCheckIns`).
+   */
+  checkIns?: CheckInsState;
   /**
    * Warning budgets as the gateway keeps them for this person, each one's count
    * for its current period, and the limits providers report (`usage.ts`).

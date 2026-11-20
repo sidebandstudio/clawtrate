@@ -2,14 +2,15 @@
 // panes: the list of sections, and the chosen one. Its Gateway pane shows the
 // connection as it is (address, state, this device, the scopes the gateway
 // granted) and offers Reconnect and Disconnect; Accounts lists the gateway's
-// accounts. A modal dialog: focus stays inside it, Escape closes it, and
-// focus returns to where it was.
+// accounts; Check-ins shows each bot's check-ins. A modal dialog: focus stays
+// inside it, Escape closes it, and focus returns to where it was.
 
 import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
   type Bot,
+  type CheckInsState,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
@@ -19,6 +20,7 @@ import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
@@ -70,13 +72,15 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "updates";
+type Section =
+  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["checkins", "Check-ins"],
   ["updates", "Updates"],
 ];
 
@@ -147,6 +151,7 @@ export function Settings({
   connection,
   info,
   accounts,
+  checkIns,
   bots,
   initialUpdates,
   initialSection = null,
@@ -156,6 +161,7 @@ export function Settings({
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
+  checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
   initialUpdates: boolean;
   /** Open on this section, as a link elsewhere asks (the Computer tab's Node settings). */
@@ -283,6 +289,15 @@ export function Settings({
     connection,
     info,
     bots,
+    announce,
+    toNav,
+  });
+  const checkInsSection = useCheckInsSection({
+    active: section === "checkins",
+    checkIns,
+    bots,
+    connection,
+    info,
     announce,
     toNav,
   });
@@ -418,25 +433,27 @@ export function Settings({
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : section === "conversation"
-          ? {
-              title: "Conversation",
-              back: toNav,
-              body: <ConversationPane announce={announce} />,
-              foot: null,
-            }
-          : section === "usage"
-            ? usageSection
-            : section === "machines"
-              ? machinesSection
-              : section === "updates"
-                ? {
-                    title: "Updates",
-                    back: toNav,
-                    foot: null,
-                    body: <Updates {...updateReading} />,
-                  }
-                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : section === "checkins"
+          ? checkInsSection
+          : section === "conversation"
+            ? {
+                title: "Conversation",
+                back: toNav,
+                body: <ConversationPane announce={announce} />,
+                foot: null,
+              }
+            : section === "usage"
+              ? usageSection
+              : section === "machines"
+                ? machinesSection
+                : section === "updates"
+                  ? {
+                      title: "Updates",
+                      back: toNav,
+                      foot: null,
+                      body: <Updates {...updateReading} />,
+                    }
+                  : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
