@@ -1,0 +1,188 @@
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { buildAddressProblem, checkFeedAddress } from "../src/main/update/address.ts";
+import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
+import { FEED_FORMAT, FILE_KEYS, parseReleaseDate, type FileKey } from "../src/main/update/feed.ts";
+import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { artifactName, makeFeed, sha512Base64 } from "./feed.ts";
+
+export function feedFingerprint(url: string) {
+  return createHash("sha256").update(url).digest("hex");
+}
+
+export interface Candidate {
+  dir: string;
+  track: string;
+  version: string;
+  commit: string;
+  buildDate: string;
+  feedUrl: string;
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function json(path: string) {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > MAX_FEED_BYTES) return {};
+  try {
+    return object(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return {};
+  }
+}
+
+const signingStates = [
+  "ad hoc",
+  "unsigned",
+  "certificate",
+  "developer-id-notarized",
+  "authenticode-valid",
+  "invalid",
+  "unknown",
+] as const;
+
+function expectedSigning(key: FileKey) {
+  return key === "win-x64" ? "authenticode-valid" : "developer-id-notarized";
+}
+
+export function plan(candidate: Candidate) {
+  const { dir, track, version, commit, buildDate, feedUrl } = candidate;
+  const parsed = parseVersion(version);
+  const issues: string[] = [];
+  const holds: string[] = [];
+  const files = [];
+  const validTrack = track === "stable" || track === "nightly";
+  const validCommit = /^[0-9a-f]{40}$/.test(commit) && commit.length === 40;
+  const validDate = parseReleaseDate(buildDate) === buildDate;
+  if (!validTrack || !parsed || versionTrack(parsed) !== track)
+    issues.push("Version and track must match.");
+  if (!validCommit) issues.push("Expected a full source commit.");
+  if (!validDate) issues.push("Expected a UTC build date.");
+  const address = buildAddressProblem(feedUrl) ? null : new URL(feedUrl);
+  if (!address || address.search || address.hash || address.pathname.endsWith("/"))
+    issues.push("Expected a direct HTTPS feed address.");
+  else if (!checkFeedAddress(feedUrl).ok) holds.push("The build uses a placeholder feed.");
+
+  const allowed = new Set(["update-feed.json", "release-plan.json"]);
+  const feed = json(join(dir, "update-feed.json"));
+  if (feed.format !== FEED_FORMAT) issues.push("Missing or invalid feed format.");
+  if (feed.track !== track) issues.push("Feed track differs.");
+  if (feed.version !== version) issues.push("Feed version differs.");
+  if (feed.sourceCommit !== commit) issues.push("Feed source commit differs.");
+  if (feed.releaseDate !== buildDate) issues.push("Feed build date differs.");
+  const entries = object(feed.files);
+  if (Object.keys(entries).some((key) => !FILE_KEYS.some((expected) => expected === key)))
+    issues.push("Feed contains an unexpected system.");
+
+  for (const key of FILE_KEYS) {
+    const receiptName = key + ".json";
+    allowed.add(receiptName);
+    const receipt = json(join(dir, receiptName));
+    const signing = signingStates.find((state) => state === receipt.signing) ?? "unknown";
+    if (receipt.feedHash !== feedFingerprint(feedUrl))
+      issues.push(key + ": build used a different feed address.");
+    if (receipt.commit !== commit) issues.push(key + ": missing or different source commit.");
+    if (receipt.buildDate !== buildDate) issues.push(key + ": missing or different build date.");
+    if (signing !== expectedSigning(key))
+      holds.push(key + ": signing is " + signing + "; requires " + expectedSigning(key) + ".");
+    if (!parsed) continue;
+    const name = artifactName(version, key);
+    allowed.add(name);
+    const entry = object(entries[key]);
+    if (Object.keys(entry).length === 0) issues.push(key + ": missing feed entry.");
+    if (address && entry.url !== new URL(version + "/" + name, address).href)
+      issues.push(key + ": address differs from the expected versioned file.");
+    if (receipt.name !== name) issues.push(key + ": missing or wrong build receipt.");
+    const path = join(dir, name);
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat?.isFile()) {
+      issues.push(key + ": missing regular file for this version.");
+      continue;
+    }
+    const size = stat.size;
+    if (!size || size > MAX_DOWNLOAD_BYTES)
+      issues.push(key + ": artifact is empty or exceeds the download limit.");
+    const sha512 = size <= MAX_DOWNLOAD_BYTES ? sha512Base64(path) : null;
+    if (entry.size !== size) issues.push(key + ": feed size differs.");
+    if (entry.sha512 !== sha512) issues.push(key + ": feed digest differs.");
+    if (receipt.sha512 !== sha512) issues.push(key + ": bytes differ from signing readback.");
+    files.push({ name, size, sha512, signing });
+  }
+  if (
+    readdirSync(dir, { withFileTypes: true }).some(
+      (file) => !file.isFile() || !allowed.has(file.name),
+    )
+  )
+    issues.push("The candidate folder contains unexpected entries.");
+  return {
+    track: validTrack ? track : null,
+    version: parsed ? version : null,
+    commit: validCommit ? commit : null,
+    buildDate: validDate ? buildDate : null,
+    files,
+    verdict: issues.length || holds.length ? "not publishable" : "publishable",
+    issues,
+    holds,
+  };
+}
+
+/** Assemble once. Rechecks read the retained feed without repairing it. */
+export function assemble(candidate: Candidate) {
+  const { dir, version, buildDate, commit, feedUrl } = candidate;
+  if (!parseVersion(version) || buildAddressProblem(feedUrl)) return;
+  for (const key of FILE_KEYS) {
+    const stat = lstatSync(join(dir, artifactName(version, key)), { throwIfNoEntry: false });
+    if (stat && (!stat.isFile() || !stat.size || stat.size > MAX_DOWNLOAD_BYTES)) return;
+  }
+  const feed = makeFeed({
+    dir,
+    version,
+    releaseDate: buildDate,
+    folder: new URL(version + "/", feedUrl).href,
+  });
+  writeFileSync(
+    join(dir, "update-feed.json"),
+    JSON.stringify({ ...feed, sourceCommit: commit }, null, 2) + "\n",
+    { flag: "wx" },
+  );
+}
+
+if (import.meta.main) {
+  const [mode, dir, track, version, commit, buildDate, feedUrl] = process.argv.slice(2);
+  if (
+    !(mode === "assemble" || mode === "check") ||
+    !dir ||
+    !track ||
+    !version ||
+    !commit ||
+    !buildDate ||
+    !feedUrl
+  ) {
+    console.error(
+      "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE FEED_URL",
+    );
+    process.exit(1);
+  }
+  try {
+    const candidate = { dir, track, version, commit, buildDate, feedUrl };
+    if (mode === "assemble") assemble(candidate);
+    const record = plan(candidate);
+    const output = join(dir, "release-plan.json");
+    writeFileSync(output + ".tmp", JSON.stringify(record, null, 2) + "\n", { flag: "wx" });
+    renameSync(output + ".tmp", output);
+    console.log(
+      [record.track, record.version, record.verdict].join(" ") +
+        "\n" +
+        [...record.issues, ...record.holds].join("\n"),
+    );
+    process.exitCode = record.issues.length ? 1 : record.holds.length ? 2 : 0;
+  } catch {
+    console.error("Could not read the candidate or write a fresh record.");
+    process.exitCode = 1;
+  }
+}
