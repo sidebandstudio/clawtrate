@@ -187,11 +187,18 @@ function subWords(line: PermissionLine, view: BotPermissions, name: string): str
 function glanceExtra(line: PermissionLine, name: string): string | null {
   if (line.kind === "exec" && line.value === "asks" && line.exec?.own)
     return `${name}'s setting: ${EXEC_WORDS[line.exec.own]}`;
-  const under = line.exceptions
-    .filter((e) => e.kind === "rule" && e.action === "never" && e.pattern)
-    .map((e) => (e.kind === "rule" ? (e.pattern ?? "") : ""));
-  if (line.value === "limited" && under.length > 0) return `not under ${list(under)}`;
-  return null;
+  if (line.value !== "limited") return null;
+  // A Limited line names what holds part of it back: the tools denied, the paths a rule refuses.
+  const parts: string[] = [];
+  const denied = line.exceptions.flatMap((e) =>
+    e.kind === "bot-deny" || e.kind === "every-deny" ? e.tools : [],
+  );
+  if (denied.length > 0) parts.push(`except ${list(denied)}`);
+  const under = line.exceptions.flatMap((e) =>
+    e.kind === "rule" && e.action === "never" && e.pattern ? [e.pattern] : [],
+  );
+  if (under.length > 0) parts.push(`not under ${list(under)}`);
+  return parts.length > 0 ? parts.join("; ") : null;
 }
 
 const countWords = (view: BotPermissions) => {
@@ -734,6 +741,9 @@ function sentence(line: PermissionLine, name: string): string {
         : ` The gateway removes ${these} from ${name}.`;
     return `${name} can't ${can}.${attempt}`;
   }
+  const ownDeny = line.exceptions.find((e) => e.kind === "bot-deny");
+  if (line.choice === null && ownDeny?.kind === "bot-deny")
+    return `${name}'s own settings deny only some of these tools: ${list(ownDeny.tools)}. The gateway still offers the rest unless something else removes them. Never denies them all; Allow takes ${name}'s deny off.`;
   if (line.ownAsk) return `${name} asks you first. Only while Clawtrate's rules plugin runs.`;
   if (line.exceptions.some((e) => e.kind === "rule" || e.kind === "fallback"))
     return `${name}'s own setting is Allow. See Effective for the rules that apply.`;
@@ -887,12 +897,13 @@ function LinePage({
         ? line.exec?.own
           ? `${EXEC_WORDS[line.exec.own]}. It replaces the default for ${name}.`
           : "None: the default applies"
-        : line.exceptions.some((e) => e.kind === "bot-deny") ||
-            (line.value === "never" && line.mark === "gateway")
+        : line.value === "never" && line.mark === "gateway"
           ? "Never (its deny list)"
-          : line.ownAsk
-            ? "Ask (the rules plugin)"
-            : "Allow",
+          : line.exceptions.some((e) => e.kind === "bot-deny")
+            ? `Never on ${list(line.exceptions.flatMap((e) => (e.kind === "bot-deny" ? e.tools : [])))} (its deny list)`
+            : line.ownAsk
+              ? "Ask (the rules plugin)"
+              : "Allow",
     ],
     ...(exec
       ? ([

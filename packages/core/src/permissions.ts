@@ -668,7 +668,6 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     ownAsk: false,
   };
   const exceptions: LineException[] = [];
-  const denyChoice = botDenied.length > 0 ? "never" : null;
   // 1, 2: the gateway removes the tools: for every bot, or for this bot. A tool no allow list
   // offers is not offered; a line none of whose tools is offered or allowed is Never or Not offered.
   if (open.length === 0) {
@@ -783,7 +782,9 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       asks.length > 0 || targetNevers.length > 0 ? pluginMark : exec.own ? "gateway" : "set";
     return { ...base, value, mark, exceptions, choice: policy === "none" ? null : policy, ownAsk };
   }
-  const choice = ownAsk ? "ask" : (denyChoice ?? "allow");
+  // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
+  // denies the rest. Never is checked only when the gateway removes every tool of the line.
+  const choice = botDenied.length > 0 ? null : ownAsk ? "ask" : "allow";
   if (def.kind === "question")
     return {
       ...base,

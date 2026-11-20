@@ -379,6 +379,23 @@ describe("what a bot may do", () => {
     expect(gw.writes()).toEqual([]);
   });
 
+  it("a deny of the bot's own on some of a line's tools is Limited, names them, checks no choice, and Never then denies the rest", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["edit"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    expect(line(view, "files")).toMatchObject({ value: "limited", mark: "gateway", choice: null });
+    expect(line(view, "files").exceptions).toEqual([{ kind: "bot-deny", tools: ["edit"] }]);
+    expect(choiceRefusal(view, line(view, "files"), "never", true)).toBeNull();
+    const result = await engine.choose("pip", "files", "never", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(result.outcome).toBe("saved");
+    expect(botTools(gw, "pip").deny).toEqual(["edit", "write", "apply_patch"]);
+    expect(line(result.view!, "files")).toMatchObject({ value: "never", choice: "never" });
+  });
+
   it("F-222: a tool server's Never writes `<server>__*` to the bot's own deny list, and Allow takes it off", async () => {
     const gw = new Gateway();
     const engine = new PermissionsEngine(gw.ctx());
