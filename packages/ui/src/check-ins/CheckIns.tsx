@@ -229,11 +229,14 @@ function CheckInsDialog({
   const bridge = useBridge();
   const setting = checkIns.settings?.find((each) => each.botId === bot.id);
   const { choice, every, prompt, saveId, refused, base, touched } = draft;
-  const submitting = useRef(false);
+  // The id of a save sent but not yet published by the host; it blocks a second click in the same frame.
+  const submitting = useRef<string | null>(null);
   const [pending, setPending] = useState(false);
   const groupRef = useRef<HTMLUListElement>(null);
   const save = checkIns.save?.id === saveId ? checkIns.save : null;
-  const saving = pending || save?.status === "saving";
+  // Once the host publishes this save, its status decides, even before the command settles.
+  const saving = save ? save.status === "saving" : pending;
+  const unpublished = () => submitting.current !== null && checkIns.save?.id !== submitting.current;
   const waitingForBase = save?.status === "conflict" && draft.rebased !== save.id;
   const deleted = save?.status === "conflict" && save.error === CHECKIN_BOT_DELETED;
   const [checking, setChecking] = useState(false);
@@ -268,15 +271,15 @@ function CheckInsDialog({
 
   // While a save is under way the dialog waits for its answer, Escape included.
   const close = () => {
-    if (saving || submitting.current) return;
+    if (saving || unpublished()) return;
     if (saveId) void bridge.send({ type: "dismissCheckInSave", saveId }).catch(() => {});
     onClose();
   };
   const submit = () => {
-    if (saving || submitting.current || waitingForBase) return;
-    submitting.current = true;
-    setPending(true);
+    if (saving || unpublished() || waitingForBase) return;
     const id = crypto.randomUUID();
+    submitting.current = id;
+    setPending(true);
     change({ saveId: id, refused: null });
     bridge
       .send({ type: "saveCheckIn", saveId: id, botId: bot.id, ...draftToSave(draft) })
@@ -284,7 +287,7 @@ function CheckInsDialog({
         change({ refused: error instanceof Error ? error.message : String(error) }),
       )
       .finally(() => {
-        submitting.current = false;
+        if (submitting.current === id) submitting.current = null;
         setPending(false);
       });
   };

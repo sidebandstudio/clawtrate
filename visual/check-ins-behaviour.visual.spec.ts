@@ -292,6 +292,37 @@ test("F-201: sending a save locks draft controls before the host publishes savin
   await expect(marlow.getByRole("textbox", { name: "Prompt" })).not.toBeEditable();
 });
 
+test("F-201: a save the host reports as not confirmed ends Saving before its command settles", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Every…/ }).click();
+  await page.evaluate(() => {
+    const w = window as unknown as { clawtrateFixture: ClawtrateBridge; heldSaveId?: string };
+    const send = w.clawtrateFixture.send;
+    w.clawtrateFixture.send = (command) => {
+      if (command.type !== "saveCheckIn") return send(command);
+      w.heldSaveId = command.saveId;
+      return new Promise<void>(() => {});
+    };
+  });
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(marlow.getByRole("button", { name: "Saving…" })).toBeVisible();
+  const id = await page.evaluate(() => (window as unknown as { heldSaveId: string }).heldSaveId);
+  await change(
+    page,
+    `return { ...state, checkIns: { ...state.checkIns, save: { id: ${JSON.stringify(id)}, botId: "marlow", status: "unknown", error: null } } };`,
+  );
+  await expect(marlow.getByTestId("save-unknown")).toBeVisible();
+  await expect(marlow.getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(marlow.getByRole("radio", { name: /^Off/ })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(marlow).toHaveCount(0);
+});
+
 test("F-201: As needed sends every 30m, and the bot is then shown checking in every 30 minutes", async ({
   page,
 }) => {
