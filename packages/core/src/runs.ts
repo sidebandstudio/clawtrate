@@ -1558,12 +1558,12 @@ export function historyQueuePairs(
 }
 
 /**
- * The gateway's answer to a send names a run that is already over: a send it
- * aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
- * from its abort of a send not yet registered), or a send it had already
- * finished (`ok`) or failed (`error`). No event of that run will follow, so the
- * answer settles it. Any other status (`started`, `in_flight`, `accepted`)
- * leaves it to the run's events.
+ * The gateway's answer to a send, or its `agent.wait` record of a run, names a run that is
+ * already over: a send it aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
+ * from its abort of a send not yet registered), a run it aborted (`error`, `error: "aborted"`),
+ * or one it had already finished (`ok`) or failed (`error`). No event of that run will follow, so
+ * the answer settles it. Any other status (`started`, `in_flight`, `accepted`, `pending`,
+ * `timeout`) leaves it to the run's events.
  */
 export function settleRunFromSendAnswer(
   activity: TaskActivity,
@@ -1575,11 +1575,14 @@ export function settleRunFromSendAnswer(
   const endedAt = num(answer.endedAt) ?? ctx.now;
   return updateRun(activity, runId, (run) => {
     if (isTerminal(run.state) || run.state === "queued") return run;
-    if (status === "timeout" && answer.summary === "aborted")
+    if (
+      (status === "timeout" && answer.summary === "aborted") ||
+      (status === "error" && answer.error === "aborted")
+    )
       return finishRun(run, "stopped", ctx, null, endedAt);
     if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
     if (status === "error") {
-      const message = str(answer.summary) ?? "The gateway reported an error.";
+      const message = str(answer.summary) ?? str(answer.error) ?? "The gateway reported an error.";
       const raw = rawEvent(ctx, run.id, "send-answer", answer);
       return finishRun(run, "failed", ctx, { message, kind: "gateway", raw }, endedAt);
     }

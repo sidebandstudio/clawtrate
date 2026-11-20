@@ -212,4 +212,48 @@ describe("Stop with no one current run (F-097)", () => {
     expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "current" }]);
     task.client.stop();
   });
+  it("F-097: after a reconnect that missed a run's end, the gateway's run record ends it and Stop names the current run", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.abort"] = (params) => ({
+      ok: true,
+      aborted: true,
+      runIds: [(params as { runId: string }).runId],
+    });
+    // What OpenClaw 2026.10.6 answers with no wait: a run it aborted, and one still going.
+    gateway.handlers["agent.wait"] = (params) => {
+      const { runId } = params as { runId: string };
+      return runId === "original"
+        ? { runId, status: "error", error: "aborted", stopReason: "rpc", endedAt: 5_000 }
+        : { runId, status: "timeout" };
+    };
+    const task = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, "original")?.state === "running");
+    // Stopped during the gap mid-tool, so its rows stop at the call, and a new run is in flight.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        {
+          role: "user",
+          content: "First",
+          __openclaw: { id: "u1", idempotencyKey: "original:user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: { command: "ls" } }],
+          stopReason: "toolUse",
+          __openclaw: { id: "a1", runId: "original" },
+        },
+        { role: "user", content: "Second", __openclaw: { id: "u2" } },
+      ],
+      hasMore: false,
+      inFlightRun: { runId: "current" },
+    });
+    gateway.dropAll();
+    await until(() => run(task, "original")?.state === "stopped");
+    expect(run(task, "original")).toMatchObject({ outcomeKnown: true, endedAt: 5_000 });
+    expect(run(task, "current")?.state).toBe("running");
+    await task.client.stopRun(KEY, "current");
+    expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "current" }]);
+    task.client.stop();
+  });
 });
