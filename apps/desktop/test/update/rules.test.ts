@@ -1,7 +1,4 @@
-// The update engine's rules that need no server: it is not wired into the app,
-// its feed address is the build's alone, F-010 uses the build's own release
-// date, versions compare strictly, and the module runs and shows nothing.
-
+// The engine stays in main. Its address, release date and bounds come from the build.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,11 +8,16 @@ import {
   DEFAULT_LIMITS,
   isUpdateRequired,
   MAX_FEED_BYTES,
-  productionUpdateEngine,
+  startDesktopUpdates,
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
 import { parseReleaseDate } from "../../src/main/update/feed.ts";
-import { isNewer, parseVersion, type Version } from "../../src/main/update/version.ts";
+import {
+  formatVersion,
+  isNewer,
+  parseVersion,
+  type Version,
+} from "../../src/main/update/version.ts";
 import { feedServer, tempDir } from "./harness.ts";
 
 const APP = join(import.meta.dirname, "../..");
@@ -38,19 +40,18 @@ function reached(entry: string): Set<string> {
   return seen;
 }
 
-describe("the update engine is not wired in", () => {
+describe("only the desktop main process can reach the engine", () => {
   // The workspace packages the entries import cannot import the app: they do
   // not depend on it. So the relative imports from each entry are the whole
   // question.
   const entries = [
-    "src/main/index.ts",
     "src/preload/index.ts",
     "src/renderer/main.tsx",
     "src/web-host/main.ts",
     "src/fixture/main.tsx",
   ].map((path) => join(APP, path));
 
-  it("no entry point of the app imports the update module", () => {
+  it("no renderer, preload or web host entry imports the update module", () => {
     for (const entry of entries) {
       expect(existsSync(entry), entry).toBe(true);
       const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}${sep}`));
@@ -63,7 +64,7 @@ describe("the update engine is not wired in", () => {
 
   it("follows the entries' imports, so it would see one", () => {
     const main = reached(join(APP, "src/main/index.ts"));
-    expect(main.has(join(APP, "src/main/badge.ts"))).toBe(true);
+    expect(main.has(join(UPDATE, "service.ts"))).toBe(true);
     expect(main.has(join(APP, "src/host/runtime.ts"))).toBe(true);
   });
 });
@@ -80,19 +81,25 @@ describe("the feed's address is the build's", () => {
     const dir = tempDir();
     try {
       process.env.CLAWTRATE_UPDATE_FEED_URL = `${server.origin}/feed.json`;
-      const engine = productionUpdateEngine({
-        currentVersion: "0.1.0",
-        downloadDir: dir.path,
+      const service = await startDesktopUpdates({
+        version: "0.1.0",
+        packaged: true,
+        changed: () => {},
+        store: { get: async () => null, set: async () => {} },
+        downloadDir: join(dir.path, "updates"),
         platform: "darwin",
         arch: "arm64",
         // What a caller holding a gateway's, a link's or a file's address might try.
         ...({
+          feeds: { stable: server.origin + "/feed.json", nightly: null },
           feedAddress: `${server.origin}/feed.json`,
           loopbackHttpForTests: { port: server.port },
         } as object),
       });
       expect(BUILD_FEED_ADDRESS).toBeNull();
-      expect(await engine.check()).toEqual({ kind: "not-configured" });
+      expect((await service.check("stable", service.get().revision)).snapshot.state).toMatchObject({
+        reason: "not-configured",
+      });
       expect(server.requests).toEqual([]);
     } finally {
       await server.close();
@@ -208,7 +215,29 @@ describe("versions", () => {
     expect(isNewer(v("0.9.0"), v("0.10.0"))).toBe(false);
   });
 
-  it("reads MAJOR.MINOR.PATCH and nothing else", () => {
+  it.each([
+    ["1.10.0", "1.9.0", true],
+    ["1.0.0-nightly.20261102.1", "1.0.0-nightly.20261101.11", true],
+    ["1.0.0-nightly.20261101.10", "1.0.0-nightly.20261101.2", true],
+    ["1.0.0", "1.0.0-nightly.20261101.1", true],
+    ["1.0.1-nightly.20261101.1", "1.0.0", true],
+    ["1.0.0-nightly.20261101.1", "1.0.0", false],
+    ["1.0.0", "1.0.0", false],
+    ["1.0.0-nightly.20261101.1", "1.0.0-nightly.20261101.1", false],
+    ["0.9.0", "1.0.0", false],
+  ] as const)("%s against %s is newer: %s", (a, b, expected) => {
+    expect(isNewer(v(a), v(b))).toBe(expected);
+  });
+
+  it("round trips the maximum nightly and the first supported year", () => {
+    const max = "999999.999999.999999-nightly.99991231.999999999999";
+    expect(max.length).toBe(50);
+    for (const version of [max, "0.0.0-nightly.10000101.0"])
+      expect(formatVersion(parseVersion(version)!)).toBe(version);
+    expect(parseVersion("0.0.0-nightly.09991231.0")).toBeNull();
+  });
+
+  it("refuses versions outside the stable and nightly grammar", () => {
     for (const text of [
       "1",
       "1.0",
@@ -218,6 +247,10 @@ describe("versions", () => {
       " 1.0.0",
       "v1.0.0",
       "1.0.0.0",
+      "1.0.0-nightly.20260230.1",
+      "1.0.0-nightly.20261101.01",
+      "1.0.0-nightly.20261101.1234567890123",
+      "1.0.0-nightly.20261101.2\n",
       "9999999.0.0",
     ]) {
       expect(parseVersion(text), text).toBeNull();

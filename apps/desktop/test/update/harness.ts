@@ -84,6 +84,7 @@ export function feedFor(
 ): Record<string, unknown> {
   return {
     format: 1,
+    track: "stable",
     version,
     releaseDate: "2026-11-01T00:00:00.000Z",
     files: {

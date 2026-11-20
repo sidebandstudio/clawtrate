@@ -3,6 +3,8 @@
 // with the build's value; here the same value is a global set before the module
 // is loaded, which is what the replaced text evaluates to.
 
+import { join } from "node:path";
+import { tempDir } from "./harness.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateDefines } from "../../packaging/update-defines.ts";
 
@@ -15,20 +17,78 @@ describe("the build's release date", () => {
   it("is the defined constant, and the production engine counts F-010 from it", async () => {
     const defines = updateDefines({ SOURCE_DATE_EPOCH: "1700000000" }, new Date());
     vi.stubGlobal("__CLAWTRATE_RELEASE_DATE__", JSON.parse(defines.__CLAWTRATE_RELEASE_DATE__!));
+    vi.stubGlobal("__CLAWTRATE_UPDATE_FEED__", "https://203.0.113.5/stable");
     vi.resetModules();
     const info = await import("../../src/main/update/build-info.ts");
     expect(info.BUILD_RELEASE_DATE).toBe("2023-11-14T22:13:20.000Z");
-    const engine = info.productionUpdateEngine({
-      currentVersion: "0.1.0",
-      downloadDir: "unused",
-      platform: "darwin",
-      arch: "arm64",
-    });
-    vi.spyOn(engine, "newer", "get").mockReturnValue({
+    const { UpdateEngine } = await import("../../src/main/update/engine.ts");
+    vi.spyOn(UpdateEngine.prototype, "newer", "get").mockReturnValue({
       version: "0.2.0",
       releaseDate: "2023-11-29T00:00:00.000Z",
     });
-    expect(engine.updateRequired(new Date("2023-11-28T22:13:20.000Z"))).toBe(false);
-    expect(engine.updateRequired(new Date("2023-11-28T22:13:20.001Z"))).toBe(true);
+    const ages: boolean[] = [];
+    vi.spyOn(UpdateEngine.prototype, "check").mockImplementationOnce(async function (
+      this: InstanceType<typeof UpdateEngine>,
+    ) {
+      ages.push(
+        this.updateRequired(new Date("2023-11-28T22:13:20.000Z")),
+        this.updateRequired(new Date("2023-11-28T22:13:20.001Z")),
+      );
+      return { kind: "not-configured" };
+    });
+    const dir = tempDir();
+    try {
+      const service = await info.startDesktopUpdates({
+        version: "0.1.0",
+        packaged: true,
+        platform: "darwin",
+        arch: "arm64",
+        downloadDir: join(dir.path, "updates"),
+        changed: () => {},
+        store: { get: async () => null, set: async () => {} },
+      });
+      await service.check("stable", service.get().revision);
+      expect(ages).toEqual([false, true]);
+    } finally {
+      dir.remove();
+      vi.restoreAllMocks();
+    }
   });
+});
+
+it.each([
+  { tracks: [] },
+  { tracks: ["stable"] },
+  { tracks: ["nightly"] },
+  { tracks: ["stable", "nightly"] },
+])("exposes the sources compiled for this build ($tracks)", async ({ tracks }) => {
+  const env = {
+    CLAWTRATE_UPDATE_FEED_URL: tracks.includes("stable")
+      ? "https://stable.invalid/feed"
+      : undefined,
+    CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: tracks.includes("nightly")
+      ? "https://nightly.invalid/feed"
+      : undefined,
+  };
+  for (const [name, value] of Object.entries(updateDefines(env, new Date()))) {
+    vi.stubGlobal(name, JSON.parse(value));
+  }
+  const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
+  const dir = tempDir();
+  try {
+    const service = await startDesktopUpdates({
+      version: "0.1.0",
+      packaged: true,
+      platform: "darwin",
+      arch: "arm64",
+      downloadDir: join(dir.path, "updates"),
+      changed: () => {},
+      store: { get: async () => null, set: async () => {} },
+    });
+    expect(service.get().tracks).toEqual(
+      tracks.map((track) => ({ track, source: track + ".invalid" })),
+    );
+  } finally {
+    dir.remove();
+  }
 });
