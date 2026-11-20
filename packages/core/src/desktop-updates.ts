@@ -6,6 +6,7 @@ export type DesktopUpdateFailure =
   | "development-build"
   | "no-updater"
   | "invalid-version"
+  | "unsupported-system"
   | "no-file-for-this-system"
   | "unreachable"
   | "timed-out"
@@ -16,6 +17,7 @@ export type DesktopUpdateFailure =
   | "malformed-feed"
   | "wrong-track"
   | "size-mismatch"
+  | "artifact-changed"
   | "hash-mismatch"
   | "write-failed";
 
@@ -25,8 +27,8 @@ export type DesktopUpdateState =
   | { kind: "nothing-newer" }
   | { kind: "offered"; version: string; releaseDate: string; offerId: string }
   | { kind: "downloading"; version: string; received: number; expected: number }
-  /** The byte count and SHA-512 matched the feed. */
-  | { kind: "verified"; version: string; size: number }
+  /** After writing, this file matched the feed’s size and SHA-512. Installing must check the exact bytes again. */
+  | { kind: "verified"; offerId: string; version: string; size: number }
   | {
       kind: "failed";
       reason: DesktopUpdateFailure;
@@ -37,26 +39,40 @@ export type DesktopUpdateState =
     };
 
 export interface DesktopUpdateSnapshot {
+  /** Monotonically increasing within this host process. */
+  revision: number;
   /** Null when the host has no desktop release version or its version failed validation. */
   runningVersion: string | null;
   runningTrack: UpdateTrack | null;
   /** Configured tracks only. Each source is a hostname. */
   tracks: ReadonlyArray<{ track: UpdateTrack; source: string }>;
   selectedTrack: UpdateTrack | null;
-  /** UTC ISO timestamp of the last completed feed read. */
-  lastCheckedAt: string | null;
+  pendingTrack: UpdateTrack | null;
+  /** Most recent complete feed read accepted by this host. */
+  lastCheck: { track: UpdateTrack; readAt: string } | null;
+  /** Most recent local settings or storage problem, separate from the release result. */
+  preferenceIssue:
+    | "preferences-not-read"
+    | "track-not-saved"
+    | "last-check-not-saved"
+    | "update-folder-unavailable"
+    | null;
   state: DesktopUpdateState;
-  /** Only on a command reply refused because another action is in progress. */
-  commandRefusal?: "busy";
   install: { kind: "unavailable-in-this-build" };
+}
+
+export type DesktopUpdateOutcome = "accepted" | "busy" | "stale" | "invalid" | "superseded";
+export interface DesktopUpdateReply {
+  outcome: DesktopUpdateOutcome;
+  snapshot: DesktopUpdateSnapshot;
 }
 
 /** Exposed as bridge.desktopUpdates. Only check and download may start a request. */
 export interface DesktopUpdates {
   get(): Promise<DesktopUpdateSnapshot>;
   subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void): () => void;
-  check(): Promise<DesktopUpdateSnapshot>;
-  chooseTrack(track: UpdateTrack): Promise<DesktopUpdateSnapshot>;
+  check(expectedTrack: UpdateTrack): Promise<DesktopUpdateReply>;
+  chooseTrack(track: UpdateTrack): Promise<DesktopUpdateReply>;
   /** A stale or unknown identity leaves the current snapshot alone. */
-  download(offerId: string): Promise<DesktopUpdateSnapshot>;
+  download(offerId: string): Promise<DesktopUpdateReply>;
 }

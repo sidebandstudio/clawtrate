@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
-import { createFileStore } from "@clawtrate/core/node";
+import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
@@ -245,14 +245,15 @@ async function main(): Promise<void> {
     platform: process.platform,
     arch: process.arch,
     downloadDir: join(userDir, "updates"),
-    store: createFileStore(join(userDir, "update-preferences.json")),
+    store: createUpdatePreferenceStore(join(userDir, "update-preferences.json")),
     changed(snapshot) {
       if (window && !window.isDestroyed())
         window.webContents.send("clawtrate:update:changed", snapshot);
     },
   });
+  app.on("before-quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:get", () => updates.get());
-  ipcMain.handle("clawtrate:update:check", () => updates.check());
+  ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
 

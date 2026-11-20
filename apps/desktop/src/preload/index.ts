@@ -31,12 +31,17 @@ const api: DesktopHostApi = {
   platform: process.platform,
   desktopUpdates: {
     get: () => ipcRenderer.invoke("clawtrate:update:get"),
-    check: () => ipcRenderer.invoke("clawtrate:update:check"),
+    check: (track) => ipcRenderer.invoke("clawtrate:update:check", track),
     chooseTrack: (track) => ipcRenderer.invoke("clawtrate:update:track", track),
     download: (id) => ipcRenderer.invoke("clawtrate:update:download", id),
     subscribe(listener) {
-      const changed = (_event: IpcRendererEvent, snapshot: DesktopUpdateSnapshot) =>
-        listener(snapshot);
+      const changed = (_event: IpcRendererEvent, snapshot: DesktopUpdateSnapshot) => {
+        try {
+          listener(snapshot);
+        } catch {
+          // Deliver this revision to the remaining subscribers.
+        }
+      };
       ipcRenderer.on("clawtrate:update:changed", changed);
       return () => ipcRenderer.removeListener("clawtrate:update:changed", changed);
     },

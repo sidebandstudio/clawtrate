@@ -7,7 +7,7 @@ export type Version =
   readonly [number, number, number] | readonly [number, number, number, number, number];
 
 export function parseVersion(text: unknown): Version | null {
-  if (typeof text !== "string" || text.length > 49) return null;
+  if (typeof text !== "string" || text.length > 50) return null;
   const match = VERSION.exec(text);
   if (!match || match[0] !== text) return null;
   const base = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
