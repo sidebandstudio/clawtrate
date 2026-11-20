@@ -68,13 +68,28 @@ export async function listMemory(request: Request, agentId: string): Promise<Mem
   };
 }
 
+/**
+ * Note writes wait on plugins/clawtrate-memory's recorded security review
+ * (#41): until then the viewer offers none, while note reads and root file
+ * edits stay.
+ */
+export const MEMORY_NOTES_WRITABLE = false;
+
 export async function writeMemory(
   request: Request,
   agentId: string,
   path: string,
+  gatewayId: string | null,
   expectedHash: string | null,
   content: string | null,
 ): Promise<void> {
+  // A missing-file guard or matching hash is valid on two gateways at one
+  // address, so ask the connected gateway who it is and hold the draft to it.
+  const identity = asRecord(await request("gateway.identity.get", {}))?.deviceId;
+  if (typeof identity !== "string" || identity === "" || identity !== gatewayId)
+    throw new Error(
+      "This draft came from a different gateway. Reopen the memory screen and save again.",
+    );
   if (ROOT_MEMORY.some((name) => name === path)) {
     if (content === null) throw new Error("Root memory files can only be edited.");
     const result = asRecord(

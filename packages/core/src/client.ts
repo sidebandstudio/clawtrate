@@ -4080,6 +4080,7 @@ export class ClawtrateClient {
   async writeMemory(
     botId: string,
     path: string,
+    gatewayId: string | null,
     expectedHash: string | null,
     content: string | null,
   ) {
@@ -4089,6 +4090,7 @@ export class ClawtrateClient {
       (method, params) => this.request(method, params),
       botId,
       path,
+      gatewayId,
       expectedHash,
       content,
     );

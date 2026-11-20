@@ -1,4 +1,9 @@
-import { ROOT_MEMORY, type MemoryDocument, type MemoryList } from "@clawtrate/core";
+import {
+  MEMORY_NOTES_WRITABLE,
+  ROOT_MEMORY,
+  type MemoryDocument,
+  type MemoryList,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
@@ -23,7 +28,15 @@ export function MemoryRow({ onOpen }: { onOpen: () => void }) {
 }
 
 type Item = { file: MemoryDocument; start: number; end: number; text: string };
-type Draft = { path: string; text: string; item: Item | null };
+type Draft = {
+  path: string;
+  text: string;
+  item: Item | null;
+  /** The gateway identity that supplied the text, from `gateway.identity.get`. */
+  gatewayId: string | null;
+};
+/** One root file's first load: a failed read stands alone beside its own file. */
+type RootLoad = { path: string; file: MemoryDocument | null; error: string | null };
 
 function items(file: MemoryDocument): Item[] {
   const { content } = file;
@@ -70,14 +83,13 @@ export function BotMemory({
   const bridge = useBridge();
   const title = useRef<HTMLHeadingElement>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
-  const [data, setData] = useState<{ root: MemoryDocument[]; notes: MemoryList } | null>(null);
+  const [data, setData] = useState<{ root: RootLoad[]; notes: MemoryList } | null>(null);
   const [note, setNote] = useState<MemoryDocument | null>(null);
   const [readingNote, setReadingNote] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [deleting, setDeleting] = useState<Item | null>(null);
+  const [deleting, setDeleting] = useState<{ item: Item; gatewayId: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [readError, setReadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   /** The gateway's current text of a note whose refused save left a draft: read again to show it. */
   const [conflictNote, setConflictNote] = useState<string | null>(null);
@@ -92,19 +104,27 @@ export function BotMemory({
     if (!online || !visible) return;
     let active = true;
     void Promise.all([
-      Promise.all(ROOT_MEMORY.map((path) => bridge.invoke({ type: "readMemory", botId, path }))),
-      bridge.invoke({ type: "listMemory", botId }),
-    ]).then(
-      ([root, notes]) => {
-        if (active) {
-          setData({ root, notes });
-          setReadError(null);
-        }
-      },
-      (error: unknown) => {
-        if (active) setReadError(errorText(error));
-      },
-    );
+      // Each root file stands alone: one failing read keeps the other usable.
+      Promise.all(
+        ROOT_MEMORY.map(async (path): Promise<RootLoad> => {
+          try {
+            return {
+              path,
+              file: await bridge.invoke({ type: "readMemory", botId, path }),
+              error: null,
+            };
+          } catch (error) {
+            return { path, file: null, error: errorText(error) };
+          }
+        }),
+      ),
+      // The notes list stands alone too; its own failure keeps the roots usable.
+      bridge
+        .invoke({ type: "listMemory", botId })
+        .catch((error: unknown) => ({ files: [], notesError: errorText(error), truncated: false })),
+    ]).then(([root, notes]) => {
+      if (active) setData({ root, notes });
+    });
     return () => {
       active = false;
     };
@@ -118,7 +138,7 @@ export function BotMemory({
       const now = data.notes.files.find((entry) => entry.path === file.path);
       return (now?.hash ?? null) === file.hash ? null : { text: null };
     }
-    const now = data.root.find((entry) => entry.path === file.path);
+    const now = data.root.find((entry) => entry.path === file.path)?.file;
     return (now?.hash ?? null) === file.hash ? null : { text: now?.content ?? "" };
   })();
 
@@ -155,9 +175,14 @@ export function BotMemory({
     }
   }
 
-  async function save(path: string, text: string | null, item: Item | null) {
+  async function save(
+    path: string,
+    text: string | null,
+    item: Item | null,
+    gatewayId: string | null,
+  ) {
     const isNote = path.startsWith("memory/");
-    const file = item?.file ?? data?.root.find((doc) => doc.path === path);
+    const file = item?.file ?? data?.root.find((doc) => doc.path === path)?.file;
     const content = isNote
       ? text
       : item
@@ -170,6 +195,7 @@ export function BotMemory({
         type: "writeMemory",
         botId,
         path,
+        gatewayId,
         expectedHash: file?.hash ?? null,
         content,
       });
@@ -202,10 +228,10 @@ export function BotMemory({
       onSubmit={(event) => {
         event.preventDefault();
         if (canEdit && !busy && changed === null && current.text.trim())
-          void save(current.path, current.text, current.item);
+          void save(current.path, current.text, current.item, current.gatewayId);
       }}
     >
-      {!current.item && !data?.notes.notesError && (
+      {!current.item && (
         <label>
           Save in
           <select
@@ -221,7 +247,9 @@ export function BotMemory({
           >
             <option value="MEMORY.md">Root memory</option>
             <option value="USER.md">About you</option>
-            <option value="note">As a note</option>
+            {MEMORY_NOTES_WRITABLE && data?.notes && !data.notes.notesError && (
+              <option value="note">As a note</option>
+            )}
           </select>
         </label>
       )}
@@ -313,7 +341,7 @@ export function BotMemory({
             : `Loads into ${name}'s new private tasks, within the conditions above.`}{" "}
           Search for this revision is unconfirmed.
         </small>
-        {canEdit && (
+        {canEdit && (!isNote || MEMORY_NOTES_WRITABLE) && (
           <div className="b-actions">
             <button
               type="button"
@@ -322,7 +350,12 @@ export function BotMemory({
               disabled={busy || draft !== null}
               onClick={() => {
                 setActionError(null);
-                setDraft({ path: item.file.path, text: item.text, item });
+                setDraft({
+                  path: item.file.path,
+                  text: item.text,
+                  item,
+                  gatewayId: connection.gatewayId,
+                });
                 setConflictNote(null);
               }}
             >
@@ -333,7 +366,7 @@ export function BotMemory({
               className="button"
               data-size="sm"
               disabled={busy || draft !== null}
-              onClick={() => setDeleting(item)}
+              onClick={() => setDeleting({ item, gatewayId: connection.gatewayId })}
             >
               Delete
             </button>
@@ -368,19 +401,7 @@ export function BotMemory({
       )}
       {granted && <GrantedBar />}
       {!online && <p className="b-hint">Connect to the gateway to read memory.</p>}
-      {online && !data && !readError && <p role="status">Loading memory…</p>}
-      {readError && (
-        <p role="alert">
-          Couldn't load memory. {readError}{" "}
-          <button
-            type="button"
-            className="button"
-            onClick={() => setRevision((current) => current + 1)}
-          >
-            Try again
-          </button>
-        </p>
-      )}
+      {online && !data && <p role="status">Loading memory…</p>}
       {data && (
         <>
           <p className="b-hint">
@@ -389,14 +410,28 @@ export function BotMemory({
             channel tasks can have different memory, and your own profile can take precedence over
             About you.
           </p>
-          {data.root.map((file) => (
-            <section key={file.path}>
-              <h4 className="b-group">{file.path === "MEMORY.md" ? "Root memory" : "About you"}</h4>
-              {changed !== null && draft?.item?.file.path === file.path && form(draft)}
-              {file.content.trim() ? (
-                <ul className="memory-items">{items(file).map(renderItem)}</ul>
+          {data.root.map(({ path, file, error }) => (
+            <section key={path}>
+              <h4 className="b-group">{path === "MEMORY.md" ? "Root memory" : "About you"}</h4>
+              {changed !== null && draft?.item?.file.path === path && form(draft)}
+              {error ? (
+                <p role="alert">
+                  Couldn't read {path}. {error}{" "}
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => setRevision((current) => current + 1)}
+                  >
+                    Try again
+                  </button>
+                </p>
               ) : (
-                <p className="b-hint">No text stored in {file.path}.</p>
+                file &&
+                (file.content.trim() ? (
+                  <ul className="memory-items">{items(file).map(renderItem)}</ul>
+                ) : (
+                  <p className="b-hint">No text stored in {path}.</p>
+                ))
               )}
             </section>
           ))}
@@ -406,6 +441,11 @@ export function BotMemory({
               Notes are stored separately and don't load into new tasks. Search can lag behind
               stored changes.
             </p>
+            {!MEMORY_NOTES_WRITABLE && (
+              <p className="b-hint">
+                Notes are read-only here until the memory plugin's security review is recorded.
+              </p>
+            )}
             {data.notes.notesError && (
               <p className="b-hint">Couldn't list notes. {data.notes.notesError}</p>
             )}
@@ -440,14 +480,18 @@ export function BotMemory({
           {draft && !draft.item
             ? form(draft)
             : canEdit &&
-              !draft &&
-              !readError && (
+              !draft && (
                 <button
                   type="button"
                   className="button"
                   onClick={() => {
                     setActionError(null);
-                    setDraft({ path: "MEMORY.md", text: "", item: null });
+                    setDraft({
+                      path: "MEMORY.md",
+                      text: "",
+                      item: null,
+                      gatewayId: connection.gatewayId,
+                    });
                     setConflictNote(null);
                   }}
                 >
@@ -462,8 +506,8 @@ export function BotMemory({
           title="Delete this memory?"
           text={
             <>
-              “{deleting.text}” will be removed from {deleting.file.path}. Chat history, earlier
-              prompts and any stale search results stay.
+              “{deleting.item.text}” will be removed from {deleting.item.file.path}. Chat history,
+              earlier prompts and any stale search results stay.
             </>
           }
           action="Delete"
@@ -471,7 +515,9 @@ export function BotMemory({
           onCancel={() => {
             if (!busy) setDeleting(null);
           }}
-          onAction={() => void save(deleting.file.path, null, deleting)}
+          onAction={() =>
+            void save(deleting.item.file.path, null, deleting.item, deleting.gatewayId)
+          }
         />
       )}
     </div>

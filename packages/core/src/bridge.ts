@@ -136,6 +136,8 @@ export type BridgeCommand =
       type: "writeMemory";
       botId: string;
       path: string;
+      /** The gateway identity that supplied the draft, from `gateway.identity.get`. */
+      gatewayId: string | null;
       expectedHash: string | null;
       content: string | null;
     }
@@ -902,7 +904,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         throw new Error("invalid memory path");
       const target = { botId: botId(command.botId), path };
       if (command.type === "readMemory") return { type: command.type, ...target };
-      const { content, expectedHash } = command;
+      const { content, expectedHash, gatewayId } = command;
       if (
         content !== null &&
         (typeof content !== "string" || utf8Length(content) > MAX_MEMORY_BYTES)
@@ -913,7 +915,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         (typeof expectedHash !== "string" || !/^[a-f0-9]{64}$/i.test(expectedHash))
       )
         throw new Error("invalid memory revision");
-      return { type: command.type, ...target, content, expectedHash };
+      return {
+        type: command.type,
+        ...target,
+        content,
+        expectedHash,
+        gatewayId: gatewayId === null ? null : id(gatewayId, "gateway identity"),
+      };
     }
     case "listWorkspace":
       return {
@@ -1349,6 +1357,7 @@ class ViewerSession implements BridgeSession {
         return client.writeMemory(
           command.botId,
           command.path,
+          command.gatewayId,
           command.expectedHash,
           command.content,
         );
