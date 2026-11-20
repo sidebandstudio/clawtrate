@@ -395,6 +395,8 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
+/** Sessions' removal epochs kept, so a history read a deletion superseded is dropped; the oldest give way. */
+export const MAX_FOREIGN_EPOCHS = 64;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
@@ -767,6 +769,12 @@ export class ClawtrateClient {
   private readonly foreign = new Map<string, TaskActivity>();
   /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
   private readonly foreignRaw = new RawTable(0, 0);
+  /**
+   * Bumped each time a session nobody has open is deleted, so a history read of
+   * it that was already on its way is dropped instead of rebuilding its runs
+   * from an answer that predates the deletion.
+   */
+  private readonly foreignEpochs = new Map<string, number>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3215,6 +3223,10 @@ export class ClawtrateClient {
    */
   private retireForeign(rawKey: string): void {
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
+    // A read of this session on its way now answers a session that is gone.
+    this.foreignEpochs.set(sessionKey, (this.foreignEpochs.get(sessionKey) ?? 0) + 1);
+    while (this.foreignEpochs.size > MAX_FOREIGN_EPOCHS)
+      this.foreignEpochs.delete(this.foreignEpochs.keys().next().value as string);
     if (!this.foreign.has(sessionKey)) return;
     this.updateForeign(sessionKey, (activity, ctx) =>
       activity.runs.some((run) => !isTerminal(run.state))
@@ -3528,7 +3540,20 @@ export class ClawtrateClient {
     ids: Set<string>,
     generation: number,
     senderKey?: string,
+    terminal: {
+      phase: "end" | "error";
+      pairs: ReadonlyArray<readonly [string, string]>;
+    } | null = null,
   ): Promise<void> {
+    // What this read may settle was active before it was asked, so a run whose
+    // live start arrives while the request is pending outlives a stale answer.
+    const activeBefore = new Set(
+      (this.foreign.get(sessionKey)?.runs ?? [])
+        .filter((run) => ids.has(run.id) && !isTerminal(run.state))
+        .map((run) => run.id),
+    );
+    // A delete of this session while the read is on its way supersedes it.
+    const epoch = this.foreignEpochs.get(sessionKey) ?? 0;
     let history: RawRecord | null;
     try {
       history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
@@ -3538,10 +3563,14 @@ export class ClawtrateClient {
     if (
       generation !== this.generation ||
       this.tracked(sessionKey) ||
-      (senderKey !== undefined && !this.tracked(senderKey))
+      (senderKey !== undefined && !this.tracked(senderKey)) ||
+      (this.foreignEpochs.get(sessionKey) ?? 0) !== epoch
     )
       return;
-    const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+    const aliases = Object.fromEntries([
+      ...(terminal?.pairs ?? []),
+      ...historyQueuePairs(history?.messages),
+    ]);
     const { messages, inFlight } = throughRunAliases(
       history?.messages,
       asRecord(history?.inFlightRun),
@@ -3555,20 +3584,40 @@ export class ClawtrateClient {
     );
     const historyIds = new Set(found.map((run) => run.id));
     const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+    const ended = terminal
+      ? new Map([...ids].map((id) => [id, terminal.phase] as const))
+      : undefined;
     this.updateForeign(sessionKey, (activity) => {
-      const followed = activity.runs.filter((run) => ids.has(run.id));
+      // A pair is one run: history under the gateway's id is the run the sender
+      // follows under the send's id. Renamed, never dropped: a foreign run keeps
+      // no steps, so nothing of a run still under way is lost with it.
+      const aliased = (terminal?.pairs ?? []).reduce((next, [gateway, client]) => {
+        if (gateway === client || next.queueAliases[gateway] === client) return next;
+        const shown = findRun(next, gateway);
+        const runs =
+          shown && !findRun(next, client)
+            ? next.runs.map((run) => (run === shown ? { ...run, id: client } : run))
+            : next.runs;
+        return { ...next, runs, queueAliases: { ...next.queueAliases, [gateway]: client } };
+      }, activity);
+      const followed = aliased.runs.filter((run) => ids.has(run.id));
       const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
       // A row said the run ended, but idle history cannot say how: settle it as
       // vanished rather than leave the card working, unless a turn is in flight.
-      const activeBefore = new Set(
-        followed.filter((run) => !isTerminal(run.state)).map((run) => run.id),
+      const runs = settleVanishedRuns(
+        merged,
+        activeBefore,
+        historyIds,
+        inFlightId,
+        ctx,
+        busy,
+        ended,
       );
-      const runs = settleVanishedRuns(merged, activeBefore, historyIds, inFlightId, ctx, busy);
       const settled =
         runs.length === merged.length && runs.every((run, i) => run === merged[i]) ? merged : runs;
       return {
-        ...activity,
-        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...settled],
+        ...aliased,
+        runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
       };
     });
   }
@@ -4816,6 +4865,7 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
+    this.foreignEpochs.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -5248,16 +5298,25 @@ export class ClawtrateClient {
       if (row.phase !== "end" && row.phase !== "error") return;
       const sessionKey = capId(key, MAX_ID_CHARS);
       const activity = this.foreign.get(sessionKey);
+      // A row naming a run id pair names one run: both ids are kept, so the
+      // read and the merge see the run whatever id it or history holds it under.
+      const pairs: Array<[string, string]> =
+        clientRunId && clientRunId !== runId ? [[runId, clientRunId]] : [];
+      const named = [runId, ...pairs.map(([, client]) => client)];
       const ids = new Set(
-        [runId, clientRunId].filter((id): id is string => {
-          if (!id) return false;
+        named.filter((id) => {
           const run = activity && findRun(activity, id);
           return run
             ? !isTerminal(run.state)
             : [...this.recipients.values()].some((link) => link.runs.has(id));
         }),
       );
-      if (ids.size > 0) void this.readRecipientRuns(sessionKey, ids, this.generation);
+      if (ids.size === 0) return;
+      for (const id of named) ids.add(id);
+      void this.readRecipientRuns(sessionKey, ids, this.generation, undefined, {
+        phase: row.phase === "error" ? "error" : "end",
+        pairs,
+      });
       return;
     }
     if (clientRunId && clientRunId !== runId) {

@@ -3193,13 +3193,23 @@ export function settleVanishedRuns(
   inFlightRunId: string | null,
   ctx: EngineContext,
   busy = false,
+  /** Runs a terminal `sessions.changed` row named, by id, to the phase it reported. */
+  namedEnded?: ReadonlyMap<string, "end" | "error">,
 ): Run[] {
   return runs.map((run) => {
-    if (!activeBefore.has(run.id) || isTerminal(run.state) || run.state === "queued") return run;
-    if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
+    const named = namedEnded?.get(run.id);
+    if (isTerminal(run.state) || run.state === "queued") return run;
+    if (!named && !activeBefore.has(run.id)) return run;
     if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
-    const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
-    return { ...settled, outcomeKnown: false };
+    if (!named) {
+      if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
+      const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
+      return { ...settled, outcomeKnown: false };
+    }
+    // The row said this run ended and history could not say how: settle it as
+    // the row said, with the reply unknown rather than invented.
+    const settled = finishRun(run, named === "error" ? "failed" : "completed", ctx);
+    return named === "error" ? settled : { ...settled, outcomeKnown: false };
   });
 }
 

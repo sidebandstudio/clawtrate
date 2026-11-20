@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { deferred, sleep, until } from "./fake-gateway.ts";
+import { deferred, sleep, until, type FakeGateway } from "./fake-gateway.ts";
 import { MAX_RAW_ENTRY_CHARS, RawTable, runErrorRawId, runsFromHistory } from "../src/runs.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
@@ -448,6 +448,148 @@ describe("a recipient's task let go while its sender's task is open", () => {
     client.openSession(KEY);
     // The sender's card follows what the recipient's history establishes: the run ended.
     await until(() => client.state.transcripts[KEY]?.linkedRuns["peer-r"]?.state === "completed");
+    client.stop();
+  });
+});
+
+describe("a recipient session nobody has open (F-122)", () => {
+  const PEER = "agent:marlow:main";
+
+  const sendTo = (gateway: FakeGateway, runId: string) => {
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 1, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        args: { sessionKey: PEER, message: "A message" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { status: "accepted", sessionKey: PEER, runId },
+        },
+      }),
+    );
+  };
+
+  it("F-122: a history page naming only the gateway's id settles the run the sender follows under the send's id", async () => {
+    const gateway = grantingGateway();
+    // First the pairing page: the user row under the send's id, its rows under the
+    // gateway's own id, in flight. Then the last page alone: the final assistant
+    // row under the gateway's id, its user row scrolled off it.
+    let peerHistory: unknown = {
+      messages: [
+        {
+          role: "user",
+          content: "A message",
+          __openclaw: { id: "pu1", idempotencyKey: "peer-c:user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Working on it" }],
+          __openclaw: { id: "pa1", runId: "peer-x" },
+        },
+      ],
+      inFlightRun: { runId: "peer-x" },
+    };
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER ? peerHistory : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-c");
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => transcript().linkedRuns["peer-c"]?.state === "running");
+    peerHistory = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done." }],
+          stopReason: "stop",
+          __openclaw: { id: "pa2", runId: "peer-x" },
+        },
+      ],
+    };
+    gateway.emit("sessions.changed", {
+      sessionKey: PEER,
+      runId: "peer-x",
+      clientRunId: "peer-c",
+      phase: "end",
+    });
+    await until(() => transcript().linkedRuns["peer-c"]?.state === "completed");
+    // The reply row settled it, not the row alone: the outcome is known.
+    expect(transcript().linkedRuns["peer-c"]?.outcomeKnown).toBe(true);
+    client.stop();
+  });
+
+  it("F-122: settles a run a terminal row named even when history holds only a different run in flight", async () => {
+    const gateway = grantingGateway();
+    let peerHistory: unknown = { messages: [] };
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER ? peerHistory : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The row says the run ended; the page holds only a newer run of the session in flight.
+    peerHistory = { messages: [], inFlightRun: { runId: "newer-r" } };
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.outcomeKnown).toBe(false);
+    client.stop();
+  });
+
+  it("F-122: a history read the session's deletion supersedes rebuilds nothing", async () => {
+    const gateway = grantingGateway();
+    const held = deferred<unknown>();
+    let peerReads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      peerReads += 1;
+      return held.promise;
+    };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The row's read is held; the session is deleted while it is on its way.
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => peerReads === 1);
+    gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "cancelled");
+    // The held answer is the session's old snapshot, with the run still in flight.
+    held.resolve({ messages: [], inFlightRun: { runId: "peer-r" } });
+    await sleep(50);
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("cancelled");
+    client.stop();
+  });
+
+  it("F-122: a run that started while its recipient history read was pending outlives the stale answer", async () => {
+    const gateway = grantingGateway();
+    const held = deferred<unknown>();
+    let peerReads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      peerReads += 1;
+      return held.promise;
+    };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    // The ordinary lookup holds; the recipient's run starts live meanwhile.
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => peerReads === 1);
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The held answer is the earlier empty history: it must not settle what it never saw.
+    held.resolve({ messages: [] });
+    await sleep(50);
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
     client.stop();
   });
 });
