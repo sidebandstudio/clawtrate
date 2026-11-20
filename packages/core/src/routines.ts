@@ -960,8 +960,10 @@ export class RoutinesEngine {
     // connected by the time it is sent or answered, and its routine by the
     // same id says nothing about that write.
     const epoch = this.epoch;
+    // A read-back that names no confirmed gateway confirms nothing: null is not an identity.
     const elsewhere = () =>
-      gateway !== undefined && (epoch !== this.epoch || this.ctx.identity() !== gateway);
+      gateway !== undefined &&
+      (gateway === null || epoch !== this.epoch || this.ctx.identity() !== gateway);
     if (elsewhere()) throw new Error(UNCONFIRMED);
     const read = await this.readRevised(id);
     if (elsewhere()) throw new Error(UNCONFIRMED);

@@ -702,7 +702,8 @@ function ZoneDialog({
                 type="button"
                 className="button"
                 data-variant="primary"
-                disabled={busy || changes.length === 0}
+                // Until the gateway confirms who it is, its routines can't be named in a write.
+                disabled={busy || changes.length === 0 || gateway === null}
                 onClick={() => void save()}
               >
                 {busy ? "Saving…" : "Save"}

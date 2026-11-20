@@ -1295,6 +1295,18 @@ describe("F-189: changing a routine", () => {
     expect(state().routines).toEqual([]);
   });
 
+  it("F-196: a read-back bound to no confirmed gateway is refused, though the host has no identity either", async () => {
+    const { routines, requests } = engine({ "cron.get": () => once }, initialRoutinesState, {
+      ...ADMIN,
+      identity: null,
+    });
+    // The zone save's write went nowhere it could name, so a matching read proves nothing.
+    await expect(routines.readOne(JOB, null)).rejects.toThrow();
+    expect(requests).toEqual([]);
+    // A read that names no gateway, as the page's own reads do, still reads.
+    expect(await routines.readOne(JOB)).toMatchObject({ id: JOB });
+  });
+
   it("F-189: only the gateway's not-found code says a routine is gone, not a refusal that says the words", async () => {
     const { routines } = engine(
       {

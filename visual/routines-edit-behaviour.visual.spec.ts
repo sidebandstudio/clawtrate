@@ -479,6 +479,21 @@ test.describe("1440", () => {
     await expect(editor(page).getByLabel("Name")).toHaveValue("Inbox tidy-up");
   });
 
+  test("F-196: the zone change waits for the gateway to confirm who it is before it can save", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    const gatewayId = await connectionValue(page, "gatewayId");
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await setConnection(page, { gatewayId: null });
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    await setConnection(page, { gatewayId });
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
   test("F-196: a bot's routines' time zone is said over them, and Change rewrites each routine's zone the form can write", async ({
     page,
   }) => {
