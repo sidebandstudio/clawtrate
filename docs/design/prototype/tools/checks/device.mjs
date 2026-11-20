@@ -112,6 +112,9 @@ for (const [dev, start, steps, onWords] of [
     [link("The node's hello arrives"), steps, ["Its hello says role node."]],
     [async (p) => check(`${dev}: after the hello, step 2 done and step 3 running`, (await switchOff(p)) && (await stepStates(p)) === "done,done,running"), null],
     [link("The read-back agrees"), start.replace("off", "on"), onWords],
+    [async (p) => check(`${dev}, first-time activation: no app reads Allowed before the person's own Allow`, (await p.locator("[data-local=allowed]").count()) === 0 && (await p.locator("[data-local=undecided]").count()) >= 3), null],
+    [click("[data-allow]:not([data-allow=contacts])"), start.replace("off", "on")],
+    [async (p) => check(`${dev}, first-time activation: one Allow makes exactly that app Allowed`, (await p.locator("[data-local=allowed]").count()) === 1), null],
   ], dev === "iPhone" ? phone : {});
 }
 p = await open("screen=mac-confirm");
@@ -142,7 +145,7 @@ await walk("a strict subset: the omission named, then finished with that subset"
 ]);
 p = await open("screen=mac-confirm");
 check("the host's dialog never says the gateway's owner approves", !/owner approves/.test(await text(p)));
-check("the host's dialog says Allow is ongoing before any app is used", (await text(p)).includes("Clawtrate asks you before an app's first use; once you allow an app, later requests for it are answered without asking, until you turn it off."));
+check("the host's dialog says Allow is ongoing before any app is used", (await text(p, "[role=alertdialog]")).includes("Clawtrate asks you before an app's first use. Later requests that reach this device may use an app you allowed without asking again."));
 await p.close();
 await walk("the iPhone on, then Stop", "screen=phone-on", [
   [sw, "phone-stop", ["Stop letting bots use this iPhone?"]],
@@ -180,10 +183,11 @@ check("on: a listed app carries the listing mark with its time, not a refusal", 
   const r = document.querySelector('[data-app="location"]');
   return !!r.querySelector('[data-mark="listed"]') && r.textContent.includes("Listed by the gateway, 5:31 PM") && !r.querySelector('[data-mark="gateway"]');
 }));
-check("on: Messages, Mail and Notes read Not listed with the gateway's refusal mark", await p.evaluate(() => ["messages", "mail", "notes"].every((id) => {
+check("on: Messages, Mail and Notes read Not listed when read, with no refusal mark, and the allowlist entries read as absent", await p.evaluate(() => ["messages", "mail", "notes"].every((id) => {
   const r = document.querySelector(`[data-app="${id}"]`);
-  return r.dataset.gateway === "notlisted" && r.textContent.includes("Gateway: Not listed") && !!r.querySelector('[data-mark="gateway"]');
+  return r.dataset.gateway === "notlisted" && r.textContent.includes("Gateway: Not listed when read at 5:31 PM") && !r.querySelector('[data-mark="gateway"]') && /didn't include clawtrate\.\w+\.\w+ or clawtrate\.\w+\.\w+ when read at 5:31 PM/.test(r.querySelector("[data-absent]")?.textContent || "");
 })));
+check("on: no row carries a gateway refusal mark without an observed refusal", (await p.locator('.d-apps [data-mark="gateway"]').count()) === 0);
 check("on: an undecided app says what Allow lets through before the tap", (await row(p, "calendar").textContent()).includes("Allow lets every request for Calendar that reaches this Mac read your calendar's events, from now on, until you turn it off."));
 check("on: an app the system refuses offers Open Settings and no Allow", await p.evaluate(() => {
   const r = document.querySelector('[data-app="contacts"]');
@@ -197,6 +201,28 @@ check("on: the examples carry this Mac's own name, and are labelled as examples"
   return d.textContent.includes("Studio Mac") && !d.textContent.includes("iPhone") && d.textContent.includes("Examples. Each request's record shows");
 }));
 await p.close();
+for (const [q, opts] of [["mac-on&history=1", {}], ["phone-on&history=1", phone], ["mac-on&allowed=calendar,messages&own=listed&app=messages", {}]]) {
+  p = await open(`screen=${q}`, opts);
+  check(`${q}: Allowed and Not decided rows never carry a refusal mark; Denied and OS-blocked rows carry this device's`, await p.evaluate(() => [...document.querySelectorAll(".d-app[data-local]")].every((r) => {
+    const refusal = !!r.querySelector('[data-mark="device"], [data-mark="gateway"]');
+    return ["allowed", "undecided"].includes(r.dataset.local) ? !refusal : !!r.querySelector('[data-mark="device"]');
+  })));
+  check(`${q}: an undecided row says it will ask`, await p.evaluate(() => [...document.querySelectorAll('.d-app[data-local="undecided"]')].every((r) => r.textContent.includes("Clawtrate asks you first"))));
+  check(`${q}: both values that offer Allow disclose ongoing permission before the tap`, await p.evaluate(() => [...document.querySelectorAll(".d-app")].filter((r) => r.querySelector("[data-allow]")).every((r) => /from now on, until you turn it off/.test(r.querySelector("[data-scope]")?.textContent || ""))));
+  await p.close();
+}
+p = await open("screen=mac-on&history=1");
+check("F-347: a denied local grant offers only local Allow to change that choice", await p.evaluate(() => {
+  const r = document.querySelector('[data-app="reminders"]');
+  return r.dataset.local === "denied" && !!r.querySelector('[data-allow="reminders"]') && !r.textContent.includes("Open Settings") && r.textContent.includes("Allow lets every request for Reminders");
+}));
+await p.close();
+p = await open("screen=mac-on&own=listed&app=messages&half=messages");
+check("a half-listed app shows the two command facts", await p.evaluate(() => {
+  const r = document.querySelector('[data-app="messages"]');
+  return r.dataset.gateway === "partial" && r.textContent.includes("Listed, 5:31 PM: clawtrate.messages.read") && (r.querySelector("[data-missing]")?.textContent || "") === "Not listed when read at 5:31 PM: clawtrate.messages.send" && !r.textContent.includes("Listed, 5:31 PM" + "Listed");
+}));
+await p.close();
 p = await open("screen=phone-on", phone);
 check("This iPhone: its six apps in order", (await p.locator(".d-app .d-app-name").allTextContents()).join(",") === "Calendar,Contacts,Location,Reminders,Alarms,Home");
 check("This iPhone: the examples carry the iPhone's name, never the Mac's", await p.evaluate(() => {
@@ -205,9 +231,15 @@ check("This iPhone: the examples carry the iPhone's name, never the Mac's", awai
 }));
 await p.close();
 await walk("Messages added with admin: the words before writing, the read-backs, and this Mac's decision untouched", "screen=mac-on", [
-  [click('[data-add="messages"]'), "mac-messages-confirm", ["Let bots ask this Mac for Messages?", "clawtrate.messages.read", "clawtrate.messages.send", "read the messages of a conversation it names and send a text message as you", "Otto", "(listed Nov 19)", "Pip has no listing yet", "a bot added later", "any device connected to the gateway with write access", "This doesn't allow Messages on this Mac."]],
-  [click("[data-confirm]"), "mac-messages-steps", ["Writing Messages to the gateway's allowlist", "The stored settings show both entries", "Clawtrate compared the request with what this Mac declares, then approved it with admin.", "Reading back"]],
+  [click('[data-add="messages"]'), "mac-messages-confirm"],
+  [async (p) => {
+    const t = await text(p, "[role=alertdialog]");
+    const lack = missing(t, ["Let bots ask this Mac for Messages?", "clawtrate.messages.read", "clawtrate.messages.send", "read the messages of a conversation it names and send a text message as you", "Otto (listed Nov 19)", "Pip has no listing yet", "a bot added later", "any device connected to the gateway with write access", "This doesn't allow Messages on this Mac. This keeps this Mac's current Messages choice. You can change that choice here."]);
+    check("the add confirmation itself names each bot with its date, and keeps this Mac's choice", !lack, lack);
+  }, null],
+  [click("[data-confirm]"), "mac-messages-steps", ["Writing Messages to the gateway's allowlist", "The gateway's stored settings list clawtrate.messages.read and clawtrate.messages.send (read 5:33 PM).", "Clawtrate compared the request with what this Mac declares, then approved it with admin.", "Reading back"]],
   [link("The gateway lists the commands for this Mac"), "mac-messages-on"],
+  [async (p) => check("after the add: the stored and the active read-back are reported apart", (await text(p, "[data-stored]")) === "The gateway's stored settings list clawtrate.messages.read and clawtrate.messages.send (read 5:33 PM)." && (await text(p, "[data-active]")) === "The gateway listed them for Studio Mac (bots) at 5:33 PM."), null],
   [async (p) => check("after the gateway step: Messages listed by the gateway, and still Not decided on this Mac", await p.evaluate(() => {
     const r = document.querySelector('[data-app="messages"]');
     return r.dataset.gateway === "listed" && r.dataset.local === "undecided" && !!r.querySelector('[data-allow="messages"]');
@@ -237,17 +269,26 @@ await walk("Alarms added on the iPhone: its own words, on This iPhone", "screen=
 ]);
 p = await open("screen=mac-messages-steps&fail=1quiet");
 check("a write with no answer never says nothing changed", (await text(p)).includes("Clawtrate couldn't confirm whether the gateway's settings changed.") && !(await text(p)).includes("Nothing changed"));
+check("an unknown write cannot announce that the command vanished", !/doesn't include|no longer list|Removed|didn't write/.test(await text(p, ".b-note")) && (await param(p, "said")) === null);
 await p.close();
 p = await open("screen=mac-messages-steps&fail=1");
-check("a refused write says what the read showed", (await text(p)).includes("Its allowlist, read again at 5:33 PM, doesn't include Messages."));
+check("a refused write gives the gateway's reason and the entries actually read", !missing(await text(p), ["The gateway refused this change: config.patch denied.", "The gateway's allowlist, read at 5:33 PM: calendar.add."]) && !(await text(p)).includes("doesn't include Messages") && (await p.locator('[data-mark="gateway"]').count()) === 1);
 await p.close();
+p = await open("screen=mac-messages-steps&fail=1&reread=fail");
+check("a refused write whose re-read fails says it couldn't read the allowlist", (await text(p)).includes("Couldn't read the gateway's allowlist."));
+await p.close();
+await walk("a hash conflict: nothing written, and Try again reads again before proposing the patch", "screen=mac-messages-steps&fail=hash", [
+  [none, null, ["The gateway's settings changed since Clawtrate read them. Clawtrate didn't write this change."]],
+  [click("[data-retry]"), "mac-messages-confirm"],
+]);
 await walk("written but not listed: what the gateway holds, and the ways on", "screen=mac-messages-steps&fail=2", [
   [none, null, ["The gateway's settings list Messages, but the gateway doesn't list it for this Mac yet.", "Try again", "Remove it from the allowlist"]],
   [button("Try again"), "mac-messages-steps"],
   [async (p) => check("Try again leaves the failure behind", (await param(p, "fail")) === null), null],
 ]);
 await walk("Messages below admin: the owner is needed, and admin can be requested", "screen=mac-on&access=write", [
-  [click('[data-add="messages"]'), "mac-messages-needadmin", ["Messages needs the gateway's owner.", "Adding it to the gateway's allowlist needs admin access.", "Request admin access"]],
+  [click('[data-add="messages"]'), "mac-messages-needadmin", ["Adding it to the gateway's allowlist needs admin access.", "Request admin access"]],
+  [async (p) => check("below admin: no \"needs the gateway's owner\" beside the admin line", !(await text(p)).includes("needs the gateway's owner")), null],
 ]);
 p = await open("screen=mac-messages-confirm");
 check("the choice's dialog takes focus and makes the page behind inert", await p.evaluate(() => document.activeElement?.id === "d-dialog-title" && document.querySelector(".b-settings").inert));
@@ -297,7 +338,7 @@ check("the card is a region named for its request, and does not take focus", awa
   return c.getAttribute("role") === "region" && c.getAttribute("aria-label") === "Location requested on this iPhone. Needs permission." && !c.contains(document.activeElement);
 }));
 await p.close();
-p = await open("screen=mac-on");
+p = await open("screen=mac-on&history=1");
 check("records: each says what this device did, what it sent and what the gateway acknowledged", await p.evaluate(() => [...document.querySelectorAll(".d-record")].every((r) => r.querySelector("[data-did]").textContent && r.querySelector("[data-sent]").textContent && r.querySelector("[data-ack]").textContent)));
 check("records: an automatic refusal with no card is kept", (await text(p, ".d-records")).includes("Didn't run it: Reminders is Denied on this Mac."));
 check("records: never name who asked", !/Otto asked|Otto wants|was told/.test(await text(p, ".d-records")));
@@ -341,7 +382,7 @@ await p.close();
 p = await open("screen=mac-stop&access=write");
 check("stopping below admin: no Also remove it from the gateway", (await p.locator("[data-also-remove]").count()) === 0);
 await p.close();
-for (const [screen, opts] of [["mac-on&allowed=calendar&own=listed&local=allowed&app=messages", {}], ["phone-on&allowed=location", phone]]) {
+for (const [screen, opts] of [["mac-on&allowed=calendar&own=listed&local=allowed&app=messages", {}], ["phone-on&history=1&allowed=location", phone]]) {
   p = await open(`screen=${screen}`, opts);
   check(`${screen.split("&")[0]}: every Allowed app has its own Turn off`, await p.evaluate(() => {
     const rows = [...document.querySelectorAll('.d-app[data-local="allowed"]')];
@@ -356,13 +397,19 @@ await walk("Turn off Messages: Denied here, still listed by the gateway", "scree
     return r.dataset.local === "denied" && r.dataset.gateway === "listed";
   })), null],
 ]);
-await walk("Remove Messages from the allowlist: the words, then Not listed, this Mac's decision kept", "screen=mac-messages-on&own=listed&local=allowed", [
-  [click('[data-remove="messages"]'), "mac-messages-remove", ["A request the gateway is waiting on ends", "What this Mac already did is not undone.", "Messages on this Mac stays as it is."]],
-  [click("[data-confirm]"), "mac-on"],
+await walk("Remove Messages from the allowlist: the words, each read apart, this Mac's decision kept", "screen=mac-messages-on&own=listed&local=allowed", [
+  [click('[data-remove="messages"]'), "mac-messages-remove"],
+  [async (p) => check("the removal confirmation names the commands and claims no more than the policy change", (await text(p, "[role=alertdialog]")).includes("Remove clawtrate.messages.read and clawtrate.messages.send from the gateway-wide allowlist? If that removes the commands from the active policy, the gateway can end waiting calls and refuse later calls for them. An operation this Mac already started may finish. This Mac keeps its Messages choice.") && !(await text(p, "[role=alertdialog]")).includes("any device")), null],
+  [click("[data-confirm]"), "mac-messages-removed", ["Removed from the gateway's allowlist.", "The gateway's stored settings no longer list clawtrate.messages.read and clawtrate.messages.send (read 5:41 PM).", "The gateway no longer lists them for Studio Mac (bots) (read 5:41 PM)."]],
   [async (p) => check("removed: Messages Not listed, still Allowed on this Mac", await p.evaluate(() => {
     const r = document.querySelector('[data-app="messages"]');
     return r.dataset.gateway === "notlisted" && r.dataset.local === "allowed";
   })), null],
+  [link("Only the stored settings show it gone"), "mac-messages-removed", ["The gateway still lists them for Studio Mac (bots) (read 5:41 PM)."]],
+  [async (p) => check("stored-only: the row still reads the active listing", (await row(p, "messages").getAttribute("data-gateway")) === "listed"), null],
+  [link("Only the active listing shows it gone"), "mac-messages-removed", ["Clawtrate couldn't confirm the allowlist edit.", "The gateway's stored settings still list clawtrate.messages.read and clawtrate.messages.send (read 5:41 PM)."]],
+  [async (p) => check("active-only: not reported as removed", !(await text(p)).includes("Removed from the gateway's allowlist.")), null],
+  [link("The allowlist can't be read"), "mac-messages-removed", ["Couldn't read the gateway's allowlist.", "Clawtrate couldn't confirm the allowlist edit."]],
 ]);
 p = await open("screen=mac-messages-on&own=listed&access=write");
 check("below admin: no Remove from the allowlist", (await p.locator("[data-remove]").count()) === 0);
@@ -502,7 +549,7 @@ p = await open("screen=share", phone);
 for (let i = 0; i < 8; i += 1) await p.keyboard.press("Tab");
 check("the share sheet keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-share")));
 await p.close();
-p = await open("screen=mac-on");
+p = await open("screen=mac-on&history=1");
 check("row actions are named for their app", await p.evaluate(() => !!document.querySelector('[aria-label="Allow Calendar"]') && !!document.querySelector('[aria-label="Turn off Location"]') && !!document.querySelector('[aria-label="Add Messages to the gateway\'s allowlist"]')));
 check("row actions are buttons", await p.evaluate(() => [...document.querySelectorAll("[data-allow], [data-turnoff], [data-add]")].every((el) => el.tagName === "BUTTON")));
 await p.close();

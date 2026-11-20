@@ -31,7 +31,7 @@
   const TITLE = P ? "This iPhone" : "This Mac";
 
   // Kept from one state to the next; everything else is per state.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit", "history", "half"];
   const go = (to, extra = {}) => {
     const next = new URLSearchParams();
     for (const key of KEEP) if (params.get(key) !== null) next.set(key, params.get(key));
@@ -69,7 +69,8 @@
 
   // The three marks of section 2.
   const markListed = (time = "5:31 PM") => `<span class="d-mark" data-mark="listed">${icon("eye")}Listed by the gateway, ${time}</span>`;
-  const markRefuses = () => `<span class="d-mark" data-mark="gateway">${icon("approval")}The gateway refuses this</span>`;
+  // Only on an observed refusal; an absence from a listing carries no refusal mark.
+  const markRefused = () => `<span class="d-mark" data-mark="gateway">${icon("approval")}The gateway refused this request</span>`;
   const markDevice = () => `<span class="d-mark" data-mark="device">${svg("device")}This device refuses this</span>`;
 
   // Pieces ----------------------------------------------------------------------
@@ -157,24 +158,31 @@
   const chosenApp = appOf(chosen);
   const list = (key) => (params.get(key) || "").split(",").filter(Boolean);
 
+  // Example grants and records made before, shown only with history=1. A first-time activation
+  // starts every app at Not decided unless the operating system already refused (Contacts here):
+  // pairing never creates a local Allow.
+  const history = params.get("history") === "1";
+
   // This device's decision for an app: undecided, allowed, denied or settings.
   function localOf(id, phone) {
     if (list("off").includes(id)) return "denied";
     if (list("allowed").includes(id)) return "allowed";
     if (id === chosen && params.get("local")) return params.get("local") === "allowed" ? "allowed" : "denied";
     if (id === chosen && params.get("prior") === "denied") return "denied";
-    const defaults = phone
-      ? { calendar: "allowed", contacts: "settings", reminders: "denied" }
-      : { location: "allowed", contacts: "settings", reminders: "denied" };
-    return defaults[id] || "undecided";
+    if (id === "contacts") return "settings";
+    if (!history) return "undecided";
+    const before = phone ? { calendar: "allowed", reminders: "denied" } : { location: "allowed", reminders: "denied" };
+    return before[id] || "undecided";
   }
-  // What the gateway listed for an app: listed or notlisted.
-  const gatewayOf = (id) => (list("omit").includes(id) ? "notlisted" : OWN_APPS.includes(id) ? (id === chosen && params.get("own") === "listed" ? "listed" : "notlisted") : "listed");
+  // What the gateway listed for an app: listed, partial (half=<app>: its first command only) or notlisted.
+  const gatewayOf = (id) =>
+    list("omit").includes(id) ? "notlisted" : list("half").includes(id) ? "partial" : OWN_APPS.includes(id) ? (id === chosen && params.get("own") === "listed" ? "listed" : "notlisted") : "listed";
+  const codes = (cmds, join = " and ") => cmds.map((c) => `<code>${c}</code>`).join(join);
 
   const without = (key, id) => list(key).filter((x) => x !== id).join(",") || null;
   const withId = (key, id) => [...new Set([...list(key), id])].join(",");
 
-  function appRow([id, name, , does], { phone = false, off = false } = {}) {
+  function appRow([id, name, cmds, does], { phone = false, off = false } = {}) {
     const here = phone ? "On this iPhone" : "On this Mac";
     const page = phone ? "phone-on" : "mac-on";
     if (off)
@@ -196,12 +204,24 @@
       action += act("Add…", isAdmin ? go("mac-messages-confirm", { app: id, own: null, dev: phone ? "phone" : null }) : go("mac-messages-needadmin", { app: id, own: null, dev: phone ? "phone" : null }), { attrs: `data-add="${id}" aria-label="Add ${name} to the gateway's allowlist"` });
     if (gateway === "listed" && OWN_APPS.includes(id) && isAdmin)
       action += act("Remove…", go("mac-messages-remove", { app: id, dev: phone ? "phone" : null }), { variant: "quiet", attrs: `data-remove="${id}" aria-label="Remove ${name} from the gateway's allowlist"` });
-    const scope = local === "undecided" ? `<span class="d-fact" data-scope>Allow lets every request for ${name} that reaches this ${phone ? "iPhone" : "Mac"} ${does}, from now on, until you turn it off.</span>` : "";
+    // Both values that offer Allow disclose what Allow lets through, before the tap.
+    const scope = local === "undecided" || local === "denied" ? `<span class="d-fact" data-scope>Allow lets every request for ${name} that reaches this ${phone ? "iPhone" : "Mac"} ${does}, from now on, until you turn it off.</span>` : "";
+    // Each mark on its own evidence: a refusal mark only on a Denied or OS-blocked row; an undecided row says it will ask.
+    const localMark = local === "denied" || local === "settings" ? markDevice() : local === "undecided" ? `<span class="d-mark" data-mark="asks">Clawtrate asks you first</span>` : "";
+    const gatewayLine =
+      gateway === "listed"
+        ? `<b>Listed, 5:31 PM</b>${markListed()}`
+        : gateway === "partial"
+          ? `<b>Listed, 5:31 PM: ${codes(cmds.slice(0, 1))}</b>${markListed()}`
+          : `<b>Not listed when read at 5:31 PM</b>`;
+    const missingLine = gateway === "partial" ? `<span class="d-fact" data-missing>Not listed when read at 5:31 PM: ${codes(cmds.slice(1))}</span>` : "";
     return (
       `<li><div class="d-app" role="group" aria-label="${name}" data-app="${id}" data-local="${local}" data-gateway="${gateway}">${glyph(id)}<div class="d-app-text"><span class="d-app-name">${name}</span>` +
-      `<span class="d-fact"${local === "denied" || local === "settings" ? ' data-tone="warn"' : ""}>${here}: <b>${word}</b>${markDevice()}</span>` +
-      `<span class="d-fact">Gateway: <b>${gateway === "listed" ? "Listed, 5:31 PM" : "Not listed"}</b>${gateway === "listed" ? markListed() : markRefuses()}</span>` +
-      (gateway === "notlisted" && OWN_APPS.includes(id) ? `<span class="d-fact">The gateway's allowlist didn't include it when read at 5:31 PM.</span>` : "") +
+      `<span class="d-fact"${local === "denied" || local === "settings" ? ' data-tone="warn"' : ""}>${here}: <b>${word}</b>${localMark}</span>` +
+      `<span class="d-fact">Gateway: ${gatewayLine}</span>` +
+      missingLine +
+      // Read as absent from the allowlist (config.get), entry by entry.
+      (gateway === "notlisted" && OWN_APPS.includes(id) ? `<span class="d-fact" data-absent>The gateway's allowlist didn't include ${codes(cmds, " or ")} when read at 5:31 PM.</span>` : "") +
       scope +
       `</div><div class="d-app-action">${action}</div></div></li>`
     );
@@ -243,7 +263,10 @@
     `<li class="d-record" data-record="${r.id}"><p class="d-record-head"><b>${r.when}</b> · ${r.app} · <code>${r.command}</code></p>` +
     `<p>${r.named}</p><p data-did>${r.did}</p><p data-sent>${r.sent}</p><p data-ack>${r.ack}</p></li>`;
   const records = (phone, rows) =>
-    `<h4 class="b-group">Requests to this device</h4><ul class="d-records" aria-label="Requests to this device">${rows.map(record).join("")}</ul>`;
+    `<h4 class="b-group">Requests to this device</h4>` +
+    (rows.length
+      ? `<ul class="d-records" aria-label="Requests to this device">${rows.map(record).join("")}</ul>`
+      : `<p class="d-lead" data-no-records>No requests have reached this ${phone ? "iPhone" : "Mac"} yet.</p>`);
   const named = (kind) =>
     kind === "listed"
       ? `The request names a task of Otto's, “${esc(TASK)}”. This ${phoneScreen ? "iPhone" : "Mac"} can't confirm who sent it.`
@@ -271,7 +294,7 @@
       line +
       extraTop +
       `<h4 class="b-group">Apps</h4><ul class="d-apps" aria-label="Apps this ${what} offers">${apps.map((a) => appRow(a, { phone })).join("")}</ul>` +
-      records(phone, recs || (phone ? PHONE_RECORDS() : MAC_RECORDS)) +
+      records(phone, recs || (phone ? PHONE_RECORDS() : history ? MAC_RECORDS : [])) +
       botsLine() +
       examples(phone) +
       never(phone) +
@@ -305,7 +328,7 @@
       `<div class="s-host-body"><img src="${logo}" alt="" width="40" height="40" /><div>` +
       `<h2 id="s-host-title" tabindex="-1">Let bots on ${GATEWAY} use this ${what}?</h2><div id="s-host-detail" class="s-host-detail">` +
       `<p>Clawtrate will ask the connected gateway for a one-time sign-in for this ${what} as a device for bots. The next screen shows what the gateway listed.</p>` +
-      `<p>It offers ${apps}. Clawtrate asks you before an app's first use; once you allow an app, later requests for it are answered without asking, until you turn it off.</p></div>` +
+      `<p>It offers ${apps}. Clawtrate asks you before an app's first use. Later requests that reach this device may use an app you allowed without asking again.</p></div>` +
       `</div></div><div class="s-host-buttons"><a class="button" data-size="sm" href="${go(phone ? "phone-off" : "mac-off")}" data-host-cancel>Cancel</a>` +
       `<a class="button" data-variant="primary" data-size="sm" href="${go(phone ? "phone-steps" : "mac-steps")}" data-host-confirm>Let bots use this ${what}</a></div></div></div>`
     );
@@ -362,6 +385,30 @@
     );
   }
 
+  // The stored settings (config.get) and the active listing for this node (node.describe), reported apart.
+  // kind is "list" after an add, "unlist" after a removal; read=both|stored|active|fail picks what each read showed.
+  function readBack(kind) {
+    const r = params.get("read");
+    if (!r) return "";
+    const c = codes(chosenApp[2]);
+    const dev = `${esc(P ? PHONE : MAC)} (bots)`;
+    const t = kind === "list" ? "5:33 PM" : "5:41 PM";
+    const storedDone = r === "both" || r === "stored";
+    const activeDone = r !== "stored";
+    const stored =
+      r === "fail"
+        ? "Couldn't read the gateway's allowlist."
+        : kind === "list"
+          ? storedDone ? `The gateway's stored settings list ${c} (read ${t}).` : `The gateway's stored settings don't list ${c} (read ${t}).`
+          : storedDone ? `The gateway's stored settings no longer list ${c} (read ${t}).` : `The gateway's stored settings still list ${c} (read ${t}).`;
+    const active =
+      kind === "list"
+        ? activeDone ? `The gateway listed them for ${dev} at ${t}.` : `The gateway doesn't list them for ${dev} yet (read ${t}).`
+        : activeDone ? `The gateway no longer lists them for ${dev} (read ${t}).` : `The gateway still lists them for ${dev} (read ${t}).`;
+    const lead = kind === "list" ? "" : storedDone ? "Removed from the gateway's allowlist." : "Clawtrate couldn't confirm the allowlist edit.";
+    return `<div class="b-note" role="status" data-readback="${r}">${icon(storedDone ? "check" : "warning")}<div>${lead ? `<p><b>${lead}</b></p>` : ""}<p data-stored>${stored}</p><p data-active>${active}</p></div></div>`;
+  }
+
   const SCREENS = {
     "mac-off": () => settings({ title: "This Mac", body: offPage() }),
     "mac-confirm": () => settings({ title: "This Mac", body: offPage() }) + hostDialog(false),
@@ -374,32 +421,40 @@
         `Let bots ask this ${WHAT} for ${chosenApp[1]}?`,
         `<p>Clawtrate adds ${chosenApp[2].map((c) => `<code>${c}</code>`).join(" and ")} to the gateway's allowlist. With them, a request that reaches this ${WHAT} can ${chosenApp[3]}.</p>` +
           `<p>The allowlist is for the whole gateway. Bots offered the tool in their latest listed tasks: <b>Otto</b> (listed Nov 19); Pip has no listing yet. A bot whose setup changes, a bot added later, and any device connected to the gateway with write access can send such requests too.</p>` +
-          `<p>This doesn't allow ${chosenApp[1]} on this ${WHAT}. Clawtrate still asks you before its first use.</p>`,
+          `<p>This doesn't allow ${chosenApp[1]} on this ${WHAT}. This keeps this ${WHAT}'s current ${chosenApp[1]} choice. You can change that choice here.</p>`,
         link("Cancel", go(HOME, { app: null }), { size: "md", attrs: "data-cancel" }) + act(`Add ${chosenApp[1]}`, go("mac-messages-steps"), { variant: "primary", size: "md", attrs: "data-confirm" }),
       ),
 
     "mac-messages-steps": () => {
       const fail = params.get("fail");
       const name = chosenApp[1];
-      const s1 = fail === "1" || fail === "1quiet" ? "failed" : "done";
+      const s1 = ["1", "1quiet", "hash"].includes(fail) ? "failed" : "done";
       const s2 = s1 === "failed" ? "waiting" : fail === "2" ? "failed" : "done";
       const s3 = s2 === "done" ? "running" : "waiting";
+      const stored = codes(chosenApp[2]);
       const after =
         fail === "1"
-          ? note("danger", "The gateway refused the change.", `Its allowlist, read again at 5:33 PM, doesn't include ${name}.`)
+          ? note("danger", `The gateway refused this change: <code>config.patch denied</code>.`, params.get("reread") === "fail" ? "Couldn't read the gateway's allowlist." : `The gateway's allowlist, read at 5:33 PM: <code>calendar.add</code>.`) + markRefused()
+          : fail === "hash"
+            ? note("danger", "The gateway's settings changed since Clawtrate read them. Clawtrate didn't write this change.", "") +
+              `<div class="d-actions">${act("Try again", go("mac-messages-confirm", { fail: null }), { variant: "primary", attrs: "data-retry" })}</div>`
           : fail === "1quiet"
             ? note("danger", "Clawtrate couldn't confirm whether the gateway's settings changed.", "") + `<div class="d-actions">${act("Check again", go("mac-messages-steps", { fail: null }), { variant: "primary" })}</div>`
             : fail === "2"
               ? note("danger", `The gateway's settings list ${name}, but the gateway doesn't list it for this ${WHAT} yet.`, "") +
-                `<div class="d-actions">${act("Try again", go("mac-messages-steps", { fail: null }), { variant: "primary" })}${act("Remove it from the allowlist", go(HOME, { fail: null, app: null, said: "Removed from the gateway's allowlist" }), { variant: "quiet" })}</div>`
-              : proto(link(`The gateway lists the commands for this ${WHAT}`, go("mac-messages-on", { own: "listed", said: `${name} listed by the gateway` })));
+                `<div class="d-actions">${act("Try again", go("mac-messages-steps", { fail: null }), { variant: "primary" })}${act("Remove it from the allowlist", go("mac-messages-remove", { fail: null }), { variant: "quiet" })}</div>`
+              : proto(
+                  link(`The gateway lists the commands for this ${WHAT}`, go("mac-messages-on", { own: "listed", read: "both", said: `${name} listed by the gateway` })),
+                  link("The settings write answers with a refusal", go("mac-messages-steps", { fail: "1" })),
+                  link("The settings changed since they were read", go("mac-messages-steps", { fail: "hash" })),
+                );
       return settings({
         title: TITLE,
         phone: P,
         body:
           `<h4 class="b-group">Adding ${name}</h4>` +
           steps([
-            [`Writing ${name} to the gateway's allowlist`, s1, s1 === "done" ? "The stored settings show both entries (read 5:33 PM)." : ""],
+            [`Writing ${name} to the gateway's allowlist`, s1, s1 === "done" ? `The gateway's stored settings list ${stored} (read 5:33 PM).` : ""],
             [`Asking the gateway to list them for this ${WHAT}`, s2, s2 === "done" ? `Clawtrate compared the request with what this ${WHAT} declares, then approved it with admin.` : ""],
             ["Reading back", s3],
           ]) +
@@ -411,19 +466,39 @@
       settings({
         title: TITLE,
         phone: P,
-        body: onPage({ phone: P, extraTop: note("", `${chosenApp[1]} needs the gateway's owner.`, "Adding it to the gateway's allowlist needs admin access.") + adminBar("Admin access needed.") }),
+        body: onPage({ phone: P, extraTop: note("", "", "Adding it to the gateway's allowlist needs admin access.") + adminBar("Admin access needed.") }),
       }),
 
-    "mac-messages-on": () => settings({ title: TITLE, phone: P, body: onPage({ phone: P }) }),
+    // The stored and the active read-back, each on its own read.
+    "mac-messages-on": () => settings({ title: TITLE, phone: P, body: onPage({ phone: P, extraTop: readBack("list") }) }),
 
     "mac-messages-remove": () =>
       settings({ title: TITLE, phone: P, body: onPage({ phone: P }) }) +
       dialog(
         `Remove ${chosenApp[1]} from the gateway's allowlist?`,
-        `<p>Bots will no longer be able to ask any device for ${chosenApp[1]}. A request the gateway is waiting on ends, and the gateway refuses later ones. What this ${WHAT} already did is not undone. ${chosenApp[1]} on this ${WHAT} stays as it is.</p>`,
-        link("Cancel", go("mac-messages-on"), { size: "md", attrs: "data-cancel" }) +
-          act("Remove", go(HOME, { own: null, said: "Removed from the gateway's allowlist" }), { variant: "primary", size: "md", attrs: "data-confirm" }),
+        `<p>Remove ${codes(chosenApp[2])} from the gateway-wide allowlist? If that removes the commands from the active policy, the gateway can end waiting calls and refuse later calls for them. An operation this ${WHAT} already started may finish. This ${WHAT} keeps its ${chosenApp[1]} choice.</p>`,
+        link("Cancel", go("mac-messages-on", { read: null }), { size: "md", attrs: "data-cancel" }) +
+          act("Remove", go("mac-messages-removed", { read: "both", own: null }), { variant: "primary", size: "md", attrs: "data-confirm" }),
       ),
+
+    // After the removal: what each read showed, apart. Done for the edit comes from the stored read.
+    "mac-messages-removed": () => {
+      return settings({
+        title: TITLE,
+        phone: P,
+        body: onPage({
+          phone: P,
+          extraTop:
+            readBack("unlist") +
+            proto(
+              link("Both reads show it gone", go("mac-messages-removed", { read: "both", own: null })),
+              link("Only the stored settings show it gone", go("mac-messages-removed", { read: "stored", own: "listed" })),
+              link("Only the active listing shows it gone", go("mac-messages-removed", { read: "active", own: null })),
+              link("The allowlist can't be read", go("mac-messages-removed", { read: "fail", own: null })),
+            ),
+        }),
+      });
+    },
 
     "mac-stop": () => settings({ title: "This Mac", body: onPage() }) + stopDialog(false),
     "mac-stopped": () => settings({ title: "This Mac", body: offPage({ after: stoppedNote(false) }) }),
@@ -615,8 +690,8 @@
       ...(from === "timedout"
         ? [{ id: "t1", when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Timed out. Didn't run it.", sent: "Sent nothing.", ack: "—" }]
         : []),
-      { id: "p1", when: "5:20 PM", app: "Calendar", command: "calendar.events", named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
-      { id: "p2", when: "5:02 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this iPhone.", sent: "Sent <code>NOT_ALLOWED_ON_DEVICE</code>.", ack: "The gateway ignored it: it was no longer waiting." },
+      ...(history ? [{ id: "p1", when: "5:20 PM", app: "Calendar", command: "calendar.events", named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
+      { id: "p2", when: "5:02 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this iPhone.", sent: "Sent <code>NOT_ALLOWED_ON_DEVICE</code>.", ack: "The gateway ignored it: it was no longer waiting." }] : []),
     ];
   };
 
