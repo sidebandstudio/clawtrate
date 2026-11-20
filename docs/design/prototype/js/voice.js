@@ -120,7 +120,9 @@
     prefs: {
       mode: p("prefs") === "none" ? "device" : p("prefs") === "unknown" ? "unknown" : "gateway",
       saved: { otto: { voice: null, speed: "1", lang: "" }, juniper: { voice: null, speed: "1", lang: "" }, pip: { voice: null, speed: "1", lang: "" } },
-      pending: null, // {bot, field, value, before}
+      pending: null, // the one write in flight: {id, bot, field, value} or {id, bot, reset: true}
+      queue: [], // writes waiting for it
+      reads: 0, // reads of clawtrate.voice after an invalidation
       notes: {}, // bot -> the last word on its saved settings
       temp: {}, // bot -> a speed for now (read-only, or settings that can't be read)
     },
@@ -131,8 +133,9 @@
     flags: { closeFail: false, createFail: false, voiceFail: false, dictFail: false, sendFail: false, prefFail: false, prefConflict: false },
     noVoices: false,
     os_prompt: null,
-    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], downloads: 0, downloadRequests: [], hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
+    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], prefReads: [], downloads: 0, downloadRequests: [], hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
   };
+  if (S.prefs.mode === "unknown") for (const k of Object.keys(S.prefs.saved)) S.prefs.saved[k] = { voice: undefined, speed: undefined, lang: undefined };
   S.sel.task = p("task") && taskOf(p("task")) ? p("task") : bot(S.sel.bot).tasks[0].id;
   if (taskOf(S.sel.task).b.id !== S.sel.bot) S.sel.bot = taskOf(S.sel.task).b.id;
   if (p("files") === "pending") S.files.o1 = [{ name: "notes.pdf", state: "pending" }];
@@ -561,18 +564,20 @@
     d.innerHTML =
       `<div class="b-confirm v-call-settings" data-testid="call-settings"><h2 id="call-settings-title">${esc(`Voice chat settings for ${b.name}`)}</h2>` +
       `<div class="v-group"><h4>Voice</h4>${voiceRow}<p class="v-row-note" id="voice-note" data-testid="voice-note">${esc(voiceNote)}</p>` +
-      `<p class="v-row-note" data-testid="voice-next">${esc(`Next calls: ${saved.voice || "the provider's default voice"}.`)}</p>` +
+      `<p class="v-row-note" data-testid="voice-next">${esc(S.prefs.pending && S.prefs.pending.bot === c.bot && S.prefs.pending.field === "voice" && S.prefs.pending.value === null ? `Saving default for future calls… Saved now: ${saved.voice || "the provider's default voice"}.` : `Next calls: ${saved.voice === undefined ? "Saved value unknown." : saved.voice || "the provider's default voice"}.`)}</p>` +
       (saved.voice ? button("Default for future calls", 'data-v="voice-default" data-k="voice-default"', "quiet") : "") +
       `</div>` +
-      `<div class="v-group"><h4>Speed</h4><label class="v-field"><span>Playback speed</span><select class="v-select" data-v="speed" data-k="speed" aria-describedby="speed-note">${SPEEDS.map((v) => `<option value="${v}"${v === saved.speed ? " selected" : ""}>${v}×</option>`).join("")}</select></label>` +
-      `<p class="v-row-note" id="speed-note" data-testid="speed-note">${esc(`Plays at ${saved.speed}× on this device.`)}</p></div>` +
+      `<div class="v-group"><h4>Speed</h4><label class="v-field"><span>Playback speed</span><select class="v-select" data-v="speed" data-k="speed" aria-describedby="speed-note">${SPEEDS.map((v) => `<option value="${v}"${v === playRate(c.bot) ? " selected" : ""}>${v}×</option>`).join("")}</select></label>` +
+      `<p class="v-row-note" id="speed-note" data-testid="speed-note">${esc(`Plays at ${playRate(c.bot)}× on this device${S.prefs.mode === "unknown" ? " for now" : ""}.`)}</p></div>` +
       `<div class="v-group"><h4>Language</h4><label class="v-field"><span>Language for new calls</span><select class="v-select" data-v="lang" data-k="lang" aria-describedby="lang-note">${LANGS.map(([v, l]) => `<option value="${v}"${v === saved.lang ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label>` +
       `<p class="v-row-note" id="lang-note" data-testid="lang-note">${esc(c.lang ? `This call: ${langName(c.lang)} requested. The provider decides how it uses it.` : "This call: provider default.")}</p></div>` +
       `<p class="v-row-note" data-testid="kept-note" role="status">${esc(prefNote(c.bot))}</p>` +
       `<div class="b-actions">${button("Close", 'data-v="call-settings-close" data-k="call-settings-close"')}</div></div>`;
     if (key) $(`[data-k="${CSS.escape(key)}"]`, d)?.focus();
   }
-  const langName = (v) => (LANGS.find(([k]) => k === v) || [v, v])[1];
+  const langName = (v) => (v === undefined ? "Saved value unknown." : (LANGS.find(([k]) => k === v) || [v, v])[1]);
+  // The local playback rate: applied at once, from the allowed values, apart from the saved speed.
+  const playRate = (b) => S.prefs.temp[b] || (SPEEDS.includes(S.prefs.saved[b].speed) ? S.prefs.saved[b].speed : "1");
 
   // Where a bot's settings are kept, and whether the last write is confirmed (sections 2, 12).
   function prefNote(botId) {
@@ -595,13 +600,25 @@
       pr.notes[botId] = `Kept on this device for ${nameOf(botId)}.`;
       return render();
     }
-    pr.pending = { bot: botId, field, value, before: pr.saved[botId][field] };
-    S.io.prefWrites.push({ bot: botId, field, value, expected: { ...pr.saved[botId] } });
+    if (pr.pending) {
+      // One write at a time: this one waits behind the write in flight.
+      pr.queue.push([botId, field, value]);
+      return render();
+    }
+    const id = `w${++S.seq}`;
+    pr.pending = field === "reset" ? { id, bot: botId, reset: true } : { id, bot: botId, field, value };
+    S.io.prefWrites.push({ id, bot: botId, field, value, expected: { ...pr.saved[botId] } });
     render();
-    later(() => ev(S.flags.prefFail ? "prefRefused" : S.flags.prefConflict ? "prefConflict" : "prefOk"), 200);
+    later(() => ev(S.flags.prefFail ? "prefRefused" : S.flags.prefConflict ? "prefConflict" : "prefOk", { id }), 200);
   }
+  // The next queued write, once the one in flight has its reply.
+  const nextWrite = () => {
+    const pr = S.prefs;
+    const n = pr.queue.shift();
+    if (n) savePref(...n);
+  };
   const fieldWord = { voice: "voice", speed: "speed", lang: "language" };
-  const fieldValue = (field, v) => (field === "voice" ? v || "the provider's default voice" : field === "speed" ? `${v}×` : langName(v));
+  const fieldValue = (field, v) => (v === undefined ? "unknown" : field === "voice" ? v || "the provider's default voice" : field === "speed" ? `${v}×` : langName(v));
 
   // Rendering --------------------------------------------------------------------------------------------
 
@@ -1401,35 +1418,59 @@
         break;
       }
       case "prefOk": {
+        // Only the reply for the write in flight.
         const w = pr.pending;
-        if (!w) return;
-        pr.saved[w.bot][w.field] = w.value;
+        if (!w || data.id !== w.id) return;
+        if (w.reset) pr.saved[w.bot] = { voice: null, speed: "1", lang: "" };
+        else pr.saved[w.bot][w.field] = w.value;
         pr.pending = null;
-        pr.notes[w.bot] = `Saved for ${nameOf(w.bot)} on ${GATEWAY}, so your other devices use it too.`;
+        pr.notes[w.bot] =
+          !w.reset && w.field === "voice" && w.value === null
+            ? `Saved. Clawtrate will omit the voice request on ${nameOf(w.bot)}'s next call.`
+            : `Saved for ${nameOf(w.bot)} on ${GATEWAY}, so your other devices use it too.`;
+        nextWrite();
         break;
       }
       case "prefConflict": {
-        // Another device wrote first: read again, change only this bot's field, try again.
+        // Another device wrote first: read again, change only this bot's requested field, try again.
         const w = pr.pending;
-        if (!w) return;
+        if (!w || data.id !== w.id) return;
         Object.assign(pr.saved[w.bot], data.remote || { speed: "1.5" });
-        S.io.prefWrites.push({ bot: w.bot, field: w.field, value: w.value, expected: { ...pr.saved[w.bot] }, retry: true });
+        w.id = `w${++S.seq}`;
+        S.io.prefWrites.push({ id: w.id, bot: w.bot, field: w.reset ? "reset" : w.field, value: w.value, expected: { ...pr.saved[w.bot] }, retry: true });
         S.flags.prefConflict = false;
-        later(() => ev("prefOk"), 150);
+        later(() => ev("prefOk", { id: w.id }), 150);
         break;
       }
       case "prefRefused": {
         const w = pr.pending;
-        if (!w) return;
+        if (!w || data.id !== w.id) return;
         pr.pending = null;
-        const differs = c && c.bot === w.bot && w.field === "voice" ? " This call may differ." : "";
-        pr.notes[w.bot] = `Couldn't save: ${data.message || "the gateway refused the write"}. ${nameOf(w.bot)}'s saved ${fieldWord[w.field]} is still ${fieldValue(w.field, pr.saved[w.bot][w.field])}.${differs}`;
+        if (w.reset) pr.notes[w.bot] = `Couldn't reset: ${data.message || "the gateway refused the write"}. ${nameOf(w.bot)}'s saved settings stay as they were.`;
+        else {
+          const differs = c && c.bot === w.bot && w.field === "voice" ? " This call may differ." : "";
+          pr.notes[w.bot] = `Couldn't save: ${data.message || "the gateway refused the write"}. ${nameOf(w.bot)}'s saved ${fieldWord[w.field]} is still ${fieldValue(w.field, pr.saved[w.bot][w.field])}.${differs}`;
+        }
+        nextWrite();
         break;
       }
-      case "prefRemote": {
-        // Another device changed a saved value: it applies to next calls, never to this one.
-        pr.saved[data.bot][data.field] = data.value;
-        pr.notes[data.bot] = `Changed on another device: ${fieldWord[data.field]} ${fieldValue(data.field, data.value)} from ${nameOf(data.bot)}'s next call.`;
+      case "prefInvalidated": {
+        // users.prefs.changed names only the keys: nothing changes until clawtrate.voice is read again.
+        if (!(data.keys || []).includes("clawtrate.voice")) return;
+        S.io.prefReads.push({ key: "clawtrate.voice" });
+        pr.reads += 1;
+        break;
+      }
+      case "prefRead": {
+        // The confirmed read applies to future calls; a call that is on keeps its voice.
+        if (pr.reads < 1) return;
+        pr.reads -= 1;
+        for (const [b, v] of Object.entries(data.saved || {})) {
+          if (pr.pending && pr.pending.bot === b) continue;
+          const before = pr.saved[b].voice;
+          Object.assign(pr.saved[b], v);
+          if (v.voice !== undefined && v.voice !== before) pr.notes[b] = `Saved voice on ${GATEWAY}: ${v.voice || "the provider's default voice"}. This call keeps its current voice.`;
+        }
         break;
       }
       case "dictCreate": {
@@ -1633,7 +1674,7 @@
       BOTS.map((b) => {
         const k = pr.saved[b.id];
         const gate = !canWrite() || pr.mode === "unknown" ? ` aria-disabled="true" aria-description="${canWrite() ? "Can't save: the saved settings couldn't be read" : "Needs more access"}"` : "";
-        return `<tr><td>${esc(b.name)}</td><td data-testid="saved-voice">${esc(k.voice || "Provider default")}</td><td>${esc(SPEEDS.includes(k.speed) ? k.speed : "1")}×</td><td>${esc(langName(k.lang))}</td><td>${button("Reset", `data-v="reset" data-bot="${b.id}" data-k="reset-${b.id}" aria-label="${esc(`Reset ${b.name}'s voice settings`)}"${gate}`, "quiet")}</td></tr>`;
+        return `<tr><td>${esc(b.name)}</td><td data-testid="saved-voice">${esc(k.voice === undefined ? "Saved value unknown." : k.voice || "Provider default")}</td><td>${esc(k.speed === undefined ? "Saved value unknown." : `${SPEEDS.includes(k.speed) ? k.speed : "1"}×`)}</td><td>${esc(langName(k.lang))}</td><td>${button("Reset saved voice, speed and language", `data-v="reset" data-bot="${b.id}" data-k="reset-${b.id}" aria-label="${esc(`Reset ${b.name}'s saved voice, speed and language`)}"${gate}`, "quiet")}</td></tr>`;
       }).join("") +
       `</tbody></table><p class="b-hint" data-testid="bots-kept">${esc(where)}</p>` +
       BOTS.filter((b) => pr.notes[b.id] || (pr.pending && pr.pending.bot === b.id)).map((b) => `<p class="b-hint" data-testid="bot-note">${esc(`${b.name}: ${prefNote(b.id)}`)}</p>`).join("") +
@@ -1845,7 +1886,10 @@
       if (k === "error") ev("error", { message: "Realtime provider closed the session." });
       if (k === "background") ev("background");
       if (k === "botvoice") ev("botVoiceRequested");
-      if (k === "remote") ev("prefRemote", { bot: "otto", field: "voice", value: "Sage" });
+      if (k === "remote") {
+        ev("prefInvalidated", { keys: ["clawtrate.voice"] });
+        later(() => ev("prefRead", { saved: { otto: { voice: "Sage" } } }), 150);
+      }
       if (k in S.flags) {
         S.flags[k] = !S.flags[k];
         el.setAttribute("aria-pressed", String(S.flags[k]));
@@ -1960,9 +2004,8 @@
         $("#call-settings-dialog").close();
         return focusKey("call-settings");
       case "voice-default":
-        savePref(c.bot, "voice", null);
-        c.voiceMsg = `${nameOf(c.bot)}'s next calls use the provider's default voice. This call keeps ${c.voice}.`;
-        return render();
+        // Nothing is said about the next call until the clear is confirmed.
+        return savePref(c.bot, "voice", null);
       case "hangup":
         return hangup();
       case "dismiss":
@@ -2075,7 +2118,7 @@
           S.prefs.saved[id] = { voice: null, speed: "1", lang: "" };
           return renderSettings();
         }
-        return savePref(id, "voice", null);
+        return savePref(id, "reset");
       }
       case "back":
         S.view = "list";
@@ -2090,7 +2133,11 @@
     const c = S.call;
     if (!c) return;
     if (v === "voice") return setVoice(event.target.value);
-    if (v === "speed") return savePref(c.bot, "speed", event.target.value);
+    if (v === "speed") {
+      S.prefs.temp[c.bot] = event.target.value;
+      if (S.prefs.mode === "unknown") return render();
+      return savePref(c.bot, "speed", event.target.value);
+    }
     // A language for new calls only: this call keeps what it asked for (section 7).
     if (v === "lang") return savePref(c.bot, "lang", event.target.value);
   });
