@@ -434,7 +434,7 @@ describe("the stand-in image provider of --with-images", () => {
     );
     expect(existsSync(join(inst.runDir, "image.log"))).toBe(true);
     await reset(inst);
-    }, 30_000);
+  }, 30_000);
 
   it("is not started without the option", async () => {
     const home = tempDir("clawtrate-home-");
