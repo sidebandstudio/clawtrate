@@ -220,6 +220,8 @@ same device, a later input, then A stops only the first run by id: runIds [the f
 
 A run records the device and connection that started it, and a non-admin requester may abort it only when one of them matches, or when the run records neither (`canRequesterAbortChatRun`, `<openclaw>/dist/chat-abort-runtime-DN2xZ73h.mjs` lines 61-70); a task-wide abort that finds only runs it may not stop answers "unauthorized" (lines 677-689; `chat-abort-handler-ta8mBb_q.mjs` lines 182-205). An admin requester passes (line 67, source). A stop that times out was not produced here.
 
+A task-wide abort can also cancel a gateway-queued input the caller owns. The queued input from a different device survived the original run's abort. A run-specific request targets the named run. (`ownqueued`: device B's input was queued behind A's running turn; B's `chat.abort {sessionKey}` answered `runIds` naming B's queued input, which ended `aborted`, while A's run ended `final`. A's `chat.abort {sessionKey, runId}` on its first run named only that run, and A's later input in the same task ended `final`. Source: the queued plan and the per-run authorization in `chat-abort-runtime-DN2xZ73h.mjs` lines 257-277, 616-652 and 706-727.)
+
 ## 7. Where the group's record can live
 
 **Live** (`prefs`), with two interactive devices `a` and `b` and a read-only device `r`, a record under one key, `clawtrate.group.<id>`, holding the name, the members (bot and task key) in order, and the time it was made:
