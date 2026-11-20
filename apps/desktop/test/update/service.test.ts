@@ -673,3 +673,19 @@ it("distinguishes folder preparation from a settings read even with no source", 
   expect((await start({ feeds })).get().preferenceIssue).toBeNull();
   expect(server.requests).toEqual([]);
 });
+
+it("returns invalid for missing idle arguments and busy during a choice", async () => {
+  const service = await start();
+  const malformed = () =>
+    Promise.all([
+      service.check(undefined),
+      service.chooseTrack(undefined),
+      service.download(undefined),
+    ]);
+  expect((await malformed()).map((r) => r.outcome)).toEqual(["invalid", "invalid", "invalid"]);
+  const choice = service.chooseTrack("nightly");
+  expect((await malformed()).map((r) => r.outcome)).toEqual(["busy", "busy", "busy"]);
+  await choice;
+  expect((await service.check("stable")).outcome).toBe("stale");
+  expect(server.requests).toEqual([]);
+});

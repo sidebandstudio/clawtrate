@@ -27,13 +27,25 @@ export type DesktopHostApi = {
   save(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
 };
 
+function invokeUpdateTrack(
+  channel: "clawtrate:update:check" | "clawtrate:update:track",
+  track: unknown,
+) {
+  return track === "stable" || track === "nightly"
+    ? ipcRenderer.invoke(channel, track)
+    : ipcRenderer.invoke(channel);
+}
+
 const api: DesktopHostApi = {
   platform: process.platform,
   desktopUpdates: {
     get: () => ipcRenderer.invoke("clawtrate:update:get"),
-    check: (track) => ipcRenderer.invoke("clawtrate:update:check", track),
-    chooseTrack: (track) => ipcRenderer.invoke("clawtrate:update:track", track),
-    download: (id) => ipcRenderer.invoke("clawtrate:update:download", id),
+    check: (track) => invokeUpdateTrack("clawtrate:update:check", track),
+    chooseTrack: (track) => invokeUpdateTrack("clawtrate:update:track", track),
+    download: (id) =>
+      typeof id === "string"
+        ? ipcRenderer.invoke("clawtrate:update:download", id)
+        : ipcRenderer.invoke("clawtrate:update:download"),
     subscribe(listener) {
       const changed = (_event: IpcRendererEvent, snapshot: DesktopUpdateSnapshot) => {
         try {
