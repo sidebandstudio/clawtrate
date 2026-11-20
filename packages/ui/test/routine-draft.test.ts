@@ -67,10 +67,20 @@ describe("F-195: at least five minutes apart", () => {
     ])
       expect(floor(cron), cron).toBe("Routines run at least 5 minutes apart.");
     // Past midnight only when the next day runs too.
-    expect(shortestGap("1,58 0,23 * * *")).toBe(3);
-    expect(shortestGap("1,58 0,23 * * 1")).toBe(57);
+    expect(shortestGap("1,58 0,23 * * *", NY, NOW)).toBe(3);
+    expect(shortestGap("1,58 0,23 * * 1", NY, NOW)).toBe(57);
     expect(floor("99 * * * *")).toMatch(/^The gateway can't read this: .*minute/u);
     expect(floor("0 9 * * MON")).toBeUndefined();
+  });
+
+  it("holds across the eight years from today, for a schedule whose first run is years away", () => {
+    const floor = (cron: string) => problems(draft({ cron }), NOW).cron;
+    expect(floor("0 0,1 8 * * * 2031")).toBe("Routines run at least 5 minutes apart.");
+    expect(floor("0 0,1 8 * * * 2034")).toBe("Routines run at least 5 minutes apart.");
+    expect(floor("0 0,10 8 * * * 2034")).toBeUndefined();
+    // 23:59 on Jan 3 to 0:00 on Jan 4; Jan 1 and Jan 3 are not consecutive.
+    expect(shortestGap("0 0,59 0,23 1,3,4 1 * 2033", NY, NOW)).toBe(1);
+    expect(shortestGap("0 0,59 0,23 1,3 1 * 2033", NY, NOW)).toBe(59);
   });
 });
 

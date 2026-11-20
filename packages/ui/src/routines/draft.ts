@@ -238,35 +238,56 @@ export function fieldsOfDraft(draft: Draft): RoutineFields {
 }
 
 const gaps = new Map<string, number | null | Error>();
+/** F-195's window: 2,922 calendar days (eight years), today included whole. */
+const WINDOW_DAYS = 2_922;
 
 /**
  * The shortest time between two consecutive runs of a cron expression, in
- * minutes, read by croner 10.0.1 with the gateway's own options (OpenClaw
- * 2026.10.6 reads every cron schedule so), across hour and day boundaries.
- * Null when it runs at most once. Throws the reader's error for an expression
- * the gateway would refuse, such as an out-of-range field.
- *
- * shortcut: the spacing is the written schedule's, in UTC; a daylight-saving
- * change can bring two runs closer for one night. It covers four years or
- * 20,000 runs, whichever ends first.
+ * minutes, on the schedule's nominal wall clock (automation.md section 9),
+ * across F-195's window from today's date in `tz`. Read by croner 10.0.1 with
+ * the gateway's own options (OpenClaw 2026.10.6 reads every cron schedule
+ * so). Exact below the floor; above it, a gap the schedule really has. Null
+ * when it runs at most once in the window. Throws the reader's error for an
+ * expression the gateway would refuse, such as an out-of-range field.
  */
-export function shortestGap(expr: string): number | null {
-  const key = expr.trim();
+export function shortestGap(expr: string, tz: string, now: number): number | null {
+  const today = Date.parse(`${wall(now, tz).date}T00:00:00Z`);
+  const key = `${today} ${expr.trim()}`;
   let gap = gaps.get(key);
   if (gap === undefined) {
     try {
-      const cron = new Cron(key, { catch: false, paused: true, utcOffset: 0 });
-      const end = Date.UTC(2030, 0, 1);
-      let previous = cron.nextRun(new Date(Date.UTC(2026, 0, 1)));
-      let shortest: number | null = null;
-      for (let count = 0; previous && previous.getTime() < end && count < 20_000; count += 1) {
-        const next = cron.nextRun(previous);
-        if (!next) break;
-        shortest = Math.min(shortest ?? Infinity, (next.getTime() - previous.getTime()) / MINUTE);
-        if (shortest < MIN_GAP_MINUTES) break;
-        previous = next;
+      const cron = new Cron(expr.trim(), { catch: false, paused: true, utcOffset: 0 });
+      const end = today + WINDOW_DAYS * DAY;
+      const next = (after: number) => {
+        const at = cron.nextRun(new Date(after))?.getTime();
+        return at !== undefined && at < end ? at : null;
+      };
+      const floor = MIN_GAP_MINUTES * MINUTE;
+      let shortest = Infinity;
+      const first = next(today - 1_000);
+      if (first !== null) {
+        // Every date that fires fires at the same times of day, so its first
+        // date gives the spacing within a day, and every two consecutive dates
+        // share one overnight spacing.
+        const day = first - (first % DAY);
+        let last = first;
+        let after = next(first);
+        for (; after !== null && after < day + DAY && shortest >= floor; after = next(after)) {
+          shortest = Math.min(shortest, after - last);
+          last = after;
+        }
+        if (after !== null && shortest >= floor) {
+          shortest = Math.min(shortest, after - last);
+          const overnight = first + DAY - last;
+          for (let date = day, run: number | null = after; overnight < shortest && run !== null;) {
+            const runDate = run - (run % DAY);
+            if (runDate === date + DAY) shortest = overnight;
+            date = runDate;
+            run = next(date + last - day);
+          }
+        }
       }
-      gap = shortest;
+      gap = shortest === Infinity ? null : shortest / MINUTE;
     } catch (error) {
       gap = error instanceof Error ? error : new Error(String(error));
     }
@@ -291,7 +312,8 @@ export function problems(draft: Draft, now: number, textLocked = false): Problem
   if (draft.locked) return out;
   if (draft.cron.trim()) {
     try {
-      if ((shortestGap(draft.cron) ?? Infinity) < MIN_GAP_MINUTES) out.cron = FLOOR;
+      if ((shortestGap(draft.cron, zoneOf(draft), now) ?? Infinity) < MIN_GAP_MINUTES)
+        out.cron = FLOOR;
     } catch (error) {
       out.cron = `The gateway can't read this: ${(error as Error).message}`;
     }
