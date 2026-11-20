@@ -346,12 +346,21 @@ export function RunEnding({
   const text = messageTextOf(run, transcript);
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
+  const showRaw = (open: boolean) => {
+    setRawOpen(open);
+    // Read when it is opened, as a step's raw is; it is not in the state.
+    if (open && raw && !rawRead)
+      void bridge.invoke({ type: "readRunRaw", key: taskKey, runId: run.id }).then(
+        (read) => setRawRead(read ?? { status: "not-kept", holds: null }),
+        () => setRawRead({ status: "not-kept", holds: raw.holds }),
+      );
+  };
   const copyRequest = async () => {
     if (!requestId) return;
     if ((await copyText(requestId)) === "copied") announce("Copied request ID");
     else {
       // The clipboard refused: the id is shown in Raw and selected for a manual copy.
-      setRawOpen(true);
+      showRaw(true);
       requestAnimationFrame(() => {
         if (requestRef.current) selectContents(requestRef.current);
       });
@@ -429,16 +438,7 @@ export function RunEnding({
               data-size="sm"
               data-variant="quiet"
               aria-expanded={rawOpen}
-              onClick={() => {
-                const open = !rawOpen;
-                setRawOpen(open);
-                // Read when it is opened, as a step's raw is; it is not in the state.
-                if (open && raw && !rawRead)
-                  void bridge.invoke({ type: "readRunRaw", key: taskKey, runId: run.id }).then(
-                    (read) => setRawRead(read ?? { status: "not-kept", holds: null }),
-                    () => setRawRead({ status: "not-kept", holds: raw.holds }),
-                  );
-              }}
+              onClick={() => showRaw(!rawOpen)}
             >
               Raw
             </button>

@@ -1461,6 +1461,32 @@ test.describe("errors and resync", () => {
     ).toHaveCount(0);
   });
 
+  test("F-301: when the clipboard refuses, Copy request ID opens Raw with the request ID selected and the failure read", async ({
+    page,
+  }) => {
+    await open(page, "run-failed");
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+      });
+      document.execCommand = () => false;
+    });
+    const card = page.getByTestId("turn-error");
+    await card.getByRole("button", { name: "Copy request ID" }).click();
+    await expect(page.getByTestId("card-announcer")).toHaveText(
+      "Couldn't copy. The text is selected.",
+    );
+    await expect(card.getByRole("button", { name: "Raw" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.getSelection()?.toString()))
+      .toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
+    // The failure itself is read too, as opening Raw reads it.
+    await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
+  });
+
   test("F-102: Try again sends the failed turn's message again with its files", async ({
     page,
   }) => {
