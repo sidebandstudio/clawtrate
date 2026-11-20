@@ -118,9 +118,16 @@ export type ToolSettings = {
 
 export type CatalogTool = { id: string; group: string; groupLabel: string; plugin: string | null };
 
+/**
+ * A tool server the listing names: its name as configured, and the prefix the
+ * gateway gave its tools (`<prefix>__<tool>`), when every tool listed for it
+ * has that prefix and no other listed tool does; else null.
+ */
+export type ListedServer = { name: string; prefix: string | null };
+
 /** What the bot's latest task was offered (`tools.effective`). */
 export type Offered =
-  | { status: "listed"; taskKey: string; available: string[]; servers: string[] }
+  | { status: "listed"; taskKey: string; available: string[]; servers: ListedServer[] }
   | { status: "no-task" }
   | { status: "failed"; reason: string };
 
@@ -235,7 +242,7 @@ export function readToolCatalog(answer: unknown): CatalogTool[] {
 export function readOffered(answer: unknown, taskKey: string): Offered {
   const root = asRecord(answer);
   const available: string[] = [];
-  const servers: string[] = [];
+  const byServer = new Map<string, string[]>();
   const access = asRecord(root?.toolAccess)?.tools;
   // A listing that can't be read lists nothing: it is a failed read, not an empty one.
   if (!Array.isArray(access) && !Array.isArray(root?.groups))
@@ -252,12 +259,25 @@ export function readOffered(answer: unknown, taskKey: string): Offered {
       if (!id || t?.deniedBySession === true) continue;
       if (t?.source === "mcp") {
         const server = str(t.mcpServer);
-        if (server && !servers.includes(server) && servers.length < MAX_TOOL_SERVERS)
-          servers.push(server);
+        if (server && (byServer.has(server) || byServer.size < MAX_TOOL_SERVERS))
+          byServer.set(server, [...(byServer.get(server) ?? []), id].slice(0, MAX_CATALOG_TOOLS));
       }
       if (!available.includes(id) && available.length < MAX_CATALOG_TOOLS) available.push(id);
     }
   }
+  const servers = [...byServer].map(([name, ids]): ListedServer => {
+    // The gateway renames a server's tools (sanitized, cut, numbered on a clash): the prefix is
+    // read from the names it lists, and kept only when it covers them and nothing else listed.
+    const first = ids[0]!;
+    const at = first.indexOf("__");
+    const prefix = at > 0 ? first.slice(0, at) : null;
+    const covers = (id: string) => prefix !== null && id.startsWith(`${prefix}__`);
+    const sound =
+      prefix !== null &&
+      ids.every(covers) &&
+      !available.some((id) => covers(id) && !ids.includes(id));
+    return { name, prefix: sound ? prefix : null };
+  });
   return { status: "listed", taskKey, available, servers };
 }
 
@@ -485,9 +505,12 @@ export type LineException =
       id: string;
       version: number;
     }
-  | { kind: "fallback"; scope: "bot" | "every" };
+  | { kind: "fallback"; scope: "bot" | "every" }
+  /** A tool server whose tools the gateway hasn't named in the latest task's listing. */
+  | { kind: "unnamed" };
 
-export type LineKind = "group" | "exec" | "question" | "server" | "plugin" | "tool";
+/** `entry`: an entry of the bot's deny list that names no tool the gateway lists now. */
+export type LineKind = "group" | "exec" | "question" | "server" | "plugin" | "tool" | "entry";
 
 export type ExecFacts = {
   /** The bot's own policy, the default for every bot, and the one that applies. */
@@ -497,12 +520,18 @@ export type ExecFacts = {
 };
 
 export type PermissionLine = {
-  /** Stable within a gateway: a design line's id, `server:<name>`, `plugin:<id>` or `tool:<name>`. */
+  /**
+   * Stable within a gateway: a design line's id, `server:<name>`, `plugin:<id>`,
+   * `tool:<name>` or `deny:<entry>`.
+   */
   id: string;
   kind: LineKind;
   /** The line's words; for a tool by its own name, that name. */
   words: string;
-  /** The gateway's tool names behind it, as they exist on this gateway (`<server>__*` for a server). */
+  /**
+   * The gateway's tool names behind it, as they exist on this gateway: for a
+   * server, `<prefix>__*` with the prefix its listing gives, or none.
+   */
   tools: string[];
   value: LineValue;
   mark: LineMark;
@@ -615,19 +644,18 @@ export function permissionLines(facts: PermissionFacts): {
     tools.forEach((t) => used.add(t));
     defs.push({ ...def, tools });
   }
-  const servers = [
-    ...new Set([
-      ...settings.servers,
-      ...(facts.offered.status === "listed" ? facts.offered.servers : []),
-    ]),
-  ];
-  for (const server of servers.slice(0, MAX_TOOL_SERVERS))
+  const listed = facts.offered.status === "listed" ? facts.offered.servers : [];
+  const servers = [...new Set([...settings.servers, ...listed.map((each) => each.name)])];
+  for (const server of servers.slice(0, MAX_TOOL_SERVERS)) {
+    // Its tools as the gateway names them; a server it hasn't named them for has none here.
+    const prefix = listed.find((each) => each.name === server)?.prefix ?? null;
     defs.push({
       id: `server:${server}`,
       kind: "server",
       words: `Tool server ${server}`,
-      tools: [`${server}__*`],
+      tools: prefix ? [`${prefix}__*`] : [],
     });
+  }
   const plugins = new Map<string, { label: string; tools: string[] }>();
   for (const tool of catalog) {
     if (used.has(tool.id)) continue;
@@ -644,12 +672,33 @@ export function permissionLines(facts: PermissionFacts): {
     if (used.has(tool.id)) continue;
     defs.push({ id: `tool:${tool.id}`, kind: "tool", words: tool.id, tools: [tool.id] });
   }
+  // An entry of the bot's deny list that names none of these (a server's tools the gateway no
+  // longer lists, once denied) is a line of its own, so it can be seen and taken off.
+  const named = defs.flatMap((def) => def.tools);
+  for (const entry of settings.botDeny)
+    if (!named.some((tool) => entryNames(entry, tool, catalog)))
+      defs.push({ id: `deny:${entry}`, kind: "entry", words: entry, tools: [entry] });
   const lines = defs.slice(0, MAX_LINES).map((def) => lineOf(def, facts));
   return { lines, omitted: Math.max(0, defs.length - MAX_LINES) };
 }
 
 function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   const { settings, catalog } = facts;
+  if (def.kind === "server" && def.tools.length === 0)
+    // The gateway hasn't named this server's tools: nothing is claimed about them.
+    return {
+      id: def.id,
+      kind: def.kind,
+      words: def.words,
+      tools: [],
+      exec: null,
+      offered: facts.offered.status === "listed" ? "no" : "unknown",
+      ownAsk: false,
+      value: facts.offered.status === "listed" ? "not-offered" : "unknown",
+      mark: null,
+      exceptions: [{ kind: "unnamed" }],
+      choice: null,
+    };
   const everyDenied: string[] = [];
   const botDenied: string[] = [];
   const notOffered: string[] = [];
@@ -668,9 +717,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     facts.offered.status !== "listed"
       ? "unknown"
       : def.kind === "server"
-        ? facts.offered.servers.includes(def.tools[0]!.slice(0, -3))
-          ? "yes"
-          : "no"
+        ? "yes"
         : def.tools.some((t) => (facts.offered as { available: string[] }).available.includes(t))
           ? "yes"
           : "no";
@@ -913,11 +960,15 @@ export function choiceRefusal(
   const execChoice =
     choice === "full" || choice === "auto" || choice === "exec-ask" || choice === "deny";
   if ((line.kind === "exec") !== execChoice) return "That choice isn't one of this line's.";
-  if (line.value === "not-offered")
+  if (line.kind === "server" && line.tools.length === 0)
+    return "The gateway hasn't listed this server's tools for the bot's latest task, so Clawtrate can't name them to allow, ask or deny.";
+  if (line.value === "not-offered" && line.mark === "set")
     return "The gateway's settings for every bot don't offer this tool. Clawtrate can't change them.";
   if (line.mark === "set" && line.value === "never")
     return "The gateway's settings deny this for every bot. Clawtrate can't change them.";
   if (line.kind === "question" && choice === "ask") return "A question already asks you.";
+  if (line.kind === "entry" && choice === "ask")
+    return "This entry of the bot's deny list names no tool the gateway lists now, so there is nothing to ask about.";
   if (!admin) return "Changing what a bot may do needs admin access.";
   if (view.listsCut.includes("bot-deny"))
     return "The bot's deny list in the gateway's settings is longer than this page reads, or has an entry it can't read whole. Clawtrate won't replace it, so it can't change it here.";
@@ -947,7 +998,7 @@ function nest(path: readonly string[], value: unknown): RawRecord {
 export function denyWrite(
   botId: string,
   settings: ToolSettings,
-  line: Pick<PermissionLine, "tools">,
+  line: Pick<PermissionLine, "tools"> & { kind?: LineKind },
   deny: boolean,
   catalog: readonly CatalogTool[],
 ): ConfigWrite | null {
@@ -956,12 +1007,15 @@ export function denyWrite(
     ? [...current, ...line.tools.filter((t) => !listNames(current, t, catalog))]
     : current.filter(
         (entry) =>
-          !line.tools.some(
-            (tool) =>
-              entry === tool ||
-              (tool.endsWith("__*") && entry.startsWith(tool.slice(0, -1))) ||
-              (!entry.includes("*") && canonical(entry) === canonical(tool)),
-          ),
+          // An entry's own line takes off that entry and nothing else.
+          (line.kind === "entry" && !line.tools.includes(entry)) ||
+          (line.kind !== "entry" &&
+            !line.tools.some(
+              (tool) =>
+                entry === tool ||
+                (tool.endsWith("__*") && entry.startsWith(tool.slice(0, -1))) ||
+                (!entry.includes("*") && canonical(entry) === canonical(tool)),
+            )),
       );
   if (next.length === current.length && next.every((e, i) => e === current[i])) return null;
   if (next.length > MAX_LIST_ENTRIES)
@@ -1029,8 +1083,20 @@ export function hasOwnAsk(scope: RulesScope | null, tools: readonly string[]): b
   );
 }
 
-/** Whether the line read back shows the choice made. */
-export function choiceShown(line: PermissionLine | undefined, choice: PermissionChoice): boolean {
+/** Whether the view read back shows the choice made on a line as it was. */
+export function choiceShown(
+  view: BotPermissions,
+  made: Pick<PermissionLine, "id" | "kind" | "tools">,
+  choice: PermissionChoice,
+): boolean {
+  const line = view.lines.find((each) => each.id === made.id);
+  // A server's tools, once denied, are no longer listed: its deny entry is what shows it.
+  if (choice === "never" && made.kind === "server") {
+    const entry = view.lines.find((each) => each.id === `deny:${made.tools[0]}`);
+    if (entry?.value === "never" && entry.mark === "gateway") return true;
+  }
+  // An entry taken off the deny list has no line any more.
+  if (choice === "allow" && made.kind === "entry") return !line;
   if (!line) return false;
   switch (choice) {
     case "never":

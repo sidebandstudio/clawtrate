@@ -38,6 +38,7 @@ import {
   type Offered,
   type PermissionChoice,
   type PermissionFacts,
+  type PermissionLine,
   type RulesPluginStatus,
   type RulesScope,
   type RulesSource,
@@ -243,17 +244,12 @@ export class PermissionsEngine {
       this.writeSent = false;
       this.rulesSaved = false;
       try {
-        await this.apply(request, botId, facts, line.tools, choice, base);
+        await this.apply(request, botId, facts, line, choice, base);
       } catch (error) {
         const after = await readBack().catch(() => null);
         // The rules plugin's part landed and the settings' did not: both are said.
         if (this.rulesSaved) {
-          const shown =
-            after &&
-            choiceShown(
-              after.lines.find((each) => each.id === lineId),
-              choice,
-            );
+          const shown = after && choiceShown(after, line, choice);
           return shown
             ? { outcome: "saved", error: null, view: after }
             : { outcome: "partial", error: message(error), view: after };
@@ -268,12 +264,7 @@ export class PermissionsEngine {
         )
           return { outcome: "failed", error: message(error), view: after };
         // No answer came: only a read after it can say it was saved.
-        const shown =
-          after &&
-          choiceShown(
-            after.lines.find((each) => each.id === lineId),
-            choice,
-          );
+        const shown = after && choiceShown(after, line, choice);
         return shown
           ? { outcome: "saved", error: null, view: after }
           : { outcome: "unconfirmed", error: message(error), view: after };
@@ -285,10 +276,7 @@ export class PermissionsEngine {
           error: "The change was sent, and reading it back failed.",
           view: null,
         };
-      const shown = choiceShown(
-        after.lines.find((each) => each.id === lineId),
-        choice,
-      );
+      const shown = choiceShown(after, line, choice);
       return { outcome: shown ? "saved" : "not-shown", error: null, view: after };
     } finally {
       this.writing = false;
@@ -299,17 +287,18 @@ export class PermissionsEngine {
     request: GatewayRequest,
     botId: string,
     facts: PermissionFacts,
-    tools: string[],
+    line: PermissionLine,
     choice: PermissionChoice,
     base: PermissionBase,
   ): Promise<void> {
     const { settings, catalog } = facts;
+    const { tools } = line;
     if (choice === "full" || choice === "auto" || choice === "exec-ask" || choice === "deny") {
       await this.patch(request, execWrite(botId, settings, choice, catalog), settings.hash);
       return;
     }
     if (choice === "never" || choice === "allow") {
-      const write = denyWrite(botId, settings, { tools }, choice === "never", catalog);
+      const write = denyWrite(botId, settings, line, choice === "never", catalog);
       if (write) await this.patch(request, write, settings.hash);
       return;
     }

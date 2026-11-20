@@ -150,6 +150,8 @@ function exceptionWords(
       return `Never: ${list(e.tools)} (${name}'s settings)`;
     case "not-offered":
       return `Not offered: ${list(e.tools)}`;
+    case "unnamed":
+      return `The gateway hasn't named this server's tools in ${name}'s latest task's listing`;
     case "fallback":
       return `${pre}"Ask when nothing else decides" is on for ${e.scope === "bot" ? name : "every bot"}`;
     case "rule": {
@@ -743,9 +745,15 @@ function sentence(line: PermissionLine, name: string): string {
       : "The default for every bot; a choice here sets one for " + name + ".";
     return `${words[policy]} ${whose} The gateway enforces this.`;
   }
+  if (line.kind === "server" && line.tools.length === 0)
+    return `The gateway hasn't named this server's tools in ${name}'s latest task's listing, so Clawtrate says nothing about them and can't allow, ask or deny them here. Once denied, a server's tools aren't listed: the deny is shown as its own line.`;
+  if (line.kind === "entry")
+    return line.value === "never" && line.mark === "gateway"
+      ? `${name}'s deny list names ${line.words}. No tool the gateway lists for ${name} now has that name, so this page can't say what it removes. Allow takes it off the list.`
+      : `${line.words} names no tool the gateway lists for ${name} now.`;
   const can =
     line.kind === "server"
-      ? `use the tool server ${line.tools[0]!.slice(0, -3)}`
+      ? `use the tool server ${line.id.slice("server:".length)}`
       : line.kind === "plugin"
         ? `use the tools ${line.words.charAt(0).toLowerCase()}${line.words.slice(1)}`
         : line.kind === "tool"

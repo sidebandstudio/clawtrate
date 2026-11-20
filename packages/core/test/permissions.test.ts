@@ -506,6 +506,74 @@ describe("what a bot may do", () => {
     expect(botTools(gw, "pip").deny).toBeUndefined();
   });
 
+  it("a tool server's Never writes the prefix the gateway gave its tools, not its configured name, and its deny entry is shown and taken off", async () => {
+    const gw = new Gateway();
+    gw.config.mcp = { servers: { "Report.Tools": {}, "Report-Tools": {} } };
+    (gw.config.tools as Json).allow = undefined;
+    // A deny of the configured name, which the gateway doesn't apply to the renamed tools.
+    botTools(gw, "pip").deny = ["Report.Tools__*"];
+    const answer = gw.answer.bind(gw);
+    const ids = {
+      "Report.Tools": "Report-Tools__example",
+      "Report-Tools": "Report-Tools-2__example",
+    };
+    gw.answer = async (method, params) => {
+      if (method !== "tools.effective") return answer(method, params);
+      gw.sent.push({ method, params });
+      // As the gateway lists them: renamed, and gone once the bot's deny names them.
+      const deny = (botTools(gw, "pip").deny as string[] | undefined) ?? [];
+      const tools = Object.entries(ids)
+        .filter(([, id]) => !deny.some((d) => id.startsWith(d.slice(0, -1))))
+        .map(([server, id]) => ({ id, source: "mcp", mcpServer: server }));
+      return { toolAccess: { tools: [] }, groups: [{ id: "mcp", tools }] };
+    };
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    expect(line(view, "server:Report.Tools")).toMatchObject({
+      tools: ["Report-Tools__*"],
+      value: "allowed",
+    });
+    expect(line(view, "server:Report-Tools").tools).toEqual(["Report-Tools-2__*"]);
+    expect(line(view, "deny:Report.Tools__*")).toMatchObject({ kind: "entry", value: "never" });
+    const result = await engine.choose("pip", "server:Report.Tools", "never", {
+      configHash: view.configHash,
+      rulesVersion: null,
+    });
+    expect(result.outcome).toBe("saved");
+    expect(botTools(gw, "pip").deny).toEqual(["Report.Tools__*", "Report-Tools__*"]);
+    // Denied, its tools aren't listed: the server says nothing, its entry shows the deny.
+    expect(line(result.view!, "server:Report.Tools")).toMatchObject({
+      tools: [],
+      value: "not-offered",
+      choice: null,
+    });
+    expect(
+      choiceRefusal(result.view!, line(result.view!, "server:Report.Tools"), "allow", true),
+    ).toMatch(/can't name them/);
+    expect(line(result.view!, "server:Report-Tools").value).toBe("allowed");
+    const back = await engine.choose("pip", "deny:Report-Tools__*", "allow", {
+      configHash: result.view!.configHash,
+      rulesVersion: null,
+    });
+    expect(back.outcome).toBe("saved");
+    expect(botTools(gw, "pip").deny).toEqual(["Report.Tools__*"]);
+  });
+
+  it("a tool server whose tools the gateway hasn't listed has no choice and no claim", async () => {
+    const gw = new Gateway();
+    const view = await new PermissionsEngine({ ...gw.ctx(), latestTask: () => null }).read("pip");
+    expect(line(view, "server:coder")).toMatchObject({
+      tools: [],
+      value: "unknown",
+      mark: null,
+      exceptions: [{ kind: "unnamed" }],
+    });
+    for (const choice of ["allow", "ask", "never"] as const)
+      expect(choiceRefusal(view, line(view, "server:coder"), choice, true)).toMatch(
+        /can't name them/,
+      );
+  });
+
   it("F-176: Run commands writes the bot's own command policy, and takes exec off its deny list", async () => {
     const gw = new Gateway();
     botTools(gw, "pip").deny = ["exec"];

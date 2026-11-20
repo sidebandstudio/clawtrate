@@ -224,7 +224,7 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
                 "ask_user",
                 "progress_card",
               ],
-              servers: ["coder"],
+              servers: [{ name: "coder", prefix: "coder" }],
             },
       plugin: status,
       rules: readable
@@ -304,12 +304,7 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
     }
     const after = view(command.botId);
     const result: PermissionWrite = {
-      outcome: choiceShown(
-        after.lines.find((each) => each.id === command.line),
-        command.choice,
-      )
-        ? "saved"
-        : "not-shown",
+      outcome: choiceShown(after, line, command.choice) ? "saved" : "not-shown",
       error: null,
       view: after,
     };
