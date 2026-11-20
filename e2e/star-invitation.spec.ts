@@ -59,27 +59,17 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
     await approve();
     const field = (page: Page) => page.getByTestId("composer-input");
     const notice = (page: Page) => page.getByRole("region", { name: "GitHub invitation" });
-    const replyText = "Here is a plain reply, streamed in small pieces with no reasoning first.";
+    const replyText = "Here is a long answer, streamed slowly.";
     const replies = (page: Page) => page.locator(".bubble").filter({ hasText: replyText });
     await expect(field(page)).toBeVisible({ timeout: 30_000 });
     const initialReplies = await replies(page).count();
     const sent = async (n: number) => {
-      await field(page).fill(n === 6 ? "Sixth reply #stream 3" : `Reply ${n} #text`);
+      // Keep the bound run visible long enough to match it before history reconciliation.
+      await field(page).fill(`Reply ${n} #stream 3`);
       await field(page).press("Enter");
-      if (n === 6) {
-        await expect(page.locator(".bubble[data-streaming=true]")).toBeVisible();
-        await expect(notice(page)).toHaveCount(0);
-        await expect(
-          page
-            .getByTestId("transcript-turn")
-            .filter({ hasText: "Here is a long answer, streamed slowly." })
-            .last(),
-        ).toBeVisible({ timeout: 30_000 });
-      } else {
-        await expect(replies(page)).toHaveCount(initialReplies + (n > 6 ? n - 1 : n), {
-          timeout: 30_000,
-        });
-      }
+      await expect(page.locator(".bubble[data-streaming=true]")).toBeVisible();
+      await expect(notice(page)).toHaveCount(0);
+      await expect(replies(page)).toHaveCount(initialReplies + n, { timeout: 30_000 });
       await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 20_000 });
     };
     await page.evaluate(() => {
