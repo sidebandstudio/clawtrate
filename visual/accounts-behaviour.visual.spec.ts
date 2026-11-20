@@ -4,6 +4,7 @@
 // thing, the access bar for admin, and what a read-only connection shows.
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { holdFrames, releaseFrames, tabThenRelease } from "./frames.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -17,28 +18,6 @@ const sent = (page: Page) =>
     (
       window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
-  );
-
-type Frames = { releaseFrames: () => void };
-/** Animation frames asked for from now wait until `releaseFrames`: a slow frame, made certain. */
-const holdFrames = (page: Page) =>
-  page.evaluate(() => {
-    const real = window.requestAnimationFrame.bind(window);
-    const held: FrameRequestCallback[] = [];
-    window.requestAnimationFrame = (callback) => (held.push(callback), 0);
-    (window as unknown as Frames).releaseFrames = () => {
-      window.requestAnimationFrame = real;
-      for (const callback of held.splice(0)) real(callback);
-    };
-  });
-/** Runs the held callbacks and waits until they have run. */
-const releaseFrames = (page: Page) =>
-  page.evaluate(
-    () =>
-      new Promise<void>((done) => {
-        (window as unknown as Frames).releaseFrames();
-        requestAnimationFrame(() => done());
-      }),
   );
 
 test("F-034: the one + menu offers New task and New bot with ⌘N; New bot opens on its name, and Escape gives focus back to +", async ({
@@ -975,3 +954,138 @@ for (const size of [WIDE, PHONE]) {
     });
   });
 }
+
+// Each key that shows a step or page moves focus as it is handled: with the page's frames held
+// until after the next key (Tab), as on a slow machine, Tab still moves on from there.
+
+test("F-034: Enter in the name and Back to the picture move focus as they are pressed: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  const name = page.getByRole("textbox", { name: "Name" });
+  await expect(name).toBeFocused();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await tabThenRelease(page);
+  const heading = page.getByRole("heading", { name: "Account", level: 2 });
+  await expect(heading).toBeVisible();
+  await expect(heading).not.toBeFocused();
+  // Back: the name has focus at once, and Tab goes on to the shapes.
+  await page.getByRole("button", { name: "Back to the picture" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await tabThenRelease(page);
+  await expect(page.getByRole("radio", { name: "drop" })).toBeFocused();
+});
+
+test("F-034: Escape gives focus back to + as New bot closes: a Tab straight after moves on from +", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  const plus = page.getByTestId("plus");
+  await plus.focus();
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("textbox", { name: "Name" })).toBeFocused();
+  await holdFrames(page);
+  await page.keyboard.press("Escape");
+  await tabThenRelease(page);
+  await expect(newBot(page)).toHaveCount(0);
+  await expect(plus).not.toBeFocused();
+});
+
+test("F-472: a bot just created opens on its composer as the dialog closes: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await page.getByTestId("create").focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(newBot(page)).toHaveCount(0);
+  await tabThenRelease(page);
+  const composer = page.locator(".composer-input");
+  await expect(composer).toBeVisible();
+  await expect(composer).not.toBeFocused();
+});
+
+test("F-474: a sign-in's view takes focus as it opens: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Waiting for xAI. The code works for 15 minutes.")).toBeVisible();
+  await tabThenRelease(page);
+  await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).not.toBeFocused();
+});
+
+test("F-474: Try again after a refused key focuses the key field as it shows: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keyfails=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("xai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Try again" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("api-key")).toBeVisible();
+  await tabThenRelease(page);
+  await expect(page.getByTestId("api-key")).not.toBeFocused();
+});
+
+test("F-476: Settings → Accounts moves focus to the page an account row opens, and back: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  const title = settings.locator("#b-section-title");
+  await settings
+    .getByRole("button", { name: /\. Open\.$/ })
+    .first()
+    .focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(settings.getByRole("button", { name: "Back to accounts" })).toBeVisible();
+  await tabThenRelease(page);
+  await expect(title).not.toBeFocused();
+  await settings.getByRole("button", { name: "Back to accounts" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
+  await tabThenRelease(page);
+  await expect(title).not.toBeFocused();
+});
+
+test("F-490: a bot's Account page takes focus as it opens, and its row as it closes: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const row = page.getByRole("button", { name: /^Account: OpenAI · Work, Bound\. Open\.$/ });
+  await row.focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  const heading = page.getByRole("heading", { name: "Account", level: 3 });
+  await expect(heading).toBeVisible();
+  await tabThenRelease(page);
+  await expect(heading).not.toBeFocused();
+  await page.getByRole("button", { name: "Back to settings" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(row).toBeVisible();
+  await tabThenRelease(page);
+  await expect(row).not.toBeFocused();
+});

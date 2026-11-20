@@ -3,6 +3,7 @@
 // the cards show only what the engine's state establishes.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
+import { holdFrames, releaseFrames, tabThenRelease } from "./frames.ts";
 
 /** The gateway's id for the fixture's question: run `run_7f3a91c2`, call `call_ask` (`askUserQuestionId`). */
 const QUESTION_ID = "ask_26e18573cf5e61d9e5d65618d22de594";
@@ -659,6 +660,29 @@ test.describe("approval cards", () => {
     await expect(card).toHaveAttribute("data-state", "pending");
   });
 
+  test("F-167: Always allow… and Escape from its form move focus as they are pressed: a Tab straight after is not undone", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-pending", "light");
+    const card = approvalCard(page);
+    const always = card.getByRole("button", { name: "Always allow…" });
+    const form = card.getByRole("group", { name: "Always allow" });
+    const save = form.getByRole("button", { name: "Allow and save" });
+    await always.focus();
+    // The page's frames held until after Tab, as on a slow machine.
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    await expect(form).toBeVisible();
+    await tabThenRelease(page);
+    await expect(save).not.toBeFocused();
+    await save.focus();
+    await holdFrames(page);
+    await page.keyboard.press("Escape");
+    await expect(form).toBeHidden();
+    await tabThenRelease(page);
+    await expect(always).not.toBeFocused();
+  });
+
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
     await openFixture(page, "scene=approval-pending", "light");
     // The card has arrived and is the task's pending one, and the page has focus, before the
@@ -666,7 +690,7 @@ test.describe("approval cards", () => {
     await expect(approvalCard(page)).toBeVisible();
     await expect(approvalCard(page)).toHaveAttribute("data-pending", "true");
     // The page takes focus from a click on the transcript's corner, away from every control:
-    // the middle of the page is the card's Always allow…, whose form takes focus a frame later.
+    // the middle of the page is the card's Always allow…, whose form takes focus.
     await page.getByTestId("transcript").click({ position: { x: 4, y: 4 } });
     await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
     await expect(approvalCard(page)).not.toBeFocused();
@@ -1172,6 +1196,75 @@ test.describe("Messaged cards", () => {
     }
   });
 
+  test("F-124: Open in Marlow that waits for its card takes no focus once the person has moved on", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-working", "light");
+    type Fixture = {
+      clawtrateFixture: {
+        setState(
+          change: (s: { transcripts: Record<string, Record<string, unknown>> }) => unknown,
+        ): void;
+      };
+      heldHistory?: Record<string, unknown>;
+    };
+    // Marlow's task as it opens: its runs known, its history still loading.
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => {
+        const t = s.transcripts[key]!;
+        w.heldHistory = t;
+        return {
+          ...s,
+          transcripts: {
+            ...s.transcripts,
+            [key]: { ...t, status: "loading", items: [], interSession: [] },
+          },
+        };
+      });
+    }, "agent:marlow:house-log");
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("House log");
+    // The person moves on while the card is waited for; frames held, as on a slow machine.
+    await holdFrames(page);
+    await page.keyboard.press("Tab");
+    const tabbedTo = await page.evaluateHandle(() => document.activeElement);
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => ({
+        ...s,
+        transcripts: { ...s.transcripts, [key]: w.heldHistory! },
+      }));
+    }, "agent:marlow:house-log");
+    const received = page.getByTestId("received-card");
+    await expect(received).toHaveAttribute("open", "");
+    await releaseFrames(page);
+    expect(await tabbedTo.evaluate((element) => element === document.activeElement)).toBe(true);
+    await expect(received.locator("summary")).not.toBeFocused();
+  });
+
+  test("F-124: ⌘[ back from Marlow's task restores the open card, and a Shift+Tab straight after is not undone", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-return", "light");
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("House log");
+    await holdFrames(page);
+    await page.keyboard.press("ControlOrMeta+BracketLeft");
+    await expect(page.locator(".title-pill")).toContainText("Tidy the transcode cache");
+    // Back on its composer: Shift+Tab, since Tab from there leaves the page.
+    await tabThenRelease(page, "Shift+Tab");
+    const returned = page.getByTestId("messaged-card");
+    await expect(returned).toHaveAttribute("open", "");
+    await expect(
+      returned.getByRole("button", { name: "Open this message in Marlow's task" }),
+    ).not.toBeFocused();
+  });
+
   test("with the task's whole history loaded, Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
     page,
   }) => {
@@ -1530,6 +1623,25 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(step).toHaveAttribute("open", "");
     await expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
     await expect(step.getByRole("button", { name: "Copy arguments" })).toBeFocused();
+  });
+
+  test("F-134: a T3 Code card that becomes the ordinary action takes no focus back once the person has moved on", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, true);
+    const card = page.getByTestId("t3-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    await card.getByRole("button", { name: "Copy arguments" }).focus();
+    // The page's frames held until after Tab, as on a slow machine.
+    await holdFrames(page);
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    await tabThenRelease(page);
+    const step = page.getByTestId("tool-call");
+    await expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
+    await expect(step.getByRole("button", { name: "Copy arguments" })).not.toBeFocused();
   });
 
   test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({

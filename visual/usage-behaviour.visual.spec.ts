@@ -5,6 +5,7 @@
 // as the engine does (apps/desktop/src/fixture/usage.ts).
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle } from "./fixture.ts";
+import { holdFrames, tabThenRelease } from "./frames.ts";
 
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write`;
 const PAGE = `${PANE}&uview=usage`;
@@ -724,4 +725,78 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   expect(shape.lines).toBeGreaterThan(1);
   expect(shape.hidden).toBeLessThanOrEqual(0);
   await context.close();
+});
+
+// With the page's frames held until after the next key (Tab), as on a slow machine, a key that
+// chooses, opens or closes moves focus as it is handled, and Tab moves on from there.
+
+test("F-232: an arrow in the Period choice moves focus with the choice: a Tab straight after leaves the group", async ({
+  page,
+}) => {
+  await openFixture(page, PAGE, "light");
+  const period = usage(page).getByRole("radiogroup", { name: "Period" });
+  await period.getByRole("radio", { name: "This week" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Home");
+  await expect(period.getByRole("radio", { name: "Today" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await tabThenRelease(page);
+  for (const radio of await period.getByRole("radio").all()) await expect(radio).not.toBeFocused();
+});
+
+test("F-234: an arrow in the budget's Period choice moves focus with the choice: a Tab straight after leaves the group", async ({
+  page,
+}) => {
+  await openFixture(page, PAGE, "light");
+  await page.getByTestId("budget-edit").click();
+  const form = page.getByTestId("budget-form");
+  await form.getByRole("radio", { name: "Weekly" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("ArrowLeft");
+  await expect(form.getByRole("radio", { name: "Daily" })).toHaveAttribute("aria-checked", "true");
+  await tabThenRelease(page);
+  for (const radio of await form.getByRole("radio").all()) await expect(radio).not.toBeFocused();
+});
+
+test("F-232: the Usage page takes focus as it opens, and its row as it closes: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, PANE, "light");
+  const row = page.getByTestId("usage-row");
+  await row.focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(usage(page)).toBeVisible();
+  await tabThenRelease(page);
+  await expect(usage(page).locator("[data-bs-focus]")).not.toBeFocused();
+  await usage(page).getByRole("button", { name: "Back to settings" }).focus();
+  await holdFrames(page);
+  await page.keyboard.press("Enter");
+  await expect(usage(page)).toHaveCount(0);
+  await tabThenRelease(page);
+  await expect(row).not.toBeFocused();
+});
+
+test("F-234: Escape from a budget's form in Settings gives focus back to its row, and from Add a budget to Add a budget: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+  const settings = await settingsUsage(page);
+  const row = settings.locator('[data-budget="bot:otto"] button');
+  await row.click();
+  await expect(settings.getByTestId("budget-tokens")).toBeFocused();
+  await holdFrames(page);
+  await page.keyboard.press("Escape");
+  await expect(settings.getByTestId("budget-edit-form")).toHaveCount(0);
+  await tabThenRelease(page);
+  await expect(row).not.toBeFocused();
+  await settings.getByTestId("budget-add").click();
+  await settings.getByTestId("budget-target").focus();
+  await holdFrames(page);
+  await page.keyboard.press("Escape");
+  await expect(settings.getByTestId("budget-add-form")).toHaveCount(0);
+  await tabThenRelease(page);
+  await expect(settings.getByTestId("budget-add")).not.toBeFocused();
 });

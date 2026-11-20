@@ -2,6 +2,7 @@
 // against a real development gateway in e2e/preview.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
+import { holdFrames, tabThenRelease } from "./frames.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 
@@ -292,4 +293,47 @@ test("F-387: Reconnect to a gateway that still does not answer goes to Connectin
   // Reconnect is offered again.
   await expect(dialog.getByRole("button", { name: "Reconnect" })).toBeVisible();
   expect((await sent(page)).filter((type) => type === "retry")).toHaveLength(1);
+});
+
+// With the page's frames held until after the next key (Tab), as on a slow machine, a key that
+// closes Settings or goes back in it moves focus as it is handled, and Tab moves on from there.
+
+test("F-227: Escape from Settings gives focus back to the gateway button as Settings closes: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  const gatewayButton = page.getByRole("button", { name: /Open the gateway menu\.$/ }).last();
+  await gatewayButton.focus();
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByRole("button", { name: "Close settings" })).toBeFocused();
+  await holdFrames(page);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await tabThenRelease(page);
+  await expect(gatewayButton).not.toBeFocused();
+});
+
+test.describe("phone", () => {
+  test.use(
+    contextFor(
+      SIZES.find((size) => size.phone)!,
+      "light",
+    ),
+  );
+  test("F-227: on a phone, Back to settings focuses the list's item as it shows: a Tab straight after is not undone", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=admin`, "light");
+    await page.keyboard.press("ControlOrMeta+,");
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+    await settings.getByRole("button", { name: "Back to settings" }).focus();
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    const nav = settings.getByRole("navigation", { name: "Settings" });
+    await expect(nav).toBeVisible();
+    await tabThenRelease(page);
+    await expect(nav.getByRole("button", { name: "Accounts", exact: true })).not.toBeFocused();
+  });
 });
