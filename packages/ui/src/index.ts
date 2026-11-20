@@ -8,3 +8,5 @@ export { App } from "./App.tsx";
 export { BridgeProvider, useBridge, useClawtrateState } from "./bridge.tsx";
 export { PRODUCT_NAME, SLOGAN } from "./ConnectScreen.tsx";
 export { rosterKey, rosterScope } from "./roster.ts";
+export { zonedTime } from "./routines/schedule.ts";
+export { requestUsagePage } from "./usage/navigation.ts";

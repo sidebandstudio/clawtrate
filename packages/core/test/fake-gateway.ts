@@ -78,7 +78,7 @@ class FakeSocket implements WebSocketLike {
       setTimeout(() => this.reply(id, reply), 0);
       return;
     }
-    this.gateway.requests.push({ method, params: frame.params });
+    this.gateway.requests.push({ method, params: frame.params, id });
     const handler = this.gateway.handlers[method];
     void Promise.resolve()
       .then(() => {
@@ -111,7 +111,7 @@ class FakeSocket implements WebSocketLike {
 
 export class FakeGateway {
   readonly connects: unknown[] = [];
-  readonly requests: Array<{ method: string; params: unknown }> = [];
+  readonly requests: Array<{ method: string; params: unknown; id?: string }> = [];
   readonly sockets: FakeSocket[] = [];
   refuseConnections = false;
   handlers: Record<string, Handler> = {

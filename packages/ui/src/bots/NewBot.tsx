@@ -91,13 +91,10 @@ function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => 
     else if (event.key === "End") next = values.length - 1;
     if (next === null) return;
     event.preventDefault();
+    // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
+    // radio it reached, and this handler leaves no focus move for a later frame.
+    event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
     choose(values[next]!);
-    // The group, held now: the event's own target is gone once it is handled.
-    const group = event.currentTarget;
-    const index_ = next;
-    requestAnimationFrame(() =>
-      group.querySelectorAll<HTMLElement>('[role="radio"]')[index_]?.focus(),
-    );
   };
 }
 
