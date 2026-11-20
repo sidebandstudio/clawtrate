@@ -12,8 +12,11 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ClawtrateClient } from "../packages/core/src/client.ts";
+import { createBridgeSession } from "../packages/core/src/bridge.ts";
+import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
-import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
@@ -221,4 +224,111 @@ test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, dis
   await expect(block("main")).toContainText("No check-ins");
   await expect(block("main")).toContainText("doesn't check in on a schedule.");
   await expect(block("marlow")).toContainText("Checks in every 30 minutes");
+});
+
+test("F-201: closing one viewer withdraws an unsent save and preserves a sent save across reconnect", async () => {
+  test.setTimeout(120_000);
+  const instance = openInstance(INSTANCE);
+  const connection = readDevConnection(instance.connectionFile)!;
+  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-check-in-viewers-"));
+  const node = createNodeHost({
+    dataDir,
+    client: {
+      displayName: "Clawtrate check-in viewers",
+      version: "0.0.0",
+      platform: process.platform,
+    },
+  });
+  let readsToHold = 0;
+  let release: (() => void) | undefined;
+  const client = new ClawtrateClient(
+    {
+      ...node,
+      createWebSocket(url) {
+        const socket = node.createWebSocket(url);
+        const send = socket.send.bind(socket);
+        socket.send = (data) => {
+          if (readsToHold > 0 && JSON.parse(data).method === "config.get" && --readsToHold === 0)
+            release = () => send(data);
+          else send(data);
+        };
+        return socket;
+      },
+    },
+    { allowGatewayUrl: (url) => url === connection.url },
+  );
+  const observer = createBridgeSession(client);
+  try {
+    await client.start();
+    await client.connect({ url: connection.url, token: connection.token });
+    await approve();
+    await expect.poll(() => client.state.connection.status, { timeout: 30_000 }).toBe("connected");
+    await observer.apply({ type: "requestAccess", tier: "admin" });
+    await approve();
+    await expect.poll(() => client.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => client.state.discovery.status).toBe("ready");
+    expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
+    const gatewayId = client.state.checkIns!.gatewayId!;
+    const before = patches();
+
+    const first = createBridgeSession(client);
+    readsToHold = 1;
+    const unsent = first.apply({
+      type: "saveCheckIn",
+      saveId: "unsent",
+      botId: "marlow",
+      gatewayId,
+      every: "24h",
+      prompt: null,
+      was: { every: "30m", prompt: null },
+      kept: [],
+    });
+    await expect.poll(() => release !== undefined).toBe(true);
+    first.dispose();
+    release!();
+    await unsent;
+    expect(patches()).toBe(before);
+    expect(client.state.checkIns?.save).toMatchObject({
+      id: "unsent",
+      status: "failed",
+      error: "The request was withdrawn.",
+    });
+    expect(client.state.connection.status).toBe("connected");
+
+    const second = createBridgeSession(client);
+    release = undefined;
+    readsToHold = 2;
+    const sent = second.apply({
+      type: "saveCheckIn",
+      saveId: "sent",
+      botId: "marlow",
+      gatewayId,
+      every: "24h",
+      prompt: null,
+      was: { every: "30m", prompt: null },
+      kept: [],
+    });
+    await expect.poll(() => release !== undefined).toBe(true);
+    await expect.poll(patches).toBe(before + 1);
+    second.dispose();
+    expect(client.state.connection.status).toBe("connected");
+    release!();
+    await sent;
+    expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
+
+    await observer.apply({ type: "suspend" });
+    expect(client.state.checkIns?.gatewayId).toBeNull();
+    await observer.apply({ type: "retry" });
+    await expect.poll(() => client.state.connection.status, { timeout: 30_000 }).toBe("connected");
+    expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
+    expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
+    expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
+      86_400_000,
+    );
+    expect(patches()).toBe(before + 1);
+  } finally {
+    observer.dispose();
+    client.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });
