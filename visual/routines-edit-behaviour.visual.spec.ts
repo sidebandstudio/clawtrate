@@ -166,6 +166,31 @@ test.describe("1440", () => {
     await expect(view(page).getByRole("heading", { name: "In doubt" })).toBeVisible();
   });
 
+  test("F-189: a new routine that landed and was changed elsewhere is edited from what this save sent", async ({
+    page,
+  }) => {
+    await open(page, `${ADMIN}&save=changed`);
+    await fillNew(page, "Landed, then changed");
+    await save(page).click();
+    const unknown = editor(page).getByTestId("editor-unknown");
+    await unknown.getByRole("button", { name: "Check now" }).click();
+    const conflict = editor(page).getByTestId("editor-changed");
+    await conflict.getByRole("button", { name: "Save mine anyway" }).click();
+    await expect(editor(page)).toHaveCount(0);
+    const update = await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
+      ).clawtrateFixture.sent.find((each) => each.type === "updateRoutine"),
+    );
+    // Edited from what was sent, so the change made elsewhere is not an edit of this draft's.
+    expect((update?.original as { text: string }).text).toBe(
+      "List the three articles worth reading first.",
+    );
+    expect((update?.edit as { text: string }).text).toBe(
+      "List the three articles worth reading first.",
+    );
+  });
+
   test("F-189: a change made elsewhere while the editor is open is shown, and the person's version kept", async ({
     page,
   }) => {
@@ -183,6 +208,8 @@ test.describe("1440", () => {
     await expect(mine).toContainText("Morning digest, short");
     await mine.getByRole("button", { name: "Use my version" }).click();
     await expect(editor(page).getByLabel("Name")).toHaveValue("Morning digest, short");
+    // Only the rename comes back: the instruction the other client wrote stays.
+    await expect(editor(page).getByLabel("Instruction")).toHaveValue(/Keep it to three lines\.$/u);
     // Through the ordinary save, now compared with the new version.
     await save(page).click();
     await expect(editor(page)).toHaveCount(0);

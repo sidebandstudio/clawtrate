@@ -159,6 +159,25 @@ function Field({
   );
 }
 
+/** The other version, with only the fields the person changed from their base put back. */
+function mineOver(
+  theirs: Draft,
+  mine: { draft: Draft; base: RoutineFields },
+  textLocked: boolean,
+): Draft {
+  const changed = changedFields(mine.base, fieldsOfDraft(mine.draft));
+  const { when, time, days, count, unit, date, tz, cron, locked } = mine.draft;
+  return {
+    ...theirs,
+    ...(changed.includes("name") ? { name: mine.draft.name } : {}),
+    ...(changed.includes("text") && !textLocked ? { text: mine.draft.text } : {}),
+    ...(changed.includes("schedule")
+      ? { when, time, days, count, unit, date, tz, cron, locked }
+      : {}),
+    ...(changed.includes("delivery") ? { delivery: mine.draft.delivery } : {}),
+  };
+}
+
 export function Editor({
   state,
   info,
@@ -211,7 +230,8 @@ export function Editor({
   const [gone, setGone] = useState(false);
   const [tried, setTried] = useState(false);
   // The draft as the person had it when they chose to see the other version.
-  const [mine, setMine] = useState<Draft | null>(null);
+  // With the fields it was edited from, so only what the person changed is restored.
+  const [mine, setMine] = useState<{ draft: Draft; base: RoutineFields } | null>(null);
   const [gateway, setGateway] = useState(connection.gatewayId);
   // The hello that was current when the editor opened: a later one is another
   // connection, whose identity cannot be told from this draft's gateway's.
@@ -368,9 +388,10 @@ export function Editor({
         if (id !== attempt.current) return;
         if (!found) return at({ status: "missing" });
         if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
-        // It landed, then changed: the editor now edits it.
+        // It landed, then changed: the editor now edits it, from what this save
+        // sent, so the other change is kept unless the person changes it too.
         setMode({ mode: "edit", routine: found });
-        setOriginal(fieldsOf(found));
+        setOriginal(sent);
         attempt.current += 1;
         setSave({ status: "conflict", current: found });
         return;
@@ -396,7 +417,7 @@ export function Editor({
   };
 
   const showTheirs = (current: Routine) => {
-    setMine(draft);
+    setMine({ draft, base: original ?? fieldsOfDraft(draft) });
     setDraft(draftOf(current, now));
     setOriginal(fieldsOf(current));
     setAccepted(current);
@@ -907,21 +928,14 @@ export function Editor({
               </summary>
               <div className="b-disclosure-body r-yours">
                 <p>
-                  <strong>{mine.name}</strong> · {whenWords(fieldsOfDraft(mine))}
+                  <strong>{mine.draft.name}</strong> · {whenWords(fieldsOfDraft(mine.draft))}
                 </p>
-                <p className="r-instruction">{mine.text}</p>
+                <p className="r-instruction">{mine.draft.text}</p>
                 <button
                   type="button"
                   className="button"
                   data-size="sm"
-                  onClick={() =>
-                    setDraft({
-                      ...mine,
-                      from: draft.from,
-                      target: draft.target,
-                      text: textLocked ? draft.text : mine.text,
-                    })
-                  }
+                  onClick={() => setDraft(mineOver(draft, mine, textLocked))}
                 >
                   Use my version
                 </button>

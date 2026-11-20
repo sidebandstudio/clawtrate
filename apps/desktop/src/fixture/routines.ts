@@ -12,8 +12,10 @@
 //   routinefail=<id>   a routine's runs and conversations fail
 //   calendar=fail|partial   the calendar's read fails, or says it is partial
 // With `access=admin` (accounts.ts) the routines can be changed, and:
-//   save=refused|noanswer|conflict   how the next save ends; `noanswer` then
-//                                    finds it saved on "Check now"
+//   save=refused|noanswer|conflict|changed   how the next save ends; `noanswer`
+//                                    then finds it saved on "Check now", and
+//                                    `changed` finds a new routine landed and
+//                                    changed elsewhere since
 //   pause=fail, run=already|fail, delete=fail   how those end
 //   hooks=on                         the gateway's inbound hooks are on
 
@@ -44,7 +46,7 @@ export type RoutineParams = {
   hold?: string | null;
   fail?: string | null;
   calendar?: "fail" | "partial" | null;
-  save?: "refused" | "noanswer" | "conflict" | null;
+  save?: "refused" | "noanswer" | "conflict" | "changed" | null;
   pause?: "fail" | null;
   run?: "already" | "fail" | "held" | null;
   remove?: "fail" | null;
@@ -73,7 +75,7 @@ export function routineParams(params: URLSearchParams): RoutineParams {
     hold: params.get("routinehold"),
     fail: params.get("routinefail"),
     calendar: calendar === "fail" || calendar === "partial" ? calendar : null,
-    save: oneOf(params.get("save"), ["refused", "noanswer", "conflict"] as const),
+    save: oneOf(params.get("save"), ["refused", "noanswer", "conflict", "changed"] as const),
     pause: oneOf(params.get("pause"), ["fail"] as const),
     run: oneOf(params.get("run"), ["already", "fail", "held"] as const),
     remove: oneOf(params.get("delete"), ["fail"] as const),
@@ -511,8 +513,13 @@ export function routineCommand(
           error:
             "invalid cron.add params: CronPattern: invalid configuration format ('99 * * *'), exactly five, six, or seven space separated parts are required.",
         }));
-      if (end === "noanswer") {
-        drafts.set(command.key, made);
+      if (end === "noanswer" || end === "changed") {
+        drafts.set(
+          command.key,
+          end === "changed"
+            ? { ...made, text: `${made.text} Keep it to three lines.`, updatedAt: now + 1 }
+            : made,
+        );
         return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
       }
       return later(400, () => {
