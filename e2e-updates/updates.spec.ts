@@ -633,8 +633,7 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
       await expect(dialog).toContainText(
         "Restart asks Clawtrate to install version 1.1.0 and reopen.",
       );
-      const mac =
-        "macOS installs the update when Clawtrate next quits, also if the restart does not complete.";
+      const mac = "If macOS stages the update, it can install the next time Clawtrate quits.";
       if (mode !== "manual") await expect(dialog).toContainText(mac);
       else await expect(dialog).not.toContainText(mac);
       await expect(cancel).toBeFocused();
