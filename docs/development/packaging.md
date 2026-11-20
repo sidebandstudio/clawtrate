@@ -49,12 +49,13 @@ Before it builds, every build prints its signing plan in one line, such as `Sign
 
 ## The update feed
 
-Nothing in the app reads a feed yet; the update screens are later work. The build fixes two things for them:
+The build fixes the update sources in the Electron main process. The host contacts a source only on an explicit check.
 
-- `CLAWTRATE_UPDATE_FEED_URL`: the feed's `https` address, substituted when a built entry imports the engine. Without it the build has no feed and makes no update request. The packaged app cannot change it.
+- `CLAWTRATE_UPDATE_FEED_URL` supplies the Stable HTTPS feed. Leave it unset for a build without updates.
+- `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL` adds a Nightly HTTPS feed alongside Stable. Each feed must serve its artifacts from its own origin without redirects or credentials.
 - `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. "Update required" counts 14 days from this date.
 
-After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same host, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
+After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. The generator sets the feed track from the package version, `X.Y.Z` for stable or `X.Y.Z-nightly.YYYYMMDD.N` for nightly, where N is the numeric run number. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same host, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
 
 ## Opening an unsigned build
 
