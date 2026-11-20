@@ -946,7 +946,8 @@ describe("the sandbox: a run's description, its folder and its proven instance",
           ),
         name,
       ).toThrow(SetupRefusedError);
-      expect(processes.asked, name).toEqual([]);
+      // Without a run file the gateway is asked about once: only a stopped one passes.
+      expect(processes.asked, name).toEqual(name === "no run record" ? [fake.GATEWAY_PID] : []);
     }
     // A port in the range but not the first of its block, a reserved one, and OpenClaw's default.
     for (const port of [19941, 19600 + 1, 18789]) {
@@ -1034,6 +1035,54 @@ describe("the sandbox: a run's description, its folder and its proven instance",
       ),
     ).toThrow(SetupRefusedError);
     expect(owned.files.reads).toEqual([]);
+  });
+
+  it("says an instance `stop` ended is stopped, from its marker alone, and refuses a live gateway without its run record", async () => {
+    // As `pnpm dev-gateway stop` leaves it: the run file removed, the marker kept.
+    const at = fake.world();
+    fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name: "su1-test",
+      run: fake.runId("a"),
+      record: null,
+    });
+    const processes = fake.identities(new Set());
+    const proof = proveRun(
+      { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+      { home: at.home, uid: at.uid, checkout: at.checkout, identify: processes.identify },
+    );
+    expect(proof).toMatchObject({ running: false, port: 19940 });
+    // Its gateway alive: a run file is needed to prove it this checkout's.
+    expect(() =>
+      proveRun(
+        { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+        { home: at.home, uid: at.uid, checkout: at.checkout, identify: fake.identities().identify },
+      ),
+    ).toThrow(SetupRefusedError);
+    // The marker of another checkout, or of another run, is not this one's even when stopped.
+    for (const marker of [{ checkout: "/elsewhere" }, { runId: fake.runId("d") }]) {
+      const other = fake.world();
+      fake.instance({
+        home: other.home,
+        checkout: other.checkout,
+        name: "su1-test",
+        run: fake.runId("a"),
+        record: null,
+        marker,
+      });
+      expect(() =>
+        proveRun(
+          { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+          {
+            home: other.home,
+            uid: other.uid,
+            checkout: other.checkout,
+            identify: fake.identities(new Set()).identify,
+          },
+        ),
+      ).toThrow(SetupRefusedError);
+    }
   });
 
   it("says a stopped instance is stopped, from its own records, and refuses one it can't tell", async () => {

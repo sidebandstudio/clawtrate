@@ -353,9 +353,13 @@ export function proveRun(description: SandboxDescription, context: ProofContext)
     throw new SetupRefusedError("state");
   const runFile = join(runDirFor(instance, join(checkout, "tools/dev-gateway/.run")), "state.json");
   const run = runRecordOf(readRecord(files, runFile, context.uid));
+  // `pnpm dev-gateway stop` removes the run file once every process is proven gone, and keeps
+  // the marker. So without a run file, the marker alone must name this checkout, and the
+  // gateway must be proven gone: the instance is stopped. A live gateway needs both.
+  const stoppedHere = run === null && marker.checkout === checkout;
   if (
-    !runMatches(run, marker, instance, checkout) ||
-    run!.gatewayPort !== marker.gatewayPort ||
+    (!stoppedHere &&
+      (!runMatches(run, marker, instance, checkout) || run!.gatewayPort !== marker.gatewayPort)) ||
     !blockPort(marker.gatewayPort)
   )
     throw new SetupRefusedError("state");
@@ -368,7 +372,8 @@ export function proveRun(description: SandboxDescription, context: ProofContext)
     marker.gatewayIdentity,
     context.identify ?? processIdentity,
   );
-  if (gateway === "unknown") throw new SetupRefusedError("state");
+  if (gateway === "unknown" || (stoppedHere && gateway === "alive"))
+    throw new SetupRefusedError("state");
   return {
     profile: `${INSTANCE_PROFILE_PREFIX}${instance}`,
     stateDir,
