@@ -67,7 +67,8 @@ export function App({
     setSettingsOpen(false);
     const opener = settingsOpener.current;
     requestAnimationFrame(() => {
-      if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
+      if (opener?.isConnected && opener.getClientRects().length && !opener.closest("[inert]"))
+        opener.focus();
       // The control that opened it is gone (another gateway was chosen): the
       // first control on the screen now showing.
       else {

@@ -11,6 +11,9 @@ export function startDesktopUpdates(
   const origin = "http://127.0.0.1:" + __TEST_FEED_PORT__;
   return DesktopUpdateService.start({
     ...options,
+    changed(snapshot) {
+      if (!existsSync(join(dirname(options.downloadDir), "hold-events"))) options.changed(snapshot);
+    },
     store: {
       get: (key) => options.store.get(key),
       async set(key, value) {

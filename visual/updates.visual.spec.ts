@@ -76,6 +76,11 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
                 page.locator(size.phone ? ".rail-status" : ".gateway-pill"),
               ).toBeVisible();
               await expect(footer).toHaveCount(1);
+              if (size.phone) {
+                const box = await footer.boundingBox();
+                expect(box?.width).toBeGreaterThanOrEqual(44);
+                expect(box?.height).toBeGreaterThanOrEqual(44);
+              }
               await footer.click();
             } else {
               await expect(footer).toHaveCount(0);

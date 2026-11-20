@@ -46,6 +46,8 @@
 @container app (max-width:687px) {
   .rail-top .update-entry {
     display: grid;
+    width: var(--tap-min);
+    height: var(--tap-min);
     margin-right: auto;
   }
   .rail-top:has(.update-entry) .rail-status {

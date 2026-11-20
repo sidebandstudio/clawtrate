@@ -331,3 +331,42 @@ for (const stage of ["check", "download"] as const) {
     }
   });
 }
+
+test("F-231: a stale check or download reconciles the screen without contacting a different source or file", async ({
+  desktopApp,
+}) => {
+  const { page, profile, server, manifest } = desktopApp;
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const line = page.locator(".update-result dd");
+  const check = page.getByRole("button", { name: "Check for Updates" });
+  const download = page.getByRole("button", { name: "Download", exact: true });
+  const hold = join(profile, "hold-events");
+  writeFileSync(hold, "");
+  const choice = await page.evaluate(() =>
+    (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.chooseTrack("nightly"),
+  );
+  expect(choice.outcome).toBe("accepted");
+  await expect(page.getByRole("radio", { name: "Stable" })).toBeChecked();
+  await check.click();
+  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.locator(".update-result")).toContainText(
+    "The update track changed. Check the selected source again.",
+  );
+  expect(server.requests).toEqual([]);
+  rmSync(hold);
+  await page.getByRole("radio", { name: "Stable" }).click();
+  await expect(page.getByRole("radio", { name: "Stable" })).toBeChecked();
+  await check.click();
+  await expect(line).toContainText("1.1.0 is offered");
+  writeFileSync(hold, "");
+  server.route("/stable", json({ ...manifest, version: "1.2.0" }));
+  const second = await page.evaluate(() =>
+    (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.check("stable"),
+  );
+  expect(second.snapshot.state.kind).toBe("offered");
+  await expect(line).toContainText("1.1.0 is offered");
+  await download.click();
+  await expect(line).toContainText("1.2.0 is offered");
+  expect(server.requests).toEqual(["/stable", "/stable"]);
+});
