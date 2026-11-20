@@ -824,9 +824,9 @@ it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
       if (change === "symlink") symlinkSync(path + ".old", path);
       else writeFileSync(path, fixture.body);
     }
-    expect((await service.restart(id)).snapshot.state).toMatchObject({
-      kind: "handoff-failed",
-      reason: "artifact-changed",
+    expect((await service.restart(id)).snapshot).toMatchObject({
+      state: { kind: "handoff-failed", reason: "artifact-changed" },
+      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
     });
     expect(installer.launch).not.toHaveBeenCalled();
     expect(await store().get("attempt")).toBeNull();

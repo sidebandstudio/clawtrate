@@ -122,10 +122,17 @@ export class DesktopUpdateService {
   }
 
   private publish(state: DesktopUpdateState) {
-    if (state.kind !== "verified") {
-      this.snapshot = { ...this.snapshot, install: idleCapability(this.options.installer) };
-    }
-    this.snapshot = { ...this.snapshot, state, revision: this.snapshot.revision + 1 };
+    let install = idleCapability(this.options.installer);
+    if (state.kind === "verified") install = this.snapshot.install;
+    else if (state.kind === "failed" && state.reason === "artifact-changed")
+      install = { kind: "unavailable-in-this-build", reason: state.reason };
+    else if (
+      state.kind === "handoff-failed" &&
+      state.reason !== "attempt-not-saved" &&
+      state.reason !== "installer-failed"
+    )
+      install = { kind: "unavailable-in-this-build", reason: state.reason };
+    this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
     try {
       this.options.changed(this.snapshot);
     } catch {

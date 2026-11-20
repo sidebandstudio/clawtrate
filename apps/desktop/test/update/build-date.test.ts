@@ -55,3 +55,39 @@ describe("the build's release date", () => {
     }
   });
 });
+
+it.each([
+  ["darwin", false, "build-not-signed"],
+  ["darwin", true, "no-installer-path"],
+  ["win32", false, "build-not-signed"],
+  ["linux", false, "no-installer-path"],
+] as const)(
+  "the production %s host with Mac signing %s reports %s",
+  async (platform, signed, reason) => {
+    vi.stubGlobal("__CLAWTRATE_SIGNED_MAC__", signed);
+    const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
+    const dir = tempDir();
+    try {
+      const fake = vi.fn(() => {
+        throw Error("unexpected installer");
+      });
+      const service = await startDesktopUpdates({
+        version: "1.0.0",
+        packaged: true,
+        platform,
+        arch: "x64",
+        changed() {},
+        quitAfterLaunch: fake,
+        store: { get: async () => null, set: async () => {} },
+        downloadDir: join(dir.path, "updates"),
+        ...({ installer: { unavailable: null, inspect: fake, launch: fake } } as object),
+      });
+      expect(service.get().install).toEqual({ kind: "unavailable-in-this-build", reason });
+      expect((await service.restart("absent")).outcome).toBe("stale");
+      service.shutdown();
+      expect(fake).not.toHaveBeenCalled();
+    } finally {
+      dir.remove();
+    }
+  },
+);
