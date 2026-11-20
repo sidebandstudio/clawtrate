@@ -1,0 +1,45 @@
+name: PR AI disclosure
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-ai-disclosure-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  disclosure:
+    name: PR AI disclosure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Fetch the current description so rerunning an old check also checks later edits.
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.issue.number,
+              mediaType: { format: "html" },
+            });
+            // GitHub renders the template's Markdown bullets as list items. Examples in
+            // fenced code blocks and HTML comments do not produce list items.
+            const html = (pr.body_html ?? "").replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, "");
+            const items = html.matchAll(/<li>\s*(?:<p\b[^>]*>)?AI model:([\s\S]*?)<\/li>/gi);
+            const entries = Array.from(items, (item) =>
+              item[1].replace(/<\/p>\s*$/i, "").replace(/<\/?code\b[^>]*>/gi, "").trim());
+            const placeholder = /^(?:none|n\/?a|unknown|unspecified|not specified|tbd|todo|model|harness)$/i;
+            function valid(entry) {
+              const fields = entry.split(/\s*\|\s*Harness:\s*/i);
+              if (fields.length !== 2) return false;
+              return fields.every((field) =>
+                /[\p{L}\p{N}]/u.test(field) && !placeholder.test(field) && !/[<>\[\]|]|&(?:lt|gt);/.test(field));
+            }
+            const noAI = entries.length === 1 && /^None\s*\|\s*Harness:\s*None$/i.test(entries[0]);
+            if (!noAI && (!entries.length || !entries.every(valid))) {
+              core.setFailed("Add one PR body bullet per contributing pair: - AI model: MODEL | Harness: HARNESS. Use actual names, or None for both if no AI contributed.");
+            }

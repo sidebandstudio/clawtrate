@@ -14,6 +14,12 @@ Delete these comments before you open the pull request.
 
 Closes #
 
+## AI assistance
+
+<!-- Use one line per contributing model and harness, including subagents. If no AI contributed, enter None for both fields. -->
+
+- AI model: | Harness:
+
 ## What changes
 
 <!-- One to three plain sentences: what someone can do now, or what stops going wrong. -->

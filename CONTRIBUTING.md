@@ -84,7 +84,9 @@ The body says what changes in one to three sentences, why, and how it was checke
 
 CodeRabbit reviews every pull request into `main` that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
-Coding agents are welcome here, since most of Clawtrate is written with them. You are still responsible for every line you submit. Read the diff before you open the pull request, and leave co-author trailers, "generated with" lines and any other tool or agent attribution out of commits and pull requests.
+Every Clawtrate pull request must say which AI model and harness helped prepare the changes. Use the model identifier your tool shows and the name of the program that ran it. Add one line per pair to the body, including any subagents whose work you used. For example, `- AI model: gpt-6.2-astra | Harness: Codex via T3 Code`. If you used no AI, write `- AI model: None | Harness: None`. Update the list when another agent contributes. Reviewers must hold approval and merge until the author supplies a complete disclosure.
+
+You are responsible for every line you submit. Read the diff before opening the pull request. Keep co-author trailers, "generated with" lines and tool credits out of commit messages and pull request titles.
 
 Keep your branch mergeable. When `main` moves under it and it conflicts, merge `main` into it and run the checks again.
 
