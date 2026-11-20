@@ -128,17 +128,21 @@ test("opens its window from the packaged app on the connect screen", async () =>
   }));
   expect(page_.require).toBe("undefined");
   expect(page_.process).toBe("undefined");
-  // The whole bridge: six functions and the platform name. `attach` hands a file's
+  // The whole bridge: eight functions and the platform name. `attach` hands a file's
   // bytes to the main process for a later message, `save` hands it the bytes of a file
-  // the Work pane holds to save where the person chooses, and `setBadge` gives it the
-  // number of unread tasks for the dock badge; anything else here is a regression.
+  // the Work pane holds to save where the person chooses, `chooseFolder` and
+  // `saveInFolder` ask for one folder for Download all and write each item there as a
+  // new file, and `setBadge` gives it the number of unread tasks for the dock badge;
+  // anything else here is a regression.
   expect(page_.host).toEqual([
     "attach",
+    "chooseFolder",
     "desktopUpdates",
     "hello",
     "onState",
     "platform",
     "save",
+    "saveInFolder",
     "send",
     "setBadge",
   ]);

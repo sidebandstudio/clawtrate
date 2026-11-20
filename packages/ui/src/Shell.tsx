@@ -1,4 +1,4 @@
-import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
+import { mapSessionRow, type Artifact, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +22,9 @@ import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
+import { ArtifactsProvider } from "./artifacts/context.tsx";
+import { MediaViewer } from "./artifacts/viewer.tsx";
+import "./artifacts/artifacts.css";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -148,6 +151,8 @@ export function Shell({
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [backTo, setBackTo] = useState<{ path: string; stepId: string } | null>(null);
   const [chatNote, setChatNote] = useState("");
+  /** While the media viewer is open, everything under it is inert. */
+  const [viewerOpen, setViewerOpen] = useState(false);
   /** Set while "Show in chat" closes the drawer: focus goes to the step, not back to the opener. */
   const keepFocus = useRef(false);
   /** "Back to <file>" while a step offers it, for ⌘[ in the conversation. */
@@ -444,6 +449,31 @@ export function Shell({
     }),
     [runs, backShown, goBackToFile, setPanel, setWorkTab],
   );
+  // An item a bot handed over: Files, with it open; and back to its card in the chat.
+  const openArtifact = useCallback(
+    (artifact: Artifact) => {
+      setFileRequest((previous) => ({
+        path: "",
+        stepId: null,
+        view: null,
+        artifact: artifact.key,
+        nonce: (previous?.nonce ?? 0) + 1,
+      }));
+      setWorkTab("files");
+      setPanel(true);
+    },
+    [setPanel, setWorkTab],
+  );
+  const showArtifactInChat = useCallback(
+    (reveal: () => void) => {
+      if (drawerOpen) {
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else reveal();
+    },
+    [drawerOpen, setPanel],
+  );
   const phase = useSyncPhase(state, taskKey);
   // Connected is not caught up: until bots, tasks and the open task have
   // loaded again after a drop, what is on screen is last seen.
@@ -479,7 +509,7 @@ export function Shell({
       ref={shellRef}
       data-panel={panelOpen && !routines ? "open" : "closed"}
       data-view={view}
-      inert={inert}
+      inert={inert || viewerOpen}
     >
       <Rail
         bots={state.bots}
@@ -510,87 +540,101 @@ export function Shell({
         newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
       />
       <div className="main-pane" ref={mainRef}>
-        {routines ? (
-          <RoutinesView
-            state={state}
-            nav={routines}
-            onNav={setRoutines}
-            onClose={closeRoutines}
-            onOpenTask={(botId, key) => {
-              selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
-              openDetail();
-            }}
-            narrow={onePane || (mainWidth !== null && mainWidth < 520)}
-            phone={onePane}
+        <ArtifactsProvider
+          taskKey={taskKey ?? ""}
+          bot={bot?.name ?? "The bot"}
+          taskTitle={task?.title ?? ""}
+          sessionId={task?.sessionId ?? null}
+          transcript={taskKey ? transcript : undefined}
+          changedAt={task?.updatedAt ?? null}
+          online={state.connection.status === "connected"}
+          onOpenInPane={openArtifact}
+          onShowInChat={showArtifactInChat}
+          onModal={setViewerOpen}
+        >
+          {routines ? (
+            <RoutinesView
+              state={state}
+              nav={routines}
+              onNav={setRoutines}
+              onClose={closeRoutines}
+              onOpenTask={(botId, key) => {
+                selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
+                openDetail();
+              }}
+              narrow={onePane || (mainWidth !== null && mainWidth < 520)}
+              phone={onePane}
+            />
+          ) : (
+            <OpenTaskContext.Provider value={selection.selectTask}>
+              <WorkLinksContext.Provider value={workLinks}>
+                <Conversation
+                  task={task}
+                  bot={bot}
+                  taskCount={selection.tasks.length}
+                  discovery={state.discovery}
+                  transcript={transcript}
+                  panelOpen={panelOpen}
+                  onTogglePanel={togglePanel}
+                  onOpenPanel={() => setPanel(true)}
+                  onBack={backToList}
+                  onReload={reload}
+                  strip={
+                    strip && (
+                      <StatusStrip
+                        strip={strip}
+                        retryAt={state.connection.retryAt}
+                        onRetry={() => void send({ type: "retry" })}
+                        onReload={reload}
+                      />
+                    )
+                  }
+                  refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                  interactive={interactive}
+                  connection={state.connection}
+                  info={info}
+                  granted={granted}
+                  online={state.connection.status === "connected"}
+                  caughtUp={caughtUp}
+                  toggleRef={toggleRef}
+                  inert={drawerOpen || inert}
+                />
+              </WorkLinksContext.Provider>
+            </OpenTaskContext.Provider>
+          )}
+          <button
+            type="button"
+            className="drawer-scrim"
+            aria-label="Close work panel"
+            tabIndex={-1}
+            onClick={() => setPanel(false)}
           />
-        ) : (
-          <OpenTaskContext.Provider value={selection.selectTask}>
-            <WorkLinksContext.Provider value={workLinks}>
-              <Conversation
-                task={task}
-                bot={bot}
-                taskCount={selection.tasks.length}
-                discovery={state.discovery}
-                transcript={transcript}
-                panelOpen={panelOpen}
-                onTogglePanel={togglePanel}
-                onOpenPanel={() => setPanel(true)}
-                onBack={backToList}
-                onReload={reload}
-                strip={
-                  strip && (
-                    <StatusStrip
-                      strip={strip}
-                      retryAt={state.connection.retryAt}
-                      onRetry={() => void send({ type: "retry" })}
-                      onReload={reload}
-                    />
-                  )
-                }
-                refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-                interactive={interactive}
-                connection={state.connection}
-                info={info}
-                granted={granted}
-                online={state.connection.status === "connected"}
-                caughtUp={caughtUp}
-                toggleRef={toggleRef}
-                inert={drawerOpen || inert}
-              />
-            </WorkLinksContext.Provider>
-          </OpenTaskContext.Provider>
-        )}
-        <button
-          type="button"
-          className="drawer-scrim"
-          aria-label="Close work panel"
-          tabIndex={-1}
-          onClick={() => setPanel(false)}
-        />
-        {panelOpen && !routines && (
-          <WorkPanel
-            bot={bot}
-            task={task}
-            transcript={transcript}
-            tab={workTab}
-            onTab={setWorkTab}
-            online={state.connection.status === "connected"}
-            connectedAt={state.connection.connectedAt}
-            fileRequest={fileRequest}
-            onShowInChat={showInChat}
-            onFilePath={setOpenFilePath}
-            drawer={drawerOpen}
-            onClose={() => setPanel(false)}
-            closeRef={closeRef}
-            panelRef={panelRef}
-            accounts={state.accounts}
-            bots={state.bots}
-            tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
-            transcripts={state.transcripts}
-            connection={state.connection}
-            info={info}
-          />
-        )}
+          {panelOpen && !routines && (
+            <WorkPanel
+              bot={bot}
+              task={task}
+              transcript={transcript}
+              tab={workTab}
+              onTab={setWorkTab}
+              online={state.connection.status === "connected"}
+              connectedAt={state.connection.connectedAt}
+              fileRequest={fileRequest}
+              onShowInChat={showInChat}
+              onFilePath={setOpenFilePath}
+              drawer={drawerOpen}
+              onClose={() => setPanel(false)}
+              closeRef={closeRef}
+              panelRef={panelRef}
+              accounts={state.accounts}
+              bots={state.bots}
+              tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
+              transcripts={state.transcripts}
+              connection={state.connection}
+              info={info}
+            />
+          )}
+          <MediaViewer />
+        </ArtifactsProvider>
       </div>
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
       {newBot && (

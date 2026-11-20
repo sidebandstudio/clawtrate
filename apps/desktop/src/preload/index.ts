@@ -1,5 +1,5 @@
 // Exposes a narrow, typed IPC surface to the renderer. No Node or Electron
-// objects cross the bridge, only plain data, six functions and the platform name.
+// objects cross the bridge, only plain data, eight functions and the platform name.
 
 import type {
   DesktopUpdates,
@@ -7,6 +7,8 @@ import type {
   AttachmentInfo,
   BridgeCommand,
   ClawtrateState,
+  FolderChoice,
+  FolderSaveResult,
   HostInfo,
   SaveResult,
 } from "@clawtrate/core";
@@ -25,6 +27,14 @@ export type DesktopHostApi = {
   attach(file: { name: string; type: string; data: ArrayBuffer }): Promise<AttachmentInfo>;
   /** Save bytes the Work pane holds to a file the person chooses in the system's save dialog. */
   save(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /** Ask the person for one folder, for several saves into it. */
+  chooseFolder(): Promise<FolderChoice>;
+  /** Write bytes as a new file in the folder `chooseFolder` gave. */
+  saveInFolder(file: {
+    folder: number;
+    name: string;
+    data: ArrayBuffer;
+  }): Promise<FolderSaveResult>;
 };
 
 function invokeUpdateTrack(
@@ -66,6 +76,8 @@ const api: DesktopHostApi = {
   send: (command) => ipcRenderer.invoke("clawtrate:command", command),
   attach: (file) => ipcRenderer.invoke("clawtrate:attach", file),
   save: (file) => ipcRenderer.invoke("clawtrate:save", file),
+  chooseFolder: () => ipcRenderer.invoke("clawtrate:chooseFolder"),
+  saveInFolder: (file) => ipcRenderer.invoke("clawtrate:saveInFolder", file),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: ClawtrateState) => listener(state);
     ipcRenderer.on("clawtrate:state", handler);

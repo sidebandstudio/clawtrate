@@ -15,6 +15,7 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
+//   &artifacts=on        Juniper's task with every kind of card (artifacts.ts), with &thumbs, &artifactload
 
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -28,6 +29,7 @@ import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
+import { artifactParams } from "./artifacts.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -86,6 +88,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
+  artifacts: artifactParams(params),
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.

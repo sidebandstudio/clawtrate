@@ -284,10 +284,29 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
           : { argumentsText: "", argumentsAbsent: true }),
         result: null,
       });
+    } else if (block.type === "canvas") {
+      const preview = asRecord(block.preview);
+      const docId = str(preview?.viewId);
+      // A Page is a canvas preview with a document id; an MCP app's view is not one.
+      if (docId && docId.trim() && preview?.mcpApp === undefined)
+        blocks.push({ kind: "page", docId, title: str(preview?.title) });
+    } else if (block.type === "attachment_error") {
+      const attachment = asRecord(block.attachment);
+      blocks.push({
+        kind: "attachment-error",
+        label: str(attachment?.label) ?? "A file",
+        code: str(attachment?.code) ?? "unknown",
+        media: str(attachment?.kind),
+      });
     }
   }
   return blocks;
 }
+
+/** Blocks the gateway collects as artifacts (`session-artifact-read`): media and files. */
+const HANDED_OVER = ["image", "audio", "video", "file", "attachment"];
+const handsOver = (content: unknown) =>
+  arr(content).some((part) => HANDED_OVER.includes(String(asRecord(part)?.type)));
 
 function meta(message: RawRecord): RawRecord {
   return asRecord(message.__openclaw) ?? {};
@@ -363,6 +382,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           return;
         }
         if (!text.trim()) return;
+        const userSeq = num(info.seq);
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         items.push({
@@ -371,6 +391,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           timestamp,
           blocks: [{ kind: "text", text }],
           model: null,
+          ...(userSeq !== null ? { seq: userSeq } : {}),
           ...(cutByGateway ? { truncated: true } : {}),
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
@@ -390,11 +411,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           item = previous;
         } else {
           currentRun = runId;
-          if (blocks.length === 0) return;
+          // A reply that only hands items over still has a place for their cards.
+          if (blocks.length === 0 && !handsOver(message.content)) return;
           item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
           items.push(item);
         }
         if (cutByGateway) item.truncated = true;
+        const seq = num(info.seq);
+        if (seq !== null) item.seq = seq;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
         if (rowId) {

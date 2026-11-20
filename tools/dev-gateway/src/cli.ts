@@ -25,6 +25,7 @@
 
 import { addScriptedRoutines } from "./routines.ts";
 import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
+import { forgetHandover, HANDOVER_BOT, seedHandover } from "./handover.ts";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -264,14 +265,17 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * which asks a person about every command it has no approved rule for. Only
  * the messaging pair may message each other.
  */
+/** Where a seeded bot works: the built-in bot in workspace/, the others in workspaces/<id>. */
+export const botWorkspace = (stateDir: string, botId: string) =>
+  botId === "main" ? join(stateDir, "workspace") : join(stateDir, "workspaces", botId);
+
 function botEntries(stateDir: string, browserBots: readonly string[] | null) {
   const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
   for (const bot of SEED_BOTS) {
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
-      // Where `agents add` used to put them: the built-in bot in workspace/, the others in workspaces/<id>.
-      workspace:
-        bot.id === "main" ? join(stateDir, "workspace") : join(stateDir, "workspaces", bot.id),
+      // Where `agents add` used to put them.
+      workspace: botWorkspace(stateDir, bot.id),
       tools: {
         ...(bot.id === SHELL_BOT ? { exec: { mode: "ask" } } : {}),
         agentToAgent: { send: partner ? [partner] : [] },
@@ -1202,6 +1206,11 @@ export async function start(
     const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
     assertInside(filesWorkspace, inst.stateDir);
     seedWorkspaceFiles(filesWorkspace);
+    // Marlow's workspace holds what the artifact scenarios hand over, and the
+    // instance's canvas the page `#hand-page` names.
+    const handoverWorkspace = botWorkspace(inst.stateDir, HANDOVER_BOT);
+    assertInside(handoverWorkspace, inst.stateDir);
+    seedHandover(handoverWorkspace, inst.stateDir);
     // Unseeded starts are for checks that need a running gateway, not its data.
     if (options.seed !== false) await seed(inst);
   });
@@ -1794,6 +1803,27 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
   }
 }
 
+/**
+ * Remove the gateway's stored copy of the note `#hand-gone` handed over, on
+ * an instance this checkout runs (handover.ts): opening its card then fails.
+ */
+export async function forgetHandedOver(inst: DevInstance): Promise<number> {
+  const refusal = inst.runner.refusal();
+  if (refusal) throw new Error(refusal);
+  if (!(await gatewayHealthy(inst))) {
+    throw new Error(
+      `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
+    );
+  }
+  const removed = forgetHandover(inst.stateDir);
+  console.log(
+    removed === 0
+      ? `Nothing to forget on ${label(inst)}: #hand-gone has not handed the old route over yet.`
+      : `Removed the gateway's stored copy of the old route (${removed} file${removed === 1 ? "" : "s"}) on ${label(inst)}.`,
+  );
+  return removed;
+}
+
 export async function seed(inst: DevInstance): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
@@ -2095,7 +2125,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset|forget-handover> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]...\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2142,6 +2172,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     "approve",
     "lock",
     "unlock",
+    "forget-handover",
   ];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
@@ -2190,6 +2221,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return status(inst);
     case "approve":
       await approve(inst, rest[0]);
+      return;
+    case "forget-handover":
+      await forgetHandedOver(inst);
       return;
     case "lock":
     case "unlock": {

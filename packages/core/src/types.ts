@@ -231,7 +231,19 @@ export type TranscriptBlock =
       /** The row carried no arguments at all (`argumentsText` is then empty). */
       argumentsAbsent?: boolean;
       result: ToolResult | null;
-    };
+    }
+  /**
+   * A page of the gateway's canvas the reply names: the `canvas` block
+   * `chat.history` adds for a tool result that previews one. `docId` is the
+   * id `canvas.document.view` reads it by.
+   */
+  | { kind: "page"; docId: string; title: string | null }
+  /**
+   * A file the bot named that the gateway did not attach (`attachment_error`):
+   * its label, the gateway's code (`file-not-found`, `delivery-failed`, …) and
+   * the kind it would have been.
+   */
+  | { kind: "attachment-error"; label: string; code: string; media: string | null };
 
 export type TranscriptItem = {
   /** Stable display key. */
@@ -240,6 +252,12 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /**
+   * The gateway's sequence number of the last message this item holds
+   * (`__openclaw.seq`): an artifact belongs to the item whose messages its
+   * `messageSeq` falls among. Absent when the gateway numbered none.
+   */
+  seq?: number;
   /**
    * The gateway cut a row of this item to its display length
    * (`__openclaw.truncated`): present and true only then. Its text, here or
@@ -324,6 +342,11 @@ export type Transcript = TaskActivity & {
   reactions?: Record<string, MessageReaction[]>;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
+  /**
+   * The session the latest successful history load answered for (`chat.history`
+   * `sessionId`), or null when it named none. Absent until history is read.
+   */
+  historySessionId?: string | null;
   /** Epoch ms of the latest successful history load. */
   loadedAt: number | null;
 };

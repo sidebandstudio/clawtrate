@@ -1,0 +1,816 @@
+// How what a bot hands over behaves (work-pane.md, sections 11 to 14), in the
+// fixture: a card opens its item in the pane and Back returns to "Sent in
+// chat"; the viewer's keys, focus and sequence; the card's menu and its ways
+// in; downloads with identical bytes; the clipboard; the states of an item
+// that cannot be opened; and that nothing is fetched from any address but the
+// app's own until the person acts.
+import { readFileSync } from "node:fs";
+import { expect, test, type Download, type Page } from "@playwright/test";
+import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { artifactBytes } from "../apps/desktop/src/fixture/artifacts.ts";
+import { ARTIFACTS, card, cardsDrawn, cell, openCard, sent } from "./artifacts-helpers.ts";
+
+/** What each fixture item holds, by its title. */
+const BYTES = artifactBytes();
+
+test.use(contextFor(SIZES[0]!, "light"));
+
+/**
+ * The person's choice to open an address: the system browser in the app, a
+ * new tab here. The reserved domains resolve nowhere, so the tab is answered
+ * locally, only so its address can be read.
+ */
+async function answerAway(page: Page) {
+  await page
+    .context()
+    .route(/^https:\/\/(help\.)?library\.example\//, (route) =>
+      route.fulfill({ contentType: "text/plain", body: "elsewhere" }),
+    );
+}
+
+/**
+ * Requests to anything but the fixture's own server that left the page: a
+ * route sees only what passed the page's own policies. Each is refused, so
+ * nothing reaches the network; the reserved domains `answerAway` answers are
+ * the person's own choice.
+ */
+function offsite(page: Page): string[] {
+  const seen: string[] = [];
+  void page.context().route(
+    (url) => url.hostname !== "127.0.0.1" && !/(^|\.)library\.example$/.test(url.hostname),
+    (route) => {
+      seen.push(route.request().url());
+      return route.abort();
+    },
+  );
+  return seen;
+}
+
+const announcer = (page: Page) => page.getByTestId("artifact-announcer");
+const viewer = (page: Page) => page.getByTestId("media-viewer");
+
+test.describe("cards and the pane", () => {
+  test("F-115: a file card names its item, opens it in the pane, and Back returns to Sent in chat", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await expect(
+      card(page, "borrowing-report.md").getByRole("button", {
+        name: "borrowing-report.md, Markdown, 142 B. Open in the Work pane.",
+      }),
+    ).toBeVisible();
+    await openCard(page, "borrowing-report.md");
+    await expect(
+      page.getByTestId("artifact-reader").getByRole("heading", { name: "borrowing-report.md" }),
+    ).toBeFocused();
+    await expect(page.locator(".reader-meta")).toHaveText("Markdown · 142 B");
+    await expect(page.locator(".reader-source")).toContainText("Sent by Juniper at");
+    await page.getByRole("tab", { name: "Source" }).click();
+    await expect(page.locator(".code-view .lc").first()).toHaveText("# Borrowing e-books");
+    // Raw is the record artifacts.get returns: no data, no address.
+    await page.getByRole("button", { name: "Raw" }).click();
+    const raw = page.getByTestId("artifact-raw");
+    await expect(raw).toContainText('"title": "borrowing-report.md"');
+    await expect(raw).not.toContainText('"url":');
+    await expect(raw).not.toContainText('"data":');
+    await page.getByRole("button", { name: "Back to this task's files" }).click();
+    const sentIn = page.getByTestId("sent-in-chat");
+    await expect(sentIn.getByRole("heading", { name: "Sent in chat" })).toBeVisible();
+    // Newest first, from the same list as the cards.
+    await expect(sentIn.locator(".file-row").first()).toContainText("voice-note.wav");
+    await expect(sentIn.locator(".file-row").last()).toContainText("E-book apps compared");
+    await expect(sentIn.locator(".file-row").nth(-2)).toContainText("borrowing-report.md");
+    await expect(sentIn.locator('[data-row^="artifact:3:0:"]')).toBeFocused();
+  });
+
+  test("F-115: Show in chat closes nothing docked, scrolls to the card and fills it", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await openCard(page, "lending-terms.pdf");
+    await page.getByRole("button", { name: "Show lending-terms.pdf in the chat" }).click();
+    const target = card(page, "lending-terms.pdf");
+    await expect(target).toHaveAttribute("data-flash", "true");
+    await expect(target).toBeInViewport();
+    await expect(announcer(page)).toHaveText("Showing the item in the chat");
+  });
+
+  test("F-307: an item elsewhere is described with Open in your browser and no Download; nothing is fetched from it", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await answerAway(page);
+    await openFixture(page, ARTIFACTS, "light");
+    await openCard(page, "lending-faq.pdf");
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "The message names this file by its address. Clawtrate doesn't fetch it; opening it leaves the app, and what is there may have changed since it was sent.",
+    );
+    // The whole address, before the choice.
+    await expect(page.getByTestId("artifact-address")).toHaveText(
+      "https://help.library.example/lending-faq.pdf",
+    );
+    await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0);
+    const [popup] = await Promise.all([
+      page.waitForEvent("popup"),
+      page
+        .getByRole("button", {
+          name: "Open https://help.library.example/lending-faq.pdf in your browser",
+        })
+        .click(),
+    ]);
+    expect(popup.url()).toBe("https://help.library.example/lending-faq.pdf");
+    await popup.close();
+    // Only the person's own choice went there: nothing before it.
+    expect(away).toEqual([]);
+  });
+
+  test("F-307: artifact Markdown and menu links disclose their destination before the browser opens", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await answerAway(page);
+    await openFixture(page, `${ARTIFACTS}&reportlinks=on`, "light");
+    await openCard(page, "borrowing-report.md");
+    const preview = page.locator(".reader-preview");
+    await expect(preview).toContainText("Library conditions");
+    // No direct anchor: the control holds the words and the whole address.
+    await expect(preview.locator("a")).toHaveCount(0);
+    const link = preview.getByRole("button", {
+      name: "Library conditions https://library.example/conditions",
+    });
+    await expect(link).toBeVisible();
+    // A relative address is not a link: its words stay text.
+    await expect(preview.getByRole("button")).toHaveCount(1);
+    await expect(preview).toContainText("my notes");
+    const [popup] = await Promise.all([page.waitForEvent("popup"), link.click()]);
+    expect(popup.url()).toBe("https://library.example/conditions");
+    await popup.close();
+
+    // The outside file's menu opens its pane, which shows the address, before anything leaves.
+    await page.getByRole("button", { name: "Back to this task's files" }).click();
+    await page.getByRole("button", { name: "Close work panel" }).first().click();
+    const faq = card(page, "lending-faq.pdf");
+    await faq.scrollIntoViewIfNeeded();
+    await faq.getByRole("button", { name: /^lending-faq\.pdf/ }).click({ button: "right" });
+    const pages = page.context().pages().length;
+    await page.getByRole("menuitem", { name: "Open in your browser…" }).click();
+    await expect(page.getByTestId("artifact-address")).toHaveText(
+      "https://help.library.example/lending-faq.pdf",
+    );
+    expect(page.context().pages()).toHaveLength(pages);
+    expect(away).toEqual([]);
+  });
+
+  test("F-307: an item with no content says so with no Download; one the device can't draw offers Download", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await openCard(page, "library-card.pkpass");
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "The gateway lists this item, but not its content, so it can't be opened or downloaded here.",
+    );
+    await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Back to this task's files" }).click();
+    // A PDF: its details and Download, said on its card and in the pane; its pages aren't drawn.
+    await page
+      .getByTestId("sent-in-chat")
+      .getByRole("button", { name: /^lending-terms\.pdf/ })
+      .click();
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "Clawtrate shows a PDF's details, not its pages. Download it to read it.",
+    );
+    await expect(
+      card(page, "lending-terms.pdf").getByRole("button", {
+        name: "lending-terms.pdf, PDF, 44 B. Open its details and Download in the Work pane.",
+      }),
+    ).toHaveCount(1);
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: "Download", exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("lending-terms.pdf");
+    expect(readFileSync((await download.path())!, "utf8")).toBe(
+      "%PDF-1.4\n% A made-up lending terms document\n",
+    );
+  });
+
+  test("F-307: an item over Clawtrate's limit names that limit as Clawtrate's", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await openCard(page, "app-screens.zip");
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "app-screens.zip is 8.4 MB. Clawtrate opens and saves items up to 5 MB (Clawtrate's limit), so it can't be opened here.",
+    );
+  });
+
+  test("F-307: an item over the limit whose size the gateway didn't report is described without a size", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&sizes=unknown`, "light");
+    await openCard(page, "app-screens.zip");
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "app-screens.zip is larger than Clawtrate opens and saves: items up to 5 MB (Clawtrate's limit), so it can't be opened here.",
+    );
+  });
+
+  test("F-307: a picture whose bytes don't draw keeps the quiet tile, and the viewer and the pane say so with Try again and Download", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&artifactbytes=broken`, "light");
+    await cardsDrawn(page);
+    const tile = cell(page, "apps-compared.png");
+    await expect(tile.locator(".media-quiet")).toContainText("No preview");
+    await expect(tile.locator("img")).toHaveCount(0);
+    await tile.click();
+    const why = "apps-compared.png didn't draw: its bytes aren't a picture this device can show.";
+    await expect(viewer(page).getByRole("alert")).toContainText(why);
+    await expect(viewer(page).getByRole("button", { name: "Try again" })).toBeVisible();
+    const [saved] = await Promise.all([
+      page.waitForEvent("download"),
+      viewer(page).getByRole("button", { name: "Download", exact: true }).click(),
+    ]);
+    expect(readFileSync((await saved.path())!, "utf8")).toBe("These bytes are not a picture.");
+    await page.keyboard.press("Escape");
+    await tile.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Show in Files" }).click();
+    const undrawn = page.getByTestId("artifact-undecodable");
+    await expect(undrawn).toContainText(why);
+    await expect(undrawn.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(undrawn.getByRole("button", { name: "Download" })).toBeVisible();
+  });
+
+  test("F-307: a failed load says so with Try again, and a successful retry shows the preview", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&artifactload=failed`, "light");
+    await openCard(page, "borrowing-report.md");
+    await expect(page.getByTestId("artifact-failed")).toContainText(
+      "Couldn't open borrowing-report.md. The gateway's download link expired before it was used.",
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.locator(".reader-preview")).toContainText("Holds take about nine days.");
+    await expect(page.getByTestId("artifact-failed")).toHaveCount(0);
+  });
+
+  test("F-115: the gateway's refusal to attach a file is said in the conversation, never offered", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    const refused = page.getByTestId("refused-card");
+    await expect(refused.getByRole("group")).toHaveAccessibleName(
+      "reading-list.csv, not attached. The gateway couldn't attach it.",
+    );
+    await expect(refused.getByRole("button")).toHaveCount(0);
+  });
+});
+
+test.describe("the card's menu", () => {
+  test("F-118: More, right-click and Shift+F10 open one menu; Download saves the item's bytes under its title", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    const report = card(page, "borrowing-report.md");
+    await report.scrollIntoViewIfNeeded();
+    await report.getByRole("button", { name: /^borrowing-report/ }).click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "borrowing-report.md" });
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "Open",
+      "Download",
+      "Copy text",
+      "Show in Files",
+      "Download 2 of 5",
+    ]);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await report.getByRole("button", { name: /^borrowing-report/ }).focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Open" })).toBeFocused();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      menu.getByRole("menuitem", { name: "Download", exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("borrowing-report.md");
+    expect(readFileSync((await download.path())!, "utf8")).toBe(
+      "# Borrowing e-books\n\n## Found\n\n- Your library lends through Shelfwise.\n- Holds take about nine days.\n\n## Left\n\n- Renew the card before March.\n",
+    );
+    // The browser chooses where, and whether: the web preview says only that it started.
+    await expect(announcer(page)).toHaveText("Sent a download request for borrowing-report.md.");
+  });
+
+  test("F-304: Download all hands the browser each on-gateway item of the message with its exact bytes, says how many requests it received, and names what it left out", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await cell(page, "apps-compared.png").click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "apps-compared.png" });
+    const downloads: Download[] = [];
+    page.on("download", (download) => downloads.push(download));
+    await menu.getByRole("menuitem", { name: "Download 5 of 6" }).click();
+    // Never that files were saved: the browser decides that, and doesn't tell the page.
+    await expect(announcer(page)).toHaveText(
+      "The browser received 5 download requests. Not sent: cover.jpg",
+    );
+    await expect.poll(() => downloads.length).toBe(5);
+    const names = downloads.map((download) => download.suggestedFilename()).sort();
+    expect(names).toEqual(
+      [
+        "apps-compared.png",
+        "borrowing-walkthrough.webm",
+        "cache-growth.png",
+        "usage.png",
+        "voice-note.wav",
+      ].sort(),
+    );
+    for (const download of downloads) {
+      const name = download.suggestedFilename();
+      expect(readFileSync((await download.path())!).equals(Buffer.from(BYTES[name]!)), name).toBe(
+        true,
+      );
+    }
+
+    // A message whose items include one with no content and one at an outside address: the
+    // result names both, beside the one over Clawtrate's limit, and sends only what it can.
+    downloads.length = 0;
+    const report = card(page, "borrowing-report.md");
+    await report.scrollIntoViewIfNeeded();
+    await report.getByRole("button", { name: /^borrowing-report/ }).click({ button: "right" });
+    await page
+      .getByRole("menu", { name: "borrowing-report.md" })
+      .getByRole("menuitem", { name: "Download 2 of 5" })
+      .click();
+    await expect(announcer(page)).toHaveText(
+      "The browser received 2 download requests. Not sent: app-screens.zip, library-card.pkpass, lending-faq.pdf",
+    );
+    await expect.poll(() => downloads.length).toBe(2);
+    for (const download of downloads) {
+      const name = download.suggestedFilename();
+      expect(readFileSync((await download.path())!).equals(Buffer.from(BYTES[name]!)), name).toBe(
+        true,
+      );
+    }
+    expect(downloads.map((download) => download.suggestedFilename()).sort()).toEqual([
+      "borrowing-report.md",
+      "lending-terms.pdf",
+    ]);
+  });
+
+  test("F-305: a picture's menu copies that picture: the clipboard holds an image with its pixels", async ({
+    page,
+  }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await cell(page, "apps-compared.png").click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "apps-compared.png" });
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "Open",
+      "Download",
+      "Copy image",
+      "Save image…",
+      "Show in Files",
+      "Download 5 of 6",
+    ]);
+    await menu.getByRole("menuitem", { name: "Copy image" }).click();
+    await expect(announcer(page)).toHaveText("Copied the image");
+    // The browser may encode the PNG again on the clipboard: what must match is the picture.
+    const same = await page.evaluate(async (expected: string) => {
+      const pixels = async (blob: Blob) => {
+        const bitmap = await createImageBitmap(blob);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        return {
+          size: [bitmap.width, bitmap.height],
+          data: context.getImageData(0, 0, bitmap.width, bitmap.height).data,
+        };
+      };
+      const [item] = await navigator.clipboard.read();
+      if (!item?.types.includes("image/png")) return "no image/png on the clipboard";
+      const held = await pixels(await item.getType("image/png"));
+      const want = await pixels(
+        new Blob([Uint8Array.from(atob(expected), (c) => c.charCodeAt(0))], { type: "image/png" }),
+      );
+      if (held.size.join("x") !== want.size.join("x")) return `size ${held.size.join("x")}`;
+      return held.data.every((value, i) => value === want.data[i]) ? "same" : "other pixels";
+    }, Buffer.from(BYTES["apps-compared.png"]!).toString("base64"));
+    expect(same).toBe("same");
+  });
+
+  test("F-306: Save image… and Save video… save exactly the chosen picture's and video's bytes", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await cell(page, "apps-compared.png").click({ button: "right" });
+    const [picture] = await Promise.all([
+      page.waitForEvent("download"),
+      page
+        .getByRole("menu", { name: "apps-compared.png" })
+        .getByRole("menuitem", { name: "Save image…" })
+        .click(),
+    ]);
+    expect(picture.suggestedFilename()).toBe("apps-compared.png");
+    expect(
+      readFileSync((await picture.path())!).equals(Buffer.from(BYTES["apps-compared.png"]!)),
+    ).toBe(true);
+    // The video sits under "+2"; the viewer's right-click offers Save video….
+    await cell(page, "usage.png").click();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("viewer-video")).toBeVisible();
+    await page.getByTestId("viewer-video").click({ button: "right" });
+    const [video] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("menuitem", { name: "Save video…" }).click(),
+    ]);
+    expect(video.suggestedFilename()).toBe("borrowing-walkthrough.webm");
+    expect(
+      readFileSync((await video.path())!).equals(Buffer.from(BYTES["borrowing-walkthrough.webm"]!)),
+    ).toBe(true);
+  });
+});
+
+test.describe("the media viewer", () => {
+  test("F-117: it opens on Close, moves with the arrow keys through the message's pictures and video, and Escape returns focus to the picture", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    const opener = cell(page, "apps-compared.png");
+    await opener.click();
+    await expect(viewer(page)).toHaveAccessibleName("apps-compared.png, 1 of 4");
+    await expect(page.getByRole("button", { name: "Close the viewer" })).toBeFocused();
+    // The shell beneath is inert while the viewer is open.
+    await expect(page.locator(".shell")).toHaveAttribute("inert", "");
+    // An item with no content (cover.jpg) is not in the sequence.
+    const strip = viewer(page).getByRole("group", { name: "Items" }).getByRole("button");
+    await expect(strip).toHaveText(["", "", "", ""]);
+    await expect(strip.nth(0)).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toHaveAccessibleName("cache-growth.png, 2 of 4");
+    await expect(strip.nth(1)).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(viewer(page)).toHaveAccessibleName("borrowing-walkthrough.webm, 4 of 4");
+    await expect(page.getByTestId("viewer-video")).toBeVisible();
+    // Tab stays inside.
+    for (let i = 0; i < 12; i += 1) {
+      await page.keyboard.press("Tab");
+      expect(
+        await viewer(page).evaluate((element) => element.contains(document.activeElement)),
+      ).toBe(true);
+    }
+    await page.keyboard.press("Escape");
+    await expect(viewer(page)).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    await expect(page.locator(".shell")).not.toHaveAttribute("inert", "");
+  });
+
+  test("F-117: a picture switches between fitted and actual size, Download saves it, and the video's speed is kept for the session", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await cell(page, "usage.png").click();
+    const stage = page.locator(".viewer-image");
+    await expect(stage).toHaveAttribute("data-zoom", "fit");
+    await stage.click();
+    await expect(stage).toHaveAttribute("data-zoom", "actual");
+    const shown = await page
+      .getByTestId("viewer-image")
+      .evaluate((img: HTMLImageElement) => img.src.split(",")[1]!);
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.keyboard.press("ControlOrMeta+s"),
+    ]);
+    expect(download.suggestedFilename()).toBe("usage.png");
+    expect(readFileSync((await download.path())!).equals(Buffer.from(shown, "base64"))).toBe(true);
+    await page.keyboard.press("ArrowRight");
+    await page.getByRole("button", { name: "Speed: 1×" }).click();
+    const speeds = page.getByRole("menu", { name: "Speed" }).getByRole("menuitemradio");
+    await expect(speeds).toHaveText(["0.5×", "1×", "1.5×", "2×"]);
+    await page.getByRole("menuitemradio", { name: "1.5×" }).click();
+    expect(
+      await page.getByTestId("viewer-video").evaluate((v: HTMLVideoElement) => v.playbackRate),
+    ).toBe(1.5);
+    await page.keyboard.press("Escape");
+    await cell(page, "usage.png").click();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByRole("button", { name: "Speed: 1.5×" })).toBeVisible();
+  });
+});
+
+test.describe("a Page", () => {
+  const reads = async (page: Page) => (await sent(page)).filter((c) => c.type === "readPage");
+
+  test("F-115: a Page's card and its Sent in chat row open the Page view, which says pages aren't shown here and reads, parses and frames nothing", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    // The same Page in a later message: the earlier card says so, and claims no version.
+    const cards = page.getByTestId("page-card");
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0).locator(".artifact-sub")).toHaveText("Page · Shown again below");
+    await expect(cards.nth(1).locator(".artifact-sub")).toHaveText("Page");
+    await expect(page.getByText(/newer version/i)).toHaveCount(0);
+    const opener = cards
+      .nth(0)
+      .getByRole("button", { name: "E-book apps compared, page. Shown again below. Open" });
+    await opener.click();
+    const view = page.getByTestId("page-view");
+    await expect(view).toHaveAccessibleName("E-book apps compared");
+    await expect(view.getByRole("button", { name: "Close the page (Esc)" })).toBeFocused();
+    await expect(page.getByTestId("page-unavailable")).toHaveText(
+      "Clawtrate can't show pages here yet.You can export this page as a file.",
+    );
+    // Nothing of the Page was read, and nothing is framed: not in the media viewer either.
+    await expect(page.locator("iframe")).toHaveCount(0);
+    await expect(viewer(page)).toHaveCount(0);
+    expect(await reads(page)).toEqual([]);
+    // Escape closes it with focus on nothing at all, after a click on the view's text.
+    await page.getByTestId("page-unavailable").click();
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+    await expect(opener).toBeFocused();
+
+    // Sent in chat lists the Page, and its row opens the same view through the same gate.
+    await page.getByRole("button", { name: "Show work panel" }).first().click();
+    await page.getByRole("tab", { name: "Files" }).click();
+    const rows = page.getByTestId("sent-in-chat").getByTestId("sent-page");
+    await expect(rows).toHaveCount(2);
+    await rows.first().click();
+    await expect(page.getByTestId("page-unavailable")).toBeVisible();
+    await expect(page.locator("iframe")).toHaveCount(0);
+    expect(await reads(page)).toEqual([]);
+    expect(away).toEqual([]);
+  });
+
+  test("F-115: export names the HTML source and reports only the browser request", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    await page.getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByTestId("page-export");
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // What each file is, by where its HTML came from, and what saving does: no author, no version.
+    await expect(dialog.locator("label").nth(0)).toContainText(
+      "Clawtrate versionSaves a copy with scripts and link controls removed.",
+    );
+    await expect(dialog.locator("label").nth(1)).toContainText(
+      "Original HTML from the gatewaySaves the original HTML.",
+    );
+    await expect(dialog).not.toContainText("made it");
+    await expect(dialog.locator(".page-export-note")).toHaveText(
+      "The file holds the page's HTML only: files kept beside it on the gateway aren't included. Saving exports the HTML as a local file.",
+    );
+    await dialog.getByRole("radio", { name: /^Clawtrate version/ }).check();
+    const [copy] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    // No style travels in the copy: not an element, not an attribute.
+    const html = readFileSync((await copy.path())!, "utf8");
+    expect(html).not.toContain("<style");
+    expect(html).not.toContain("style=");
+    // The browser decides whether it saves: only the request is reported.
+    await expect(announcer(page)).toHaveText(
+      "Sent a download request for E-book apps compared.html.",
+    );
+  });
+
+  test("F-115: Escape closes only Export after a click on its note, and restores focus to Export", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    const view = page.getByTestId("page-view");
+    const opening = view.getByRole("button", { name: "Export…" });
+    await opening.click();
+    const dialog = page.getByTestId("page-export");
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // The view's Close and Export… are covered while Export is open.
+    await expect(view.getByRole("button", { name: "Close the page (Esc)" })).toHaveAttribute(
+      "inert",
+      "",
+    );
+    await dialog.locator(".page-export-note").click();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(view).toBeVisible();
+    await expect(opening).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+  });
+
+  test("F-115: a failed artifact listing still shows the transcript's Page rows", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&artifactlist=failed`, "light");
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    // The cards of the transcript's Pages, and their rows in Files, with no listing at all.
+    await expect(page.getByTestId("page-card")).toHaveCount(2);
+    await expect(page.getByTestId("artifact-card")).toHaveCount(0);
+    await page.getByRole("button", { name: "Show work panel" }).first().click();
+    await page.getByRole("tab", { name: "Files" }).click();
+    const rows = page.getByTestId("sent-in-chat").getByTestId("sent-page");
+    await expect(rows).toHaveCount(2);
+    await rows.first().click();
+    await expect(page.getByTestId("page-unavailable")).toBeVisible();
+  });
+
+  test("F-115: Export reads the Page once, for its occurrence, and saves the Clawtrate version with nothing that runs, navigates or loads, or the original", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    expect(await reads(page)).toEqual([]);
+    await page.keyboard.press("ControlOrMeta+e");
+    const dialog = page.getByRole("dialog", { name: "Export E-book apps compared" });
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // One read, for this occurrence: the task, its current session, the message and the Page.
+    expect(await reads(page)).toEqual([
+      {
+        type: "readPage",
+        key: "agent:main:library-loans",
+        sessionId: "main-library-loans",
+        itemId: "loans-2",
+        docId: "apps-compared",
+      },
+    ]);
+    await dialog.getByRole("radio", { name: /^Clawtrate version/ }).check();
+    const [shown] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    expect(shown.suggestedFilename()).toBe("E-book apps compared.html");
+    const inert = readFileSync((await shown.path())!, "utf8");
+    expect(inert).toMatch(
+      /^<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:;/,
+    );
+    for (const gone of ["<script", "<form", "<a ", "href=", "action=", "src=", "tracker.example"])
+      expect(inert, gone).not.toContain(gone);
+    // The link's words and the table stay; the button no longer submits anything.
+    expect(inert).toContain("the comparison");
+    expect(inert).toContain('<button type="button">Sort</button>');
+    await expect(announcer(page)).toHaveText(
+      "Sent a download request for E-book apps compared.html.",
+    );
+
+    await page.keyboard.press("ControlOrMeta+e");
+    await dialog.getByRole("radio", { name: /^Original HTML from the gateway/ }).check();
+    const [original] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    expect(readFileSync((await original.path())!, "utf8")).toContain(
+      "<script>document.body.dataset.ran='yes'</script>",
+    );
+    expect(away).toEqual([]);
+  });
+});
+
+test.describe("nothing remote loads by itself", () => {
+  test("F-116 F-117: drawing the task asks no address but the app's own; a link's card shows its whole address, and its preview is fetched only from its own control, which names the host and the machine", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await answerAway(page);
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await expect(cell(page, "apps-compared.png").locator("img")).toBeVisible();
+    // Previews were asked of the host (the gateway's own), and only for on-gateway pictures.
+    const previews = (await sent(page)).filter(
+      (c) => c.type === "readArtifact" && c.part === "preview",
+    );
+    expect(previews.map((c) => c.artifactId)).not.toContain("artifact_cover");
+    const asked = async () => (await sent(page)).filter((c) => c.type === "previewLink");
+    expect(await asked()).toEqual([]);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    const link = page.getByTestId("link-card");
+    await expect(link).toBeInViewport();
+    await expect(link.getByTestId("link-address")).toHaveText("https://library.example/ebooks");
+    // A hover, however long, fetches nothing.
+    await link.getByRole("button", { name: /Opens in your browser/ }).hover();
+    await page.waitForTimeout(800);
+    expect(await asked()).toEqual([]);
+    await expect(page.getByTestId("link-preview")).toHaveCount(0);
+    // The fixture is the web preview: its host machine is the one that fetches.
+    const control = link.getByRole("button", {
+      name: "Preview library.example from the computer running the preview",
+    });
+    await control.click();
+    await expect(page.getByTestId("link-preview")).toContainText("Library e-books");
+    expect(await asked()).toEqual([{ type: "previewLink", url: "https://library.example/ebooks" }]);
+    // Closed, nothing of it is kept: opening it again asks again.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("link-preview")).toHaveCount(0);
+    await expect(control).toBeFocused();
+    await control.click();
+    await expect(page.getByTestId("link-preview")).toContainText("Library e-books");
+    expect(await asked()).toHaveLength(2);
+    // Choosing the card opens the address it shows in the browser; nothing else went out.
+    const [popup] = await Promise.all([
+      page.waitForEvent("popup"),
+      link
+        .getByRole("button", {
+          name: "library.example/ebooks, https://library.example/ebooks. Opens in your browser.",
+        })
+        .click(),
+    ]);
+    expect(popup.url()).toBe("https://library.example/ebooks");
+    await popup.close();
+    expect(away).toEqual([]);
+  });
+
+  test("F-307: a failed recording offers Try again and Download, and Pause cancels pending playback", async ({
+    page,
+  }) => {
+    // Every start of a media element, counted in the page.
+    await page.addInitScript(() => {
+      const counted = window as unknown as { plays: number };
+      counted.plays = 0;
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+        counted.plays += 1;
+        return play.call(this);
+      };
+    });
+    const plays = () => page.evaluate(() => (window as unknown as { plays: number }).plays);
+    await openFixture(page, `${ARTIFACTS}&audio=slow`, "light");
+    await cardsDrawn(page);
+    const note = card(page, "voice-note.wav");
+    await note.scrollIntoViewIfNeeded();
+    await note.getByRole("button", { name: "Play voice-note.wav" }).click();
+    await note.getByRole("button", { name: "Pause voice-note.wav" }).click();
+    // The read answers after Pause: nothing starts.
+    await page.waitForTimeout(1_200);
+    expect(await plays()).toBe(0);
+    await expect(note.getByRole("button", { name: "Play voice-note.wav" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await openFixture(page, `${ARTIFACTS}&audio=broken`, "light");
+    await cardsDrawn(page);
+    const broken = card(page, "voice-note.wav");
+    await broken.scrollIntoViewIfNeeded();
+    await broken.getByRole("button", { name: "Play voice-note.wav" }).click();
+    const failed = broken.getByTestId("recording-unplayable");
+    await expect(failed).toHaveText("This device couldn't play this recording.Try againDownload");
+    await expect(broken.getByRole("button", { name: "Play voice-note.wav" })).toBeVisible();
+    const [saved] = await Promise.all([
+      page.waitForEvent("download"),
+      failed.getByRole("button", { name: "Download" }).click(),
+    ]);
+    expect(readFileSync((await saved.path())!, "utf8")).toBe("These bytes are not a recording.");
+    // Try again plays it again, and says so again.
+    const before = await plays();
+    await failed.getByRole("button", { name: "Try again" }).click();
+    await expect.poll(plays).toBeGreaterThan(before);
+    await expect(broken.getByTestId("recording-unplayable")).toBeVisible();
+    // Where the pane offers playback, it says the same.
+    await openCard(page, "voice-note.wav");
+    const reader = page.getByTestId("artifact-reader");
+    await reader.getByRole("button", { name: "Play voice-note.wav" }).click();
+    await expect(reader.getByTestId("recording-unplayable")).toContainText(
+      "This device couldn't play this recording.",
+    );
+  });
+
+  test("F-117: a recording plays only when asked, one at a time", async ({ page }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    const full = async () =>
+      (await sent(page)).filter((c) => c.type === "readArtifact" && c.part === "full").length;
+    expect(await full()).toBe(0);
+    const play = page.getByRole("button", { name: "Play voice-note.wav" });
+    await play.click();
+    await expect(page.getByRole("button", { name: "Pause voice-note.wav" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(await full()).toBe(1);
+  });
+});

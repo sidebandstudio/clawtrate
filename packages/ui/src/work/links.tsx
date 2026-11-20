@@ -11,6 +11,8 @@ export type FileRequest = {
   /** The step it came from: a write opens on its change, a read on the source. */
   stepId: string | null;
   view: "changes" | "source" | null;
+  /** An item a bot handed over, by its occurrence key: Files opens it instead of `path`. */
+  artifact?: string;
   /** Grows with every request, so the same file asked twice opens twice. */
   nonce: number;
 };

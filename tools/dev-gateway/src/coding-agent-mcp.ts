@@ -10,6 +10,7 @@
 //   slow_task    { seconds }                            -> { status: "done", seconds }
 //   long_output  { lines }                              -> many numbered lines of text
 //   received_notifications {}                           -> notifications the gateway sent
+//   share_page   { docId, title }                       -> a canvas preview naming that page
 
 import { createInterface } from "node:readline";
 
@@ -72,6 +73,16 @@ export const TOOLS = [
     description: "List the notifications this server has received, such as cancellations.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "share_page",
+    description:
+      "Share a page of the gateway's canvas in the conversation: the result names it as a canvas preview.",
+    inputSchema: {
+      type: "object",
+      properties: { docId: { type: "string" }, title: { type: "string" } },
+      required: ["docId"],
+    },
+  },
 ];
 
 const json = (value: Record<string, unknown>): ToolResult => ({
@@ -132,6 +143,18 @@ export function createCodingAgent() {
     if (name === "long_output") {
       const lines = clamp(args.lines, 1, 20_000, 1);
       const text = Array.from({ length: lines }, (_, i) => `line ${i + 1} of ${lines}`).join("\n");
+      return { content: [{ type: "text", text }] };
+    }
+    if (name === "share_page") {
+      // The shape the gateway's history reads as a canvas preview (`kind: "canvas"`):
+      // `chat.history` then adds a `canvas` block naming the page to the bot's reply.
+      const docId = String(args.docId ?? "");
+      const title = typeof args.title === "string" ? args.title : docId;
+      const text = JSON.stringify({
+        kind: "canvas",
+        view: { id: docId, url: `/__openclaw__/canvas/documents/${docId}/index.html`, title },
+        presentation: { target: "assistant_message", title },
+      });
       return { content: [{ type: "text", text }] };
     }
     if (name === "received_notifications") {

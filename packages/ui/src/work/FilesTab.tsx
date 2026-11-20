@@ -27,10 +27,13 @@ import { FileRow, onRowKeys } from "./FileRow.tsx";
 import { folderOf } from "./files-format.ts";
 import type { FileRequest } from "./links.tsx";
 import { Reader, type View } from "./Reader.tsx";
+import { ArtifactReader, SentInChat } from "../artifacts/reader.tsx";
 import { useTaskFiles, useWorkspaceFolder } from "./useFiles.ts";
 
 export type Level =
   | { kind: "task" }
+  /** An item the bot handed over (work-pane.md, section 13), by its occurrence key. */
+  | { kind: "artifact"; key: string; from: string | null }
   | { kind: "folder"; path: string; from: string | null }
   | {
       kind: "file";
@@ -55,7 +58,9 @@ function rememberPlace(key: string, place: Place) {
 const levelKey = (level: Level) =>
   level.kind === "task"
     ? "task"
-    : `${level.kind}:${level.kind === "file" ? level.source : ""}:${level.path}`;
+    : level.kind === "artifact"
+      ? `artifact:${level.key}`
+      : `${level.kind}:${level.kind === "file" ? level.source : ""}:${level.path}`;
 
 /** Markers show in the workspace only when the task's folder is established as it. */
 const NO_MARKS = new Map<string, FileMark>();
@@ -132,18 +137,25 @@ export function FilesTab({
     if (!request || handled.current === request.nonce) return;
     handled.current = request.nonce;
     focusNext.current = "heading";
-    setStack([
-      { kind: "task" },
-      {
-        kind: "file",
-        source: "task",
-        path: request.path,
-        size: null,
-        view: request.view,
-        stepId: request.stepId,
-        from: `task:${request.path}`,
-      },
-    ]);
+    setStack(
+      request.artifact
+        ? [
+            { kind: "task" },
+            { kind: "artifact", key: request.artifact, from: `artifact:${request.artifact}` },
+          ]
+        : [
+            { kind: "task" },
+            {
+              kind: "file",
+              source: "task",
+              path: request.path,
+              size: null,
+              view: request.view,
+              stepId: request.stepId,
+              from: `task:${request.path}`,
+            },
+          ],
+    );
   }, [request]);
 
   // After a level changes: its scroll back, and focus where it belongs. A
@@ -211,6 +223,16 @@ export function FilesTab({
             )
           }
           onWorkspace={() => push({ kind: "folder", path: "", from: null }, "workspace")}
+          onArtifact={(key) => push({ kind: "artifact", key, from: null }, `artifact:${key}`)}
+        />
+      )}
+      {level.kind === "artifact" && (
+        <ArtifactReader
+          key={level.key}
+          artifactKey={level.key}
+          backLabel={backLabel(stack)}
+          onBack={back}
+          headingRef={headingRef}
         />
       )}
       {level.kind === "folder" && (
@@ -343,6 +365,7 @@ function TaskLevel({
   now,
   onOpen,
   onWorkspace,
+  onArtifact,
 }: {
   files: ReturnType<typeof useTaskFiles>;
   marks: Map<string, FileMark>;
@@ -352,8 +375,10 @@ function TaskLevel({
   now: number;
   onOpen: (file: TaskFile) => void;
   onWorkspace: () => void;
+  onArtifact: (key: string) => void;
 }) {
   const [filter, setFilter] = useState("");
+  const sent = <SentInChat onOpen={(artifact) => onArtifact(artifact.key)} />;
   const { list, loading, error } = files;
   const all = list?.files ?? [];
   // A file being written that the list does not have yet shows at the top of Changed.
@@ -514,6 +539,7 @@ function TaskLevel({
           )}
         </div>
       )}
+      {sent}
       {workspaceRow}
     </>
   );

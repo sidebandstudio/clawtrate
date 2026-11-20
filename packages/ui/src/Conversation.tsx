@@ -35,6 +35,7 @@ import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
+import { MessageArtifacts } from "./artifacts/cards.tsx";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -47,7 +48,10 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
     <div className="turn" data-role={role} data-testid="transcript-turn">
       <ReplyQuote item={item} />
       {role === "assistant" ? (
-        <ItemFeed itemId={item.id} />
+        <>
+          <ItemFeed itemId={item.id} />
+          <MessageArtifacts item={item} />
+        </>
       ) : (
         <MessageUnit
           message={

@@ -14,6 +14,14 @@ import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { PICTURE_PATH } from "./seed-files.ts";
+import {
+  HANDOVER,
+  HANDOVER_LINK,
+  PAGE_ID,
+  PAGE_TITLE,
+  REPORT_PATH,
+  REPORT_TEXT,
+} from "./handover.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
 export type PlanContext = {
@@ -94,6 +102,13 @@ const afterBrowser =
     }
     return [say(text)];
   };
+
+/**
+ * A reply that hands files over: the gateway attaches each file named on a
+ * `MEDIA:` line (relative to the bot's workspace) and removes the line.
+ */
+const handOver = (text: string, paths: string[]) =>
+  [text, ...paths.map((path) => `MEDIA: ./${path}`)].join("\n");
 
 /** Tool call ids are filled in by the planner, so they are unique in a session. */
 const tool = (name: string, args: Record<string, unknown>): ReplyStep => ({
@@ -811,6 +826,76 @@ export const SCENARIOS: Scenario[] = [
       browserCall(() => ({ action: "text" })),
       afterBrowser("Tried both addresses."),
     ],
+  },
+  {
+    name: "hand-file",
+    phrase: "hand me the trail report",
+    summary: `Writes a report (${REPORT_PATH}), then hands it over: a file card.`,
+    steps: () => [
+      tool("write", { path: REPORT_PATH, content: REPORT_TEXT }),
+      say(handOver("Here is the trail report.", [REPORT_PATH])),
+    ],
+  },
+  {
+    name: "hand-picture",
+    phrase: "hand me the ridge profile",
+    summary: `Hands over a small picture (${HANDOVER.picture}).`,
+    bots: "Marlow",
+    steps: () => [say(handOver("Here is the ridge's profile.", [HANDOVER.picture]))],
+  },
+  {
+    name: "hand-audio",
+    phrase: "hand me the chime",
+    summary: `Hands over a two-second recording (${HANDOVER.audio}).`,
+    bots: "Marlow",
+    steps: () => [say(handOver("Here is the chime from the trailhead.", [HANDOVER.audio]))],
+  },
+  {
+    name: "hand-link",
+    phrase: "send me the trail conditions",
+    summary: `Ends its reply with a link (${HANDOVER_LINK}, a reserved domain): a link card.`,
+    steps: () => [say(`The park keeps this week's trail conditions here: ${HANDOVER_LINK}`)],
+  },
+  {
+    name: "hand-page",
+    phrase: "make me a trail page",
+    summary: `Names a page of the gateway's canvas (${PAGE_ID}) through the coding agent's share_page: a page card.`,
+    bots: "Marlow",
+    steps: () => [
+      mcp("share_page", { docId: PAGE_ID, title: PAGE_TITLE }),
+      say("I made a page with Saturday's routes."),
+    ],
+  },
+  {
+    name: "hand-several",
+    phrase: "hand me everything",
+    summary: `Writes the report, then hands over four items at once: it, two pictures (one over 256 KB, ${HANDOVER.photo}) and the recording.`,
+    bots: "Marlow",
+    steps: () => [
+      tool("write", { path: REPORT_PATH, content: REPORT_TEXT }),
+      say(
+        handOver("Here is everything from Saturday.", [
+          REPORT_PATH,
+          HANDOVER.picture,
+          HANDOVER.photo,
+          HANDOVER.audio,
+        ]),
+      ),
+    ],
+  },
+  {
+    name: "hand-large",
+    phrase: "hand me the elevation log",
+    summary: `Hands over a 6 MB file (${HANDOVER.large}), over the 5 MB the gateway attaches: it attaches none, and puts an \`attachment_error\` on the reply instead.`,
+    bots: "Marlow",
+    steps: () => [say(handOver("Here is the elevation log.", [HANDOVER.large]))],
+  },
+  {
+    name: "hand-gone",
+    phrase: "hand me the old route",
+    summary: `Hands over a note (${HANDOVER.gone}); \`pnpm dev-gateway forget-handover\` then removes the gateway's stored copy, so opening it fails.`,
+    bots: "Marlow",
+    steps: () => [say(handOver("Here is the old route.", [HANDOVER.gone]))],
   },
 ];
 

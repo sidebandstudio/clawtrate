@@ -40,6 +40,47 @@ export type ClientIdentity = {
   platform: string;
 };
 
+/**
+ * The subset of a WHATWG `fetch` response core reads: browsers, Node 18+,
+ * Electron and React Native all provide it.
+ */
+export type HttpResponseLike = {
+  readonly status: number;
+  readonly headers: { get(name: string): string | null };
+  readonly body: {
+    getReader(): {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>;
+      cancel(): Promise<void>;
+    };
+    cancel(): Promise<void>;
+  } | null;
+};
+
+/**
+ * An HTTP GET with no cookies and no redirects. Core asks it only for an
+ * address on the gateway's own origin that the gateway itself named
+ * (`artifacts.ts`), never for an address a bot wrote.
+ */
+export type HttpFetch = (
+  url: string,
+  init: { method: "GET"; redirect: "error"; credentials: "omit"; signal: AbortSignal },
+) => Promise<HttpResponseLike>;
+
+/** What a link's page says about itself, fetched by the device on the person's gesture. */
+export type LinkPreview =
+  | {
+      status: "ok";
+      url: string;
+      title: string | null;
+      description: string | null;
+      /** The page's preview picture, fetched with it: base64 and its type. */
+      image: { mimeType: string; data: string } | null;
+    }
+  | { status: "none"; url: string };
+
+/** Fetches a link's preview: `http:` and `https:` only, no cookies, bounded; the host decides how. */
+export type LinkPreviewer = (url: string) => Promise<LinkPreview>;
+
 export type ApprovalInstructions = { command: string; note: string | null };
 
 export type ClawtrateHost = {
@@ -55,4 +96,8 @@ export type ClawtrateHost = {
    * gateway is the local development one; core falls back to the generic command.
    */
   approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
+  /** Fetches the gateway's own media addresses (`artifacts.ts`); without it, none is fetched. */
+  fetch?: HttpFetch;
+  /** Fetches a link's preview on the person's gesture; without it, links show no preview. */
+  linkPreview?: LinkPreviewer;
 };

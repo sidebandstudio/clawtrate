@@ -18,5 +18,11 @@ declare class URL {
   readonly protocol: string;
   readonly host: string;
   readonly hostname: string;
+  readonly pathname: string;
+  readonly search: string;
+  readonly hash: string;
+  readonly username: string;
+  readonly password: string;
+  readonly searchParams: { get(name: string): string | null; keys(): IterableIterator<string> };
   toString(): string;
 }

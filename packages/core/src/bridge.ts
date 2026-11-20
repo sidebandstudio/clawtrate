@@ -12,6 +12,15 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import {
+  MAX_ADDRESS_CHARS,
+  type ArtifactList,
+  type ArtifactPart,
+  type ArtifactRead,
+  type ArtifactRecord,
+  type PageRead,
+} from "./artifacts.ts";
+import type { LinkPreview } from "./host.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -161,6 +170,20 @@ export type BridgeCommand =
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
   | { type: "releaseFile"; id: string }
+  /** What the bot handed over in a task this viewer has open (`artifacts.list`). */
+  | { type: "listArtifacts"; key: string }
+  /** One item's content, or the preview a card draws, by the gateway's id. */
+  | { type: "readArtifact"; key: string; artifactId: string; part: ArtifactPart }
+  /** One item's record, for Raw (`artifacts.get`). */
+  | { type: "readArtifactRecord"; key: string; artifactId: string }
+  /**
+   * A Page one occurrence in the open task's current transcript names
+   * (`canvas.document.view`): the task, its current session, and the item
+   * that holds the occurrence. Asked only when the person exports it.
+   */
+  | { type: "readPage"; key: string; sessionId: string | null; itemId: string; docId: string }
+  /** A link's preview, on the person's gesture: `http:` and `https:` only. */
+  | { type: "previewLink"; url: string }
   // Routines (automation.md sections 3 to 8), at the read tier. Reads answer and keep nothing.
   | { type: "refreshRoutines" }
   /** One bot's routines, when the kept list is missing some of the gateway's. */
@@ -314,52 +337,71 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                   ? CheckoutDiff
                                   : C extends { type: "readFileChunk" }
                                     ? { data: string }
-                                    : C extends { type: "cancelSignIn" }
-                                      ? { cancelled: boolean }
-                                      : C extends { type: "dismissSignIn" }
-                                        ? { dismissed: boolean }
-                                        : C extends { type: "saveApiKey" }
-                                          ? { profileId: string | null }
-                                          : C extends { type: "createBot" | "finishBot" }
-                                            ? { botId: string; missing: MissingStep[] }
-                                            : C extends { type: "newTask" | "newMainTask" }
-                                              ? { key: string }
-                                              : C extends { type: "archiveTask" }
-                                                ? ArchiveResult
-                                                : C extends { type: "listArchived" }
-                                                  ? ArchivedList
-                                                  : C extends { type: "readComposerMenu" }
-                                                    ? MenuRow[]
-                                                    : C extends { type: "readUsage" }
-                                                      ? UsageReport | UsageBusy
-                                                      : C extends { type: "listRoutines" }
-                                                        ? BudgetRoutine[]
-                                                        : C extends { type: "readPlacement" }
-                                                          ? BotPlacement
-                                                          : C extends { type: "readMachines" }
-                                                            ? MachinesView
-                                                            : C extends {
-                                                                  type: "setCommandMachine";
-                                                                }
-                                                              ? ConfigSave
-                                                              : C extends {
-                                                                    type: "setBotWorkspace";
-                                                                  }
-                                                                ? {
-                                                                    workspace: string | null;
-                                                                    asTyped: boolean;
-                                                                  }
-                                                                : C extends {
-                                                                      type: "setMachineDefaults";
-                                                                    }
-                                                                  ? ApprovalsFile
-                                                                  : C extends { type: "listMemory" }
-                                                                    ? MemoryList
+                                    : C extends { type: "listArtifacts" }
+                                      ? ArtifactList
+                                      : C extends { type: "readArtifact" }
+                                        ? ArtifactRead
+                                        : C extends { type: "readArtifactRecord" }
+                                          ? ArtifactRecord
+                                          : C extends { type: "readPage" }
+                                            ? PageRead
+                                            : C extends { type: "previewLink" }
+                                              ? LinkPreview
+                                              : C extends { type: "cancelSignIn" }
+                                                ? { cancelled: boolean }
+                                                : C extends { type: "dismissSignIn" }
+                                                  ? { dismissed: boolean }
+                                                  : C extends { type: "saveApiKey" }
+                                                    ? { profileId: string | null }
+                                                    : C extends { type: "createBot" | "finishBot" }
+                                                      ? { botId: string; missing: MissingStep[] }
+                                                      : C extends {
+                                                            type: "newTask" | "newMainTask";
+                                                          }
+                                                        ? { key: string }
+                                                        : C extends { type: "archiveTask" }
+                                                          ? ArchiveResult
+                                                          : C extends { type: "listArchived" }
+                                                            ? ArchivedList
+                                                            : C extends { type: "readComposerMenu" }
+                                                              ? MenuRow[]
+                                                              : C extends { type: "readUsage" }
+                                                                ? UsageReport | UsageBusy
+                                                                : C extends { type: "listRoutines" }
+                                                                  ? BudgetRoutine[]
+                                                                  : C extends {
+                                                                        type: "readPlacement";
+                                                                      }
+                                                                    ? BotPlacement
                                                                     : C extends {
-                                                                          type: "readMemory";
+                                                                          type: "readMachines";
                                                                         }
-                                                                      ? MemoryDocument
-                                                                      : void;
+                                                                      ? MachinesView
+                                                                      : C extends {
+                                                                            type: "setCommandMachine";
+                                                                          }
+                                                                        ? ConfigSave
+                                                                        : C extends {
+                                                                              type: "setBotWorkspace";
+                                                                            }
+                                                                          ? {
+                                                                              workspace:
+                                                                                string | null;
+                                                                              asTyped: boolean;
+                                                                            }
+                                                                          : C extends {
+                                                                                type: "setMachineDefaults";
+                                                                              }
+                                                                            ? ApprovalsFile
+                                                                            : C extends {
+                                                                                  type: "listMemory";
+                                                                                }
+                                                                              ? MemoryList
+                                                                              : C extends {
+                                                                                    type: "readMemory";
+                                                                                  }
+                                                                                ? MemoryDocument
+                                                                                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -398,7 +440,26 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Ask the person for one folder (the desktop app's folder dialog), for
+   * several saves into it. The folder stays in the host; the page gets a
+   * number for it and its name. Absent where the host has none.
+   */
+  chooseFolder?(): Promise<FolderChoice>;
+  /** Write bytes as a new file in a folder `chooseFolder` gave: never outside it, never over a file. */
+  saveInFolder?(file: {
+    folder: number;
+    name: string;
+    data: ArrayBuffer;
+  }): Promise<FolderSaveResult>;
 };
+
+export type FolderChoice =
+  { status: "chosen"; folder: number; name: string } | { status: "cancelled" };
+
+/** How one save into a chosen folder ended: the name it has there, read back, or why not. */
+export type FolderSaveResult =
+  { status: "saved"; name: string } | { status: "failed"; name: string; message: string };
 
 /**
  * How a save ended. A failed write is read back before anything is said about
@@ -1005,6 +1066,39 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "releaseFile":
       return { type: "releaseFile", id: id(command.id, "transfer id") };
+    case "listArtifacts":
+      return { type: "listArtifacts", key: sessionKey(command.key) };
+    case "readArtifact":
+      if (command.part !== "full" && command.part !== "preview") throw new Error("invalid part");
+      return {
+        type: "readArtifact",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "artifact id"),
+        part: command.part,
+      };
+    case "readArtifactRecord":
+      return {
+        type: "readArtifactRecord",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "artifact id"),
+      };
+    case "readPage":
+      return {
+        type: "readPage",
+        key: sessionKey(command.key),
+        sessionId:
+          command.sessionId === null || command.sessionId === undefined
+            ? null
+            : id(command.sessionId, "session id"),
+        itemId: id(command.itemId, "item id"),
+        docId: id(command.docId, "page id"),
+      };
+    case "previewLink": {
+      const url = command.url;
+      if (typeof url !== "string" || url.length > MAX_ADDRESS_CHARS || !/^https?:\/\//i.test(url))
+        throw new Error("invalid link");
+      return { type: "previewLink", url };
+    }
     case "newTask": {
       const label = command.label;
       if (
@@ -1459,6 +1553,25 @@ class ViewerSession implements BridgeSession {
         return client.readFileChunk(command.id, command.index, owner);
       case "releaseFile":
         return client.releaseFile(command.id, owner);
+      case "listArtifacts":
+        return client.listArtifacts(this.mine(command.key), this.fileOptions());
+      case "readArtifact":
+        return client.readArtifact(
+          this.mine(command.key),
+          command.artifactId,
+          command.part,
+          this.fileOptions(),
+        );
+      case "readArtifactRecord":
+        return client.readArtifactRecord(this.mine(command.key), command.artifactId);
+      case "readPage":
+        return client.readPage(
+          this.mine(command.key),
+          { sessionId: command.sessionId, itemId: command.itemId, docId: command.docId },
+          this.fileOptions(),
+        );
+      case "previewLink":
+        return client.previewLink(command.url);
       case "newTask":
         return { key: await client.newTask(command.botId, { label: command.label, owner }) };
       case "newMainTask":

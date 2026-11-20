@@ -86,6 +86,19 @@ import {
   MAX_IMAGE_BYTES,
   validateAttachmentMeta,
 } from "./attachments.ts";
+import {
+  listArtifacts,
+  previewLink,
+  readArtifact,
+  readArtifactRecord,
+  readPage,
+  type ArtifactContext,
+  type ArtifactList,
+  type ArtifactPart,
+  type ArtifactRead,
+  type ArtifactRecord,
+  type PageRead,
+} from "./artifacts.ts";
 import { ChatTextBaselines } from "./chat-text.ts";
 import {
   FileTransfers,
@@ -4305,6 +4318,93 @@ export class ClawtrateClient {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
   }
 
+  // What a bot handed over (`artifacts.ts`). All `operator.read`; nothing is kept in the state.
+
+  private async artifactRead<T>(
+    read: (ctx: ArtifactContext) => Promise<T>,
+    options: FileReadOptions,
+  ): Promise<T> {
+    const gatewayUrl = this.state.connection.gatewayUrl;
+    if (this.state.connection.status !== "connected" || !gatewayUrl)
+      throw new Error("Not connected to the gateway.");
+    if (this.fileReads >= MAX_FILE_READS)
+      throw new Error("Other files are being read; try again in a moment.");
+    this.fileReads += 1;
+    try {
+      return await read({
+        request: (method, params) => this.request(method, params),
+        fetch: this.host.fetch ?? null,
+        gatewayUrl,
+        transfers: this.fileTransfers,
+        owner: options.owner ?? DIRECT_CALLER,
+        ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
+        now: () => this.now(),
+      });
+    } finally {
+      this.fileReads -= 1;
+    }
+  }
+
+  /** The task's items the bot handed over (`artifacts.list`, `messageRole: "assistant"`). */
+  listArtifacts(key: string, options: FileReadOptions = {}): Promise<ArtifactList> {
+    return this.artifactRead((ctx) => listArtifacts(ctx, key), options);
+  }
+
+  /** One item's content, or its preview, from where the gateway says it is. */
+  readArtifact(
+    key: string,
+    artifactId: string,
+    part: ArtifactPart,
+    options: FileReadOptions = {},
+  ): Promise<ArtifactRead> {
+    return this.artifactRead((ctx) => readArtifact(ctx, key, artifactId, part), options);
+  }
+
+  /** An item's record as `artifacts.get` returns it, for Raw. */
+  readArtifactRecord(key: string, artifactId: string): Promise<ArtifactRecord> {
+    return this.artifactRead((ctx) => readArtifactRecord(ctx, key, artifactId), {});
+  }
+
+  /**
+   * A Page one occurrence names: read only when that occurrence is confirmed
+   * in the task's current transcript (the item holds a `page` block with this
+   * id), that transcript's history named its session, and that session is the
+   * one the opener saw and the task's row names. Anything else is not read.
+   */
+  readPage(
+    key: string,
+    occurrence: { sessionId: string | null; itemId: string; docId: string },
+    options: FileReadOptions = {},
+  ): Promise<PageRead> {
+    const transcript = this.state.transcripts[key];
+    const task = Object.values(this.state.tasksByBot)
+      .flat()
+      .find((each) => each.key === key);
+    // The session is confirmed only by a read history that named it, the same one the opener
+    // saw and the task's row names now: two unknown sessions confirm nothing.
+    const confirmed = transcript?.status === "ready" ? (transcript.historySessionId ?? "") : "";
+    const sameSession =
+      confirmed !== "" &&
+      confirmed === occurrence.sessionId &&
+      confirmed === (task?.sessionId ?? null);
+    const named = transcript?.items.some(
+      (item) =>
+        item.id === occurrence.itemId &&
+        item.blocks.some((block) => block.kind === "page" && block.docId === occurrence.docId),
+    );
+    if (!named || !sameSession)
+      return Promise.resolve({
+        status: "failed",
+        message: "This task's messages don't name this page now.",
+      });
+    return this.artifactRead((ctx) => readPage(ctx, occurrence.docId), options);
+  }
+
+  /** A link's preview, fetched by the host on the person's gesture (`LinkPreviewer`). */
+  previewLink(url: string) {
+    return previewLink(this.host.linkPreview ?? null, url);
+  }
+
   /** The next part of a file on its way to this viewer. */
   readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
     return this.fileTransfers.chunk(owner, id, index);
@@ -5378,6 +5478,7 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.
@@ -5402,6 +5503,18 @@ export class ClawtrateClient {
     if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
+  }
+
+  /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message
+   * of it changed in place. The gateway writes what a reply hands over (its
+   * attachments and the files it refused to attach) into the message after
+   * the run ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
   }
 
   /**
@@ -5671,6 +5784,7 @@ export class ClawtrateClient {
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: null,
         hasMore: history?.hasMore === true,
+        historySessionId: typeof history?.sessionId === "string" ? history.sessionId : null,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
       };

@@ -33,6 +33,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/file-paths.ts:filePathsOf>paths":
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/artifacts.ts:KINDS": "static, the four kinds of artifact",
+  "packages/core/src/artifacts.ts:TEXT_TYPES": "static, five media types read as text",
+  "packages/core/src/mapping.ts:HANDED_OVER": "static, five block types",
+  "packages/core/src/node/link-preview.ts:IMAGE_TYPES": "static, four picture types",
   "packages/core/src/files.ts:PICTURE_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:AUDIO_EXTENSIONS": "static, nine extensions",
   "packages/core/src/files.ts:VIDEO_EXTENSIONS": "static, six extensions",
@@ -154,6 +158,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/remote-bridge.ts:createRemoteBridge>wanted":
     "renderer; the tasks the host accepted as open, at most `MAX_VIEWER_OPEN_TASKS`, plus opens in flight",
   // Hosts.
+  "apps/desktop/src/main/index.ts:main>folders":
+    "one folder path per window for Download all, replaced by its next choice and dropped when the window goes",
   "apps/desktop/src/main/index.ts:main>sessions":
     "one bridge session per open window, removed when it closes",
   "apps/desktop/src/web-host/server.ts:<anonymous>>chunks":
