@@ -110,12 +110,15 @@ describe("the feed's address is the build's", () => {
     }
   });
 
-  it("the build accepts only an https address without credentials that is not loopback", () => {
+  it("the build checks the scheme, credentials and parsed hostname without resolving it", () => {
     expect(buildAddressProblem("https://updates.example/clawtrate/feed.json")).toBeNull();
     expect(buildAddressProblem("http://updates.example/feed.json")).toBe("must use https");
     expect(buildAddressProblem("https://user:pass@updates.example/feed.json")).toMatch(/user name/);
     for (const host of ["127.0.0.1", "127.1.2.3", "localhost", "[::1]", "a.localhost"]) {
       expect(buildAddressProblem(`https://${host}/feed.json`), host).toMatch(/loopback/);
+    }
+    for (const host of ["localhost.", "[::ffff:127.0.0.1]"]) {
+      expect(buildAddressProblem(`https://${host}/feed.json`)).toBeNull();
     }
     expect(buildAddressProblem("updates.example/feed.json")).toBe("is not an address");
   });

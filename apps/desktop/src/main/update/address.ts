@@ -50,7 +50,7 @@ export function readable(url: URL, loopback?: LoopbackHttpForTests): boolean {
 
 /**
  * The build's own check of `CLAWTRATE_UPDATE_FEED_URL`: HTTPS, no
- * credentials, and not a loopback host, which only a test may read.
+ * credentials, and a check of the parsed hostname without resolving it.
  * Returns why it is refused, or null.
  */
 export function buildAddressProblem(text: string): string | null {
