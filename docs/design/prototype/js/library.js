@@ -467,7 +467,7 @@
     const spoken = `${x.title}, ${what}, ${x.by === "person" ? "sent by you" : `in ${taskTitle(x.task)}`}${x.time ? `, ${x.time}` : ""}${x.again ? ", shown again below" : ""}${pinned ? ", pinned" : ""}${unavailable ? ". Can't be opened here" : ". Open"}.`;
     const pinLabel = `${pinned ? "Unpin" : "Pin"} ${x.title}`;
     return (
-      `<li class="lib-row" data-item="${esc(x.id)}" data-kind="${x.kind}"><button type="button" class="file-row" data-lib-open="${esc(x.id)}" aria-label="${esc(spoken)}" title="${esc(x.title)}"${phone() && actions ? ' aria-haspopup="menu"' : ""}${unavailable ? ' aria-disabled="true"' : ""}>` +
+      `<li class="lib-row" data-item="${esc(x.id)}" data-kind="${x.kind}"><button type="button" class="file-row" data-lib-open="${esc(x.id)}" aria-label="${esc(spoken)}" title="${esc(x.title)}"${phone() && actions ? ' aria-haspopup="menu"' : ""}${unavailable ? ' data-unavailable="true"' : ""}>` +
       `<span class="file-icon">${icon(kindIcon(x.kind))}</span><span class="file-name">${esc(x.title)}${pinned ? `<span class="lib-pinmark" aria-hidden="true">${pinIcon()}</span>` : ""}</span>` +
       `<span class="file-sub">${esc(sub(x))}</span></button>` +
       (x.src === "uploads"

@@ -605,7 +605,7 @@
   padding-right: 88px;
 }
 
-.lib-row .file-row[aria-disabled="true"] {
+.lib-row .file-row[data-unavailable="true"] {
   cursor: default;
   color: var(--text-muted);
 }

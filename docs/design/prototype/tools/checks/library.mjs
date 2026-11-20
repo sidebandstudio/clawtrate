@@ -661,11 +661,11 @@ check("R4 it says some uploads may be missing", (await text(p, "#lib-uploads")) 
 await p.click('[data-lib-more="today"]');
 await p.click('[data-lib-more="today"]');
 check("R8 at phone width too, the last Show more focuses the first row it revealed", await q(p, () => !document.querySelector('[data-lib-more="today"]') && document.activeElement === document.querySelectorAll('.lib-group[data-group="today"] [data-lib-open]')[10]));
-check("E4 five metadata rows the person sent, four from the image listing's first reply and one after its cursor, each Preview unavailable", await q(p, () => ["u1", "u2", "u3", "u4", "u5"].every((id) => document.querySelector(`.lib-row[data-item="${id}"] .file-sub`)?.textContent === "PNG image · Preview unavailable · 5:29 PM · sent by you" && document.querySelector(`[data-lib-open="${id}"]`).getAttribute("aria-disabled") === "true") && window.CT.library.ITEMS.filter((x) => x.src === "uploads").map((x) => x.cursor).join() === "1,1,1,1,2"));
+check("E4 five metadata rows the person sent, four from the image listing's first reply and one after its cursor, each Preview unavailable", await q(p, () => ["u1", "u2", "u3", "u4", "u5"].every((id) => document.querySelector(`.lib-row[data-item="${id}"] .file-sub`)?.textContent === "PNG image · Preview unavailable · 5:29 PM · sent by you" && document.querySelector(`[data-lib-open="${id}"]`).getAttribute("aria-label").endsWith(". Can't be opened here.")) && window.CT.library.ITEMS.filter((x) => x.src === "uploads").map((x) => x.cursor).join() === "1,1,1,1,2"));
 check("R4 sent by you only where the matching history row is the person's", (await subOf(p, "k5")) === "maps.example · 5:30 PM · sent by you");
 const uploadSeen = observe(p);
 for (const id of ["u1", "u5"]) {
-  await q(p, (i) => document.querySelector(`[data-lib-open="${i}"]`).click(), id);
+  await p.click(`[data-lib-open="${id}"]`);
   check(`E4 choosing ${id === "u1" ? "the first" : "the fifth"} opens no viewer and offers no Download, Copy or Share, and says why`, (await text(p, ".lib-failed span")) === `Can't open map-${id.slice(1)}.png here: the gateway didn't return its picture.` && (await q(p, () => !document.querySelector(".viewer, [data-v=download], [data-v=copy], .export-dialog") && !window.CT.work.artifacts.u1)));
 }
 check("E4 …and no request was made", uploadSeen.requests.length === 0, uploadSeen.requests.join(" "));
