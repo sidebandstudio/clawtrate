@@ -18,6 +18,7 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }, { clock
   const p = await b.newPage({ viewport });
   p.on("pageerror", (e) => out.push("PAGEERROR " + e));
   if (clock) await p.clock.install({ time: new Date("2026-11-18T22:00:00Z") });
+  if (clock === "paused") await p.clock.pauseAt(new Date("2026-11-18T22:01:00Z"));
   await p.goto(base + (query ? "&" + query : ""));
   if (clock) await p.clock.runFor(50);
   else await p.waitForTimeout(150);
@@ -210,11 +211,11 @@ check("R1 Group Chats always says its one line, with no request and never No res
 await p.close();
 
 // Changing scope while a hidden source is still widening: what is said belongs to the chosen scope.
-p = await open("palette=open&width=phone&scope=messages&q=backup&bots=30&each=1&src=eachfail", { width: 390, height: 844 });
-await p.waitForTimeout(450);
+p = await open("palette=open&width=phone&scope=messages&q=backup&bots=30&each=1&src=eachfail", { width: 390, height: 844 }, { clock: "paused" });
+await p.clock.runFor(450);
 await recordLive(p);
 await p.click('[data-scope="groups"]');
-await p.waitForTimeout(1500);
+await p.clock.runFor(1500);
 check("R1 a scope change drops the hidden widening's announcement", (await said(p)).length > 0 && (await said(p)).every((t) => t === "Group chats aren't part of Clawtrate yet."), (await said(p)).join(" / "));
 await p.close();
 
@@ -284,13 +285,13 @@ await settle(p);
 check("R2 a retry started before the text changed does not draw under the new text", !(await body(p)).includes("transcode cache") && !(await body(p)).includes("All 3 matching messages"));
 await p.close();
 
-p = await open("palette=open&q=transcode&bot=juniper&task=j1");
-await settle(p);
+p = await open("palette=open&q=transcode&bot=juniper&task=j1", undefined, { clock: "paused" });
+await p.clock.runFor(1200);
 const behind = await p.evaluate(() => document.querySelector(".task-line")?.textContent);
 await p.keyboard.press("Enter");
-await p.waitForTimeout(60);
+await p.clock.runFor(60);
 await p.fill("#s-field", "ephyr");
-await p.waitForTimeout(500);
+await p.clock.runFor(500);
 check("R2 an open started before the text changed does not complete", (await paletteOpen(p)) && !(await p.evaluate(() => document.querySelector(".bubble.search-hit"))));
 check("R2 and the conversation behind search stays on its own task", behind === "Heat pump vs. gas furnace" && (await p.evaluate(() => document.querySelector(".task-line")?.textContent)) === behind);
 await p.keyboard.press("Escape");
@@ -357,8 +358,9 @@ await type(p, "transcode");
 check("R3 the archive count is said", (await groupText(p, "messages")).includes("4 tasks have archived transcript content that wasn't searched."));
 await p.close();
 
-p = await open("palette=open");
-await type(p, "backup");
+p = await open("palette=open", undefined, { clock: "paused" });
+await p.fill("#s-field", "backup");
+await p.clock.runFor(1200);
 let m = await groupText(p, "messages");
 check("R3 truncated: the matches the gateway returned, and more indexed messages match", m.includes("Messages · 25") && m.includes("Showing the 25 matches the gateway returned, newest first. More indexed messages match."));
 check("F-268 never 'recent' and never 'Search older'", !(await body(p)).includes("Search older") && !(await body(p)).toLowerCase().includes("recent messages"));
@@ -368,11 +370,11 @@ await activate(p, "Search each bot for more");
 await p.keyboard.press("Shift+Enter");
 check("R7 Shift+Enter on an action row does nothing", (await requests(p, "messages")).length === sent);
 await p.keyboard.press("Enter");
-await p.waitForTimeout(20);
+await p.clock.runFor(20);
 m = await groupText(p, "messages");
 check("R3 while widening: Searching 4 bots…, with the verified hits kept", m.includes("Searching 4 bots…") && (await p.locator('.s-group[data-group="messages"] .s-row[data-kind="message"]').count()) === 5);
 check("R1 while widening nothing says 'No matches in … Messages'", !(await text(p, ".s-nomatch")).includes("Messages"));
-await p.waitForTimeout(700);
+await p.clock.runFor(900);
 m = await groupText(p, "messages");
 check("R3 after widening: how many bots answered and how many messages came back", m.includes("4 of 4 bots answered. 30 messages returned.") && m.includes("Juniper · no matches") && m.includes("Marlow · all 2 matches") && m.includes("Otto · 25 returned. More match; add words to narrow them.") && m.includes("Pip · all 3 matches"));
 check("F-268 searching each bot found what the first search left out", m.includes("Saved a backup copy as the March draft"));
@@ -391,8 +393,8 @@ await widening.close();
 check("S12 the live region says how many bots answered, as Messages' limit, with no combined count", (await live(p)).includes("4 of 4 bots answered. 30 messages returned.") && !/\d+ results?:/.test(await live(p)), await live(p));
 await p.close();
 
-p = await open("palette=open&q=backup&each=1&src=eachfail");
-await settle(p);
+p = await open("palette=open&q=backup&each=1&src=eachfail", undefined, { clock: "paused" });
+await p.clock.runFor(1600);
 m = await groupText(p, "messages");
 check("R3 a failed bot is named, and not counted as answered", m.includes("3 of 4 bots answered.") && m.includes("Pip · couldn't search: the gateway didn't answer in time") && (await live(p)).includes("Pip couldn't be searched."));
 await activate(p, "Try again for Pip");
@@ -401,7 +403,7 @@ await p.evaluate(() => {
   new MutationObserver(() => window.__raw.push(document.querySelector("#s-live").textContent)).observe(document.querySelector("#s-live"), { childList: true, characterData: true, subtree: true });
 });
 await p.keyboard.press("Enter");
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("S8 Try again searches that bot again", (await groupText(p, "messages")).includes("Pip · all 3 matches"));
 const raw = await p.evaluate(() => window.__raw);
 check("R1 while the retry is in progress the earlier status is cleared and nothing is said until it answers", raw[0] === "" && raw.filter(Boolean).length > 0 && raw.filter(Boolean).every((t) => t.includes("4 of 4 bots answered.")), raw.join(" / "));
@@ -416,13 +418,13 @@ await settle(p);
 check("R3 a truncated bot's reply keeps its indexing and archive lines", (await groupText(p, "messages")).includes("Otto · 25 returned. More match; add words to narrow them. Some messages are still being indexed. 4 tasks have archived transcript content that wasn't searched."));
 await p.close();
 
-p = await open("palette=open&q=backup&each=1&bots=30");
-await p.waitForTimeout(1600);
+p = await open("palette=open&q=backup&each=1&bots=30", undefined, { clock: "paused" });
+await p.clock.runFor(1600);
 m = await groupText(p, "messages");
 check("R3 a large roster: 24 bots asked, the rest named and offered", m.includes("24 of 24 bots answered.") && m.includes("Not asked: Umber, Vale, Wren, Yarrow, Zinnia and Alder.") && m.includes("Search the next 6 bots"));
 await activate(p, "Search the next 6 bots");
 await p.keyboard.press("Enter");
-await p.waitForTimeout(600);
+await p.clock.runFor(600);
 check("R3 the next batch is asked", (await groupText(p, "messages")).includes("30 of 30 bots answered.") && (await requests(p, "messages")).filter((r) => r.scope.agentId).length === 30);
 await p.close();
 
