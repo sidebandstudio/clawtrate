@@ -319,16 +319,19 @@ async function patchConfig(
 ): Promise<void> {
   const admin = ctx.clients.admin;
   const before = await admin.request<Revision>("config.get", {});
-  const patched = await admin.request<{ ok?: boolean }>("config.patch", {
+  const patched = await admin.request<{ ok?: boolean; noop?: boolean }>("config.patch", {
     raw: JSON.stringify(patch),
     baseHash: before.hash,
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
   });
   expect(patched.ok === true, `config.patch was refused: ${show(patched)}`);
+  // Already saved (a retry whose first answer was lost): the gateway makes no
+  // new revision, so the saved one is waited on until the gateway runs it.
+  const saved = patched.noop === true;
   const started = Date.now();
   while (Date.now() - started < 30_000) {
     const now = await admin.request<Revision>("config.get", {}).catch(() => null);
-    if (now && now.configRevisionHash !== before.configRevisionHash) {
+    if (now && (saved || now.configRevisionHash !== before.configRevisionHash)) {
       if (now.appliedConfigHash === now.configRevisionHash) return;
     }
     await sleep(200);

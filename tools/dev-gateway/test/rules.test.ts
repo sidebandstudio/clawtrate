@@ -227,18 +227,23 @@ describe("the rules checks' temporary settings", () => {
    * (`enabled: true`) is refused `refusals` times, then a check that notes
    * whether the plugin was on when it started.
    */
-  const drive = async (refusals: number) => {
+  const drive = async (refusals: number, lostReply = false) => {
     let enabled = true;
     let revision = 1;
+    let applied = 1;
+    /** When the saved revision runs; until then the previous one does. */
+    let appliesAt = 0;
     let left = refusals;
+    let lose = lostReply;
     const seenAtNext: boolean[] = [];
     const answer = async (method: string, params: Record<string, unknown> = {}) => {
       switch (method) {
         case "config.get":
+          if (Date.now() >= appliesAt) applied = revision;
           return {
             hash: `h${revision}`,
             configRevisionHash: `r${revision}`,
-            appliedConfigHash: `r${revision}`,
+            appliedConfigHash: `r${applied}`,
             config: { plugins: { entries: { "clawtrate-tool-rules": { enabled } } } },
           };
         case "config.patch": {
@@ -250,8 +255,16 @@ describe("the rules checks' temporary settings", () => {
             left -= 1;
             throw new Error("config.patch refused");
           }
+          // Nothing changes: no new revision, as OpenClaw 2026.10.6 answers it.
+          if (next === enabled) return { ok: true, noop: true, changedPaths: [] };
           enabled = next;
           revision += 1;
+          if (next && lose) {
+            // Saved, run a few seconds later, and the answer lost on the way.
+            lose = false;
+            appliesAt = Date.now() + 5_000;
+            throw new Error("the connection closed before config.patch answered");
+          }
           return { ok: true };
         }
         case "clawtrate-tool-rules.status":
@@ -307,6 +320,13 @@ describe("the rules checks' temporary settings", () => {
   it("are restored by settling when the check's own rollback was refused, before the next check", async () => {
     const run = await drive(1);
     expect(run.lines[0]).toMatch(/^FAIL {2}the plugin turned off mid-run.*config\.patch refused/);
+    expect(run.seenAtNext).toEqual([true]);
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+  });
+
+  it("are waited on, not patched again until a timeout, when a rollback was saved but its answer lost", async () => {
+    const run = await drive(0, true);
+    expect(run.lines[0]).toMatch(/^FAIL {2}the plugin turned off mid-run.*connection closed/);
     expect(run.seenAtNext).toEqual([true]);
     expect(run.result).toEqual({ passed: 1, failed: 1 });
   });
