@@ -837,6 +837,13 @@ describe("F-193: a run's conversation", () => {
 
 const refused = (message: string) =>
   new GatewayProtocolRequestError({ code: "INVALID_REQUEST", message });
+/** The pinned gateway's answer for a job that no longer exists. */
+const missing = (id: string) =>
+  new GatewayProtocolRequestError({
+    code: "INVALID_REQUEST",
+    message: `Automation not found: ${id}. List automations and retry with a current job id.`,
+    details: { code: "CRON_JOB_NOT_FOUND", jobId: id },
+  });
 const ADMIN = { admin: true, connected: true };
 
 describe("changing routines needs admin", () => {
@@ -1127,9 +1134,7 @@ describe("F-189: changing a routine", () => {
     const gone = engine(
       {
         "cron.get": () => {
-          throw refused(
-            `Automation not found: ${JOB}. List automations and retry with a current job id.`,
-          );
+          throw missing(JOB);
         },
       },
       initialRoutinesState,
@@ -1273,6 +1278,23 @@ describe("F-189: changing a routine", () => {
     expect(state().routines).toEqual([]);
   });
 
+  it("F-189: only the gateway's not-found code says a routine is gone, not a refusal that says the words", async () => {
+    const { routines } = engine(
+      {
+        "cron.get": () => {
+          throw refused("delivery target not found for this account");
+        },
+      },
+      initialRoutinesState,
+      ADMIN,
+    );
+    expect(await routines.update(JOB, original, { ...original, name: "x" }, expected)).toEqual({
+      status: "refused",
+      error: "delivery target not found for this account",
+    });
+    await expect(routines.readOne(JOB)).rejects.toThrow(/not found for this account/u);
+  });
+
   it("F-189: an answer for the routine that can't be read is not taken to mean it was deleted", async () => {
     for (const answer of ["unexpected", { ...once, id: "another-routine" }]) {
       const { routines } = engine({ "cron.get": () => answer }, initialRoutinesState, ADMIN);
@@ -1408,7 +1430,7 @@ describe("F-350 F-351 F-352: pause, run now and delete", () => {
     const gone = engine(
       {
         "cron.remove": () => {
-          throw refused(`Automation not found: ${JOB}.`);
+          throw missing(JOB);
         },
       },
       initialRoutinesState,

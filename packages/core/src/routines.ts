@@ -566,7 +566,13 @@ function refusal(error: unknown): string | null {
   return error instanceof GatewayProtocolRequestError ? error.message : null;
 }
 
-const notFound = (error: string) => /\bnot found\b/iu.test(error);
+/**
+ * The gateway's own answer that the job is gone (`details.code`, sent by every
+ * cron method on 2026.10.6), not any refusal whose words say "not found".
+ */
+const notFound = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError &&
+  asRecord(error.details)?.code === "CRON_JOB_NOT_FOUND";
 
 /** The gateway refused an update held to a definition that has changed since. */
 const changedSince = (error: unknown) =>
@@ -880,7 +886,7 @@ export class RoutinesEngine {
     if (unsent(error)) return { status: "not-sent", reason: "offline" };
     const refused = refusal(error);
     if (refused !== null)
-      return notFound(refused) ? { status: "deleted" } : { status: "refused", error: refused };
+      return notFound(error) ? { status: "deleted" } : { status: "refused", error: refused };
     return { status: "unknown", error: errorText(error) };
   }
 
@@ -956,8 +962,7 @@ export class RoutinesEngine {
         revision: typeof revision === "string" && revision !== "" ? revision : null,
       };
     } catch (error) {
-      const refused = refusal(error);
-      if (refused !== null && notFound(refused)) return null;
+      if (notFound(error)) return null;
       throw error;
     }
   }
