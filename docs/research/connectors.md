@@ -55,7 +55,7 @@ No client call was made on that start.
 - `plugins.catalog.get {id, version?}` (lines 394-454): for a ClawHub id, ClawHub's details joined with any local copy, or, when ClawHub fails and the plugin is on the gateway, the local details with `detail.remoteError` "ClawHub details are unavailable: …. Showing installed plugin metadata." and `downloadability: {status: "unknown"}`. The detail (`schema` `PluginsCatalogGetResult`) can carry `readme`, `author`, `verification`, `security`, `configuration [{name, required, sensitive}]`, `mcpServers`, `mcpServerDetails [{name, url?, transport?, auth?: oauth|api-key|none, …}]`, `skills`, `versions`, `compatibility`.
 - `plugins.list` (`operator.read`, lines 266-290): every plugin the gateway knows, installed or listed in the official catalog, each with `state`, `enabled`, `installed`, `origin`, `removable`, `categories`, `catalogId` and `runtime {state: unloaded|disabled|active|service-failed, error?}`; and `mutationAllowed`.
 - The skills half of "Search across apps and skills" is `skills.search {query?, limit?}` (`operator.read`), which asks ClawHub too.
-- `catalog.icon` and `imageUrl` are ClawHub's; the design draws no icon (section 2 of the design), so no icon address is ever used.
+- `catalog.icon` and `imageUrl` are ClawHub's; the design draws no icon (section 2 of the design), so no icon address is ever used, as `docs/decisions.md`, "Addresses a gateway hands the client", requires for an address it does not list.
 
 ### On the instance, behind the fence (tried)
 

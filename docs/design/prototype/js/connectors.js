@@ -424,15 +424,9 @@
       open:
         `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.</p>` +
         address(host) +
-        `<div class="c-open"><a class="button" data-size="sm" data-variant="primary" href="${go("chat", { card: "opened" })}">Open in your browser</a></div>` +
+        `<p class="c-line">To sign in, copy this address into a browser.</p>` +
         `<p class="c-line">After you sign in, ask Pip again.</p>` +
         `<p class="c-line" data-tone="${params.get("shared") === "1" ? "warn" : ""}">Anyone who opens this link completes this sign-in.</p>`,
-      opened:
-        `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">Opened at 5:12 PM. If the page didn't finish, open it again.</p>` +
-        address(host) +
-        `<div class="c-open"><a class="button" data-size="sm" href="${go("chat", { card: "opened" })}">Reopen</a></div>` +
-        `<p class="c-line">After you sign in, ask Pip again.</p>` +
-        `<p class="c-line">Anyone who opens this link completes this sign-in.</p>`,
       connected: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text">MCP server "team-notes" is connected. Its tools become available on the next message.</p>`,
       history: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text mono" data-c="tool">team-notes__connect</p><p class="c-card-text">Connect MCP server "team-notes" at <span class="mono">https://auth.teamnotes.example/authorize?state=example-state-2c41</span>. After sign-in completes, the server's tools become available on the next message.</p>`,
       error: `<p class="c-card-title"><b>team-notes can't ask for a sign-in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,

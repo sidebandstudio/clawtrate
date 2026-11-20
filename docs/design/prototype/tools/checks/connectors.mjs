@@ -127,8 +127,7 @@ const STATES = [
   ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
   ["screen=connector&id=calendrop", ["Open Settings on your OpenClaw gateway to sign in to calendrop.", "Check again"]],
   ["screen=connector&id=calendrop&checked=1", ["Read again at 5:12 PM."]],
-  ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link completes this sign-in."]],
-  ["screen=chat&card=opened", ["Opened at 5:12 PM. If the page didn't finish, open it again.", "Reopen"]],
+  ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "To sign in, copy this address into a browser.", "Anyone who opens this link completes this sign-in."]],
   ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
   ["screen=chat&card=history", ["Used team-notes connect", "team-notes__connect", "Connect MCP server \"team-notes\" at", "https://auth.teamnotes.example/authorize?state=example-state-2c41"]],
   ["screen=chat&card=error", ["team-notes can't ask for a sign-in here:", "gateway.publicOrigin is not configured"]],
@@ -241,14 +240,6 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   await at(s2, "signin-cli");
   check("neither app offers a browser sign-in (ruling 2)", !(await text(s2)).includes("Open in your browser") && !(await text(s2)).includes("Asking the gateway"));
   await s2.close();
-  const q = await open("screen=chat");
-  const order = await q.evaluate(() => {
-    const addr = document.querySelector(".c-address");
-    const btn = [...document.querySelectorAll(".c-open a")].find((a) => a.textContent === "Open in your browser");
-    return Boolean(addr && btn && addr.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING);
-  });
-  check("the full sign-in address is shown before its button", order);
-  await q.close();
 }
 await walk("Add from a row, cancelled", "screen=browse", [[link("Add Quillnote"), "add-confirm"], [link("Cancel"), "app"]], ["What it adds"]);
 await walk("add: a capability review, then a failure after writing", "screen=add-confirm&id=quillnote", [
@@ -394,7 +385,11 @@ for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   check(`${label}: Left Arrow goes back to All`, (await at(q, "browse")) && (await q.evaluate(() => document.activeElement?.id)) === "chip-all");
   await q.close();
 }
-await walk("the connect card, opened and reopened", "screen=chat", [[link("Open in your browser"), "chat"], [link("Reopen"), "chat"]], ["Reopen", "Opened at 5:12 PM."]);
+{
+  const p = await open("screen=chat");
+  check("the connect card's address is text with a copy button, never a button that opens it (decision on addresses)", (await p.locator(".c-card a").count()) === 0 && (await p.getByRole("button", { name: "Copy sign-in address" }).count()) === 1);
+  await p.close();
+}
 await walk("the connect card in a shared task", "screen=chat", [[link("In a shared task"), "chat"]], ["Anyone who opens this link completes this sign-in."]);
 {
   const p = await open("screen=chat&shared=1");
