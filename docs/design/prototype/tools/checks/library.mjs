@@ -691,6 +691,17 @@ await p.keyboard.press("ArrowDown");
 check("R8 the menu moves with the arrows", (await focused(p)) === "Share as file…");
 await p.keyboard.press("Escape");
 check("R8 Escape closes it, focus back on the row", await q(p, () => !document.querySelector(".lib-hold") && document.activeElement.dataset.libOpen === "p2"));
+await q(p, async () => {
+  // A completed hold whose release lands off its row, so no click belongs to it.
+  const row = document.querySelector('[data-lib-open="p2"]');
+  row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 7, clientX: 60, clientY: 20 }));
+  await new Promise((r) => setTimeout(r, 600));
+  document.body.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 7 }));
+});
+await p.keyboard.press("Escape");
+await p.click('[data-lib-filter="links"]');
+check("E8 after a hold released off its row and dismissed, the next ordinary click still acts", await q(p, () => !document.querySelector(".lib-hold") && document.querySelector('[data-lib-filter="links"]').getAttribute("aria-checked") === "true"));
+await p.click('[data-lib-filter="all"]');
 await p.mouse.move(rowBox.x + 60, rowBox.y + 20);
 await p.mouse.down();
 await p.mouse.move(rowBox.x + 60, rowBox.y + 60, { steps: 4 });
@@ -769,6 +780,11 @@ p = await open("&width=phone&panel=open&tab=library&state=readonly&hold=i2", pho
 check("touch and hold another item: Open and Pin", await q(p, () => [...document.querySelectorAll(".lib-hold .menu-item")].map((x) => x.textContent).join() === "Open,Pin"));
 await p.click('[data-hold="pin"]');
 check("R6 at phone width, read-only Pin opens the access request and changes nothing on the gateway", await q(p, () => document.activeElement.dataset.access === "request" && window.CT.library.G.value.length === 3 && !window.CT.library.G.value.some((pin) => pin.art === "i2")));
+await p.close();
+p = await open("&width=phone&panel=open&tab=library", phoneSize);
+await p.focus('[data-lib-filter="all"]');
+await p.keyboard.press("Escape");
+check("E8 Escape with only the phone's Work pane open is the pane's own: it closes", await q(p, () => window.app.model.panel === false && !document.querySelector(".lib-hold, .page-view, .page-sheet, .export-dialog")));
 await p.close();
 p = await open("&width=phone&panel=open&tab=library&lib=error", phoneSize);
 check("F-371 the iPhone's library couldn't load: its words and Try Again", (await text(p, "#panel-library .work-empty h4")) === "Couldn't load this conversation's library" && (await text(p, '#panel-library [data-lib="retry"]')) === "Try Again");

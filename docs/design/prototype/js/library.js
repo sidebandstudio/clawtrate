@@ -316,7 +316,7 @@
     accessFor: null,
     cache: new Set(), // items whose content is on the device
     pageCache: {},
-    swallow: false,
+    swallow: null,
   };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const verifying = params.get("pins") === "verify";
@@ -1317,11 +1317,15 @@
   document.addEventListener(
     "click",
     (event) => {
+      // Only the click that belongs to a completed hold, on its own row, is consumed.
       if (L.swallow) {
-        L.swallow = false;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        return;
+        const held = L.swallow;
+        L.swallow = null;
+        if (event.target.closest?.("[data-lib-open]") === held.row) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
       }
       // Page cards in the conversation open through the same gate as everything else.
       const card = event.target.closest('[data-viewer="page"], [data-open-page]');
@@ -1489,9 +1493,10 @@
   };
   document.addEventListener("pointerdown", (event) => {
     const r = event.target.closest?.("#panel-library [data-lib-open]");
+    L.swallow = null; // a new press clears any record of the last one
     if (!r || !phone()) return;
     cancelPress();
-    press = { x: event.clientX, y: event.clientY, fired: false };
+    press = { x: event.clientX, y: event.clientY, fired: false, row: r, pointerId: event.pointerId };
     press.timer = setTimeout(() => {
       press.fired = true;
       openHold(r.dataset.libOpen);
@@ -1502,8 +1507,9 @@
   });
   document.addEventListener("pointercancel", cancelPress);
   document.addEventListener("scroll", () => press && !press.fired && cancelPress(), true);
-  document.addEventListener("pointerup", () => {
-    if (press?.fired) L.swallow = true; // the release and its click belong to the menu
+  document.addEventListener("pointerup", (event) => {
+    // The release of a completed hold, by the same pointer, and the click it makes on that row belong to the menu.
+    if (press?.fired && event.pointerId === press.pointerId) L.swallow = { row: press.row, pointerId: press.pointerId };
     if (press) clearTimeout(press.timer);
     press = null;
   });
@@ -1530,6 +1536,8 @@
         return items[n].focus();
       }
       if (event.key === "Escape") {
+        // Escape belongs to the Library only while one of its menus or dialogs is open; otherwise its owner handles it.
+        if (!holdMenu && !menu && !topmost()) return;
         event.stopImmediatePropagation();
         if (holdMenu) return closeHold(true);
         if (menu) {

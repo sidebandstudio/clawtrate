@@ -218,7 +218,7 @@ frame    ┌──────────────────────�
          └──────────────────────────────┘
 ```
 
-A modal `dialog` over the whole window, labelled by the Page's title, in the app's own theme (the Page draws its own colours; it is a document, not media). Focus moves to Close when it opens. Closing returns to what opened it: a card in the transcript, with the transcript at the position it had; a Library row, with the Library at that row. Tab and Shift+Tab stay inside the topmost dialog (Export or a confirmation over the Page view, otherwise the Page view), and covered controls are skipped. Escape closes the topmost dialog, unless focus is in the chat's field with text, where it first leaves the field. Inside the frame the Page is a separate document whose keys Clawtrate does not see in the web preview: Shift+Tab from the Page's first control leaves the frame, and Escape then closes. The desktop's window input hook also sees Escape inside the frame and closes.
+A modal `dialog` over the whole window, labelled by the Page's title, in the app's own theme (the Page draws its own colours; it is a document, not media). Focus moves to Close when it opens. Closing returns to what opened it: a card in the transcript, with the transcript at the position it had; a Library row, with the Library at that row. Tab and Shift+Tab stay inside the topmost dialog (Export or a confirmation over the Page view, otherwise the Page view), and covered controls are skipped. Escape belongs to the Library and Pages only while one of their menus or dialogs is open; otherwise the surface that owns it (the Work pane's drawer, the conversation) handles it. Escape closes the topmost dialog, unless focus is in the chat's field with text, where it first leaves the field. Inside the frame the Page is a separate document whose keys Clawtrate does not see in the web preview: Shift+Tab from the Page's first control leaves the frame, and Escape then closes. The desktop's window input hook also sees Escape inside the frame and closes.
 
 ### The bar
 
@@ -328,7 +328,7 @@ On a Page row, touch and hold opens a menu: **Open**, **Share as file…** (sect
 
 Other rows open on tap; touch and hold on them gives **Open** and **Pin** or **Unpin**. The item's own actions (Save, Share) are those of its view, reached through Open; they are not repeated in this menu for now. An upload's row has no Pin.
 
-- **The press**: half a second without moving. A fulfilled press consumes its release and the click that follows, so the menu stays and nothing opens. Moving more than a few points, scrolling or a cancelled pointer abandons it.
+- **The press**: half a second without moving. A fulfilled press consumes its release and the click that follows, so the menu stays and nothing opens. Only that click is consumed: the press records its row and pointer, and a click elsewhere, or after a release that made none, acts as usual. The record clears on cancel and on the next press. Moving more than a few points, scrolling or a cancelled pointer abandons it.
 - **Keyboard and assistive technology**: the same menu with Shift+F10 or the context-menu key on a focused row, and in VoiceOver's actions for the row. Up, Down, Home and End move in it; Escape closes it, focus back on the row.
 
 ### A Page, full screen
