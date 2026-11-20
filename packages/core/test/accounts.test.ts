@@ -35,6 +35,7 @@ import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient, CHOICES, HOST_NOTE } from "./accounts-fake.ts";
+import { MORE_INPUT, RETRY_ANSWER } from "../src/accounts-engine.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -1030,7 +1031,7 @@ describe("sign-ins, through the gateway's own methods", () => {
       warning: null,
     });
     expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
-    expect(accounts().write?.error).toMatch(/reading its accounts afterwards failed/);
+    expect(accounts().write?.error).toMatch(/Reading its accounts again failed/);
     expect(fake.prefs["clawtrate.account-kind.globex:direct"]).toBeUndefined();
     client.stop();
   });
@@ -1048,7 +1049,11 @@ describe("sign-ins, through the gateway's own methods", () => {
       profileId: "globex:manual",
       warning,
     });
-    expect(accounts().write).toMatchObject({ what: "key", status: "unverified", error: warning });
+    expect(accounts().write).toMatchObject({
+      what: "key",
+      status: "unverified",
+      error: `${warning} Its accounts list globex:manual.`,
+    });
     client.stop();
   });
 
@@ -1066,7 +1071,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     };
     const reads = fake.gateway.calls("models.authStatus").length;
     await expect(client.saveApiKey("globex", "made-up-key-direct-0003", null)).rejects.toThrow(
-      /may have kept the key before this error\. Its accounts now list globex:manual\./,
+      /may have kept the key before this error\. Its accounts now list one more Globex account\./,
     );
     expect(fake.gateway.calls("models.authStatus").length).toBeGreaterThan(reads);
     expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
@@ -1391,7 +1396,8 @@ describe("a typed API key leaves no trace", () => {
     const { client, storage, logs } = await keyClient(fake);
     await client.saveApiKey("acme", KEY, null);
     expect(client.state.accounts.signIn?.stage).toBe("failed");
-    expect(client.state.accounts.signIn?.error).toMatch(/refused/);
+    // The gateway's words after the key went out are not shown.
+    expect(client.state.accounts.signIn?.error).toBeNull();
     await traceless(client, storage, logs, KEY);
     client.stop();
   });
@@ -1467,12 +1473,116 @@ describe("a typed API key leaves no trace", () => {
         : next(params);
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn(code);
-    expect(client.state.accounts.signIn).toMatchObject({
-      stage: "entering",
-      step: { id: "second" },
-    });
+    await until(() => client.state.accounts.signIn?.result != null);
+    // Another input after the answer: Clawtrate doesn't follow it, and holds nothing.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: MORE_INPUT });
+    expect(fake.gateway.calls("wizard.cancel")).toHaveLength(1);
     expect(held(client)).toEqual([]);
     await traceless(client, storage, logs, code);
+    client.stop();
+  });
+
+  it("F-475: redaction material is gone before the follow-up read and that read publishes no raw profile metadata", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const engine = (client as unknown as { accounts: { secrets: string[] } }).accounts;
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const save = fake.gateway.handlers["models.authSetApiKey"]!;
+    let saved = false;
+    const heldOnRead: number[] = [];
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => {
+      const answer = save(params);
+      saved = true;
+      return answer;
+    };
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      if (saved) heldOnRead.push(engine.secrets.length);
+      const answer = status(params) as {
+        providers: Array<{ profiles: Array<Record<string, unknown>> }>;
+      };
+      for (const profile of answer.providers.flatMap((p) => p.profiles))
+        if (profile.profileId === "globex:manual") profile.displayName = "Raw label 7Y";
+      return answer;
+    };
+    const shown = JSON.stringify(client.state.accounts.accounts);
+    const snapshots: string[] = [];
+    const stop = client.store.subscribe((state) => void snapshots.push(JSON.stringify(state)));
+    expect(await client.saveApiKey("globex", KEY, null)).toEqual({
+      profileId: "globex:manual",
+      warning: null,
+    });
+    stop();
+    // The follow-up read ran with nothing held, and published none of what it read.
+    expect(heldOnRead.length).toBeGreaterThan(0);
+    expect(heldOnRead.every((count) => count === 0)).toBe(true);
+    expect(snapshots.join("")).not.toContain("Raw label 7Y");
+    expect(JSON.stringify(client.state.accounts.accounts)).toBe(shown);
+    expect(client.state.accounts.write).toMatchObject({ what: "key", status: "saved" });
+    await traceless(client, storage, logs, KEY);
+    client.stop();
+  });
+
+  it("F-474: a subsequent step after submit publishes no unsolicited prompt data", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "made-up-code-unsolicited";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    fake.gateway.handlers["wizard.next"] = async (params) => {
+      if ((params as { answer?: unknown }).answer)
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "raw-step-id-91",
+            type: "progress",
+            title: "Unsolicited title",
+            message: "Unsolicited message",
+            externalUrl: "https://unsolicited.example/page",
+            deviceCode: { code: "UNSO-LICI", expiresInMinutes: 5 },
+          },
+        };
+      if (
+        (params as { sessionId: string }).sessionId &&
+        client.state.accounts.signIn?.stage === "waiting"
+      ) {
+        await gate;
+        return { done: true, status: "done" };
+      }
+      return next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    await until(() => client.state.accounts.signIn?.stage === "waiting");
+    const shown = JSON.stringify(client.state.accounts.signIn);
+    for (const word of ["raw-step-id-91", "Unsolicited", "unsolicited.example", "UNSO-LICI"])
+      expect(shown).not.toContain(word);
+    release();
+    await until(() => client.state.accounts.signIn?.result != null);
+    await traceless(client, storage, logs, code);
+    client.stop();
+  });
+
+  it("F-474: an answer the gateway refuses shows the step it answered again, in Clawtrate's words", async () => {
+    const { client, fake } = await keyClient();
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) =>
+      (params as { answer?: unknown }).answer
+        ? {
+            done: false,
+            status: "running",
+            error: "Invalid redirect: made-up-code-refused",
+            step: { id: "paste", type: "text", sensitive: true, message: "Try again" },
+          }
+        : next(params);
+    await client.startSignIn(CHOICES.browser, null);
+    const asked = client.state.accounts.signIn!.step;
+    await client.answerSignIn("made-up-code-refused");
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "entering",
+      step: asked,
+      error: RETRY_ANSWER,
+    });
+    expect(JSON.stringify(client.state)).not.toContain("made-up-code-refused");
     client.stop();
   });
 
@@ -1503,9 +1613,9 @@ describe("a typed API key leaves no trace", () => {
     };
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn(` ${code} `);
-    // Still under way, waiting for another answer: the step is shown, without the code.
-    expect(client.state.accounts.signIn).toMatchObject({ stage: "entering" });
-    expect(client.state.accounts.signIn?.step?.title).toBe("Code … was not accepted");
+    await until(() => client.state.accounts.signIn?.result != null);
+    // A step after the answer asks for more: none of its words are shown.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: MORE_INPUT });
     expect(JSON.stringify(client.state)).not.toContain(code);
     // Once the sign-in ends, nothing of it is held.
     await client.dismissSignIn();
@@ -1532,8 +1642,9 @@ describe("a typed API key leaves no trace", () => {
         : next(params);
     };
     await client.saveApiKey("acme", KEY, null);
-    expect(client.state.accounts.signIn?.step?.title).toBe("Key rejected: …");
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", step: null });
     expect(JSON.stringify(client.state)).not.toContain(KEY);
+    expect(JSON.stringify(client.state)).not.toContain("Key rejected");
     await client.dismissSignIn();
     expect(held(client)).toEqual([]);
     await traceless(client, storage, logs, KEY);
@@ -1555,10 +1666,8 @@ describe("a typed API key leaves no trace", () => {
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn(address);
     await until(() => client.state.accounts.signIn?.result != null);
-    expect(client.state.accounts.signIn).toMatchObject({
-      stage: "failed",
-      error: "The provider refused code ….",
-    });
+    // The gateway's words after the answer are not shown, scrubbed or not.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: null });
     expect(held(client)).toEqual([]);
     for (const form of [address, decoded, "abc%2Fdef-4417"])
       await traceless(client, storage, logs, form);
@@ -1607,7 +1716,8 @@ describe("a typed API key leaves no trace", () => {
     await client.answerSignIn(code);
     await until(() => client.state.accounts.status === "error");
     expect(client.state.accounts.signIn?.stage).toBe("unverified");
-    expect(client.state.accounts.error).toContain("could not read after");
+    // After an answer was sent the gateway's words are not taken: Clawtrate's own are shown.
+    expect(client.state.accounts.error).toBe("Clawtrate couldn't read the gateway's accounts.");
     expect(JSON.stringify(client.state)).not.toContain(code);
   });
 

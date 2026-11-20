@@ -30,6 +30,7 @@ import {
   parseModelRef,
   prefBotId,
   prefProfileId,
+  providerName,
   readBotView,
   readCatalog,
   readIntent,
@@ -58,6 +59,7 @@ import {
   type ModelRef,
   type SignInResult,
   type SignInState,
+  type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
@@ -110,6 +112,12 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = 32_768;
 
+/** The gateway refused an answer the person typed: the step is shown again, in these words. */
+export const RETRY_ANSWER = "The gateway did not accept that answer. Check it and try again.";
+/** After an answer, the gateway asked for another input Clawtrate doesn't send. */
+export const MORE_INPUT =
+  "The gateway asked for more than Clawtrate can send here. Finish this sign-in on the gateway's machine.";
+
 /** The most steps one sign-in is followed through before Clawtrate stops it. */
 export const MAX_SIGNIN_STEPS = 64;
 
@@ -154,6 +162,8 @@ export class AccountsEngine {
    * which could carry it back, is not taken (`scrubbed`).
    */
   private typedIn: string | null = null;
+  /** A key went out in `models.authSetApiKey` and its request ended: as `typedIn`, for that save. */
+  private keySent = false;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: AccountsContext) {
@@ -201,8 +211,12 @@ export class AccountsEngine {
       ctx.update((a) => this.compose(a, config, views, catalog, at));
       this.reads += 1;
     } catch (error) {
-      // While a sign-in lasts, its typed values are taken out of whatever comes back.
-      const message = this.scrub(errorText(error));
+      // While a sign-in lasts, its typed values are taken out of whatever comes back; after one
+      // was sent, the gateway's words are not taken at all.
+      const message =
+        this.quiet() && this.secrets.length === 0
+          ? "Clawtrate couldn't read the gateway's accounts."
+          : this.scrub(errorText(error));
       ctx.update((a) => ({ ...a, status: "error", error: message }));
     }
   }
@@ -388,7 +402,14 @@ export class AccountsEngine {
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
           ...b,
-          evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
+          evidence: {
+            ...b.evidence,
+            status: "failed",
+            error:
+              this.quiet() && this.secrets.length === 0
+                ? "The read failed."
+                : this.scrub(errorText(error)),
+          },
         })),
       );
       return false;
@@ -465,7 +486,7 @@ export class AccountsEngine {
     // account another client added since the last read is not this sign-in's.
     this.forgetSecrets();
     this.typedIn = null;
-    if (key !== null) this.holdSecret(key);
+    // A key is held for redaction only around the one request that carries it (`follow`).
     ctx.update((a) => ({ ...a, signIn: { ...signIn, known: this.accountsOf(signIn.provider) } }));
     const before = await this.knownBefore(signIn.provider, signIn.forBot);
     this.setSignIn(signIn.id, { known: before });
@@ -522,8 +543,9 @@ export class AccountsEngine {
       .map((a) => a.id);
   }
 
-  private setSignIn(id: string, patch: Partial<SignInState>): void {
-    const clean = this.scrubbed(id, patch);
+  /** A patch from the gateway's answers; `own` when every string in it is Clawtrate's. */
+  private setSignIn(id: string, patch: Partial<SignInState>, own = false): void {
+    const clean = own ? patch : this.scrubbed(id, patch);
     this.ctx.update((a) => (a.signIn?.id === id ? { ...a, signIn: { ...a.signIn, ...clean } } : a));
   }
 
@@ -556,16 +578,27 @@ export class AccountsEngine {
 
   /**
    * Every string a sign-in's patch carries from the gateway, scrubbed while
-   * what the person typed is held. Once its request has ended, the gateway's
-   * later text for that sign-in is not taken: the screens say it in their own
-   * words (bots.md section 5).
+   * what the person typed is held. Once something typed has been sent in this
+   * sign-in, none of the gateway's text for it is taken: its error, a step's
+   * id, title, message, page, code and placeholder are dropped, and the screens
+   * say each stage in their own words (bots.md section 5).
    */
   private scrubbed(id: string, patch: Partial<SignInState>): Partial<SignInState> {
-    if (this.secrets.length === 0 && this.typedIn === id) {
+    if (this.typedIn === id) {
       const out: Partial<SignInState> = { ...patch };
       if (typeof out.error === "string") out.error = null;
       if (out.step)
-        out.step = { ...out.step, title: null, message: null, url: null, placeholder: null };
+        out.step = {
+          ...out.step,
+          id: "answered",
+          title: null,
+          message: null,
+          url: null,
+          urlRefused: false,
+          code: null,
+          expiresInMinutes: null,
+          placeholder: null,
+        };
       return out;
     }
     if (this.secrets.length === 0) return patch;
@@ -585,22 +618,45 @@ export class AccountsEngine {
     return out;
   }
 
-  /** A log line, scrubbed of a sign-in's typed values. */
+  /**
+   * Something typed was sent and its request has ended: the gateway's words
+   * are not taken from here on, in the state or a log line.
+   */
+  private quiet(): boolean {
+    return this.typedIn !== null || this.keySent;
+  }
+
+  /** A log line, scrubbed of a sign-in's typed values; after one was sent, without the gateway's words. */
   private log(message: string): void {
+    if (this.quiet() && this.secrets.length === 0) {
+      const colon = message.indexOf(": ");
+      this.ctx.log(
+        `${colon > 0 ? message.slice(0, colon) : message} (the gateway's words are not kept after a typed answer)`,
+      );
+      return;
+    }
     this.ctx.log(this.scrub(message));
   }
 
-  /** The sign-in's next steps: `answer` goes with the first request only. */
+  /**
+   * The sign-in's next steps: `answer` goes with the first request only. A
+   * typed value (`answer` with `secret`, or `key` at the first sensitive step)
+   * is held for redaction only while the one request that carries it lasts;
+   * from then on nothing the gateway says of this sign-in is shown. `asked` is
+   * the step the person answered, shown again when the gateway refuses it.
+   */
   private async follow(
     id: string,
-    answer: { stepId: string; value: unknown } | null,
+    answer: { stepId: string; value: unknown; secret: boolean } | null,
     key: string | null,
     before: string[],
     pause: () => void = () => undefined,
+    asked: SignInStep | null = null,
   ): Promise<void> {
     const { ctx } = this;
     let pending = answer;
     let typed = key;
+    let sent = asked;
     // What the person typed last, only to take it out of what the gateway answers next.
     const stillMine = () => {
       const now = ctx.get().signIn;
@@ -610,6 +666,10 @@ export class AccountsEngine {
       if (!stillMine()) return;
       const abort = new AbortController();
       this.signInAbort = abort;
+      // This request carries what the person typed: its answer is the last one held against it.
+      const carrying = pending?.secret === true;
+      const answered = carrying ? pending!.stepId : null;
+      if (carrying) this.typedIn = id;
       let next: RawRecord | null;
       try {
         next = asRecord(
@@ -634,12 +694,15 @@ export class AccountsEngine {
         return await this.afterSignIn(id, before);
       } finally {
         pending = null;
+        // The request that carried it has ended: nothing of it is held before the next one.
+        if (carrying) this.forgetSecrets();
       }
       if (this.signInAbort === abort) this.signInAbort = null;
       if (!stillMine()) return;
       if (next?.done === true) {
         const status = typeof next.status === "string" ? next.status : null;
-        const error = typeof next.error === "string" ? this.scrub(next.error) : null;
+        // The words decide the stage; after an answer they are not shown (`scrubbed`).
+        const error = typeof next.error === "string" ? next.error : null;
         const stage = endingOf(status, error);
         this.setSignIn(id, {
           stage: stage === "connected" ? "checking" : stage,
@@ -650,11 +713,11 @@ export class AccountsEngine {
       }
       const step = readStep(next?.step);
       if (!step) {
-        this.setSignIn(id, {
-          stage: "failed",
-          step: null,
-          error: "The gateway sent a step Clawtrate can't read.",
-        });
+        this.setSignIn(
+          id,
+          { stage: "failed", step: null, error: "The gateway sent a step Clawtrate can't read." },
+          true,
+        );
         return await this.afterSignIn(id, before);
       }
       // A note that brings the sign-in's page, before anything has been shown with it, is the
@@ -664,11 +727,11 @@ export class AccountsEngine {
       if (step.type === "note" && step.url && ctx.get().signIn?.step?.url?.href !== step.url.href) {
         this.setSignIn(id, { stage: "waiting", step });
         pause();
-        pending = { stepId: step.id, value: true };
+        pending = { stepId: step.id, value: true, secret: false };
         continue;
       }
       if (step.type === "note" || step.type === "action") {
-        pending = { stepId: step.id, value: true };
+        pending = { stepId: step.id, value: true, secret: false };
         continue;
       }
       if (step.type === "progress") {
@@ -677,12 +740,33 @@ export class AccountsEngine {
         continue;
       }
       if (step.type === "text") {
-        if (step.sensitive && typed !== null) {
-          // The person's own key, sent once and dropped.
-          pending = { stepId: step.id, value: typed };
-          typed = null;
+        if (step.sensitive && typed !== null && sent === null) {
+          // The person's own key, held only for the request that sends it once.
           this.setSignIn(id, { stage: "checking", step: { ...step } });
+          this.holdSecret(typed);
+          pending = { stepId: step.id, value: typed, secret: true };
+          sent = step;
+          typed = null;
           continue;
+        }
+        if (sent !== null) {
+          const own = (error: string) =>
+            this.setSignIn(id, { stage: "failed", step: null, error }, true);
+          // The same step again, or the gateway's refusal of the answer: it did not take it.
+          if (step.id === answered || (answered !== null && typeof next?.error === "string")) {
+            if (this.ctx.get().signIn?.flow !== "key" && sent.id === step.id) {
+              this.setSignIn(id, { stage: "entering", step: sent, error: RETRY_ANSWER }, true);
+              pause();
+              return;
+            }
+            await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
+            own(RETRY_ANSWER);
+            return await this.afterSignIn(id, before);
+          }
+          // Another input after an answer: Clawtrate doesn't follow it further.
+          await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
+          own(MORE_INPUT);
+          return await this.afterSignIn(id, before);
         }
         this.setSignIn(id, { stage: "entering", step });
         pause();
@@ -690,23 +774,31 @@ export class AccountsEngine {
       }
       // A choice Clawtrate does not offer: end it rather than guess.
       await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
-      this.setSignIn(id, {
-        stage: "failed",
-        step: null,
-        error:
-          "The gateway asked for a choice Clawtrate can't make here. Sign in on the gateway's machine.",
-      });
+      this.setSignIn(
+        id,
+        {
+          stage: "failed",
+          step: null,
+          error:
+            "The gateway asked for a choice Clawtrate can't make here. Sign in on the gateway's machine.",
+        },
+        true,
+      );
       return await this.afterSignIn(id, before);
     }
     // The safety stop: a sign-in that goes on this long without asking for anything ends here,
     // as failed, and like every end it forgets what it was given.
     if (!stillMine()) return;
     await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
-    this.setSignIn(id, {
-      stage: "failed",
-      step: null,
-      error: `The gateway's sign-in went on for ${MAX_SIGNIN_STEPS} steps without asking for anything, so Clawtrate stopped following it. Check the accounts, or sign in on the gateway's machine.`,
-    });
+    this.setSignIn(
+      id,
+      {
+        stage: "failed",
+        step: null,
+        error: `The gateway's sign-in went on for ${MAX_SIGNIN_STEPS} steps without asking for anything, so Clawtrate stopped following it. Check the accounts, or sign in on the gateway's machine.`,
+      },
+      true,
+    );
     await this.afterSignIn(id, before);
   }
 
@@ -720,24 +812,27 @@ export class AccountsEngine {
       throw new Error("No sign-in is waiting for an answer.");
     if (typeof value !== "string" || value.length === 0 || value.length > MAX_SECRET_CHARS)
       throw new Error("That can't be sent.");
-    const stepId = signIn.step.id;
+    const step = signIn.step;
     // A code or an address pasted back is a secret; a company address asked for first is not.
-    const secret = isSecretStep(signIn.step);
-    this.holdSecret(value);
-    this.setSignIn(signIn.id, { stage: "checking" });
+    const secret = isSecretStep(step);
+    this.setSignIn(signIn.id, { stage: "checking", error: null }, true);
+    if (secret) this.holdSecret(value);
     // Compared with the read made just before it started, kept through every step.
     const before = signIn.known;
     try {
-      await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
+      await this.paused((pause) =>
+        this.follow(
+          signIn.id,
+          { stepId: step.id, value, secret },
+          null,
+          before,
+          pause,
+          secret ? step : null,
+        ),
+      );
     } finally {
-      this.dropTyped(signIn.id, secret);
+      this.forgetSecrets();
     }
-  }
-
-  /** The request that carried a typed value has ended: nothing of it is held from here on. */
-  private dropTyped(id: string, secret = true): void {
-    this.forgetSecrets();
-    if (secret && this.ctx.get().signIn?.id === id) this.typedIn = id;
   }
 
   /**
@@ -1006,7 +1101,7 @@ export class AccountsEngine {
           true,
         );
       } finally {
-        this.dropTyped(id);
+        this.forgetSecrets();
       }
       const after = this.ctx.get().signIn;
       return {
@@ -1015,7 +1110,7 @@ export class AccountsEngine {
       };
     }
     const forBot = this.signInTarget(botId);
-    const before = this.accountsOf(provider);
+    const who = providerName(provider);
     this.setWrite({
       what: "key",
       target: provider,
@@ -1023,88 +1118,81 @@ export class AccountsEngine {
       error: null,
       at: this.ctx.now(),
     });
-    // Held while this save lasts, like a sign-in's: every answer and log line is scrubbed of it.
+    // What the target's view lists of the provider before the write, read privately.
+    const before = await this.privateRead(provider, forBot);
+    // Held only while the request that carries the key lasts: its answer or error is read, and
+    // scrubbed of it, before anything else is asked of the gateway.
     this.holdSecret(key);
-    /** Read the accounts again; what they show of the provider, only from a read made now. */
-    const reread = async () => {
-      const count = this.reads;
-      await this.load();
-      const read = this.ctx.get();
-      // A cached list, while disconnected or after a failed read, establishes nothing.
-      if (this.reads === count || read.status !== "ready") return null;
-      return read.accounts.filter((a) => a.provider === provider);
-    };
+    let answer: RawRecord | null = null;
+    let failure: string | null = null;
     try {
-      let answer: RawRecord | null;
-      try {
-        answer = asRecord(
-          await this.ctx.request("models.authSetApiKey", {
-            provider,
-            apiKey: key,
-            agentId: forBot,
-          }),
-        );
-      } catch (error) {
-        // The gateway can store the key and then fail (its settings, its refresh): what it now
-        // has is read before anything is said.
-        const message = this.scrub(withoutSecret(errorText(error), key));
-        const listed = await reread();
-        const added = listed?.filter((a) => !before.includes(a.id)).map((a) => a.id) ?? [];
-        const said = `${message} The gateway may have kept the key before this error. ${
-          listed === null
-            ? "Reading its accounts again failed, so Clawtrate can't say what it has now."
-            : added.length > 0
-              ? `Its accounts now list ${added.join(", ")}.`
-              : "Its accounts show no new account for this provider; a key that replaced one would not show as new."
-        }`;
-        this.setWrite({
-          what: "key",
-          target: provider,
-          status: added.length > 0 ? "unverified" : "failed",
-          error: said,
-          at: this.ctx.now(),
-        });
-        // No `cause`: the gateway's own error may carry the key; only its cleaned words leave.
-        // eslint-disable-next-line preserve-caught-error
-        throw new Error(said);
-      }
-      const named = typeof answer?.profileId === "string" ? answer.profileId : null;
-      // The gateway's warning: the key was saved and something after it was not confirmed.
-      const warning =
-        typeof answer?.warning === "string" && answer.warning.trim()
-          ? this.scrub(withoutSecret(answer.warning, key))
-          : null;
-      // Saved only when a read made after it shows the account, as for every sign-in.
-      const listed = await reread();
-      const added = listed?.filter((a) => !before.includes(a.id)).map((a) => a.id) ?? [];
-      const shown =
-        listed === null
-          ? null
-          : named
-            ? listed.some((a) => a.id === named)
-              ? named
-              : null
-            : added.length === 1
-              ? added[0]!
-              : null;
-      if (shown) await this.recordKind(shown, "typed-key");
-      const read = this.ctx.get();
-      this.setWrite({
-        what: "key",
-        target: provider,
-        status: shown && !warning ? "saved" : "unverified",
-        error: warning
-          ? warning
-          : shown
+      answer = asRecord(
+        await this.ctx.request("models.authSetApiKey", { provider, apiKey: key, agentId: forBot }),
+      );
+    } catch (error) {
+      failure = this.scrub(withoutSecret(errorText(error), key));
+    }
+    // Only a validated id from the reply; the warning in its cleaned words.
+    const named = answer ? prefProfileId(answer.profileId) : null;
+    const warning =
+      answer && typeof answer.warning === "string" && answer.warning.trim()
+        ? this.scrub(withoutSecret(answer.warning, key))
+        : null;
+    this.forgetSecrets();
+    this.keySent = true;
+    try {
+      // The follow-up read is the engine's own: nothing of it is published, and the accounts
+      // shown stay the last ones until the ordinary read after it.
+      const after = await this.privateRead(provider, forBot);
+      const listed = after === null ? null : named ? after.includes(named) : null;
+      const grew = after !== null && before !== null && after.length > before.length;
+      const confirmed = named !== null && listed === true;
+      if (confirmed) await this.recordKind(named, "typed-key");
+      const readWords =
+        after === null
+          ? "Reading its accounts again failed, so Clawtrate can't say what it has now."
+          : confirmed
+            ? `Its accounts list ${named}.`
+            : grew
+              ? `Its accounts now list one more ${who} account.`
+              : `Its accounts show no new ${who} account; a key that replaced one would not show as new.`;
+      const status: AccountWrite["status"] = failure
+        ? confirmed || grew
+          ? "unverified"
+          : "failed"
+        : confirmed && !warning
+          ? "saved"
+          : "unverified";
+      const error = failure
+        ? `${failure} The gateway may have kept the key before this error. ${readWords}`
+        : warning
+          ? `${warning} ${readWords}`
+          : confirmed
             ? null
-            : listed === null
-              ? `The gateway took the key, but reading its accounts afterwards failed${read.error ? `: ${read.error}` : ""}.`
-              : "The gateway took the key, but its accounts don't show it yet.",
-        at: this.ctx.now(),
-      });
-      return { profileId: shown, warning };
+            : `The gateway took the key. ${readWords}`;
+      this.setWrite({ what: "key", target: provider, status, error, at: this.ctx.now() });
+      // The list is read again by the screen that asks (`refreshAccounts`): gateway metadata.
+      if (failure) throw new Error(error!);
+      return { profileId: confirmed ? named : null, warning };
     } finally {
-      this.forgetSecrets();
+      this.keySent = false;
+    }
+  }
+
+  /**
+   * One bot's refreshed view of a provider's account ids, read for the engine
+   * alone: no label, error or row of it is published. Null when it failed.
+   */
+  private async privateRead(provider: string, botId: string): Promise<string[] | null> {
+    if (!this.ctx.connected()) return null;
+    try {
+      const view = readBotView(
+        await this.ctx.request("models.authStatus", { agentId: botId, refresh: true }),
+      );
+      if (view.unavailable) return null;
+      return view.profiles.filter((p) => p.provider === provider).map((p) => p.id);
+    } catch {
+      return null;
     }
   }
 
