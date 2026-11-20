@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { browserPorts, instancePorts, openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { PAGES_RECORD_PATH } from "../tools/dev-gateway/src/scripted-pages.ts";
+import { readMarker } from "../tools/dev-gateway/src/state-guard.ts";
+import { execFileSync } from "node:child_process";
 import { devGateway, FORBIDDEN_PORTS, startHost, stopChild } from "./global-setup.ts";
 
 const COMPUTER = process.env.CLAWTRATE_E2E_COMPUTER!;
@@ -235,6 +237,12 @@ test("F-139 F-142: a bot opens a scripted loopback page in its own browser; the 
     );
     await watch(page);
     await shoot(page, "watching-1440");
+    // The scripted page is quiet: its screencast sends no frame while nothing changes, and after
+    // 10 s without a usable frame the tile no longer says Live, though the view is renewed.
+    await expect(panel(page).locator(".screen-live")).toHaveText(/^Last picture, 1\d s ago$/, {
+      timeout: 20_000,
+    });
+    await expect(panel(page).locator(".screen[data-state=live] canvas")).toHaveCount(1);
     await panel(page).getByRole("button", { name: "Open Pip's browser full window" }).click();
     await expect(full(page)).toContainText("Pip's browser");
     await expect(full(page)).toContainText("Watching");
@@ -351,6 +359,82 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
       });
     }
   } finally {
+    await close();
+  }
+});
+
+test("F-144 F-145: a real question while Pip's browser can be taken: the banner's Take control is granted, the bar's answer goes once control is given back, and Pip carries on", async ({
+  browser,
+}) => {
+  const label = "Computer question";
+  const key = await createTask("e2e-computer-question", label);
+  await runInTask(key, "#browse");
+  // The run asks and waits for the answer: it ends only once it is answered.
+  const asking = runInTask(key, "#ask");
+  const { page, close } = await viewer(browser, true, label);
+  try {
+    await showComputer(page);
+    const banner = panel(page).getByTestId("computer-banner");
+    await expect(banner).toContainText("Pip is waiting for you", { timeout: 60_000 });
+    await expect(banner).toContainText("Which route should I plan for Saturday?");
+    await banner.getByRole("button", { name: "Take control" }).click();
+    await expect(bar(page)).toContainText("You have control", { timeout: 60_000 });
+    // The question is still the gateway's, pending, while control is held.
+    await expect(page.getByTestId("question-card").last()).not.toContainText("Answered");
+    await bar(page).getByRole("button", { name: "Lake loop" }).click();
+    await expect(bar(page)).toContainText("Answer sent. Pip can carry on.", { timeout: 30_000 });
+    // Released first, then answered: the run goes on with its browser free.
+    const output = await asking;
+    expect(output).not.toContain("A person has control of my browser");
+    const read = await runInTask(key, "#browse-read");
+    expect(read).not.toContain("A person has control of my browser");
+  } finally {
+    await close();
+  }
+});
+
+test("F-142: when the gateway stops answering renewals, You have control ends within the lease: input stops at once, and the bar says control isn't confirmed", async ({
+  browser,
+}) => {
+  const { page, close } = await viewer(browser, true, WATCH_TASK);
+  // This run's own instance's gateway, by its PID from the tool's marker: paused, never stopped.
+  const marker = readMarker(openInstance(COMPUTER).stateDir);
+  const pid = marker?.gatewayPid;
+  expect(typeof pid === "number" && pid > 1, "the instance's gateway PID").toBe(true);
+  const command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+  expect(command, "the PID is this instance's gateway").toContain(`clawtrate-dev-${COMPUTER}`);
+  let paused = false;
+  try {
+    await showComputer(page);
+    await watch(page);
+    await panel(page).getByRole("button", { name: "Open Pip's browser full window" }).click();
+    await full(page).getByRole("button", { name: "Take control" }).click();
+    await expect(bar(page)).toContainText("You have control", { timeout: 60_000 });
+    const before = (await pageRecord()).seq;
+    process.kill(pid!, "SIGSTOP");
+    paused = true;
+    // Within three quarters of the development contract's 6 s lease, with no answer and no event.
+    await expect(bar(page)).toContainText(
+      "The gateway hasn't confirmed that you still have control of Pip's browser. Input has stopped.",
+      { timeout: 8_000 },
+    );
+    await full(page).getByTestId("screen-frame").focus();
+    await page.keyboard.type("never sent");
+    process.kill(pid!, "SIGCONT");
+    paused = false;
+    // Read again once the gateway answers: still held, or ended; never a guess.
+    await expect(bar(page)).toContainText(/You still have control\.|Your control ended/, {
+      timeout: 30_000,
+    });
+    await page.waitForTimeout(1_000);
+    expect(
+      (await pageRecord(before)).events.some((e) => e.value.includes("never sent")),
+      "typed while control wasn't confirmed",
+    ).toBe(false);
+    if (await bar(page).getByRole("button", { name: "Give back control" }).isVisible())
+      await bar(page).getByRole("button", { name: "Give back control" }).click();
+  } finally {
+    if (paused) process.kill(pid!, "SIGCONT");
     await close();
   }
 });
