@@ -10,6 +10,7 @@ import { openFixture } from "./fixture.ts";
 
 type Probe = {
   active: number;
+  readable: boolean;
   commands: string[];
   emit: (
     revision: number,
@@ -58,6 +59,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
         };
         const probe: Probe = {
           active: 0,
+          readable: false,
           commands: [],
           mutations: 0,
           emit: (
@@ -82,7 +84,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           return new Promise<DesktopUpdateReply>((resolve) => commands.set(action, resolve));
         }
         bridge.desktopUpdates = {
-          get: () => first.promise,
+          get: () => (probe.readable ? first.promise : Promise.reject(new Error("Read failed"))),
           subscribe(fn) {
             listeners.add(fn);
             probe.active = listeners.size;
@@ -101,9 +103,19 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   });
   await openFixture(page, "scene=main", "light");
   await expect.poll(() => page.evaluate(() => window.updateProbe.active)).toBe(1);
-  await page.evaluate(() => window.updateProbe.emit(1, { kind: "not-checked" }));
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const retry = page.getByRole("button", { name: "Retry reading settings" });
+  await expect(page.getByRole("heading", { name: "Updates", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(retry).toBeFocused();
+  await page.evaluate(() => {
+    window.updateProbe.readable = true;
+  });
+  await page.keyboard.press("Enter");
+  await expect(retry).toHaveAttribute("aria-disabled", "true");
+  await page.evaluate(() => window.updateProbe.emit(1, { kind: "not-checked" }));
+  await expect(page.getByRole("group", { name: "Update status" })).toBeFocused();
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await page.evaluate(() => {
     window.updateProbe.emit(5, {

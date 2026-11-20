@@ -183,19 +183,28 @@ export function Updates({
   if (!s)
     return (
       <div className="updates-section">
-        <span role="status">{message}</span>
-        {message && (
-          <div className="b-actions">
-            <button
-              type="button"
-              className="button"
-              aria-disabled={working || undefined}
-              onClick={retryRead}
-            >
-              Retry reading settings
-            </button>
-          </div>
-        )}
+        <div
+          key="result"
+          className="update-result"
+          tabIndex={-1}
+          role="group"
+          aria-label="Update status"
+        >
+          <span role="status">{message}</span>
+          {message && (
+            <div className="b-actions">
+              <button
+                ref={focusResultOnRemoval}
+                type="button"
+                className="button"
+                aria-disabled={working || undefined}
+                onClick={retryRead}
+              >
+                Retry reading settings
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   const { line, action } = updateRow(s, pending);
@@ -289,6 +298,7 @@ export function Updates({
           <p className="b-hint">The next check asks the {names[s.selectedTrack]} source.</p>
         )}
       <div
+        key="result"
         ref={result}
         className="update-result"
         tabIndex={-1}
