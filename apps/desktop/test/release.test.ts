@@ -3,7 +3,7 @@
 // and the feed it writes for its artifacts. Every value here is made up.
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -220,6 +220,48 @@ describe("the feed the release writes", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
     dir = undefined;
   });
+
+  it.each(["/releases", "/releases/", "/releases?dummy=1", "/releases#fixture"])(
+    "keeps the installer in the supplied folder %s",
+    (folder) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "win-x64")), "a Windows installer");
+      const feed = makeFeed({
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: `https://updates.example${folder}`,
+        dir,
+      });
+      expect(feed.files["win-x64"]?.url).toBe(
+        "https://updates.example/releases/Clawtrate-0.2.0-win-x64.exe",
+      );
+      expect(
+        parseFeed(
+          JSON.stringify(feed),
+          new URL("https://updates.example/releases/feed.json"),
+          "win-x64",
+        ),
+      ).toMatchObject({ ok: true, feed: { file: { size: 19 } } });
+    },
+  );
+
+  it.each(["empty file", "directory"])(
+    "refuses a Windows installer at an invalid path (%s)",
+    (kind) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "mac-arm64")), "a macOS zip");
+      const path = join(dir, artifactName("0.2.0", "win-x64"));
+      if (kind === "directory") mkdirSync(path);
+      else writeFileSync(path, "");
+      const options = {
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: "https://updates.example/releases",
+        dir,
+      };
+      expect(() => makeFeed(options)).toThrow(new Error("win-x64 must be a non-empty artifact."));
+    },
+  );
 
   it("names each artifact with its size and SHA-512, and the engine reads it back", () => {
     dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
