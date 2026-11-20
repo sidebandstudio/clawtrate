@@ -274,7 +274,7 @@
 
   function pendingCard(kind) {
     const st = S.d;
-    const editedView = ["edited", "elsewhere"].includes(st) || (S.edited && ["sending", "refused", "noanswer", "unknown"].includes(st));
+    const editedView = ["edited", "elsewhere"].includes(st) || (S.edited && ["sending", "refused", "noanswer", "unknown", "stillwaiting"].includes(st));
     const m = editedView ? editedModel(kind) : base(kind);
     const changed = editedView ? changedFields(kind) : [];
     const sending = st === "sending";
@@ -287,17 +287,19 @@
     if (st === "noanswer") decision = `<p class="d-say" data-tone="warn">No answer from the gateway. Your decision may or may not have been applied.</p>`;
     if (st === "unknown")
       decision = `<p class="d-say" data-tone="warn">Couldn't confirm what happened. The gateway no longer lists this draft, and Otto's ${noun(kind)} tool hasn't reported back.</p>`;
-    if (st === "stillwaiting") decision = `<p class="d-say">Your decision wasn't applied. The draft is still waiting.</p>`;
+    if (st === "stillwaiting") decision = `<p class="d-say">The draft is still waiting.</p>`;
     if (st === "disabled") decision = `<p class="d-say" data-tone="accent">Drafts off for Otto. This draft is still waiting for you.</p>`;
     if (st === "stillon") decision = `<p class="d-say">Drafts on for Otto. This draft is still waiting for you.</p>`;
     if (st === "disableunknown")
       decision = `<p class="d-say" data-tone="warn">Couldn't confirm the setting. Read it again. ${button("Read again", 'data-d="disable-read" data-size="sm"')}</p>`;
     if (st === "norecord") decision = `<p class="d-say" data-tone="warn">Couldn't read this draft. The gateway still lists it as waiting.</p>`;
     const matchLine = editedView
-      ? `<p class="d-match">${st === "elsewhere" ? "Edited on another device at 5:44 PM." : `You edited Otto's ${noun(kind)}. This is what will be sent.`} <button type="button" class="link-button" data-d="show-original">${S.showOriginal ? "Hide Otto's version" : "Show Otto's version"}</button></p>`
+      ? `<p class="d-match">${st === "elsewhere" ? "Edited on another device at 5:44 PM." : `You edited Otto's ${noun(kind)}. These are the edited arguments the tool will receive if you allow it.`} <button type="button" class="link-button" data-d="show-original">${S.showOriginal ? "Hide Otto's version" : "Show Otto's version"}</button></p>`
       : "";
     let actions = "";
-    if (st === "noanswer" || st === "unknown") actions = button("Check again", 'data-d="check"') + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
+    // Unknown: the hold is gone, so nothing is offered but Check again.
+    if (st === "unknown") actions = button("Check again", 'data-d="check"');
+    else if (st === "noanswer") actions = button("Check again", 'data-d="check"') + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
     else if (st === "norecord") actions = button("Check again", 'data-d="check-record"') + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
     else if (st === "refused") actions = button("Try again", 'data-d="send"', "primary") + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
     else if (editedView)
@@ -318,7 +320,7 @@
       `<header class="request-head"><div><h3 class="request-title">${heading}</h3><p class="d-sub">${subline(kind)}</p>${matchLine}</div><span class="tag" data-tone="warn">${tag}</span></header>` +
       contents +
       (editedView && S.showOriginal ? originalOf(kind) : "") +
-      (st === "edited" ? `<p class="d-hint">The gateway asks again because you edited it. This answer sends it.</p>` : "") +
+      (st === "edited" ? `<p class="d-hint">The gateway asks again because you edited it. This answer lets the tool run.</p>` : "") +
       decision +
       `<div class="request-actions">${actions}</div>` +
       `<p class="d-sentence"><button type="button" class="link-button" data-d="full">${S.full ? "Hide full request" : "Show full request"}</button></p>` +
@@ -351,7 +353,7 @@
       `<header class="request-head"><div><h3 class="request-title">${title(kind)}</h3><p class="d-sub">${subline(kind)}</p></div><span class="tag" data-tone="warn">Ready to send</span></header>` +
       `<div class="d-edit">${fields}<textarea id="e-body" aria-label="${kind === "email" ? "Body" : "Message"}">${esc(kind === "email" ? m.body : m.text)}</textarea></div>` +
       (kind === "email" ? `${filesOf(kind)}<p class="d-hint">From and the attachments stay as Otto set them.</p>` : "") +
-      `<p class="d-editnote">Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's ${noun(kind)} to the plugin, which swaps in your edit. The gateway then asks once more, for the edited ${noun(kind)}, and that answer sends it.</p>` +
+      `<p class="d-editnote">Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's ${noun(kind)} to the plugin, which swaps in your edit. The gateway then asks once more, for the edited ${noun(kind)}, and that answer lets the tool run.</p>` +
       note +
       `<div class="request-actions">${send}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
       `<div class="d-foot">${pluginMark()}</div></section>`
@@ -381,11 +383,19 @@
 
   const showOriginalLink = () => `<button type="button" class="link-button" data-d="show-original">${S.showOriginal ? "Hide Otto's version" : "Show Otto's version"}</button>`;
 
+  // The simulated connector's result: what it reports it sent and the attachment bytes it read, captured when
+  // the tool runs and held apart from the card's editable model.
+  const toolResult = (kind, m) =>
+    kind === "email"
+      ? { from: m.from, to: m.to.slice(), cc: m.cc.slice(), files: EMAIL.files.map((f) => ({ name: f.name, size: S.file === "changed" ? "44 bytes" : f.size })) }
+      : { workspace: m.workspace, to: m.to, thread: m.thread };
+  const silent = () => S.d === "sentnoreport" || S.tool === "silent";
   function sentSentence(m, kind) {
-    if (S.d === "sentnoreport" || S.tool === "silent") return `The ${noun(kind)} tool reported success at 5:43 PM. It doesn't say what it sent; this is what you approved.`;
+    if (silent()) return `The ${noun(kind)} tool reported success at 5:43 PM. It doesn't say what it sent; this is what you approved.`;
+    const r = S.result || toolResult(kind, m);
     return kind === "email"
-      ? `Sent from ${esc(m.from)} to ${esc(m.to.join(", "))}, cc ${esc(m.cc.join(", "))}, with report.txt (28 bytes), at 5:43 PM. Read back from the email tool's result.`
-      : `Posted to ${esc(m.to)} in ${esc(m.workspace)}, in the thread ${esc(m.thread)}, at 5:43 PM. Read back from the message tool's result.`;
+      ? `Sent from ${esc(r.from)} to ${esc(r.to.join(", "))}, cc ${esc(r.cc.join(", "))}, with ${r.files.map((f) => `${esc(f.name)} (${esc(f.size)})`).join(", ")}, at 5:43 PM. Read back from the email tool's result.`
+      : `Posted to ${esc(r.to)} in ${esc(r.workspace)}, in the thread ${esc(r.thread)}, at 5:43 PM. Read back from the message tool's result.`;
   }
 
   // The bot's own action card for the call: its arguments are the bot's, so the
@@ -394,7 +404,9 @@
     const m = base(kind);
     const line =
       S.p === "running"
-        ? `Edited before sending: ${changedFields(kind).join(", ")}. What was sent is on the draft card.`
+        ? silent()
+          ? `Edited before approval: ${changedFields(kind).join(", ")}. The tool didn't report what it sent.`
+          : `Edited before sending: ${changedFields(kind).join(", ")}. What was sent is on the draft card.`
         : "Clawtrate can't tell whether this was edited: it couldn't read the drafts plugin's record.";
     return (
       `<section class="card d-card" data-kind="action" role="region" aria-label="Otto used ${TOOL[kind]}." data-testid="action">` +
@@ -408,7 +420,7 @@
     const m = S.edited ? editedModel(kind) : base(kind);
     const used = S.edited || S.editGiven ? " Your edit wasn't used." : "";
     if (st === "sent" || st === "sentnoreport") return resolvedCard(m, kind, "Answered", "accent", sentSentence(m, kind));
-    if (st === "editsent") return resolvedCard(m, kind, "Answered", "accent", `${sentSentence(m, kind)} You edited this before it was sent. ${showOriginalLink()}`, true);
+    if (st === "editsent") return resolvedCard(m, kind, "Answered", "accent", `${sentSentence(m, kind)} ${silent() ? "You edited the approved draft." : "You edited this before it was sent."} ${showOriginalLink()}`, true);
     if (st === "toolfailed")
       return resolvedCard(m, kind, "Tool failed", "danger", `Tool failed. Sending could not be confirmed. The ${noun(kind)} tool said: account not connected.`, Boolean(S.edited));
     if (st === "discarded") return resolvedCard(base(kind), kind, "Discarded", "", "Discarded at 5:43 PM. Nothing was sent. Otto was told you discarded it.");
@@ -571,7 +583,7 @@
     const pending =
       !read &&
       ((secret && ["pending", "typed", "hosts", "exists", "saving", "refused", "unconfirmed", "raw"].includes(S.s)) ||
-        (!secret && ["running", "unchecked"].includes(S.p) && !finished(S.kind)));
+        (!secret && ["running", "unchecked"].includes(S.p) && !finished(S.kind) && S.d !== "unknown"));
     const shelf = pending
       ? `<div class="composer-shelf"><div class="shelf-row" data-tone="warn">${icon("approval")}<span class="shelf-text">${secret ? "Otto asked you for a secret" : `Otto has a draft waiting for you`}</span><span class="spacer"></span>${button("Review", 'data-d="review" data-size="sm"')}</div></div>`
       : "";
@@ -833,6 +845,7 @@
       // The plugin rechecks files after the first answer only; nothing of it runs after the second.
       if (S.file === "changed" && !S.edited) return go({ d: "filechanged" }, "Not sent");
       if (S.tool === "fails") return go({ d: "toolfailed" }, "Tool failed");
+      S.result = toolResult(S.kind, S.edited ? editedModel(S.kind) : base(S.kind));
       go({ d: S.edited ? "editsent" : S.tool === "silent" ? "sentnoreport" : "sent" }, "Sent");
     });
   }
@@ -891,10 +904,11 @@
         return decide("discard");
       case "check": {
         const f = S.checkfinds;
-        if (f === "waiting") return go({ d: S.edited ? "edited" : "stillwaiting" }, "Still waiting");
+        if (f === "waiting") return go({ d: "stillwaiting" }, "Still waiting");
         if (f === "expired") return go({ d: S.edited ? "editexpired" : "expired" });
         if (f === "refused") return go({ d: "refused" });
         if (f === "unknown") return go({ d: "unknown" });
+        S.result = toolResult(S.kind, S.edited ? editedModel(S.kind) : base(S.kind));
         return go({ d: S.edited ? "editsent" : "sent" }, "Sent");
       }
       case "check-record":

@@ -59,7 +59,7 @@ const states = [
   ["view=draft&d=discarded", ["Discarded at 5:43 PM. Nothing was sent. Otto was told you discarded it."]],
   ["view=draft&d=refused", ["The gateway refused this decision", "The draft is still waiting.", "Try again", "Discard"]],
   ["view=draft&d=noanswer", ["No answer from the gateway. Your decision may or may not have been applied.", "Check again", "Discard"]],
-  ["view=draft&d=stillwaiting", ["Your decision wasn't applied. The draft is still waiting.", "Send email"]],
+  ["view=draft&d=stillwaiting", ["The draft is still waiting.", "Send email"]],
   ["view=draft&d=unknown", ["Couldn't confirm what happened. The gateway no longer lists this draft, and Otto's email tool hasn't reported back.", "Check again"]],
   ["view=draft&d=already", ["Already answered on another device at 5:25 PM. Your decision was not applied."]],
   ["view=draft&d=expired", ["Expired at 5:52 PM without an answer. Nothing was sent."]],
@@ -70,12 +70,12 @@ const states = [
   ["view=draft&d=filechanged", ["Not sent", "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below."]],
   ["view=draft&d=unchecked", ["Couldn't check report.txt: the plugin couldn't read it. If it changes before it's sent, Clawtrate can't tell.", "Send email"]],
   ["view=draft&d=norecord", ["Couldn't read this draft. The gateway still lists it as waiting.", "Check again", "Discard"]],
-  ["view=draft&d=edit", ["Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's email to the plugin, which swaps in your edit. The gateway then asks once more, for the edited email, and that answer sends it.", "From and the attachments stay as Otto set them.", "Send edited email", "Cancel edit", "Discard"]],
+  ["view=draft&d=edit", ["Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's email to the plugin, which swaps in your edit. The gateway then asks once more, for the edited email, and that answer lets the tool run.", "From and the attachments stay as Otto set them.", "Send edited email", "Cancel edit", "Discard"]],
   ["view=draft&d=editsaving", ["Giving your edit to the drafts plugin…"]],
   ["view=draft&d=editfailed", ["This draft was already edited on another device."]],
   ["view=draft&d=editunconfirmed", ["Couldn't confirm the edit. Check the draft's current state.", "Check the draft"]],
   ["view=draft&d=editwaiting", ["Waiting for the gateway to ask again for the edited email.", "Edited email"]],
-  ["view=draft&d=edited", ["Edited email", "You edited Otto's email. This is what will be sent.", "Show Otto's version", "dana@example.com, sam@example.net", "Media box report: disk at 91%", "Edited", "Checked after the first answer. The file can still change while this draft waits.", "Send edited email", "The gateway asks again because you edited it. This answer sends it."]],
+  ["view=draft&d=edited", ["Edited email", "You edited Otto's email. These are the edited arguments the tool will receive if you allow it.", "Show Otto's version", "dana@example.com, sam@example.net", "Media box report: disk at 91%", "Edited", "Checked after the first answer. The file can still change while this draft waits.", "Send edited email", "The gateway asks again because you edited it. This answer lets the tool run."]],
   ["view=draft&d=elsewhere", ["Edited on another device at 5:44 PM.", "Send edited email"]],
   ["view=draft&d=editsent", ["Answered", "Sent from otto@example.com to dana@example.com, sam@example.net", "You edited this before it was sent.", "Otto used mail_send", "Edited before sending: To, Subject, Body. What was sent is on the draft card."]],
   ["view=draft&d=editsent&p=unchecked", ["Clawtrate can't tell whether this was edited: it couldn't read the drafts plugin's record."]],
@@ -232,13 +232,26 @@ const pause = (ms) => (pg) => pg.waitForTimeout(ms);
 (await walk("Discard → Discarded", "view=draft", [tap('[data-d="discard"]')], ["Discarded at 5:43 PM. Nothing was sent."])).close();
 (await walk("Send, refused → Try again → Answered", "view=draft", [answer("refused"), tap('[data-d="send"]'), pause(700), answer("applied"), tap('[data-d="send"]')], ["Answered"])).close();
 for (const [finds, words] of [
-  ["waiting", ["Your decision wasn't applied. The draft is still waiting."]],
+  ["waiting", ["The draft is still waiting."]],
   ["expired", ["Expired at 5:52 PM without an answer."]],
   ["refused", ["The gateway refused this decision"]],
   ["unknown", ["Couldn't confirm what happened."]],
   ["confirmed", ["Answered"]],
 ])
   (await walk(`No answer → Check again finds ${finds}`, "view=draft", [answer("noanswer"), (pg) => bar(pg, "checkfinds", finds), tap('[data-d="send"]'), pause(700), tap('[data-d="check"]')], words)).close();
+p = await walk("No answer → Check again finds unknown → Check only", "view=draft", [answer("noanswer"), (pg) => bar(pg, "checkfinds", "unknown"), tap('[data-d="send"]'), pause(700), tap('[data-d="check"]')], ["Couldn't confirm what happened."]);
+check("walk: Unknown offers Check again only, no Discard and no pending shelf", (await p.locator('[data-d="check"]').count()) === 1 && (await p.locator('[data-d="discard"], [data-d="send"]').count()) === 0 && (await p.locator(".composer-shelf").count()) === 0);
+await p.close();
+p = await walk(
+  "Edited: no answer on the second hold → Check again finds it waiting",
+  "view=draft&d=edited",
+  [answer("noanswer"), (pg) => bar(pg, "checkfinds", "waiting"), tap('[data-d="send"]'), pause(700), tap('[data-d="check"]')],
+  ["Edited email", "The draft is still waiting.", "Send edited email"],
+);
+check("walk: the edited hold still waiting offers no Edit", (await p.locator('[data-d="edit"]').count()) === 0);
+await p.close();
+p = await walk("A file changes during the second hold → Send: the receipt names the bytes the connector read", "view=draft&d=edited", [tap('[data-proto-event="file"]'), tap('[data-d="send"]')], ["Answered", "report.txt (44 bytes)"]);
+await p.close();
 (await walk("Send, already answered elsewhere", "view=draft", [answer("already"), tap('[data-d="send"]')], ["Already answered on another device at 5:25 PM."])).close();
 (await walk("A file changes while waiting → Send → Not sent", "view=draft", [tap('[data-proto-event="file"]'), tap('[data-d="send"]')], ["Not sent", "report.txt changed after Otto asked"])).close();
 (await walk("Raw opens drawn, and closes", "view=draft", [tap('[data-d="raw"]')], ["plugin.approval.requested", "Hide Raw"])).close();
@@ -291,7 +304,11 @@ await typeEmail(p);
 await click(p, '[data-d="edit-send"]');
 await waitText(p, ["Edited email"], 5000);
 await click(p, '[data-d="send"]');
-check("walk: an edited send whose tool says nothing doesn't claim a report", await waitText(p, ["It doesn't say what it sent; this is what you approved."]));
+check(
+  "walk: an edited send whose tool says nothing doesn't claim a report",
+  await waitText(p, ["It doesn't say what it sent; this is what you approved.", "You edited the approved draft.", "Edited before approval: To, Subject, Body. The tool didn't report what it sent."]),
+);
+check("walk: an edited silent send makes neither sent claim", !(await text(p)).includes("You edited this before it was sent") && !(await text(p)).includes("What was sent is on the draft card"));
 await p.close();
 const SLACK_TYPED = { to: "#ops-oncall", text: "Disk at 91%.\n\nLogs  moved  to archive/." };
 p = await open("view=draft&kind=slack", { chrome: "1" });
@@ -552,7 +569,7 @@ check("gallery: the Drafts and the Vault section links to every state", links.le
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();
-const banned = ["securely", "Every bot on this gateway loses it", "Never shown to Otto", "can't read it back", "Every bot on the gateway can use them", "nothing waits as a draft", "Sign in to", "Filled directly to", "Securely save to Bot's vault"];
+const banned = ["securely", "This is what will be sent", "This answer sends it", "Your decision wasn't applied", "Every bot on this gateway loses it", "Never shown to Otto", "can't read it back", "Every bot on the gateway can use them", "nothing waits as a draft", "Sign in to", "Filled directly to", "Securely save to Bot's vault"];
 const broken = [];
 const claims = [];
 for (const href of links) {

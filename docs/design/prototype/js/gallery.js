@@ -1351,7 +1351,7 @@
     {
       id: "drafts",
       title: "Drafts and the Vault",
-      note: "Draft examples use a proposed plugin (#89) and stand-in tools. What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent, is sent or discarded, and is edited in place with a second answer; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
+      note: "Draft examples use a proposed plugin (#89) and stand-in tools. What docs/design/drafts-and-vault.md adds: a draft card that shows the arguments the tool will receive, is sent or discarded, and is edited in place with a second answer; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
       specimens: [
         ...[
           ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "raw", "sending", "sent", "sentnoreport", "toolfailed", "discarded", "refused", "noanswer", "unknown", "already", "expired", "closed", "cancelled", "runended", "restartunknown", "filechanged", "unchecked", "norecord", "edit", "editsaving", "editfailed", "editunconfirmed", "editwaiting", "edited", "elsewhere", "editsent", "editdiscarded", "editexpired", "editrestart", "disable", "disabled", "disableunknown", "stillon"]],
