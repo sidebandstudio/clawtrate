@@ -744,7 +744,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         messageId: id(command.messageId, "message id"),
         emoji,
-        remove: command.remove === true,
+        remove: command.remove === undefined ? false : flag(command.remove),
       };
     }
     case "retryMessage":
