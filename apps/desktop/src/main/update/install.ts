@@ -24,5 +24,6 @@ export interface UpdateInstaller {
     file: VerifiedArtifact,
     signal: AbortSignal,
     handed: () => void,
+    submitted?: () => void,
   ): Promise<UpdateInstallRefusal | "installer-failed" | null>;
 }

@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { linkSync } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
@@ -1168,3 +1169,54 @@ it("withdraws Restart when the already inspected download is replaced", async ()
   expect(service.get().install).toMatchObject({ reason: "artifact-changed" });
   expect((await service.restart(id)).outcome).toBe("stale");
 });
+
+it.skipIf(process.platform === "win32")(
+  "a native refusal cannot publish handed-to-system before update-downloaded",
+  async () => {
+    const updater = Object.assign(new EventEmitter(), {
+      setFeedURL: vi.fn(),
+      checkForUpdates: vi.fn(),
+      quitAndInstall: vi.fn(),
+    });
+    vi.doMock("electron", () => ({ autoUpdater: updater }));
+    try {
+      for (const scenario of ["feed-error", "throw", "deadline", "ready"] as const) {
+        updater.setFeedURL.mockImplementation(() => {
+          if (scenario === "feed-error") updater.emit("error", Error("refused"));
+        });
+        updater.checkForUpdates.mockClear().mockImplementation(() => {
+          if (scenario === "throw") throw Error("refused");
+          if (scenario === "ready") updater.emit("update-downloaded");
+        });
+        updater.quitAndInstall.mockImplementation(() => {
+          updater.emit("error", Error("late"));
+        });
+        const installer = macInstaller("arm64", async () => null, undefined, 100);
+        const states: string[] = [];
+        const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
+        const id = await offer(service);
+        await service.download(id);
+        const result = (await service.restart(id)).snapshot.state;
+        if (scenario === "feed-error") {
+          expect(updater.checkForUpdates).not.toHaveBeenCalled();
+          expect(result).toMatchObject({ kind: "handoff-failed", reason: "installer-failed" });
+        } else {
+          expect(result).toEqual({
+            kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",
+            offerId: id,
+            version: "1.1.0",
+          });
+          expect((await service.restart(id)).outcome).toBe("busy");
+          expect((await service.check("stable")).outcome).toBe("busy");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
+          expect((await service.download(id)).outcome).toBe("busy");
+        }
+        expect(states.includes("handed-to-system")).toBe(scenario === "ready");
+        expect(updater.listenerCount("error")).toBe(1);
+        service.shutdown();
+      }
+    } finally {
+      vi.doUnmock("electron");
+    }
+  },
+);

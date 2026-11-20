@@ -94,7 +94,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const updater = Object.assign(new EventEmitter(), {
       setFeedURL: vi.fn(),
-      checkForUpdates: vi.fn(),
+      checkForUpdates: vi.fn(() => submitted.resolve()),
       quitAndInstall: vi.fn(),
     });
     vi.doMock("electron", () => ({ autoUpdater: updater }));
@@ -104,17 +104,17 @@ it.skipIf(process.platform === "win32")(
       const file = await candidate();
       expect(await installer.inspect(file)).toBeNull();
       expect(updater.setFeedURL).not.toHaveBeenCalled();
-      const pending = installer.launch(file, new AbortController().signal, () => {
-        expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
-        submitted.resolve();
-      });
+      const handed = vi.fn();
+      const pending = installer.launch(file, new AbortController().signal, handed);
       await submitted.promise;
       expect(updater.setFeedURL).toHaveBeenCalledExactlyOnceWith({
         url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/.+\/feed$/),
         serverType: "default",
       });
       expect(updater.quitAndInstall).not.toHaveBeenCalled();
+      expect(handed).not.toHaveBeenCalled();
       updater.emit("update-downloaded");
+      expect(handed).toHaveBeenCalledTimes(1);
       expect(await pending).toBeNull();
       expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
     } finally {

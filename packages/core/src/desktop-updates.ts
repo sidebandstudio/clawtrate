@@ -62,6 +62,8 @@ export type DesktopUpdateState =
   | { kind: "preparing"; offerId: string; version: string }
   /** macOS may complete this authorized handoff on any later quit. */
   | { kind: "handed-to-system"; offerId: string; version: string }
+  /** Native staging was requested, but Electron did not confirm it. */
+  | { kind: "handoff-unconfirmed"; offerId: string; version: string }
   | { kind: "handing-off"; offerId: string; version: string }
   | {
       kind: "handoff-failed";
