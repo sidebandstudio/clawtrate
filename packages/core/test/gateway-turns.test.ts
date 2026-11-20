@@ -368,9 +368,11 @@ describe("a recipient's task let go while its sender's task is open", () => {
     );
     gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
     await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
     client.closeSession(PEER);
     await until(() => client.state.transcripts[PEER] === undefined);
-    gateway.emit("agent", agentEvent("sender-r", 2, "lifecycle", { phase: "end" }));
+    gateway.emit("agent", agentEvent("sender-r", 3, "lifecycle", { phase: "end" }));
     await until(() => transcript().runs[0]?.state === "completed");
     expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
     // The row says the run ended, but its history has no rows of it at all: it
