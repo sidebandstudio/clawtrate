@@ -157,7 +157,7 @@ it.each(["reconciled", "retried"])("F-519: a %s reply never invites early or twi
   expect(shown).toBe(1);
 });
 
-it("F-519: concurrent preview tabs can each claim six once", () => {
+it("F-519: two preview tabs reading five can each claim six", () => {
   const store = storage();
   store.setItem("", "5");
   const interleaved = {
@@ -170,6 +170,21 @@ it("F-519: concurrent preview tabs can each claim six once", () => {
   expect(countReply(() => interleaved)).toBe(true);
   expect(countReply(() => store)).toBe(false);
   expect(countReply(() => interleaved)).toBe(false);
+});
+
+it("F-519: a stale preview tab can restore five after another tab shows the invitation", () => {
+  const store = storage();
+  store.setItem("", "4");
+  const stale = {
+    ...store,
+    setItem(key: string, value: string) {
+      expect([countReply(() => store), countReply(() => store)]).toEqual([false, true]);
+      store.setItem(key, value);
+    },
+  };
+  expect(countReply(() => stale)).toBe(false);
+  expect(store.getItem()).toBe("5");
+  expect(countReply(() => store)).toBe(true);
 });
 
 it("F-519: a consumed preference stops collecting sends, including pending acknowledgements", () => {
