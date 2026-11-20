@@ -524,7 +524,7 @@ test.describe("T3 Code thread cards", () => {
     for (const [id, listed] of [
       ["call_t3pl", "trail-guide"],
       ["call_t3tl", "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70"],
-    ]) {
+    ] as const) {
       const row = page.locator(`#action-${id}`);
       await row.locator(":scope > summary").click();
       const readable = row.locator('[data-view="readable"]');
