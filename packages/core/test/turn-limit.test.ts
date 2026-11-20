@@ -41,6 +41,19 @@ describe("the turn time limit (F-100)", () => {
     again.client.stop();
   });
 
+  it("F-100: a limit the host could not keep is not taken, and the one before stays", async () => {
+    const { client, storage } = started(null);
+    await client.start();
+    const set = storage.set.bind(storage);
+    storage.set = (key: string, value: string) =>
+      key === "turn-limit-minutes"
+        ? Promise.reject(new Error("The disk is full."))
+        : set(key, value);
+    await expect(client.setTurnLimit(1)).rejects.toThrow("The disk is full.");
+    expect(client.state.turnLimitMinutes).toBe(50);
+    client.stop();
+  });
+
   const aborted = (runId: string) => ({
     runId,
     seq: 9,

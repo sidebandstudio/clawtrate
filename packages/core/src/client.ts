@@ -4438,9 +4438,10 @@ export class ClawtrateClient {
       throw new Error(
         `A turn limit is a whole number of minutes from ${MIN_TURN_LIMIT_MINUTES} to ${MAX_TURN_LIMIT_MINUTES}.`,
       );
+    // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
+    await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
     this.turnLimitMs = minutes * 60_000;
     this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
-    await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
     for (const [timerKey, timer] of this.turnTimers) {
       clearTimeout(timer);
       this.turnTimers.delete(timerKey);
