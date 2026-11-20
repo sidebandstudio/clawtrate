@@ -153,6 +153,7 @@ import {
   RawTable,
   reconcileOutbox,
   historyQueuePairs,
+  MAX_QUEUE_ALIASES,
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
@@ -775,6 +776,12 @@ export class ClawtrateClient {
    * from an answer that predates the deletion.
    */
   private readonly foreignEpochs = new Map<string, number>();
+  /**
+   * Bumped whenever an epoch entry is evicted: an evicted epoch's value can be
+   * captured again, and only the floor tells a read made before that from one
+   * made after it.
+   */
+  private foreignEpochFloor = 0;
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3199,6 +3206,15 @@ export class ClawtrateClient {
       ...next,
       runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
     };
+    // The id pairs the session's turns were named by, newest kept, as a task's own are.
+    const aliasKeys = Object.keys(next.queueAliases);
+    if (aliasKeys.length > MAX_QUEUE_ALIASES)
+      next = {
+        ...next,
+        queueAliases: Object.fromEntries(
+          aliasKeys.slice(-MAX_QUEUE_ALIASES).map((key) => [key, next.queueAliases[key]!]),
+        ),
+      };
     this.foreign.delete(sessionKey);
     this.foreign.set(sessionKey, next);
     while (this.foreign.size > FOREIGN_SESSIONS) {
@@ -3225,8 +3241,10 @@ export class ClawtrateClient {
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
     // A read of this session on its way now answers a session that is gone.
     this.foreignEpochs.set(sessionKey, (this.foreignEpochs.get(sessionKey) ?? 0) + 1);
-    while (this.foreignEpochs.size > MAX_FOREIGN_EPOCHS)
+    while (this.foreignEpochs.size > MAX_FOREIGN_EPOCHS) {
       this.foreignEpochs.delete(this.foreignEpochs.keys().next().value as string);
+      this.foreignEpochFloor += 1;
+    }
     if (!this.foreign.has(sessionKey)) return;
     this.updateForeign(sessionKey, (activity, ctx) =>
       activity.runs.some((run) => !isTerminal(run.state))
@@ -3552,8 +3570,10 @@ export class ClawtrateClient {
         .filter((run) => ids.has(run.id) && !isTerminal(run.state))
         .map((run) => run.id),
     );
-    // A delete of this session while the read is on its way supersedes it.
-    const epoch = this.foreignEpochs.get(sessionKey) ?? 0;
+    // A delete of this session while the read is on its way supersedes it, as
+    // does any eviction of epoch entries since the read was asked.
+    const epoch = this.foreignEpochs.get(sessionKey);
+    const floor = this.foreignEpochFloor;
     let history: RawRecord | null;
     try {
       history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
@@ -3564,7 +3584,8 @@ export class ClawtrateClient {
       generation !== this.generation ||
       this.tracked(sessionKey) ||
       (senderKey !== undefined && !this.tracked(senderKey)) ||
-      (this.foreignEpochs.get(sessionKey) ?? 0) !== epoch
+      this.foreignEpochs.get(sessionKey) !== epoch ||
+      this.foreignEpochFloor !== floor
     )
       return;
     const aliases = Object.fromEntries([
@@ -3583,6 +3604,14 @@ export class ClawtrateClient {
       ids.has(run.id),
     );
     const historyIds = new Set(found.map((run) => run.id));
+    // Ends history does not establish: a busy read leaves the newest rows' run
+    // open, and an end history holds only in its rows' shape is never a reply.
+    // A terminal row naming such a run must still settle it.
+    const inferred = new Set(
+      found
+        .filter((run) => !run.outcomeKnown || (busy && !isTerminal(run.state)))
+        .map((run) => run.id),
+    );
     const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
     const ended = terminal
       ? new Map([...ids].map((id) => [id, terminal.phase] as const))
@@ -3612,6 +3641,7 @@ export class ClawtrateClient {
         ctx,
         busy,
         ended,
+        inferred,
       );
       const settled =
         runs.length === merged.length && runs.every((run, i) => run === merged[i]) ? merged : runs;
@@ -4866,6 +4896,7 @@ export class ClawtrateClient {
     this.spawnedBy.clear();
     this.foreign.clear();
     this.foreignEpochs.clear();
+    this.foreignEpochFloor = 0;
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();

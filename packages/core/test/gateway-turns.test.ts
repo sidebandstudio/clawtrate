@@ -7,8 +7,15 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { MAX_FOREIGN_EPOCHS } from "../src/client.ts";
 import { deferred, sleep, until, type FakeGateway } from "./fake-gateway.ts";
-import { MAX_RAW_ENTRY_CHARS, RawTable, runErrorRawId, runsFromHistory } from "../src/runs.ts";
+import {
+  MAX_QUEUE_ALIASES,
+  MAX_RAW_ENTRY_CHARS,
+  RawTable,
+  runErrorRawId,
+  runsFromHistory,
+} from "../src/runs.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
 
@@ -455,22 +462,22 @@ describe("a recipient's task let go while its sender's task is open", () => {
 describe("a recipient session nobody has open (F-122)", () => {
   const PEER = "agent:marlow:main";
 
-  const sendTo = (gateway: FakeGateway, runId: string) => {
+  const sendTo = (gateway: FakeGateway, runId: string, index = 0) => {
     gateway.emit(
       "agent",
-      agentEvent("sender-r", 1, "tool", {
+      agentEvent("sender-r", 1 + 2 * index, "tool", {
         phase: "start",
         name: "sessions_send",
-        toolCallId: "send-c",
+        toolCallId: `send-${index}`,
         args: { sessionKey: PEER, message: "A message" },
       }),
     );
     gateway.emit(
       "agent",
-      agentEvent("sender-r", 2, "tool", {
+      agentEvent("sender-r", 2 + 2 * index, "tool", {
         phase: "result",
         name: "sessions_send",
-        toolCallId: "send-c",
+        toolCallId: `send-${index}`,
         isError: false,
         result: {
           content: [{ type: "text", text: "{}" }],
@@ -590,6 +597,89 @@ describe("a recipient session nobody has open (F-122)", () => {
     held.resolve({ messages: [] });
     await sleep(50);
     expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
+    client.stop();
+  });
+
+  it("F-122: a terminal row settles a run whose end history only infers", async () => {
+    const gateway = grantingGateway();
+    let peerHistory: unknown = { messages: [] };
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER ? peerHistory : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The page holds the run's rows but no reply of its own, beside a newer turn
+    // in flight: history infers the end, and the busy merge keeps the run open.
+    peerHistory = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
+          __openclaw: { id: "a1", runId: "peer-r" },
+        },
+      ],
+      inFlightRun: { runId: "newer-r" },
+    };
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.outcomeKnown).toBe(false);
+    client.stop();
+  });
+
+  it("F-122: a stale recipient read is still dropped after its deletion's epoch was evicted", async () => {
+    const gateway = grantingGateway();
+    const held = deferred<unknown>();
+    let peerReads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      peerReads += 1;
+      return held.promise;
+    };
+    const { client, transcript } = await openTask({ gateway });
+    sendTo(gateway, "peer-r");
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => peerReads === 1);
+    // The deletion settles the card, and enough further deletions evict its
+    // epoch entry while the read is still on its way.
+    gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "cancelled");
+    for (let i = 0; i <= MAX_FOREIGN_EPOCHS; i += 1)
+      gateway.emit("sessions.changed", { sessionKey: `agent:marlow:extra-${i}`, reason: "delete" });
+    // The held answer is the session's old snapshot, with the run still in flight.
+    held.resolve({ messages: [], inFlightRun: { runId: "peer-r" } });
+    await sleep(50);
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("cancelled");
+    client.stop();
+  });
+
+  it("F-122: the id pairs a recipient's ends name are kept newest first, within the queue aliases' cap", async () => {
+    const gateway = grantingGateway();
+    let peerReads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      peerReads += 1;
+      return { messages: [] };
+    };
+    const { client } = await openTask({ gateway });
+    const ends = MAX_QUEUE_ALIASES + 4;
+    for (let i = 0; i < ends; i += 1) {
+      sendTo(gateway, `peer-c${i}`, i);
+      gateway.emit("sessions.changed", {
+        sessionKey: PEER,
+        runId: `peer-x${i}`,
+        clientRunId: `peer-c${i}`,
+        phase: "end",
+      });
+    }
+    await until(() => peerReads === ends);
+    await sleep(50);
+    const foreign = (
+      client as unknown as { foreign: Map<string, { queueAliases: Record<string, string> }> }
+    ).foreign;
+    expect(Object.keys(foreign.get(PEER)?.queueAliases ?? {})).toHaveLength(MAX_QUEUE_ALIASES);
     client.stop();
   });
 });

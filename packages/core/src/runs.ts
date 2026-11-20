@@ -3195,12 +3195,18 @@ export function settleVanishedRuns(
   busy = false,
   /** Runs a terminal `sessions.changed` row named, by id, to the phase it reported. */
   namedEnded?: ReadonlyMap<string, "end" | "error">,
+  /** Runs whose end history holds only in its rows' shape, never as a reply. */
+  historyInferred?: ReadonlySet<string>,
 ): Run[] {
   return runs.map((run) => {
     const named = namedEnded?.get(run.id);
     if (isTerminal(run.state) || run.state === "queued") return run;
     if (!named && !activeBefore.has(run.id)) return run;
-    if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
+    if (
+      run.id === inFlightRunId ||
+      (historyRunIds.has(run.id) && (!named || !historyInferred?.has(run.id)))
+    )
+      return run;
     if (!named) {
       if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
       const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
