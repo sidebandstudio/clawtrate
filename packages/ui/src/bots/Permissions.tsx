@@ -812,8 +812,12 @@ function sentence(line: PermissionLine, view: BotPermissions, name: string): str
   const verb = line.words.charAt(0).toLowerCase() + line.words.slice(1);
   if (line.kind === "question")
     return `${name} asks its questions in the conversation, which already waits for you.`;
-  if (line.value === "not-offered")
+  if (line.value === "not-offered" && line.mark === "set")
     return `The gateway's settings for every bot don't offer this to ${name}. Set on the gateway; Clawtrate can't change it.`;
+  if (line.value === "not-offered" && line.mark === "gateway")
+    return `${name}'s own allow list in the gateway's settings leaves this out. This page doesn't change allow lists.`;
+  if (line.value === "not-offered" && line.kind !== "server")
+    return `The settings Clawtrate reads leave this open, and the gateway didn't list it in ${name}'s latest task's tools at ${clock(view.readAt)}. Something this page doesn't read may remove it.`;
   if (line.value === "never" && line.mark === "set")
     return `The gateway's settings deny this for every bot. Set on the gateway; Clawtrate can't change it, and no choice here can loosen it.`;
   if (line.kind === "exec") {
