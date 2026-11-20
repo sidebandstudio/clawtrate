@@ -1,9 +1,10 @@
 import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
+import { movedOn, pressMark, useFocusOnCommit } from "./focus.ts";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
   readPreference,
@@ -95,6 +96,7 @@ export function Shell({
   const routinesOpen = routines !== null;
   const conversationVisible = routines === null;
   const selection = useSelection(state, interactive, conversationVisible);
+  const focusOnCommit = useFocusOnCommit();
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
@@ -296,6 +298,14 @@ export function Shell({
   // pane moves nothing except off what has just become inert.
   const drawerWasOpen = useRef(false);
   const panelWasOpen = useRef(panelOpen);
+  // A pane closed by an action that keeps its place (Show in chat, Routines) moves focus only
+  // where that action says. If focus went with the pane, the Work toggle holds it as the pane
+  // commits closed, so a key pressed meanwhile acts from a control in the app.
+  useLayoutEffect(() => {
+    if (panelOpen || !keepFocus.current) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) toggleRef.current?.focus({ preventScroll: true });
+  }, [panelOpen]);
   useEffect(() => {
     // Right after a resize the last measurement can lag a frame behind, so
     // focus is decided from the pane's width as it is now.
@@ -389,8 +399,10 @@ export function Shell({
   const showInChat = useCallback(
     (stepId: string, from: { path: string }) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      // The step takes focus only if the person has not moved on since asking.
+      const mark = pressMark();
       const reveal = () => {
-        const found = taskKey !== null && revealStep(taskKey, callId);
+        const found = taskKey !== null && revealStep(taskKey, callId, mark);
         setChatNote("");
         requestAnimationFrame(() =>
           setChatNote(
@@ -600,13 +612,18 @@ export function Shell({
           connection={state.connection}
           info={info}
           onClose={() => setNewBot(false)}
-          onCreated={(id) => {
+          onCreated={(id, from) => {
+            // A result for a dialog closed since (Escape, or reopened afresh) moves nothing.
+            if (!from.dialog?.isConnected) return;
             setNewBot(false);
+            // The person moved on while it was made: the dialog closes, and the task and focus
+            // stay theirs. The bot is in the list as the gateway reports it.
+            if (movedOn(from.mark)) return;
             selection.selectBot(id);
-            openDetail();
-            requestAnimationFrame(() =>
-              document.querySelector<HTMLElement>(".composer-input")?.focus(),
-            );
+            // Its composer takes focus as the bot is committed, before the next key; in one
+            // pane the move into the conversation goes to the composer as well.
+            openDetail({ composer: true });
+            focusOnCommit(() => document.querySelector<HTMLElement>(".composer-input"));
           }}
         />
       )}

@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { holdFrames, releaseFrames, tabThenRelease } from "./frames.ts";
 import { FILES, filesPanel, listed, openRow, row } from "./files-helpers.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -615,6 +616,71 @@ test.describe("from a step to its file, and back", () => {
     await expect(page.getByTestId("chat-link-announcer")).toHaveText(
       "Showing the step in the chat",
     );
+  });
+
+  test("F-447: Show in chat takes no focus once the person has moved on: a Tab straight after is not undone", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "disk-2026-11-16.md");
+    await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).focus();
+    // The page's frames held until after Tab, as on a slow machine.
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    const step = page.locator('.transcript [data-call="c6"]');
+    await tabThenRelease(page, page.getByRole("tab", { name: "Preview" }), "Tab", () =>
+      expect(step).toHaveAttribute("open", ""),
+    );
+  });
+
+  test("F-447: Show in chat still takes focus after a key the page made itself", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "disk-2026-11-16.md");
+    await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).focus();
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    // Dispatched by the page, not pressed: not the person moving on.
+    await page.evaluate(() =>
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Shift", bubbles: true }),
+      ),
+    );
+    await releaseFrames(page);
+    await expect(page.locator('.transcript [data-call="c6"] > summary')).toBeFocused();
+  });
+
+  test("F-447: Show in chat from the drawer leaves focus on the Work toggle as it closes, and a key pressed then keeps it there", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: DRAWER.width, height: DRAWER.height });
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "disk-2026-11-16.md");
+    const show = page.locator(".reader-source").getByRole("button", { name: "Show in chat" });
+    const toggle = page.getByRole("button", { name: "Show work panel" });
+    const step = page.locator('.transcript [data-call="c6"]');
+    await show.focus();
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
+    // Before the frames run: focus is on a control in the app, not on the page itself.
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("Shift");
+    await releaseFrames(page);
+    await expect(step).toHaveAttribute("open", "");
+    await expect(toggle).toBeFocused();
+    // And Tab from there, with the frames held again, goes on and stays.
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "disk-2026-11-16.md");
+    await show.focus();
+    await holdFrames(page);
+    await page.keyboard.press("Enter");
+    await expect(toggle).toBeFocused();
+    await tabThenRelease(page, page.getByTestId("transcript"));
+    await expect(step).toHaveAttribute("open", "");
   });
 
   test("F-447: Show in chat reaches a call of a run still under way and a reloaded single card", async ({

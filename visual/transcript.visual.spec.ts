@@ -2,6 +2,7 @@
 // markdown and wide tables, progress narration, and find.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { holdFrames, tabThenRelease } from "./frames.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PIP_WEEK = "bot=pip&task=agent:pip:week";
@@ -359,6 +360,23 @@ test("F-076: Cmd/Ctrl+F finds text in the open conversation", async ({ page }) =
   await expect(page.locator(".title-pill")).toBeVisible();
   await expect(transcript).toBeFocused();
   expect((await highlighted()).all).toBe(0);
+});
+
+test("F-076: Escape from find gives focus back as the bar closes: a Tab straight after is not undone", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  await settle(page);
+  const transcript = page.locator(".transcript");
+  await transcript.focus();
+  await page.keyboard.press("ControlOrMeta+F");
+  await expect(page.getByRole("textbox", { name: "Find in conversation" })).toBeFocused();
+  // The page's frames held until after Tab, as on a slow machine.
+  await holdFrames(page);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("find-bar")).toHaveCount(0);
+  await expect(transcript).toBeFocused();
+  await tabThenRelease(page, transcript.locator("summary", { hasText: "Looked in ." }).first());
 });
 
 test("F-076: find reads text as it is rendered, across bold, emphasis, links and inline code, but not from one block into the next", async ({

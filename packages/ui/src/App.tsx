@@ -2,6 +2,7 @@ import type { ConnectionError, HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
+import { useFocusOnCommit } from "./focus.ts";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
 import { Settings } from "./Settings.tsx";
@@ -63,24 +64,23 @@ export function App({
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
   }, []);
+  const focusOnCommit = useFocusOnCommit();
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
     const opener = settingsOpener.current;
-    requestAnimationFrame(() => {
+    focusOnCommit(() => {
       if (opener?.isConnected && opener.getClientRects().length && !opener.closest("[inert]"))
-        opener.focus();
+        return opener;
       // The control that opened it is gone (another gateway was chosen): the
       // first control on the screen now showing.
-      else {
-        const gateway =
-          opener?.classList.contains("update-entry") &&
-          [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(
-            (el) => el.getClientRects().length,
-          );
-        (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
-      }
+      const gateway =
+        opener?.classList.contains("update-entry") &&
+        [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(
+          (el) => el.getClientRects().length,
+        );
+      return gateway || document.querySelector<HTMLElement>(FIRST_CONTROL);
     });
-  }, []);
+  }, [focusOnCommit]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === ",") {

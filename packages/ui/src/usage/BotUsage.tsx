@@ -4,8 +4,9 @@
 // task's context. Every figure is the gateway's, with its source and its age.
 
 import type { Bot, Task, UsagePeriod } from "@clawtrate/core";
-import { useEffect, useState, type ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useState, type ComponentProps } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
+import { useFocusOnCommit } from "../focus.ts";
 import { BotSettings } from "../bots/BotSettings.tsx";
 import { BackIcon, ChevronIcon, WarnIcon } from "../icons.tsx";
 import { BudgetPart } from "./Budget.tsx";
@@ -333,21 +334,21 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
     if (request && request.seq === shown) settleUsageRequest(request);
   }, [request, shown]);
   const open = page !== null && page.botId === props.bot.id;
+  const focusOnCommit = useFocusOnCommit();
   const back = () => {
     setPage(null);
-    requestAnimationFrame(() =>
-      document
-        .querySelector<HTMLElement>('#panel-settings [data-bs="usage"], [data-testid="usage-row"]')
-        ?.focus(),
+    focusOnCommit(() =>
+      document.querySelector<HTMLElement>(
+        '#panel-settings [data-bs="usage"], [data-testid="usage-row"]',
+      ),
     );
   };
-  // Opening the page puts focus on its title, or on the budget form's field when it opens with it.
+  // Opening the page puts focus on its title, or on the budget form's field when it opens with
+  // it: as the page is committed, before the next key.
   const withForm = open && page.form;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open && !withForm)
-      requestAnimationFrame(() =>
-        document.querySelector<HTMLElement>('[data-testid="usage-page"] [data-bs-focus]')?.focus(),
-      );
+      document.querySelector<HTMLElement>('[data-testid="usage-page"] [data-bs-focus]')?.focus();
   }, [open, withForm]);
   return (
     <BotSettings

@@ -15,6 +15,7 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
+import { useFocusOnCommit } from "../focus.ts";
 import { ChevronIcon } from "../icons.tsx";
 import { BudgetForm, type BudgetTarget } from "./Budget.tsx";
 import {
@@ -129,6 +130,7 @@ function Budgets({
   const [routines, setRoutines] = useState<BudgetRoutine[] | null>(null);
   // A failed read of the routines is said, and asked again with Try again: never an empty list.
   const [routinesError, setRoutinesError] = useState<string | null>(null);
+  const focusOnCommit = useFocusOnCommit();
   useEffect(() => {
     if (!adding || routines || routinesError) return;
     let live = true;
@@ -171,9 +173,7 @@ function Budgets({
   const edited = budgets.find((each) => each.id === editing) ?? null;
   const closeEditor = (id: string) => {
     setEditing(null);
-    requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>(`[data-budget="${id}"] button.b-open`)?.focus(),
-    );
+    focusOnCommit(() => document.querySelector<HTMLElement>(`[data-budget="${id}"] button.b-open`));
   };
   return (
     <>
@@ -271,9 +271,7 @@ function Budgets({
             event.stopPropagation();
             setAdding(false);
             setTarget("");
-            requestAnimationFrame(() =>
-              document.querySelector<HTMLElement>('[data-testid="budget-add"]')?.focus(),
-            );
+            focusOnCommit(() => document.querySelector<HTMLElement>('[data-testid="budget-add"]'));
           }}
         >
           <label>

@@ -6,6 +6,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { holdFrames, tabThenRelease } from "./frames.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
@@ -594,6 +595,22 @@ test.describe("action cards", () => {
     await panel.getByRole("button", { name: "Copy tool call id" }).click();
     await expect(page.getByTestId("card-announcer")).toHaveText("Copied tool call id");
     await page.keyboard.press("Home");
+  });
+
+  test("F-093: an arrow between Readable and Raw moves focus with the tab: a Tab straight after leaves the tabs", async ({
+    page,
+  }) => {
+    await open(page, "actions-short");
+    const command = cards(page).nth(1);
+    await line(command).click();
+    await command.getByRole("tab", { name: "Readable" }).focus();
+    // The page's frames held until after Tab, as on a slow machine.
+    await holdFrames(page);
+    await page.keyboard.press("ArrowRight");
+    const raw = command.getByRole("tab", { name: "Raw" });
+    await expect(raw).toHaveAttribute("aria-selected", "true");
+    await expect(raw).toBeFocused();
+    await tabThenRelease(page, command.getByRole("button", { name: "Copy tool name" }));
   });
 
   test("F-423: reasoning before a reply is one folded line over it; opened it shows the text, with Raw; no card, no run line", async ({

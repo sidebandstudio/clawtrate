@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
+import { movedOn, pressMark } from "../focus.ts";
 import { ApprovalCardView } from "./ApprovalCard.tsx";
 import {
   CardEnvContext,
@@ -150,10 +151,11 @@ export function CardScope({
   // Arriving from "Open in <bot>": the receiving card of that run, open, in view and focused.
   // The task can show its runs before its history has loaded, so the card may come later:
   // the arrival waits for it until the history has loaded without it.
-  const arriving = useRef<{ taskKey: string; runId: string } | null>(null);
+  // It takes focus only if the person has pressed nothing since choosing "Open in <bot>".
+  const arriving = useRef<{ taskKey: string; runId: string; mark: number } | null>(null);
   useLayoutEffect(() => {
-    const runId = takeArrival(taskKey);
-    arriving.current = runId === null ? null : { taskKey, runId };
+    const arrival = takeArrival(taskKey);
+    arriving.current = arrival && { taskKey, ...arrival };
   }, [taskKey]);
   useLayoutEffect(() => {
     const pending = arriving.current;
@@ -165,7 +167,8 @@ export function CardScope({
       if (!element) return false;
       element.open = true;
       element.scrollIntoView({ block: "center" });
-      element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      if (!movedOn(pending.mark))
+        element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
     };
     if (open()) arriving.current = null;
@@ -182,6 +185,9 @@ export function CardScope({
   useLayoutEffect(() => {
     const back = takeReturnPoint(taskKey);
     if (!back) return;
+    // It takes focus only if the person has pressed nothing since choosing the way back (or,
+    // when they came back some other way, since the task opened).
+    const mark = back.mark ?? pressMark();
     let frame = 0;
     const restore = (tries: number) => {
       const element = document.getElementById(back.domId);
@@ -198,7 +204,8 @@ export function CardScope({
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
         (each) => each.textContent?.startsWith("Open in"),
       );
-      (button ?? element.querySelector<HTMLElement>("summary"))?.focus({ preventScroll: true });
+      if (!movedOn(mark))
+        (button ?? element.querySelector<HTMLElement>("summary"))?.focus({ preventScroll: true });
     };
     frame = requestAnimationFrame(() => (frame = requestAnimationFrame(() => restore(10))));
     return () => cancelAnimationFrame(frame);
