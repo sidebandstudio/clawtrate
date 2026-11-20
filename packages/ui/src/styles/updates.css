@@ -1,0 +1,56 @@
+.updates-section fieldset {
+  margin: 1rem 0;
+  padding: 0;
+  border: 0;
+}
+.updates-section legend {
+  font-weight: 600;
+}
+.updates-section label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-inline-end: 18px;
+}
+.updates-section input,
+.updates-section progress {
+  accent-color: var(--accent);
+}
+.updates-section progress {
+  width: 100%;
+}
+
+.update-source {
+  overflow-wrap: anywhere;
+}
+.update-result {
+  margin-block-start: 14px;
+}
+.update-result .b-actions {
+  margin-block-start: 14px;
+}
+.updates-section .b-note {
+  margin-block: 12px;
+}
+.updates-section .b-note p {
+  margin: 0;
+}
+.update-result progress {
+  display: block;
+  margin-top: 6px;
+}
+.rail-top .update-entry {
+  display: none;
+}
+@container app (max-width:687px) {
+  .rail-top .update-entry {
+    display: grid;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    margin-right: auto;
+  }
+  .rail-top:has(.update-entry) .rail-status {
+    margin-right: 0;
+  }
+}

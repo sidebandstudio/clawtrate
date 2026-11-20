@@ -97,7 +97,7 @@ describe("the feed's address is the build's", () => {
         } as object),
       });
       expect(BUILD_FEED_ADDRESS).toBeNull();
-      expect((await service.check("stable")).snapshot.state).toMatchObject({
+      expect((await service.check("stable", service.get().revision)).snapshot.state).toMatchObject({
         reason: "not-configured",
       });
       expect(server.requests).toEqual([]);
