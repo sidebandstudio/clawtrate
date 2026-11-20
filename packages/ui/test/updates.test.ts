@@ -224,7 +224,7 @@ const restartFailures = [
   ["attempt-not-saved", "Couldn't save the restart attempt on this device."],
   ["installer-failed", "Couldn't hand the update to the installer."],
 ] as const;
-it.each(restartFailures.slice(0, 3))(
+it.each([restartFailures[0], restartFailures[1], restartFailures[2]])(
   "F-231 F-030: an offer stays reachable but withholds Download for %s",
   (reason, line) => {
     const offer = render(

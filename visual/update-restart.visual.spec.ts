@@ -111,7 +111,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
         await openFixture(page, `scene=stopped-not-sent&${OTTO_DISK}&updates=ready`, "light");
         await showList(page);
         await page.evaluate(
-          ({ tasks, messages, nameLength }) => {
+          ({ tasks, messages }) => {
             const fixture = (
               window as unknown as {
                 clawtrateFixture: {
@@ -125,9 +125,6 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
               const all = Array.from({ length: tasks }, (_, i) => ({ ...task, key: task.key + i }));
               return {
                 ...s,
-                bots: s.bots.map((bot) =>
-                  bot.id === "otto" ? { ...bot, name: "W".repeat(nameLength) } : bot,
-                ),
                 tasksByBot: { ...s.tasksByBot, otto: all },
                 transcripts: Object.fromEntries(
                   all.map((t) => [
@@ -146,7 +143,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
               };
             });
           },
-          { tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX, nameLength: MAX_NAME_CHARS },
+          { tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX },
         );
         await page.getByRole("button", { name: "Open Updates" }).click();
         await page.getByRole("button", { name: "Restart to Update" }).click();
@@ -177,9 +174,24 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
           });
         expect(await fixed()).toEqual([true, true, true, true]);
         await expect(dialog).toHaveScreenshot(`restart-full-outbox-${size.name}-${height}.png`);
-        await description.evaluate((el) => {
-          el.scrollTop = el.scrollHeight;
-        });
+        await page.evaluate((length) => {
+          const { clawtrateFixture } = window as unknown as {
+            clawtrateFixture: { setState: (update: (s: ClawtrateState) => ClawtrateState) => void };
+          };
+          clawtrateFixture.setState((s) => ({
+            ...s,
+            bots: s.bots.map((bot) =>
+              bot.id === "otto" ? { ...bot, name: "W".repeat(length) } : bot,
+            ),
+          }));
+        }, MAX_NAME_CHARS);
+        await expect(description).toContainText("W".repeat(MAX_NAME_CHARS));
+        expect(
+          await description.evaluate((el) => {
+            el.scrollTop = el.scrollHeight;
+            return el.scrollTop > 0 && el.scrollWidth <= el.clientWidth;
+          }),
+        ).toBe(true);
         expect(await fixed()).toEqual([true, true, true, true]);
       });
     });
