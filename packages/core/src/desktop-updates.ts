@@ -29,11 +29,19 @@ export type UpdateInstallRefusal =
   | "mac-designated-requirement"
   | "authenticode-trust"
   | "publisher-mismatch"
-  | "installation-context";
+  | "installation-context"
+  | "inspection-failed"
+  | "running-signature-untrusted"
+  | "running-publisher-mismatch"
+  | "installer-product"
+  | "installer-version"
+  | "mac-archive"
+  | "mac-bundle-identifier"
+  | "mac-architecture";
 
 export type UpdateInstallCapability =
   | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }
-  | { kind: "restart-available"; offerId: string };
+  | { kind: "restart-available"; offerId: string; completesOnQuit?: true };
 
 /** Set only from a prior handoff record and the running version on this launch. */
 export interface UpdateAttemptOutcome {
@@ -46,6 +54,8 @@ export interface UpdateAttemptOutcome {
 
 export type DesktopUpdateState =
   | { kind: "preparing"; offerId: string; version: string }
+  /** macOS may complete this authorized handoff on any later quit. */
+  | { kind: "handed-to-system"; offerId: string; version: string }
   | { kind: "handing-off"; offerId: string; version: string }
   | {
       kind: "handoff-failed";
@@ -82,6 +92,7 @@ export interface DesktopUpdateSnapshot {
   lastCheck: { track: UpdateTrack; readAt: string } | null;
   /** Most recent local settings or storage problem, separate from the release result. */
   preferenceIssue:
+    | "attempt-not-read"
     | "preferences-not-read"
     | "track-not-saved"
     | "last-check-not-saved"
@@ -98,7 +109,7 @@ export interface DesktopUpdateReply {
   snapshot: DesktopUpdateSnapshot;
 }
 
-/** Exposed as bridge.desktopUpdates. Only check and download may start a request. */
+/** Exposed as bridge.desktopUpdates. Check and Download contact the release source. Confirmed Restart may serve a local handoff. */
 export interface DesktopUpdates {
   get(): Promise<DesktopUpdateSnapshot>;
   subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void): () => void;
@@ -106,6 +117,6 @@ export interface DesktopUpdates {
   chooseTrack(track: UpdateTrack): Promise<DesktopUpdateReply>;
   /** A stale or unknown identity leaves the current snapshot alone. */
   download(offerId: string): Promise<DesktopUpdateReply>;
-  /** Explicitly restart into the verified offer the person saw. */
+  /** Accepted means preparation began. Only lastAttempt observes the running version after relaunch. */
   restart(offerId: string): Promise<DesktopUpdateReply>;
 }
