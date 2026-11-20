@@ -336,7 +336,9 @@ export function threadStateOf(calls: readonly T3Call[]): T3ThreadState | null {
 
 /** T3 Code's status in plain words (11.2, step 2); a status this design does not name, as received. */
 export function statusWords(status: string): string {
-  return T3_WORDS.status[status] ?? status.replace(/_/g, " ");
+  return Object.hasOwn(T3_WORDS.status, status)
+    ? T3_WORDS.status[status]!
+    : status.replace(/_/g, " ");
 }
 
 const firstLine = (text: string | null | undefined) =>

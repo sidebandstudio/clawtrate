@@ -30,6 +30,7 @@ import {
   threadKey,
   threadStateOf,
   threadLink,
+  statusWords,
   threadTitle,
   workMayContinue,
   type ActionCall,
@@ -1261,5 +1262,19 @@ describe("the arguments' facts within their bound", () => {
     expect(JSON.stringify(facts).length).toBeLessThanOrEqual(MAX_T3_FACTS_CHARS);
     expect(facts?.argThread).toBe(thread);
     expect(facts?.argMessageShort).toBe(true);
+  });
+});
+
+describe("a status this design does not name", () => {
+  it("F-134: is said as received, even when it names a property every object inherits", () => {
+    for (const status of ["constructor", "toString", "__proto__"]) {
+      const w = live(
+        "t3_thread_wait",
+        { threadId: THREAD },
+        { threadId: THREAD, status, timedOut: false },
+      );
+      expect(typeof lineOf(w, MAP).detail).toBe("string");
+      expect(statusWords(status)).toBe(status.replace(/_/g, " "));
+    }
   });
 });

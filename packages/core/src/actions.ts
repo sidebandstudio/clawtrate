@@ -1904,7 +1904,11 @@ function t3Detail(call: ActionCall, tool: string): string {
     if (typeof t?.count !== "number") return "";
     return tool === "t3_project_list" ? T3_WORDS.projects(t.count) : T3_WORDS.threads(t.count);
   }
-  const status = t?.status ? (T3_WORDS.status[t.status] ?? upper(nameWords(t.status))) : "";
+  const status = !t?.status
+    ? ""
+    : Object.hasOwn(T3_WORDS.status, t.status)
+      ? T3_WORDS.status[t.status]!
+      : upper(nameWords(t.status));
   return status;
 }
 
