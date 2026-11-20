@@ -78,7 +78,7 @@ after: {"status":"error","error":{"code":"AUTH_DEVICE_TOKEN_MISMATCH","message":
 gateway devices: {"pending":[],"paired":[]}
 ```
 
-So: below admin the record stays, and its owner removes it on the gateway's computer with `openclaw devices remove <deviceId>` (for the selected profile). With admin, `device.pair.remove` with the device's own id removes it, the result names the removed id, and the gateway ends the connection at once, so nothing can be read back over it afterwards: the result is the gateway's confirmation.
+So: read and interactive were refused for missing device access. Forget only offers this operation with already-held admin. Local removal does not ask the gateway to remove its record; its owner can remove it on the gateway's computer with `openclaw devices remove <deviceId>` (for the selected profile). With admin, `device.pair.remove` with the device's own id removes it, the result names the removed id, and the gateway ends the connection at once, so nothing can be read back over it afterwards: the result is the gateway's confirmation.
 
 ## 4. Updates: no feed today, and what an update would need
 
