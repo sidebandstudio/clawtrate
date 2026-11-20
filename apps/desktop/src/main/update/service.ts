@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { clearUpdateDirectory, prepareUpdateDirectory } from "../private-update-directory.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { UpdateEngine } from "./engine.ts";
-import { fileKeyFor, parseReleaseDate } from "./feed.ts";
+import { readCheck } from "./preferences.ts";
+import { fileKeyFor } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
 export interface UpdateServiceOptions {
@@ -24,17 +25,9 @@ export interface UpdateServiceOptions {
   downloadDir: string;
   feeds: Record<UpdateTrack, string | null>;
   releaseDate: string | null;
-  store: KeyValueStore;
+  store: Pick<KeyValueStore, "get" | "set">;
   changed: (snapshot: DesktopUpdateSnapshot) => void;
   loopbackHttpForTests?: LoopbackHttpForTests;
-}
-
-export function readCheck(value: unknown): DesktopUpdateSnapshot["lastCheck"] {
-  if (!value || typeof value !== "object" || !("track" in value) || !("readAt" in value))
-    return null;
-  const { track, readAt } = value;
-  const date = parseReleaseDate(readAt);
-  return (track === "stable" || track === "nightly") && date ? { track, readAt: date } : null;
 }
 
 function failed(

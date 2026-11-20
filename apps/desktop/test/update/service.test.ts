@@ -1,5 +1,7 @@
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
-import { createFileStore } from "@clawtrate/core/node";
+import { createUpdatePreferenceStore } from "../../src/main/update/preferences.ts";
+import { updateDefines } from "../../packaging/update-defines.ts";
+import { checkFeedAddress } from "../../src/main/update/address.ts";
 import { symlinkSync, statSync, readFileSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -35,7 +37,7 @@ afterEach(async () => {
   await server.close();
   dir.remove();
 });
-const store = () => createFileStore(join(dir.path, "preferences.json"));
+const store = () => createUpdatePreferenceStore(join(dir.path, "preferences.json"));
 const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[0]> = {}) =>
   DesktopUpdateService.start({
     packaged: true,
@@ -232,7 +234,7 @@ it("a failed file-store write cannot slip into a later successful save", async (
     selectedTrack: "nightly",
     state: { reason: "write-failed" },
   });
-  expect(await prefs.get("selectedTrack")).toBe("nightly");
+  await expect(prefs.get("selectedTrack")).rejects.toThrow();
   rmSync(path, { recursive: true });
   renameSync(path + ".saved", path);
   await service.check(service.get().selectedTrack);
@@ -499,4 +501,50 @@ it("reads the last JSON value for a repeated track", async () => {
     );
     expect((await service.check("stable")).snapshot.state).toMatchObject(expected);
   }
+});
+
+it("bounds preference reads and recovers when the file is repaired", async () => {
+  const path = join(dir.path, "preferences.json");
+  const prefs = store();
+  for (const bad of [
+    " ".repeat(1024) + "{}",
+    "[]",
+    '{"selectedTrack":42}',
+    '{"lastCheck":false}',
+  ]) {
+    writeFileSync(path, bad);
+    const service = await start({ store: prefs });
+    expect(service.get().state).toMatchObject({ reason: "write-failed" });
+    expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("stable");
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  }
+  const history = { track: "nightly", readAt: "2026-11-01T00:00:00.000Z" };
+  writeFileSync(
+    path,
+    JSON.stringify({
+      other: "discard",
+      lastCheckedAt: history.readAt,
+      lastCheck: JSON.stringify({ ...history, extra: true }),
+    }),
+  );
+  await prefs.set("selectedTrack", "nightly");
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+    selectedTrack: "nightly",
+    lastCheck: history,
+  });
+  expect(readdirSync(dir.path)).toEqual(["preferences.json"]);
+});
+it("bounds the packaged and displayed hostname to 253 characters", async () => {
+  const host = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".");
+  for (const suffix of ["", "x"]) {
+    const name = host + suffix,
+      url = "https://" + name + "/feed";
+    const defines = () => updateDefines({ CLAWTRATE_UPDATE_FEED_URL: url }, new Date());
+    if (suffix) expect(defines).toThrow(/253/);
+    else expect(defines).not.toThrow();
+    expect(checkFeedAddress(url).ok).toBe(!suffix);
+    const service = await start({ feeds: { stable: url, nightly: null } });
+    expect(service.get().tracks).toEqual(suffix ? [] : [{ track: "stable", source: name }]);
+  }
+  expect(server.requests).toEqual([]);
 });

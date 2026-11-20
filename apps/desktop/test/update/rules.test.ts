@@ -80,7 +80,7 @@ describe("the feed's address is the build's", () => {
         version: "0.1.0",
         packaged: true,
         changed: () => {},
-        store: { get: async () => null, set: async () => {}, delete: async () => {} },
+        store: { get: async () => null, set: async () => {} },
         downloadDir: join(dir.path, "updates"),
         platform: "darwin",
         arch: "arm64",
