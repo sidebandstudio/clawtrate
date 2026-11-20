@@ -446,8 +446,9 @@ describe("Connect on this computer", () => {
     await h.client.start();
     const looking = h.setup.look();
     await until(() => h.setup.current.step === 2);
+    const before = h.stopped();
     h.setup.cancel();
-    expect(h.stopped()).toBe(1);
+    expect(h.stopped()).toBe(before + 1);
     expect(h.setup.current.phase).toBe("idle");
     release();
     await looking;
@@ -996,6 +997,174 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     expect(h.setup.current.look?.access).toBe("new");
     expect(h.gateway.connects).toEqual([]);
     expect(minted(h.requests)).toEqual([]);
+    h.client.stop();
+  });
+
+  it("a new look ends the earlier look's programs before it asks anything", async () => {
+    let release!: () => void;
+    const stopsAtVersion: number[] = [];
+    let looks = 0;
+    const h: ReturnType<typeof harness> = harness({
+      replies: {
+        "--version": () => {
+          looks += 1;
+          stopsAtVersion.push(h.stopped());
+          return looks === 1
+            ? new Promise((resolve) => (release = () => resolve({ stdout: VERSION_LINE })))
+            : { stdout: VERSION_LINE };
+        },
+      },
+    });
+    await h.client.start();
+    const first = h.setup.look();
+    await until(() => stopsAtVersion.length === 1);
+    await h.setup.look();
+    release();
+    await first;
+    expect(stopsAtVersion[1]).toBeGreaterThan(stopsAtVersion[0]!);
+    h.client.stop();
+  });
+
+  it("Back while the host's dialog is open returns to the card, and a later yes runs nothing", async () => {
+    let answer!: (yes: boolean) => void;
+    const h = harness({ confirm: () => new Promise((resolve) => (answer = resolve)) });
+    await h.client.start();
+    await h.setup.look();
+    const looked = h.requests.length;
+    const connecting = h.setup.connect();
+    await until(() => h.setup.current.phase === "confirming");
+    h.setup.cancel();
+    expect(h.setup.current.phase).toBe("found");
+    answer(true);
+    await connecting;
+    expect(h.setup.current.phase).toBe("found");
+    expect(h.requests.length).toBe(looked);
+    expect(h.gateway.sockets).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it("Back while the sandbox is checked again before the look starts nothing", async () => {
+    const h = harness();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let ran = 0;
+    const setup = new SetupController({
+      client: h.client,
+      open: async () => {
+        await held;
+        return {
+          world: world(),
+          run: async () => {
+            ran += 1;
+            return { exitCode: 0, stdout: "", timedOut: false, tooLarge: false, failed: false };
+          },
+          identify: () => ({ state: "exited", how: "absent" }),
+        };
+      },
+      stopPrograms: () => {},
+      confirm: null,
+    });
+    const looking = setup.look();
+    setup.cancel();
+    release();
+    await looking;
+    expect(setup.current.phase).toBe("idle");
+    expect(ran).toBe(0);
+    h.client.stop();
+  });
+
+  it("Back while the bots load closes the setup's own connection, and opens nothing more", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const auth = (params as { auth?: { bootstrapToken?: string } }).auth;
+      return auth?.bootstrapToken === CODE
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : { ok: false, error: { code: "INVALID_REQUEST", message: "unauthorized" } };
+    };
+    // The bots never arrive while Back is pressed.
+    gateway.handlers["agents.list"] = () => new Promise(() => {});
+    const h = harness({ gateway });
+    await h.client.start();
+    await h.setup.look();
+    void h.setup.connect();
+    await until(() => h.client.state.connection.status === "connected");
+    expect(h.client.state.discovery.status).toBe("loading");
+    h.setup.cancel();
+    await until(() => h.client.state.connection.status === "idle");
+    const sockets = h.gateway.sockets.length;
+    await sleep(100);
+    expect(h.gateway.sockets).toHaveLength(sockets);
+    expect(h.setup.current.phase).toBe("found");
+    h.client.stop();
+  });
+
+  it("Back leaves alone a connection the setup didn't open", async () => {
+    const h = harness();
+    h.gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "other-token"),
+    });
+    await h.client.start();
+    await h.client.connect({ url: "ws://127.0.0.1:19960", token: "typed" });
+    await until(() => h.client.state.connection.status === "connected");
+    await h.setup.look();
+    h.setup.cancel();
+    h.setup.reset();
+    await sleep(50);
+    expect(h.client.state.connection).toMatchObject({
+      status: "connected",
+      gatewayUrl: "ws://127.0.0.1:19960",
+    });
+    h.client.stop();
+  });
+
+  it("a connection to another route doesn't finish the setup: only its own route does", async () => {
+    const h = harness();
+    h.gateway.connectReply = (params, url) => {
+      if (url !== URL) return { ok: true, payload: helloOk(["operator.read"], "other-token") };
+      const auth = (params as { auth?: { bootstrapToken?: string } }).auth;
+      return auth?.bootstrapToken === CODE
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : { ok: false, error: { code: "INVALID_REQUEST", message: "unauthorized" } };
+    };
+    await h.client.start();
+    // Another route, connected with its bots read, while the setup looks and connects.
+    await h.client.connect({ url: "ws://127.0.0.1:19960", token: "typed" });
+    await until(() => h.client.state.discovery.status === "ready");
+    await h.setup.look();
+    const doneAt: Array<string | null> = [];
+    h.client.store.subscribe((state) => {
+      if (h.setup.current.phase === "done" && doneAt.length === 0)
+        doneAt.push(state.connection.gatewayUrl);
+    });
+    await h.setup.connect();
+    await until(() => h.setup.current.phase === "done");
+    expect(doneAt[0]).toBe(URL);
+    h.client.stop();
+  });
+
+  it("connected with bots that couldn't be read, a retry that reads them opens the app", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const auth = (params as { auth?: { bootstrapToken?: string; deviceToken?: string } }).auth;
+      return auth?.bootstrapToken === CODE || auth?.deviceToken === "device-token"
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : { ok: false, error: { code: "INVALID_REQUEST", message: "unauthorized" } };
+    };
+    let failing = true;
+    const bots = gateway.handlers["agents.list"]!;
+    gateway.handlers["agents.list"] = (params) => {
+      if (failing) throw new Error("not now");
+      return bots(params);
+    };
+    const h = harness({ gateway });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    await until(() => h.setup.current.failure?.kind === "bots");
+    failing = false;
+    await h.client.retryNow();
+    await until(() => h.setup.current.phase === "done");
     h.client.stop();
   });
 

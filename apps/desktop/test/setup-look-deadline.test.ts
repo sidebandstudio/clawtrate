@@ -4,13 +4,26 @@
 import type * as FsPromises from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 
-// Any path under a "hangs" folder never answers; every other check is the real one.
+// Any path under a "hangs" folder never answers, one under "held" answers when the
+// test lets it go; every other check is the real one.
+const gate = vi.hoisted(() => {
+  let release: () => void = () => {};
+  const opened = new Promise<void>((resolve) => (release = resolve));
+  return { opened, release: () => release() };
+});
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof FsPromises>();
   const hangs = (path: unknown) => String(path).includes("/hangs/");
+  const held = (path: unknown) => String(path).includes("/held/");
   return {
     ...fs,
     stat: (path: string) => (hangs(path) ? new Promise(() => {}) : fs.stat(path)),
+    lstat: (path: string) =>
+      held(path)
+        ? gate.opened.then(() => {
+            throw Object.assign(new Error("absent"), { code: "ENOENT" });
+          })
+        : fs.lstat(path),
   };
 });
 
@@ -54,4 +67,43 @@ it("a check for signs of OpenClaw that never answers ends the look as can't tell
   );
   expect(result?.look).toMatchObject({ outcome: "cant-tell", reason: "timeout" });
   expect(run).not.toHaveBeenCalled();
+});
+
+it("Back while the look checks for another profile's folder starts nothing more", async () => {
+  let cancelled = false;
+  const asked: string[] = [];
+  const program = process.execPath;
+  const result = await lookHere(
+    world({
+      candidates: [program],
+      profiles: [
+        { name: "default", args: [], stateDir: "/nowhere/.openclaw", required: true, env: {} },
+        {
+          name: "clawtrate",
+          args: ["--profile", "clawtrate"],
+          stateDir: "/held/.openclaw-clawtrate",
+          required: false,
+          env: {},
+        },
+      ],
+    }),
+    async (request) => {
+      asked.push(request.args.join(" "));
+      // Back is pressed while the folder check is still out, then it answers.
+      setTimeout(() => {
+        cancelled = true;
+        gate.release();
+      }, 20);
+      return {
+        exitCode: 0,
+        stdout: "OpenClaw 2026.10.6 (fe06181)\n",
+        timedOut: false,
+        tooLarge: false,
+        failed: false,
+      };
+    },
+    { cancelled: () => cancelled },
+  );
+  expect(result).toBeNull();
+  expect(asked).toEqual(["--version"]);
 });

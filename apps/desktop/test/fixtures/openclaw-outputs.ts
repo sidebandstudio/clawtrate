@@ -15,6 +15,12 @@ type StatusOptions = {
   listening?: boolean;
   service?: "none" | "running" | "stopped" | "unknown";
   label?: string;
+  /**
+   * The service's `targetRole`. Recorded as `diagnostic-only` on a development
+   * instance; a test that needs a service associated with its gateway passes
+   * another value.
+   */
+  targetRole?: string;
   extraServices?: Array<{ label: string }>;
   /** The address the status probed, and the one its RPC answered on. */
   probeUrl?: string;
@@ -44,7 +50,7 @@ export function statusJson(options: StatusOptions = {}): string {
       loadState: { status: service === "running" ? "loaded" : "not-loaded" },
       loadedText: "loaded",
       notLoadedText: "not loaded",
-      targetRole: "diagnostic-only",
+      targetRole: options.targetRole ?? "diagnostic-only",
       command: null,
       runtime,
       configAudit: { ok: true, issues: [] },

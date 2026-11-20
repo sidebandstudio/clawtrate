@@ -63,7 +63,7 @@ Start the desktop app with it:
 CLAWTRATE_SETUP_SANDBOX=<that path> pnpm desktop
 ```
 
-"This computer" finds the instance and names its version, profile, how it listens and its service ("None registered"). A stopped instance (`pnpm dev-gateway stop --instance look`) is "installed but not running". A folder `.openclaw-work` in the sandbox's `home` is named as another profile and not used. Write a sandbox with another `--scenario` to see the other results; `pairing` follows Connect to the end. The sandbox stays valid until the instance is started again.
+"This computer" finds the instance and names its version, profile, its configured bind ("Configured for loopback") and its service ("No matching service reported"). A stopped instance (`pnpm dev-gateway stop --instance look`) is "installed but not running". A folder `.openclaw-work` in the sandbox's `home` is named as another profile and not used. Write a sandbox with another `--scenario` to see the other results; `pairing` follows Connect to the end. The sandbox stays valid until the instance is started again.
 
 The web preview shows the same screens, without pairing, with its data in the sandbox's folder:
 

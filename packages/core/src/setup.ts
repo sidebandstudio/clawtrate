@@ -9,10 +9,7 @@ export const TESTED_OPENCLAW_VERSION = "2026.10.6";
 /** The gateway protocol the pinned client speaks, for a host's synthetic gateway. */
 export { PROTOCOL_VERSION as GATEWAY_PROTOCOL } from "@openclaw/gateway-client/browser";
 
-/**
- * The oldest version Clawtrate connects to. The pinned protocol schema
- * describes nothing older than 2026.7 (`since: "<=2026.7"`); Clawtrate's choice.
- */
+/** Below this version Clawtrate doesn't offer automatic setup: Clawtrate's choice. */
 export const OLDEST_OPENCLAW_VERSION = "2026.7.0";
 
 /**
@@ -42,7 +39,7 @@ export type CantTellReason =
   /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
   | "endpoint";
 
-/** The gateway's service, as observed. `none` is a gateway started by hand. */
+/** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
   "launchagent" | "launchagent-stopped" | "systemd" | "systemd-stopped" | "none";
 
@@ -53,8 +50,8 @@ export type SetupLook = {
   version: string | null;
   /** The profile's name: `default`, `clawtrate`, or a development instance's. */
   profile: string | null;
-  /** `loopback` when the gateway listens on this computer only. */
-  listens: "loopback" | "network" | null;
+  /** The configured bind the status reported: `loopback` or `lan`; anything else is not reported. */
+  listens: "loopback" | "lan" | null;
   service: LookService | null;
   port: number | null;
   /** For `not-token`: the gateway's other sign-in. */

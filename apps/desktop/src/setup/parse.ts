@@ -52,8 +52,8 @@ export type GatewayStatus = {
   /** The profile's config file, kept to tell this gateway from another; never shown or opened. */
   configPath: string;
   port: number;
-  /** How it listens, when the status names a bind mode the look knows; otherwise not reported. */
-  bind: "loopback" | "network" | null;
+  /** Its configured bind, when the status names `loopback` or `lan`; otherwise not reported. */
+  bind: "loopback" | "lan" | null;
   /**
    * The service as the status describes it: a registered LaunchAgent or
    * systemd user unit, `none` when the status says its unit is missing, and
@@ -86,9 +86,6 @@ export type GatewayStatus = {
   /** Whether the status says its service belongs to this gateway (not `diagnostic-only`). */
   serviceAssociated: boolean;
 };
-
-/** Bind modes OpenClaw names; the look knows which of them listen beyond this computer. */
-const NETWORK_BINDS = new Set(["lan", "tailnet", "custom", "auto"]);
 
 /** A reported address, compared with the endpoint after taking off at most one terminal slash. */
 const sameEndpoint = (value: unknown, url: string) =>
@@ -164,12 +161,9 @@ export function parseStatus(stdout: string): GatewayStatus | null {
     configExists: config.exists,
     configPath: config.path,
     port: number,
-    bind:
-      gateway.bindMode === "loopback"
-        ? "loopback"
-        : typeof gateway.bindMode === "string" && NETWORK_BINDS.has(gateway.bindMode)
-          ? "network"
-          : null,
+    // Only these two configured values say where it listens: `auto`, `tailnet` and a custom
+    // address can each resolve to loopback, so they are not reported.
+    bind: gateway.bindMode === "loopback" ? "loopback" : gateway.bindMode === "lan" ? "lan" : null,
     service: described,
     // What tells this service apart: its label, role, process, state and the unit it names.
     serviceKey: JSON.stringify([
@@ -194,11 +188,16 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   };
 }
 
-/** The service as the found card names it; null when the status didn't describe it. */
+/**
+ * The service as the found card names it: a registered service only when the
+ * status associates it with this gateway, "none" when it reports no unit, and
+ * null (not reported) otherwise.
+ */
 export function serviceFact(status: GatewayStatus): LookService | null {
   const service = status.service;
   if (service === null) return null;
   if (service === "none") return "none";
+  if (!status.serviceAssociated) return null;
   const stopped = service.state === "stopped";
   if (service.kind === "launchagent") return stopped ? "launchagent-stopped" : "launchagent";
   return stopped ? "systemd-stopped" : "systemd";

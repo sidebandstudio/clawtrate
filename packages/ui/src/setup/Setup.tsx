@@ -236,11 +236,11 @@ function HowToUpdate() {
 }
 
 const SERVICE_WORDS: Record<LookService, string> = {
-  launchagent: "LaunchAgent, starts when you log in",
+  launchagent: "LaunchAgent",
   "launchagent-stopped": "LaunchAgent, stopped",
-  systemd: "systemd user service, starts with your session",
+  systemd: "systemd user service",
   "systemd-stopped": "systemd user service, stopped",
-  none: "None registered",
+  none: "No matching service reported",
 };
 
 /** A fact the look established, or "Not reported". */
@@ -255,9 +255,9 @@ function runningFacts(look: SetupLook): Array<[string, string]> {
     [
       "Listens",
       look.listens === "loopback"
-        ? "On this computer only"
-        : look.listens === "network"
-          ? "On your network too"
+        ? "Configured for loopback"
+        : look.listens === "lan"
+          ? "Configured for LAN"
           : NOT_REPORTED,
     ],
     ["Service", serviceWords(look.service)],
@@ -273,12 +273,9 @@ const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
 /** Other services and profiles the look saw: named, never used. */
 function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
   if (others.length === 0) return null;
-  const several = others.length > 1;
   return (
     <>
-      <Note>
-        {`${PRODUCT_NAME} also saw ${several ? "other OpenClaw services" : "another OpenClaw service"} here (${others.join(", ")}). It connects only to the default gateway and its own; use Advanced for others.`}
-      </Note>
+      <Note>{`Other OpenClaw services or profile folders reported here: ${others.join(", ")}.`}</Note>
       <p className="s-links">
         <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
       </p>
@@ -287,11 +284,10 @@ function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => vo
 }
 
 const CANT_TELL: Record<string, string> = {
-  timeout: "Asking the gateway didn't finish in time.",
-  shape: "OpenClaw answered in a way Clawtrate doesn't understand.",
-  "no-answer":
-    "OpenClaw's gateway didn't answer, though something runs on its port or as its service.",
-  "not-set-up": "OpenClaw is installed here, but no gateway is set up for it.",
+  timeout: "The look didn't finish in time.",
+  shape: "Clawtrate couldn't read the OpenClaw result.",
+  "no-answer": "Clawtrate couldn't read a gateway answer.",
+  "not-set-up": "OpenClaw didn't report a config file for this profile.",
   endpoint:
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
 };
@@ -360,7 +356,7 @@ function LookResult({
           facts={runningFacts(look)}
         >
           <Note tone="warn">
-            {`OpenClaw ${look.version} isn't the version this ${PRODUCT_NAME} is tested with (${TESTED_OPENCLAW_VERSION}). Use Advanced to connect to it.`}
+            {`OpenClaw ${look.version} isn't the version this ${PRODUCT_NAME} is tested with (${TESTED_OPENCLAW_VERSION}). Use Advanced to try connecting.`}
           </Note>
           <Actions>{advanced}</Actions>
           <HowToUpdate />
@@ -368,8 +364,12 @@ function LookResult({
       );
     case "too-old":
       return (
-        <Found mark={<CloseIcon />} tone="danger" heading="This OpenClaw is too old for Clawtrate">
-          <Lede>{`OpenClaw ${look.version} is older than the oldest version this ${PRODUCT_NAME} connects to (${OLDEST_OPENCLAW_VERSION}). Update it, then look again.`}</Lede>
+        <Found
+          mark={<CloseIcon />}
+          tone="danger"
+          heading="This OpenClaw is too old for automatic setup"
+        >
+          <Lede>{`OpenClaw ${look.version} is below the version this ${PRODUCT_NAME} offers for automatic setup (${OLDEST_OPENCLAW_VERSION}). Update it, then look again.`}</Lede>
           <Actions>
             <Primary onClick={lookAgain}>Look again</Primary>
           </Actions>
@@ -382,9 +382,9 @@ function LookResult({
           mark={<PauseIcon />}
           heading="OpenClaw is installed but not running"
           facts={[
-            ["Version", look.version ?? NOT_REPORTED],
+            ["Installed program", look.version ?? NOT_REPORTED],
             ["Service", serviceWords(look.service)],
-            ["Port", `Nothing listening on ${look.port}`],
+            ["Port", `No gateway answered on port ${look.port}`],
           ]}
         >
           <Lede>Start OpenClaw yourself, then look again.</Lede>
@@ -499,7 +499,11 @@ const FAILURES: Record<
   "code-failed": {
     lead: "Couldn't make a one-time code.",
     text: (_port, exit) =>
-      exit === null ? "OpenClaw stopped." : `OpenClaw exited with code ${exit}.`,
+      exit === null
+        ? ""
+        : exit === 0
+          ? "OpenClaw didn't return a usable setup code."
+          : `OpenClaw exited with code ${exit}.`,
     next: "retry",
     step: 0,
   },

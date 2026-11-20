@@ -158,7 +158,8 @@ async function otherProfiles(world: LookWorld): Promise<string[]> {
 
 type ProfileLook =
   | { kind: "status"; status: GatewayStatus; auth: AuthMode | null }
-  | { kind: "fail"; reason: CantTellReason };
+  | { kind: "fail"; reason: CantTellReason }
+  | { kind: "cant-run" };
 
 export type LookOptions = {
   /** Called as each step starts. */
@@ -182,7 +183,24 @@ export async function lookHere(
   options.onStep?.(0);
   if (world.platform === "win32") return { look: { ...empty, outcome: "windows" }, found: null };
 
+  // Every file check of the look is started now, under one deadline, before any program runs.
   const files = Date.now() + FILE_CHECK_MS;
+  // An optional profile is looked at only when its state is a real folder.
+  const presence = withDeadline(
+    Promise.all(
+      world.profiles.map(
+        (profile) =>
+          profile.required ||
+          lstat(profile.stateDir).then(
+            (found) => found.isDirectory(),
+            () => false,
+          ),
+      ),
+    ),
+    files,
+  );
+  presence.catch(() => {});
+  const folderNames = withDeadline(otherProfiles(world), files).catch(() => [] as string[]);
   let program: string | null;
   try {
     program = world.installed
@@ -233,25 +251,14 @@ export async function lookHere(
   options.onStep?.(2);
   let considered: LookProfile[];
   try {
-    // An optional profile is looked at only when its state is a real folder.
-    const present = await withDeadline(
-      Promise.all(
-        world.profiles.map(
-          (profile) =>
-            profile.required ||
-            lstat(profile.stateDir).then(
-              (found) => found.isDirectory(),
-              () => false,
-            ),
-        ),
-      ),
-      Date.now() + FILE_CHECK_MS,
-    );
+    const present = await presence;
     considered = world.profiles.filter((_, index) => present[index]);
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
     throw error;
   }
+  // Back during the profile check starts nothing more.
+  if (cancelled()) return null;
   // The deep status scans the system's service folders: never in a sandbox.
   const deep = world.deep
     ? runFor(first, ["gateway", "status", "--json", "--deep"], LIMITS.deep)
@@ -262,6 +269,7 @@ export async function lookHere(
         runFor(profile, ["gateway", "status", "--json"], LIMITS.status),
         runFor(profile, ["config", "get", "gateway.auth.mode", "--json"], LIMITS.auth),
       ]);
+      if (couldNotRun(statusRun) || couldNotRun(authRun)) return { kind: "cant-run" };
       if (statusRun.timedOut || authRun.timedOut) return { kind: "fail", reason: "timeout" };
       const status = statusRun.exitCode === 0 ? parseStatus(statusRun.stdout) : null;
       if (!status) return { kind: "fail", reason: "shape" };
@@ -276,12 +284,10 @@ export async function lookHere(
   if (cancelled()) return null;
   const services =
     deepRun && deepRun.exitCode === 0 ? (parseExtraServices(deepRun.stdout) ?? []) : [];
-  let folders: string[];
-  try {
-    folders = await withDeadline(otherProfiles(world), Date.now() + FILE_CHECK_MS);
-  } catch {
-    folders = [];
-  }
+  // A required program that couldn't start is its own result.
+  if (looks.some((look) => look.kind === "cant-run"))
+    return { look: { ...empty, outcome: "cant-run" }, found: null };
+  const folders = await folderNames;
   const others = [...services.map((label) => `service ${label}`), ...folders].slice(
     0,
     MAX_LOOK_OTHERS,
@@ -321,6 +327,7 @@ function classify(
   programIdentity: string | null,
   identify: Identify,
 ): LookReport {
+  if (result.kind === "cant-run") return { look: { ...empty, outcome: "cant-run" }, found: null };
   if (result.kind === "fail")
     return { look: cantTell(result.reason, programVersion.text), found: null };
   const { status, auth } = result;

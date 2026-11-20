@@ -252,8 +252,8 @@ test("F-492: the look names this run's instance from its own records, with nothi
   await expect(page.getByTestId("setup-found").locator("dl > div")).toHaveText([
     "Version2026.10.6",
     `Profile${PROFILE}`,
-    "ListensOn this computer only",
-    "ServiceNone registered",
+    "ListensConfigured for loopback",
+    "ServiceNo matching service reported",
   ]);
   await expect(page.locator("input")).toHaveCount(0);
   // A development instance is never paired with: after the dialog, a fixed refusal.
@@ -327,7 +327,7 @@ test("F-515: another version is named, offers Advanced, and runs nothing for the
   const launched = await launch({ scenario: "untested-version" });
   await thisComputer(launched.page).click();
   await expect(launched.page.getByRole("status").filter({ hasText: "2026.9.37" })).toHaveText(
-    "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.",
+    "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.",
     { timeout: 60_000 },
   );
   await expect(launched.page.getByRole("button", { name: "Connect" })).toHaveCount(0);
@@ -342,8 +342,8 @@ test("F-516: another profile is named and not connected to", async () => {
   mkdirSync(join(sandbox.home, ".openclaw-work"));
   const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();
-  await expect(launched.page.getByRole("status").filter({ hasText: "also saw" })).toHaveText(
-    "Clawtrate also saw another OpenClaw service here (profile work). It connects only to the default gateway and its own; use Advanced for others.",
+  await expect(launched.page.getByRole("status").filter({ hasText: "reported here" })).toHaveText(
+    "Other OpenClaw services or profile folders reported here: profile work.",
     { timeout: 60_000 },
   );
   // What the card offers to connect to is this file's instance, by its profile.
@@ -378,9 +378,9 @@ test("a gateway that is stopped is installed but not running, with nothing liste
     launched.page.getByRole("heading", { name: "OpenClaw is installed but not running" }),
   ).toBeVisible({ timeout: 60_000 });
   const facts = launched.page.getByTestId("setup-found").locator("dl > div");
-  await expect(facts.nth(0)).toHaveText("Version2026.10.6");
-  await expect(facts.nth(1)).toHaveText("ServiceNone registered");
-  await expect(facts.nth(2)).toHaveText(/^PortNothing listening on 19\d\d\d$/);
+  await expect(facts.nth(0)).toHaveText("Installed program2026.10.6");
+  await expect(facts.nth(1)).toHaveText("ServiceNo matching service reported");
+  await expect(facts.nth(2)).toHaveText(/^PortNo gateway answered on port 19\d\d\d$/);
   await expect(launched.page.getByRole("button", { name: "Connect" })).toHaveCount(0);
   await close(launched);
 });

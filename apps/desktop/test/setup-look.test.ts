@@ -154,23 +154,43 @@ describe("the look on this computer", () => {
     }
   });
 
-  it("F-492: the service is named as observed: a LaunchAgent, a systemd user service, or none", async () => {
+  it("F-492 F-516: a service is named only when the status associates it with this gateway, and a configured bind only for loopback or LAN", async () => {
+    const associated = { targetRole: "gateway" };
     const running = await look(
       homeWorld(),
-      fakeRunner(defaultTable(statusJson({ port: 18789, service: "running" }))).run,
+      fakeRunner(defaultTable(statusJson({ port: 18789, service: "running", ...associated }))).run,
     );
     expect(running?.look.service).toBe("launchagent");
     const systemd = await look(
       homeWorld({ platform: "linux" }),
-      fakeRunner(defaultTable(statusJson({ port: 18789, service: "running", label: "systemd" })))
-        .run,
+      fakeRunner(
+        defaultTable(
+          statusJson({ port: 18789, service: "running", label: "systemd", ...associated }),
+        ),
+      ).run,
     );
     expect(systemd?.look.service).toBe("systemd");
-    const network = await look(
+    // As recorded: a running service the status calls diagnostic-only is not this gateway's.
+    const diagnostic = await look(
+      homeWorld(),
+      fakeRunner(defaultTable(statusJson({ port: 18789, service: "running" }))).run,
+    );
+    expect(diagnostic?.look.service).toBeNull();
+    // A missing unit is reported as such.
+    const none = await look(homeWorld(), fakeRunner(defaultTable(statusJson({ port: 18789 }))).run);
+    expect(none?.look.service).toBe("none");
+    const lan = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, bind: "lan" }))).run,
     );
-    expect(network?.look.listens).toBe("network");
+    expect(lan?.look.listens).toBe("lan");
+    for (const bind of ["auto", "tailnet", "custom"]) {
+      const report = await look(
+        homeWorld(),
+        fakeRunner(defaultTable(statusJson({ port: 18789, bind }))).run,
+      );
+      expect(report?.look.listens, bind).toBeNull();
+    }
   });
 
   it("F-515: another version is named and not offered for Connect", async () => {
@@ -236,7 +256,11 @@ describe("the look on this computer", () => {
   it("a registered service that is stopped, with nothing listening, is proven stopped", async () => {
     const report = await look(
       homeWorld(),
-      fakeRunner(defaultTable(statusJson({ port: 18789, answered: null, service: "stopped" }))).run,
+      fakeRunner(
+        defaultTable(
+          statusJson({ port: 18789, answered: null, service: "stopped", targetRole: "gateway" }),
+        ),
+      ).run,
     );
     expect(report?.look).toMatchObject({ outcome: "stopped", service: "launchagent-stopped" });
   });
@@ -548,6 +572,28 @@ describe("the look on this computer", () => {
     symlinkSync(join(dir, "app"), join(world.home, ".openclaw-linked"));
     const report = await look(world, fakeRunner(defaultTable()).run);
     expect(report?.look.others).toEqual([]);
+  });
+
+  it("a status or auth command that can't be started is the program's own result, at each stage, with nothing after it", async () => {
+    for (const [key, reply] of [
+      ["gateway status --json", { failed: true, exitCode: null }],
+      ["gateway status --json", { exitCode: 127 }],
+      ["config get gateway.auth.mode --json", { failed: true, exitCode: null }],
+      ["config get gateway.auth.mode --json", { exitCode: 126 }],
+    ] as const) {
+      const { run, requests } = fakeRunner({ ...defaultTable(), [key]: reply });
+      const report = await look(homeWorld(), run);
+      expect(report?.look.outcome, `${key} ${JSON.stringify(reply)}`).toBe("cant-run");
+      expect(report?.found).toBeNull();
+      // Only the version and the one stage's commands ran.
+      for (const request of requests)
+        expect([
+          "--version",
+          "gateway status --json",
+          "config get gateway.auth.mode --json",
+          "gateway status --json --deep",
+        ]).toContain(request.args.join(" "));
+    }
   });
 
   it("a program that can't be started is its own result, not an answer of the wrong shape", async () => {

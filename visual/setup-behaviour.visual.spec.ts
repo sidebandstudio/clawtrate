@@ -67,7 +67,7 @@ test("F-491 F-492: This computer starts the look at once; the steps run, then th
   await expect(facts).toHaveText([
     "Version2026.10.6",
     "Profiledefault",
-    "ListensOn this computer only",
+    "ListensConfigured for loopback",
     "ServiceLaunchAgent, starts when you log in",
   ]);
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
@@ -150,7 +150,7 @@ test("F-515: another version is named, offers Advanced and how to update, and no
 }) => {
   await openFixture(page, "setup=untested", "light");
   await expect(page.getByRole("status").filter({ hasText: "2026.9.37" })).toHaveText(
-    "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.",
+    "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.",
   );
   await expect(page.getByRole("button", { name: "Connect" })).toHaveCount(0);
   await page.getByText("How to update").click();
@@ -169,8 +169,8 @@ test("F-516: other services and profiles are named, and Advanced is offered for 
   page,
 }) => {
   await openFixture(page, "setup=found-others", "light");
-  await expect(page.getByRole("status").filter({ hasText: "also saw" })).toHaveText(
-    "Clawtrate also saw other OpenClaw services here (service com.example.openclaw-gateway, profile work). It connects only to the default gateway and its own; use Advanced for others.",
+  await expect(page.getByRole("status").filter({ hasText: "reported here" })).toHaveText(
+    "Other OpenClaw services or profile folders reported here: service com.example.openclaw-gateway, profile work.",
   );
   await page.getByRole("button", { name: "Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
@@ -243,7 +243,7 @@ test("F-516: a bind or a service the look didn't establish is not reported", asy
   await expect(facts.nth(3)).toHaveText("ServiceNot reported");
   await openFixture(page, "setup=stopped-by-hand", "light");
   await expect(page.getByTestId("setup-found").locator("dl > div").nth(1)).toHaveText(
-    "ServiceNone registered",
+    "ServiceNo matching service reported",
   );
   await expect(page.getByText(/started by hand/)).toHaveCount(0);
 });
@@ -271,7 +271,7 @@ test("F-515: the too-old card speaks of the version it read, and of no protocol"
   await openFixture(page, "setup=too-old", "light");
   await expect(
     page.getByText(
-      /OpenClaw 2026\.6\.2 is older than the oldest version this Clawtrate connects to \(2026\.7\.0\)/,
+      /OpenClaw 2026\.6\.2 is below the version this Clawtrate offers for automatic setup \(2026\.7\.0\)\. Update it, then look again\./,
     ),
   ).toBeVisible();
   await expect(page.getByText(/protocol/)).toHaveCount(0);
@@ -303,4 +303,32 @@ test("connected, with bots that couldn't be read, says so and doesn't open the a
   );
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   await expect(page.getByTestId("bot-list")).toHaveCount(0);
+});
+
+test("F-516: each card says only what the look established", async ({ page }) => {
+  const lead = (text: string) => page.getByText(text, { exact: true });
+  await openFixture(page, "setup=found-profile-only", "light");
+  await expect(page.getByRole("status").filter({ hasText: "reported here" })).toHaveText(
+    "Other OpenClaw services or profile folders reported here: profile work.",
+  );
+  await expect(page.getByText(/connects only to|its own/)).toHaveCount(0);
+  await openFixture(page, "setup=cant-tell", "light");
+  await expect(lead("The look didn't finish in time.")).toBeVisible();
+  await openFixture(page, "setup=cant-tell-shape", "light");
+  await expect(lead("Clawtrate couldn't read the OpenClaw result.")).toBeVisible();
+  await openFixture(page, "setup=cant-tell-not-set-up", "light");
+  await expect(lead("OpenClaw didn't report a config file for this profile.")).toBeVisible();
+  await openFixture(page, "setup=cant-tell-no-answer", "light");
+  await expect(lead("Clawtrate couldn't read a gateway answer.")).toBeVisible();
+  await expect(page.getByText(/runs on its port|as its service/)).toHaveCount(0);
+  await openFixture(page, "setup=stopped-by-hand", "light");
+  const facts = page.getByTestId("setup-found").locator("dl > div");
+  await expect(facts).toHaveText([
+    "Installed program2026.10.6",
+    "ServiceNo matching service reported",
+    "PortNo gateway answered on port 18789",
+  ]);
+  await openFixture(page, "setup=code-failed-shape", "light");
+  await expect(page.getByText("OpenClaw didn't return a usable setup code.")).toBeVisible();
+  await expect(page.getByText(/exited with code 0|OpenClaw stopped/)).toHaveCount(0);
 });

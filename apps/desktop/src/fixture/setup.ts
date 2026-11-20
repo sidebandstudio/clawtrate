@@ -87,6 +87,10 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "cant-run": looked({ outcome: "cant-run", version: null, profile: null }),
   endpoint: looked({ outcome: "cant-tell", reason: "endpoint" }),
   bots: failed("bots", { port: 18789 }),
+  "found-profile-only": looked({ others: ["profile work"] }),
+  "cant-tell-not-set-up": looked({ outcome: "cant-tell", reason: "not-set-up" }),
+  "cant-tell-no-answer": looked({ outcome: "cant-tell", reason: "no-answer" }),
+  "code-failed-shape": failed("code-failed", { exitCode: 0 }),
 };
 
 export function isSetupState(name: string | null): name is string {

@@ -81,6 +81,8 @@ export class SetupController implements SetupHost {
   /** Counts looks and connects; anything finishing for an older one is dropped. */
   private attempt = 0;
   private found: FoundGateway | null = null;
+  /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
+  private owned: { attempt: number; url: string } | null = null;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
   private watching: (() => void) | null = null;
   private readonly now: () => number;
@@ -143,6 +145,8 @@ export class SetupController implements SetupHost {
 
   async look(): Promise<void> {
     this.stopWatching();
+    // Another look: the earlier one's programs end before this one asks anything.
+    this.options.stopPrograms();
     const attempt = (this.attempt += 1);
     this.found = null;
     this.clearSlow();
@@ -211,11 +215,14 @@ export class SetupController implements SetupHost {
       this.publish(initialSetupState);
       return;
     }
+    if (phase === "confirming") {
+      // The dialog's answer, when it comes, is for an attempt that is over.
+      this.publish({ ...this.state, phase: "found" });
+      return;
+    }
     if (phase === "connecting" || phase === "failed") {
       this.stopWatching();
-      // A connection whose bots couldn't be read is let go too.
-      if (this.state.failure?.kind === "bots") void this.options.client.disconnect();
-      else void this.letGo();
+      void this.closeOwned();
       this.publish(
         this.state.look
           ? { ...initialSetupState, phase: "found", look: this.state.look }
@@ -230,8 +237,20 @@ export class SetupController implements SetupHost {
     this.stopWatching();
     this.options.stopPrograms();
     this.found = null;
-    void this.letGo();
+    void this.closeOwned();
     this.publish(initialSetupState);
+  }
+
+  /**
+   * Closes the connection this setup opened, connected or not, while its bots
+   * load too. A connection setup didn't open, or a gateway saved before, is
+   * never touched.
+   */
+  private async closeOwned(): Promise<void> {
+    const owned = this.owned;
+    this.owned = null;
+    if (owned && this.options.client.state.connection.gatewayUrl === owned.url)
+      await this.options.client.disconnect();
   }
 
   /** Ends a setup connection that didn't finish; a gateway saved before is never touched. */
@@ -309,7 +328,8 @@ export class SetupController implements SetupHost {
     if (paired) {
       // A saved pairing for this address: reused, asking for read alone (§7).
       this.publish({ ...this.state, step: 1 });
-      this.watch(attempt, found.port);
+      this.owned = { attempt, url: found.url };
+      this.watch(attempt, found.url, found.port);
       await client.connectForSetup(found.url, { check: listening });
       return;
     }
@@ -333,7 +353,8 @@ export class SetupController implements SetupHost {
     }
     if (attempt !== this.attempt) return;
     this.publish({ ...this.state, step: 1 });
-    this.watch(attempt, found.port);
+    this.owned = { attempt, url: found.url };
+    this.watch(attempt, found.url, found.port);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
     await client.connectWithSetupCode(code, { check: listening });
   }
@@ -389,11 +410,13 @@ export class SetupController implements SetupHost {
   }
 
   /** Follows the connection Connect started, until it is in or has failed. */
-  private watch(attempt: number, port: number): void {
+  /** Follows this attempt's connection to `url` only: another route's state says nothing about it. */
+  private watch(attempt: number, url: string, port: number): void {
     this.stopWatching();
     const check = (state: ClawtrateState) => {
       if (attempt !== this.attempt) return;
       const { connection, discovery } = state;
+      if (connection.gatewayUrl !== url) return;
       if (connection.status === "connected") {
         if (discovery.status === "ready") {
           this.stopWatching();
