@@ -21,6 +21,7 @@ import {
   mainWindowTitle,
   taskbarOverlayDescription,
   windowsProcesses,
+  type OverlayRead,
 } from "./windows.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -228,10 +229,25 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
         window as unknown as { clawtrateHost: { setBadge(n: number): void } }
       ).clawtrateHost.setBadge(value);
     }, count);
-  await setBadge(3);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("3 unread");
-  await setBadge(0);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("");
+  const reads: OverlayRead[] = [];
+  let step = { phase: "set", expected: "3 unread" };
+  try {
+    await setBadge(3);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+    step = { phase: "clear", expected: "" };
+    await setBadge(0);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+  } catch (error) {
+    await test.info().attach("taskbar-overlay", {
+      body: JSON.stringify({ ...step, lastReads: reads.slice(-5) }, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
 });
 
 test("hands a second launch to the running app instead of starting another", async () => {
