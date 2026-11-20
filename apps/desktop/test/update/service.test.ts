@@ -429,6 +429,43 @@ it.each(["check", "download"] as const)(
     expect(revisions.every((r, i) => i === 0 || revisions[i - 1]! < r)).toBe(true);
   },
 );
+it.each(["before save", "during successful save", "during failed save"])(
+  "retires a track choice at shutdown %s",
+  async (phase) => {
+    const prefs = store(),
+      service = await start({ store: prefs });
+    const entered = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>();
+    const set = prefs.set;
+    const spy = vi.spyOn(prefs, "set").mockImplementationOnce(async (key, value) => {
+      entered.resolve();
+      await release.promise;
+      if (phase === "during failed save") throw Error("write refused");
+      await set(key, value);
+    });
+    const choice = service.chooseTrack("nightly");
+    if (phase !== "before save") await entered.promise;
+    const count = snapshots.length;
+    expect(snapshots.at(-1)?.pendingTrack).toBe("nightly");
+    service.shutdown();
+    const closed = service.get();
+    expect(closed).toMatchObject({ selectedTrack: "stable", pendingTrack: null });
+    release.resolve();
+    expect(await choice).toEqual({ outcome: "superseded", snapshot: closed });
+    expect(spy).toHaveBeenCalledTimes(phase === "before save" ? 0 : 1);
+    for (const reply of await Promise.all([
+      service.chooseTrack("nightly"),
+      service.check("stable"),
+      service.download("id"),
+    ]))
+      expect(reply).toEqual({ outcome: "invalid", snapshot: closed });
+    expect(snapshots).toHaveLength(count);
+    expect(service.get()).toBe(closed);
+    expect((await start()).get().selectedTrack).toBe(
+      phase === "during successful save" ? "nightly" : "stable",
+    );
+  },
+);
 it("an unsuccessful track choice still retires the file and its offer", async () => {
   const prefs = store(),
     service = await start({ store: prefs });
