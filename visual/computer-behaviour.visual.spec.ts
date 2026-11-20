@@ -214,15 +214,13 @@ test.describe("the full view on the desktop", () => {
   test("F-142: Live only while a usable picture arrived within 10 s; on a quiet page the tile and the full view say the last picture's age by themselves", async ({
     page,
   }) => {
-    // The page's own clock, moved on by the check: the fixture's stream sends one frame and,
-    // with nothing typed, no other, while its renewals go on answering.
-    await page.clock.install();
+    // The fixture's stream sends one frame and, with nothing typed, no other, while its
+    // renewals go on answering: after 10 s the picture is the last one, by itself.
     await openFixture(page, `${COMPUTER}&computer=watching`, "light");
     await watch(page);
     const badge = computerPanel(page).locator(".screen-live");
     await expect(badge).toHaveText("Live");
-    await page.clock.fastForward(11_000);
-    await expect(badge).toHaveText(/^Last picture, 1\d s ago$/);
+    await expect(badge).toHaveText(/^Last picture, 1\d s ago$/, { timeout: 14_000 });
     await expect(computerPanel(page).getByTestId("computer-tile")).toHaveAccessibleName(
       /^Juniper's browser, last picture, 1\d s ago: /,
     );
@@ -231,8 +229,9 @@ test.describe("the full view on the desktop", () => {
       .getByRole("button", { name: "Open Juniper's browser full window" })
       .click();
     await expect(fullView(page).locator(".screen-age")).toHaveText(/^Last picture, 1\d s ago$/);
-    await page.clock.fastForward(60_000);
-    await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 1 min ago");
+    await expect(fullView(page).getByTestId("screen-frame")).toHaveAccessibleName(
+      /^Juniper's browser, last picture, 1\d s ago$/,
+    );
   });
 
   test("F-142: another device's take that is still waiting for the bot is asking for control, never has control", async ({

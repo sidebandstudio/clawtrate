@@ -17,6 +17,7 @@ import {
   type ComputerContext,
   type ComputerState,
 } from "../src/computer.ts";
+import * as words from "../src/computer-words.ts";
 import type { WebSocketLike } from "../src/host.ts";
 import { utf8Bytes } from "../src/bytes.ts";
 import type { QuestionCard, Run } from "../src/runs.ts";
@@ -1035,6 +1036,12 @@ describe("Live only while a usable picture is recent (F-142, section 17)", () =>
       kind: "last",
       ageMs: 20_000,
     });
+  });
+
+  it("F-142: the last picture's age in seconds, then minutes", () => {
+    expect(words.lastPictureLine(10_001)).toBe("Last picture, 10 s ago");
+    expect(words.lastPictureLine(61_000)).toBe("Last picture, 1 min ago");
+    expect(words.lastPictureLine(3_700_000)).toBe("Last picture, over an hour ago");
   });
 
   it("F-142: the pane keeps the newest usable frame's capture time; a frame too large, or renewals, change nothing", async () => {
