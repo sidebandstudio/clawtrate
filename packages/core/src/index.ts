@@ -74,6 +74,7 @@ export {
   SESSION_PAGE_SIZE,
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_GONE,
+  ROUTE_KEY,
   validateGatewayUrl,
   type ClientOptions,
   type ConnectOptions,

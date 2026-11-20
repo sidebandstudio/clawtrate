@@ -41,6 +41,14 @@ import {
   serviceOnPort,
 } from "./look.ts";
 import { type ConfigRefusal, resolveTarget, type Target } from "./person-config.ts";
+import {
+  maxScriptOutput,
+  parseScriptOutput,
+  remoteScript,
+  type ScriptKind,
+  type ScriptProfile,
+} from "./scripts.ts";
+import type { ProgramPlace } from "./look.ts";
 import { routeConfigText } from "./route-config.ts";
 import { endProcess, ProcessTable, type RunResult, runSsh, type Spawn } from "./run.ts";
 import {
@@ -189,6 +197,25 @@ export type PinResult =
 
 export type LookResult =
   | { ok: true; facts: LookFacts }
+  | Failed
+  | NotSupportedHere
+  | { ok: false; kind: "not-pinned" }
+  | {
+      ok: false;
+      kind: "cant-tell";
+      reason:
+        | "timed-out"
+        | "too-large"
+        | "no-begin"
+        | "no-end"
+        | "malformed"
+        | "incomplete"
+        | "script-failed";
+    };
+
+/** What a CODE, START or STOP script found: the program's place and OpenClaw's answer, in memory. */
+export type ScriptResult =
+  | { ok: true; program: ProgramPlace | null; answer: { text: string; exit: number } | null }
   | Failed
   | NotSupportedHere
   | { ok: false; kind: "not-pinned" }
@@ -692,6 +719,54 @@ export class SshTransport {
     const parsed = parseLookOutput(run.stdout, script.requestId);
     if (!parsed.ok) return { ok: false, kind: "cant-tell", reason: parsed.reason };
     return { ok: true, facts: parsed.facts };
+  }
+
+  /** Runs a constant script (CODE, START, STOP) through the pinned connection. */
+  private async scriptInner(
+    route: Route,
+    kind: ScriptKind,
+    values: { profile: ScriptProfile; port: number },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ScriptResult | StaleRoute> {
+    const client = await this.checkClient();
+    if (!client.ok) return client;
+    if (!this.current(route)) return STALE;
+    if (!this.known.get(route.alias, route.endpoint)) return { ok: false, kind: "not-pinned" };
+    const script = remoteScript(kind, values);
+    const run = await runSsh(
+      this.processes,
+      this.world,
+      ["-F", this.configPath(route), "--", route.alias, "/bin/sh", "-s"],
+      {
+        stdin: script.text,
+        timeoutMs: LOOK_TIMEOUT_MS,
+        maxStdout: maxScriptOutput(kind),
+        signal: this.signal(options.signal),
+      },
+    );
+    if (!this.current(route)) return STALE;
+    if (run.timedOut || run.cancelled) return { ok: false, kind: "cant-tell", reason: "timed-out" };
+    if (run.overflow) return { ok: false, kind: "cant-tell", reason: "too-large" };
+    if (run.spawnFailed || run.exit === 255) return this.failed(route, runFailure(run));
+    if (run.exit !== 0) return { ok: false, kind: "cant-tell", reason: "script-failed" };
+    const parsed = parseScriptOutput(kind, run.stdout, script.requestId);
+    if (!parsed.ok) return { ok: false, kind: "cant-tell", reason: parsed.reason };
+    return { ok: true, program: parsed.program, answer: parsed.answer };
+  }
+
+  /**
+   * Runs one of the constant scripts, CODE, START or STOP, through the pinned
+   * connection, for `profile` and the gateway's `port`. Only after the host's
+   * own dialog: the caller's part. OpenClaw's answer is returned in memory.
+   */
+  runScript(
+    route: Route,
+    kind: ScriptKind,
+    values: { profile: ScriptProfile; port: number },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ScriptResult | AppFilesUnsafe | StaleRoute> {
+    if (!this.current(route)) return Promise.resolve(STALE);
+    return this.track(guardedAsync(() => this.scriptInner(route, kind, values, options)));
   }
 
   /**

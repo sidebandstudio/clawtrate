@@ -118,12 +118,16 @@ export type NodeHostOptions = {
   client: ClientIdentity;
   log?: ClawtrateHost["log"];
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
+  /** Wraps the file store: the desktop host keeps each route's device token in its route store. */
+  wrapStorage?: (store: KeyValueStore) => KeyValueStore;
 };
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
   return {
     createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
-    storage: createFileStore(join(options.dataDir, "state.json")),
+    storage: (options.wrapStorage ?? ((store) => store))(
+      createFileStore(join(options.dataDir, "state.json")),
+    ),
     signer: createFileSigner(join(options.dataDir, "device-key.pem")),
     client: options.client,
     ...(options.log ? { log: options.log } : {}),

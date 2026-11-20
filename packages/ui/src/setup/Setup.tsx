@@ -11,11 +11,14 @@ import type {
   SetupLook,
   SetupRefusal,
   SetupState,
+  ShownHostKey,
+  SshSetup,
 } from "@clawtrate/core";
 import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
+import { copyText, selectContents, type CopyResult } from "../clipboard.ts";
 import { CommandLine, PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
 import {
   BackIcon,
@@ -23,6 +26,7 @@ import {
   ChevronIcon,
   ClockIcon,
   CloseIcon,
+  CopyIcon,
   PauseIcon,
   PlusIcon,
   WarnIcon,
@@ -299,15 +303,21 @@ function LookResult({
   onAdvanced,
   onAnother,
   confirming,
+  there = null,
 }: {
   look: SetupLook;
   offer: NonNullable<HostInfo["setup"]>;
   onAdvanced: () => void;
   onAnother: () => void;
   confirming: boolean;
+  /** Over SSH (§5): the card's few differences, and Look again asks the account again. */
+  there?: SshSetup | null;
 }) {
   const send = useCommand();
-  const lookAgain = () => void send({ type: "setupLook" });
+  const lookAgain = () =>
+    void send(
+      there ? { type: "setupThere", destination: there.destination } : { type: "setupLook" },
+    );
   const advanced = <Primary onClick={onAdvanced}>Use Advanced</Primary>;
   switch (look.outcome) {
     case "running":
@@ -387,10 +397,33 @@ function LookResult({
             ["Port", `No gateway answered on port ${look.port}`],
           ]}
         >
-          <Lede>Start OpenClaw yourself, then look again.</Lede>
-          <Actions>
-            <Primary onClick={lookAgain}>Look again</Primary>
-          </Actions>
+          {there ? (
+            <>
+              <Actions>
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="primary"
+                  data-size="lg"
+                  aria-disabled={confirming || undefined}
+                  onClick={() => {
+                    if (!confirming) void send({ type: "setupStart" });
+                  }}
+                >
+                  Start OpenClaw…
+                </button>
+                <Quiet onClick={lookAgain}>Look again</Quiet>
+              </Actions>
+              <Hint>{`Clawtrate asks before it starts OpenClaw on ${there.name ?? "that computer"}.`}</Hint>
+            </>
+          ) : (
+            <>
+              <Lede>Start OpenClaw yourself, then look again.</Lede>
+              <Actions>
+                <Primary onClick={lookAgain}>Look again</Primary>
+              </Actions>
+            </>
+          )}
           <p className="s-links">
             <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
           </p>
@@ -417,7 +450,7 @@ function LookResult({
         <Found
           mark={<WarnIcon />}
           tone="warn"
-          heading="Clawtrate couldn't tell what is on this computer"
+          heading={`Clawtrate couldn't tell what is on ${there ? "that" : "this"} computer`}
         >
           <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
           <Actions>
@@ -449,6 +482,18 @@ function LookResult({
         </Found>
       );
     case "not-found":
+      if (there)
+        return (
+          <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
+            <Lede>Setting OpenClaw up on another computer isn't offered in this version.</Lede>
+            <Actions>
+              <Primary onClick={lookAgain}>Look again</Primary>
+            </Actions>
+            <p className="s-links">
+              <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
+            </p>
+          </Found>
+        );
       return (
         <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
           <Lede>
@@ -569,12 +614,14 @@ const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gate
 
 /** A screen's identity, so that a new one takes focus and is announced. */
 function screenKey(view: SetupView, setup: SetupState): string {
+  if (view === "another" && setup.there)
+    return `there:${setup.phase === "confirming" && !setup.look ? "idle" : setup.phase}:${setup.there.key?.state ?? ""}:${setup.look?.outcome ?? ""}:${setup.there.failure?.kind ?? setup.failure?.kind ?? ""}`;
   if (view !== "here") return view;
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? ""}`;
 }
 
 export function SetupFlow({
-  view,
+  view: chosen,
   onView,
   setup,
   connection,
@@ -590,6 +637,8 @@ export function SetupFlow({
   const offer = info.setup!;
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
+  // Setup on another computer keeps its screens, also after a reload or from another window.
+  const view: SetupView = setup.there && chosen === "here" ? "another" : chosen;
   const key = screenKey(view, setup);
   const shown = useRef<string | null>(null);
   useEffect(() => {
@@ -605,6 +654,7 @@ export function SetupFlow({
   const toFirst = () => {
     if (view === "here")
       void send({ type: setup.phase === "looking" ? "setupCancel" : "setupReset" });
+    if (view === "another" && setup.there) void send({ type: "setupReset" });
     onView("first");
   };
   const lookHere = () => {
@@ -612,7 +662,7 @@ export function SetupFlow({
     void send({ type: "setupLook" });
   };
   const advanced = () => {
-    if (view === "here") void send({ type: "setupReset" });
+    if (view === "here" || setup.there) void send({ type: "setupReset" });
     onView("advanced");
   };
   const another = () => {
@@ -624,8 +674,14 @@ export function SetupFlow({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || view === "first") return;
     event.preventDefault();
-    if (view === "here" && (setup.phase === "connecting" || setup.phase === "failed"))
+    if (
+      (view === "here" || view === "another") &&
+      (setup.phase === "connecting" || setup.phase === "failed") &&
+      setup.look
+    )
       backFromConnect();
+    else if (view === "another" && setup.there && setup.phase !== "idle")
+      void send({ type: "setupCancel" });
     else toFirst();
   };
 
@@ -634,6 +690,16 @@ export function SetupFlow({
     body = (
       <FirstScreen offer={offer} onThis={lookHere} onAnother={another} onAdvanced={advanced} />
     );
+  } else if (view === "another" && offer.ssh) {
+    body = (
+      <AnotherComputer
+        setup={setup}
+        offer={offer}
+        onFirst={toFirst}
+        onAdvanced={advanced}
+        onAnother={another}
+      />
+    );
   } else if (view === "another") {
     body = (
       <>
@@ -641,8 +707,8 @@ export function SetupFlow({
         <Mark />
         <Title id="setup-title">Another computer</Title>
         <Lede>
-          Reaching another computer with SSH isn't in this version of Clawtrate yet. Use Advanced
-          with that gateway's address and a token.
+          Reaching another computer with SSH is off in this run: it would use this account's own SSH
+          settings. Use Advanced with that gateway's address and a token.
         </Lede>
         <Actions>
           <Primary onClick={advanced}>Use Advanced</Primary>
@@ -746,6 +812,443 @@ export function SetupFlow({
         {announced}
       </p>
     </div>
+  );
+}
+
+/** A fingerprint in groups of eight, as section 2 draws it, with its copy button. */
+function Fingerprint({ label, shown }: { label: string; shown: ShownHostKey }) {
+  const [state, setState] = useState<"idle" | CopyResult>("idle");
+  const codeRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (state !== "copied") return;
+    const timer = setTimeout(() => setState("idle"), 1500);
+    return () => clearTimeout(timer);
+  }, [state]);
+  const value = shown.fingerprint;
+  const body = value.startsWith("SHA256:") ? value.slice("SHA256:".length) : value;
+  const groups = body.match(/.{1,8}/g) ?? [body];
+  return (
+    <div className="s-print" data-testid="setup-fingerprint">
+      <div className="s-print-text">
+        <span className="s-print-alg">{label}</span>
+        <code ref={codeRef} aria-label={`${shown.label} fingerprint ${value}`}>
+          {`SHA256:${groups.join(" ")}`}
+        </code>
+      </div>
+      <button
+        type="button"
+        className="button"
+        data-variant="quiet"
+        data-size="sm"
+        aria-label="Copy fingerprint"
+        onClick={async () => {
+          const result = await copyText(value);
+          if (result === "manual" && codeRef.current) selectContents(codeRef.current);
+          setState(result);
+        }}
+      >
+        {state === "copied" ? <CheckIcon /> : <CopyIcon />}
+      </button>
+      <span className="visually-hidden" aria-live="polite">
+        {state === "copied"
+          ? "Copied."
+          : state === "manual"
+            ? "The fingerprint is selected. Press Command-C or Control-C to copy it."
+            : ""}
+      </span>
+    </div>
+  );
+}
+
+/** What `ssh` and the forward ended on (§5, §8), in fixed copy naming what the host resolved. */
+function sshFailureCopy(
+  there: SshSetup,
+  platform: string,
+): { lead: string; text: string; next: string | null; retry: boolean } {
+  const failure = there.failure!;
+  const account = there.account ?? there.destination;
+  const name = there.name ?? there.destination;
+  const hostName = account.includes("@") ? account.slice(account.indexOf("@") + 1) : account;
+  switch (failure.kind) {
+    case "unreachable":
+      return {
+        lead: `Can't reach ${account}`,
+        text: `Nothing answered at ${hostName}, port ${there.port ?? 22} (${failure.cause ?? "connection refused"}).`,
+        next: "Check the name and that the computer is on.",
+        retry: true,
+      };
+    case "sign-in-refused":
+      return {
+        lead: `${account} didn't accept your key`,
+        text: `The SSH sign-in for ${account} was refused.`,
+        next:
+          "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first." +
+          (platform === "win32" ? " Key-agent sign-in has not been verified on Windows." : ""),
+        retry: true,
+      };
+    case "timed-out":
+      return { lead: "ssh stopped", text: "ssh didn't finish in time.", next: null, retry: true };
+    case "spawn-failed":
+      return {
+        lead: "ssh couldn't start",
+        text: "Clawtrate couldn't start ssh on this computer.",
+        next: null,
+        retry: true,
+      };
+    case "not-supported":
+      return {
+        lead: "Clawtrate can't use ssh here",
+        text: "This computer's ssh is missing or older than Clawtrate needs.",
+        next: null,
+        retry: false,
+      };
+    case "app-files-unsafe":
+      return {
+        lead: "Clawtrate can't keep its SSH files private here",
+        text: "It couldn't confirm that no other account can change its own SSH folder, so it doesn't use SSH on this computer.",
+        next: null,
+        retry: false,
+      };
+    case "forwarding-refused":
+      return {
+        lead: `${name} doesn't allow forwarding`,
+        text: `The SSH server on ${name} refused this forwarded connection. Check whether its SSH configuration and your key allow forwarding to the gateway port.`,
+        next: null,
+        retry: true,
+      };
+    case "gateway-not-answering":
+      return {
+        lead: `Nothing answered on the gateway port on ${name}`,
+        text: "The SSH server could not connect to the gateway's port.",
+        next: null,
+        retry: true,
+      };
+    case "code-failed":
+      return {
+        lead: "Couldn't make a one-time code.",
+        text:
+          failure.exit === null
+            ? `OpenClaw on ${name} didn't return a usable setup code.`
+            : failure.exit === 0
+              ? "OpenClaw didn't return a usable setup code."
+              : `OpenClaw exited with code ${failure.exit}.`,
+        next: null,
+        retry: true,
+      };
+    case "start-failed":
+      return {
+        lead: "OpenClaw didn't start.",
+        text:
+          failure.exit !== null && failure.exit !== 0
+            ? `OpenClaw exited with code ${failure.exit}.`
+            : "Nothing answered on its port after it was started.",
+        next: null,
+        retry: true,
+      };
+    default:
+      return {
+        lead: "ssh stopped",
+        text: `ssh stopped (exit ${failure.exit ?? "unknown"}).`,
+        next: null,
+        retry: true,
+      };
+  }
+}
+
+/** Another computer over SSH (§5 to §7): the field, the key, the look, Connect and Start. */
+function AnotherComputer({
+  setup,
+  offer,
+  onFirst,
+  onAdvanced,
+  onAnother,
+}: {
+  setup: SetupState;
+  offer: NonNullable<HostInfo["setup"]>;
+  onFirst: () => void;
+  onAdvanced: () => void;
+  onAnother: () => void;
+}) {
+  const send = useCommand();
+  const there = setup.there ?? null;
+  const [typed, setTyped] = useState(there?.destination ?? "");
+  const cancel = () => void send({ type: "setupCancel" });
+  const lookThere = () => {
+    const destination = typed.trim();
+    if (destination) void send({ type: "setupThere", destination });
+  };
+  const name = there?.name ?? there?.destination ?? "";
+  const account = there?.account ?? there?.destination ?? "";
+  const advancedLink = (
+    <p className="s-links">
+      <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
+    </p>
+  );
+
+  // The field: nothing under way, or the account's dialog open over it.
+  if (!there || setup.phase === "idle" || (setup.phase === "confirming" && !setup.look)) {
+    const confirming = setup.phase === "confirming";
+    return (
+      <>
+        <Back onBack={onFirst} />
+        <Mark />
+        <Title id="setup-title">Another computer</Title>
+        <form
+          className="s-field"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!confirming) lookThere();
+          }}
+        >
+          <label className="field">
+            <span className="s-field-label">SSH host or alias</span>
+            <input
+              className="input"
+              name="destination"
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+              placeholder="devbox or you@devbox.example"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              aria-invalid={there?.invalid || undefined}
+              aria-describedby="setup-ssh-hint"
+            />
+          </label>
+          {there?.invalid && (
+            <p className="s-field-error" role="alert">
+              That isn't an SSH host or alias Clawtrate can use.
+            </p>
+          )}
+          <Hint>
+            <span id="setup-ssh-hint">
+              Clawtrate uses your SSH keys and the host's settings from your SSH configuration, and
+              never asks for a password.
+            </span>
+          </Hint>
+          {there?.refusal && (
+            <Note tone="warn" lead={there.refusal.title}>
+              {there.refusal.sentence}
+            </Note>
+          )}
+          <Actions>
+            <button
+              type="submit"
+              className="button"
+              data-variant="primary"
+              data-size="lg"
+              aria-disabled={confirming || undefined}
+            >
+              Look there
+            </button>
+          </Actions>
+        </form>
+        {advancedLink}
+      </>
+    );
+  }
+
+  if (setup.phase === "looking") {
+    return (
+      <>
+        <Back onBack={cancel} />
+        <Mark />
+        <Title id="setup-title">{`Looking on ${account}`}</Title>
+        <Steps
+          steps={[
+            `Reaching ${name}`,
+            "Finding OpenClaw",
+            "Checking its version",
+            "Asking the gateway",
+          ]}
+          current={setup.step}
+        />
+      </>
+    );
+  }
+
+  if (setup.phase === "key" && there.key) {
+    const key = there.key;
+    if (key.state === "first-contact")
+      return (
+        <>
+          <Back onBack={cancel} />
+          <Mark />
+          <Title id="setup-title">{`Is this ${name}?`}</Title>
+          <Lede>
+            {`This is the first time Clawtrate connects to ${name}. Its key is below. If you can, compare it with the key ${name} itself shows before you trust it.`}
+          </Lede>
+          <Fingerprint label={key.presented.label} shown={key.presented} />
+          <details className="b-disclosure s-disclosure">
+            <summary>How to compare</summary>
+            <div className="b-disclosure-body">
+              <Hint>
+                {`On ${name}, in a session you already trust, `}
+                <code>ssh-keygen -lf</code>
+                {
+                  " with the key file shows its fingerprint. The file depends on the key's type, for example "
+                }
+                <code>/etc/ssh/ssh_host_ed25519_key.pub</code>.
+              </Hint>
+            </div>
+          </details>
+          <Actions>
+            <Primary onClick={() => void send({ type: "setupTrustKey" })}>Trust this key…</Primary>
+            <button type="button" className="button" data-size="lg" onClick={cancel}>
+              Back
+            </button>
+          </Actions>
+        </>
+      );
+    return (
+      <>
+        <Back onBack={cancel} />
+        <Mark />
+        <Title id="setup-title">{`On ${account}`}</Title>
+        <Note tone="danger" lead={`${name}'s key has changed`}>
+          {`The key ${name} presented is not the one Clawtrate trusted. This happens when a computer is reinstalled, and it is also what someone between you and ${name} would cause. Clawtrate won't connect until you decide.`}
+        </Note>
+        <div className="s-prints">
+          {key.trusted && (
+            <Fingerprint
+              label={`Trusted, pinned ${key.trusted.pinnedAt.slice(0, 10)}`}
+              shown={key.trusted}
+            />
+          )}
+          <Fingerprint label="Presented now" shown={key.presented} />
+        </div>
+        <Actions>
+          <Primary
+            onClick={() => void send({ type: "setupThere", destination: there.destination })}
+          >
+            Try again
+          </Primary>
+          <button type="button" className="button" data-size="lg" onClick={cancel}>
+            Back
+          </button>
+        </Actions>
+        <p className="s-links">
+          <SmallLink onClick={() => void send({ type: "setupReplaceKey" })}>
+            Replace the trusted key…
+          </SmallLink>
+        </p>
+      </>
+    );
+  }
+
+  // A failure of ssh or of the forward, before or during Connect or Start.
+  if (setup.phase === "failed" && there.failure) {
+    const copy = sshFailureCopy(there, offer.platform);
+    const atConnect = setup.look !== null;
+    return (
+      <>
+        <Back onBack={atConnect ? cancel : onFirst} />
+        <Mark />
+        <Title id="setup-title">
+          {atConnect ? `Connecting to ${account}` : `Looking on ${account}`}
+        </Title>
+        <Note tone="danger" lead={copy.lead}>
+          {copy.text}
+          {copy.next ? ` ${copy.next}` : ""}
+        </Note>
+        <Actions>
+          {copy.retry && (
+            <Primary
+              onClick={() => void send({ type: "setupThere", destination: there.destination })}
+            >
+              Try again
+            </Primary>
+          )}
+          {!copy.retry && <Primary onClick={onAdvanced}>Use Advanced</Primary>}
+        </Actions>
+        {copy.retry && advancedLink}
+      </>
+    );
+  }
+
+  const starting = setup.look?.outcome === "stopped";
+  if (setup.phase === "connecting" || setup.phase === "failed" || setup.phase === "done") {
+    const failure = setup.phase === "failed" ? setup.failure : null;
+    const copy = failure ? FAILURES[failure.kind] : null;
+    const steps = starting
+      ? ["Starting the gateway", "Asking the gateway"]
+      : setup.look?.access === "paired"
+        ? [
+            `Checking ${name}`,
+            `Opening a private connection to ${name}`,
+            "Requesting read access",
+            "Loading your bots",
+          ]
+        : [
+            `Making a one-time code on ${name}`,
+            `Opening a private connection to ${name}`,
+            "Pairing this computer, read-only",
+            "Loading your bots",
+          ];
+    const lead =
+      failure?.kind === "unreachable"
+        ? "Nothing answered through the private connection."
+        : (copy?.lead ?? "");
+    return (
+      <>
+        <Back onBack={setup.look ? cancel : onFirst} />
+        <Mark />
+        <Title id="setup-title">
+          {starting ? `Starting OpenClaw on ${name}` : `Connecting to ${account}`}
+        </Title>
+        <Steps
+          steps={steps}
+          current={
+            failure && copy
+              ? Math.min(copy.step + (starting ? 0 : 1), steps.length - 1)
+              : setup.step
+          }
+          failed={!!failure}
+        />
+        {failure && copy && (
+          <>
+            <Note tone="danger" lead={lead}>
+              {failure.kind === "unreachable"
+                ? "The gateway may have just stopped."
+                : copy.text?.(failure.port, failure.exitCode)}
+            </Note>
+            <Actions>
+              {(copy.next === "retry" || copy.next === "look") && (
+                <Primary
+                  onClick={() => void send({ type: "setupThere", destination: there.destination })}
+                >
+                  {copy.next === "retry" ? "Try again" : "Look again"}
+                </Primary>
+              )}
+              {copy.next === "back" && <Primary onClick={cancel}>Back</Primary>}
+              {copy.next === "bots" && (
+                <Primary onClick={() => void send({ type: "retry" })}>Try again</Primary>
+              )}
+              {copy.next === "advanced" && <Primary onClick={onAdvanced}>Use Advanced</Primary>}
+            </Actions>
+          </>
+        )}
+      </>
+    );
+  }
+
+  const look = setup.look;
+  if (!look) return null;
+  return (
+    <>
+      <Back onBack={onFirst} />
+      <Mark />
+      <Title id="setup-title">{`On ${account}`}</Title>
+      <LookResult
+        look={look}
+        offer={offer}
+        onAdvanced={onAdvanced}
+        onAnother={onAnother}
+        confirming={setup.phase === "confirming"}
+        there={there}
+      />
+    </>
   );
 }
 

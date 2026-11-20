@@ -37,6 +37,12 @@ import {
   type HostRuntime,
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
+import { SetupRouter, SetupSlice } from "../setup/host.ts";
+import { establishPrivateDir } from "../setup/private-dir.ts";
+import { RemoteSetup, type HostAnswer, type HostQuestion } from "../setup/remote.ts";
+import { RouteStore, routedStorage } from "../setup/routes.ts";
+import { productionWorld as sshProductionWorld } from "./ssh/world.ts";
+import { SshTransport } from "./ssh/transport.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
@@ -89,6 +95,8 @@ let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
 let closeSetup: () => Promise<void> = async () => {};
+/** Ends the SSH route's forward and every `ssh` the host started, by PID. */
+let closeRemote: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
 function hasSwitch(name: string): boolean {
@@ -185,25 +193,52 @@ function setupOpener(): {
 }
 
 /** The host's own confirmation (docs/design/setup.md §2): a native dialog, never the page. */
-async function confirmNatively(confirmation: {
-  message: string;
-  detail: string;
-  confirm: string;
-}): Promise<boolean> {
+async function askNatively(question: HostQuestion): Promise<HostAnswer> {
   const options = {
     type: "question" as const,
-    message: confirmation.message,
-    detail: confirmation.detail,
-    buttons: [confirmation.confirm, "Cancel"],
-    defaultId: 0,
+    message: question.message,
+    detail: question.detail,
+    buttons: [question.confirm, "Cancel"],
+    defaultId: question.checkbox ? 1 : 0,
     cancelId: 1,
     noLink: true,
+    ...(question.checkbox ? { checkboxLabel: question.checkbox, checkboxChecked: false } : {}),
   };
   const owner = window && !window.isDestroyed() ? window : null;
   const answer = owner
     ? await dialog.showMessageBox(owner, options)
     : await dialog.showMessageBox(options);
-  return answer.response === 0;
+  return { confirmed: answer.response === 0, checked: answer.checkboxChecked === true };
+}
+
+async function confirmNatively(confirmation: {
+  message: string;
+  detail: string;
+  confirm: string;
+}): Promise<boolean> {
+  return (await askNatively(confirmation)).confirmed;
+}
+
+/**
+ * The SSH transport of a person's app, made once, only after its app-data
+ * folder and every folder above it are proven private (docs/design/setup.md
+ * §2 rule 3). A development build or an automated run never reaches another
+ * computer: its SSH world would be this account's real one.
+ */
+function sshTransportFor(dataDir: string): SshTransport | { refused: "app-files-unsafe" } {
+  const dir = join(dataDir, "ssh");
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") chmodSync(dir, 0o700);
+  } catch {
+    return { refused: "app-files-unsafe" };
+  }
+  const verdict = establishPrivateDir(dir);
+  if (!verdict.ok) {
+    console.log(`[setup] The app's SSH folder isn't proven private (${verdict.reason}).`);
+    return { refused: "app-files-unsafe" };
+  }
+  return new SshTransport(sshProductionWorld(dir));
 }
 
 function createWindow(): BrowserWindow {
@@ -355,10 +390,18 @@ async function main(): Promise<void> {
   }
 
   const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
+  const dataDir = privateDataDir();
+  const routes = new RouteStore(dataDir);
+  // Set once the setup host exists: where a request is approved, and a route's word on an address.
+  let router: SetupRouter | null = null;
+  let remote: RemoteSetup | null = null;
   runtime = await startHostRuntime({
     kind: "desktop",
     displayName: "Clawtrate Desktop",
-    dataDir: privateDataDir(),
+    dataDir,
+    wrapStorage: (store) => routedStorage(store, routes),
+    approvalPlace: (url) => router?.placeFor(url) ?? null,
+    routeAllows: (url) => remote?.allows(url) ?? null,
     // A sandboxed or refused start (every development build and automated run) has no
     // development gateway, doesn't auto-connect and never resumes a saved gateway.
     devGateway: STARTUP.devGateway,
@@ -390,15 +433,33 @@ async function main(): Promise<void> {
   // Setup on this computer. A development build and every automated run look only in a sandbox.
   const opener = setupOpener();
   closeSetup = opener.close;
+  const slice = new SetupSlice(client);
   const setup = new SetupController({
     client,
     open: opener.open,
     stopPrograms: () => programs.stopAll(),
     confirm: confirmNatively,
     log: (line) => console.log(line),
+    publish: (next) => slice.setMain(next),
   });
-  policy.setup = setup;
-  info.setup = { look: true, pair: true, platform: process.platform };
+  // Another computer only in a person's app: never with this account's real SSH files otherwise.
+  const ssh = SETUP.kind === "production";
+  remote = ssh
+    ? new RemoteSetup({
+        client,
+        transport: () => sshTransportFor(dataDir),
+        routes,
+        ask: askNatively,
+        publish: (next) => slice.setMain(next),
+        publishRoute: (route) => slice.setRoute(route),
+        log: (line) => console.log(line),
+      })
+    : null;
+  closeRemote = () => remote?.closeAll() ?? Promise.resolve();
+  router = new SetupRouter(setup, remote);
+  policy.setup = router;
+  info.setup = { look: true, pair: true, platform: process.platform, ssh };
+  if (remote && STARTUP.resume) void remote.resume();
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
     info,
@@ -486,6 +547,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   programs.stopAll();
   void closeSetup();
+  void closeRemote();
   runtime?.client.stop();
 });
 

@@ -435,7 +435,22 @@ export type ConnectionSettings = {
   token: string | null;
   /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
   suspended?: boolean;
+  /**
+   * The route this connection belongs to, when the host reaches the gateway
+   * through a route of its own (docs/decisions.md, "Routes"): an SSH route's
+   * `url` is its forward's local address, which changes, so the device token is
+   * kept for the route, never for that address. A routed connection is opened
+   * only by its host (`connectRoute`), never resumed by the client itself.
+   */
+  route?: string;
 };
+
+/** A route's key: its kind and 24 hex digits of the host's digest of what identifies it. */
+export const ROUTE_KEY = /^(?:ssh|here)-[0-9a-f]{24}$/;
+
+/** What a device token is kept for: the gateway URL, or a route. */
+const credentialOf = (settings: Pick<ConnectionSettings, "url" | "route">) =>
+  settings.route ? `route:${settings.route}` : settings.url;
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -806,6 +821,8 @@ export class ClawtrateClient {
     null;
   /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
   private heldToken: string | null = null;
+  /** The route whose gateway the state shows, or null for one reached by its address. */
+  private shownRoute: string | null = null;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -1100,6 +1117,11 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
     this.settings = await this.savedSettings();
+    // A route's address is its host's to open again: the client never resumes one by itself.
+    if (this.settings?.route) {
+      this.settings = null;
+      return;
+    }
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
       return;
@@ -1179,6 +1201,79 @@ export class ClawtrateClient {
   async hasDeviceToken(url: string): Promise<boolean> {
     const identity = await this.loadIdentity();
     return (await this.loadToken(validateGatewayUrl(url), identity.deviceId, "operator")) !== null;
+  }
+
+  /** Whether this device holds a token for `route` (`ROUTE_KEY`). */
+  async hasRouteToken(route: string): Promise<boolean> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    const identity = await this.loadIdentity();
+    return (await this.loadToken(`route:${route}`, identity.deviceId, "operator")) !== null;
+  }
+
+  /** Drops this device's token for `route`: the route was removed, or leads elsewhere now. */
+  async dropRouteToken(route: string): Promise<void> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    const identity = await this.loadIdentity();
+    await this.host.storage.delete(this.tokenKey(`route:${route}`, identity.deviceId, "operator"));
+  }
+
+  /** The route of the connection, if the host opened it through one. */
+  get route(): string | null {
+    return this.settings?.route ?? null;
+  }
+
+  /**
+   * Connect through a route the host holds open (docs/design/setup.md §7, §8):
+   * `url` is where the route answers now, `route` the key its device token is
+   * kept for. With a setup code, as `connectWithSetupCode`: the first token is
+   * written for the route only for the operator role and exactly read. Without
+   * one, the route's own token, as `connectForSetup` when `setup` is set, else
+   * as an ordinary reconnect. Reopening the same route keeps what is on screen.
+   */
+  async connectRoute(options: {
+    url: string;
+    route: string;
+    code?: { bootstrapToken: string; expiresAtMs: number };
+    setup?: { check?: () => boolean };
+  }): Promise<void> {
+    const url = validateGatewayUrl(options.url);
+    if (!ROUTE_KEY.test(options.route)) throw new Error("Not a route key.");
+    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+    if (this.settings?.route !== options.route)
+      this.abandonAccessRequest("Switched to another gateway.");
+    this.settings = { url, token: null, route: options.route };
+    this.pairingSeen = null;
+    const setup = options.setup ?? (options.code ? {} : null);
+    this.setupCheck = setup?.check ? { url, check: setup.check } : null;
+    this.setupIntent = setup ? { url, reuse: !options.code } : null;
+    this.setupCode = options.code
+      ? { url, bootstrapToken: options.code.bootstrapToken, expiresAtMs: options.code.expiresAtMs }
+      : null;
+    if (!options.code && !setup)
+      await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
+    await this.open();
+  }
+
+  /**
+   * The route's way to the gateway is down (its forward is being restored):
+   * the socket closes and nothing is retried until the host connects the route
+   * again, so nothing is sent to an address the route no longer holds. What is
+   * on screen stays.
+   */
+  holdRoute(route: string): void {
+    if (this.settings?.route !== route) return;
+    this.close();
+    this.setupCheck = null;
+    if (this.state.connection.status !== "idle")
+      // No connection, no effective access; the next hello says what is granted.
+      this.setConnection({
+        status: this.everConnected ? "reconnecting" : "connecting",
+        retryAt: null,
+        canWrite: false,
+        canAnswer: false,
+        canApprove: false,
+        canAdmin: false,
+      });
   }
 
   /** The host's setup slice: what its look found and where setup stands. */
@@ -1470,7 +1565,7 @@ export class ClawtrateClient {
           );
           const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
           const pairing = askedPairing && within.includes(PAIRING_SCOPE);
-          await this.writeToken(url, deviceId, role, {
+          await this.writeToken(credentialOf(this.settings), deviceId, role, {
             token,
             grantedScopes: within,
             heldScopes: [
@@ -4924,11 +5019,16 @@ export class ClawtrateClient {
       return;
     }
 
-    const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
+    const credential = credentialOf(settings);
+    const stored = await this.loadToken(credential, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     const paired = stored !== null;
-    // Reopening the same gateway keeps what is on screen until fresh data arrives.
-    const sameGateway = this.state.connection.gatewayUrl === settings.url;
+    // Reopening the same gateway keeps what is on screen until fresh data arrives: the same
+    // address, or the same route at the address it answers on now.
+    const sameGateway = settings.route
+      ? this.shownRoute === settings.route
+      : this.shownRoute === null && this.state.connection.gatewayUrl === settings.url;
+    this.shownRoute = settings.route ?? null;
     const hasData = sameGateway && this.state.bots.length > 0;
     if (!sameGateway) {
       this.rows = new Map();
@@ -4961,7 +5061,7 @@ export class ClawtrateClient {
           ),
     }));
 
-    const tokenStore = this.connectionTokenStore(settings.url, generation);
+    const tokenStore = this.connectionTokenStore(settings.url, generation, credential);
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => {
         const loaded = await this.loadIdentity();
@@ -5027,7 +5127,7 @@ export class ClawtrateClient {
       },
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
-        const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        const token = await this.loadToken(credential, identity.deviceId, "operator");
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -5117,7 +5217,7 @@ export class ClawtrateClient {
           }
           // The token stays a credential to take out of gateway text after its staging ends.
           this.heldToken = staged.token;
-          await this.writeToken(settings.url, staged.deviceId, staged.role, {
+          await this.writeToken(credential, staged.deviceId, staged.role, {
             token: staged.token,
             grantedScopes: [...staged.scopes],
             heldScopes: [...READ_SCOPES],
@@ -6645,9 +6745,14 @@ export class ClawtrateClient {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
-  private tokenKey(url: string, deviceId: string, role: string): string {
-    return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+  /**
+   * Device tokens are scoped to one gateway URL, or to one route, so a token is
+   * never offered to another. A gateway URL starts with `ws`, never `route:`.
+   */
+  private tokenKey(credential: string, deviceId: string, role: string): string {
+    if (credential.startsWith("route:"))
+      return `deviceToken:route:${credential.slice("route:".length)}:${deviceId}:${role}`;
+    return `deviceToken:${encodeURIComponent(credential)}:${deviceId}:${role}`;
   }
 
   /**
@@ -6655,13 +6760,20 @@ export class ClawtrateClient {
    * and a write is dropped once that connection is no longer current, checked
    * after every wait, so a late write can never land after a switch.
    */
-  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
-    const current = () => generation === this.generation && this.settings?.url === url;
+  private connectionTokenStore(
+    url: string,
+    generation: number,
+    credential: string = url,
+  ): GatewayBrowserDeviceTokenStore {
+    const current = () =>
+      generation === this.generation &&
+      this.settings?.url === url &&
+      credentialOf(this.settings) === credential;
     return {
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
-        const record = await this.loadToken(url, deviceId, role);
+        const record = await this.loadToken(credential, deviceId, role);
         if (!record) return null;
         return {
           token: record.token,
@@ -6679,10 +6791,10 @@ export class ClawtrateClient {
         }
         // A replacement token is this socket's credential now: taken out of gateway text too.
         this.heldToken = token;
-        const existing = await this.loadToken(url, deviceId, role);
+        const existing = await this.loadToken(credential, deviceId, role);
         if (!current()) return;
         const held = existing?.heldScopes ?? [...READ_SCOPES];
-        await this.writeToken(url, deviceId, role, {
+        await this.writeToken(credential, deviceId, role, {
           token,
           // A replacement token is held to what this client asks for, whatever it was granted.
           grantedScopes: scopes.filter((scope) => held.includes(scope)),
@@ -6693,7 +6805,7 @@ export class ClawtrateClient {
       },
       clear: async ({ deviceId, role }) => {
         if (!current()) return;
-        await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+        await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
       },
     };
   }

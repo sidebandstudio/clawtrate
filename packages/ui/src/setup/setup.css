@@ -257,3 +257,64 @@
     min-height: 48px;
   }
 }
+
+/* Another computer: the field's label and refusal, from the prototype. */
+.s-field-label {
+  display: block;
+  margin: 0 4px 6px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-field-error {
+  margin: 6px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+/* A host key's fingerprint (setup.md §2 "New components"): its label over the value, in mono. */
+.s-print {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 12px 8px 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.s-print-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.s-print-alg {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-print code {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  word-spacing: 0.25em;
+  overflow-wrap: anywhere;
+}
+
+.s-prints {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.s-prints .s-print {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 520px) {
+  .s-prints {
+    grid-template-columns: 1fr;
+  }
+}

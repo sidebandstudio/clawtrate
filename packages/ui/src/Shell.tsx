@@ -544,6 +544,7 @@ export function Shell({
                       retryAt={state.connection.retryAt}
                       onRetry={() => void send({ type: "retry" })}
                       onReload={reload}
+                      onRoute={() => void send({ type: "setupRetryRoute" })}
                     />
                   )
                 }
