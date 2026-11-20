@@ -32,7 +32,7 @@
   const MESSAGE_DELAY = Number(p("delay")) || 120;
   const ROUTINE_PAGE = Number(p("routinepage")) || 50;
   const EACH_CAP = 24; // bots asked by one "Search each bot for more"
-  const FILES_CAP = 8; // bots' workspaces asked per query
+  const FILES_CAP = 8; // bots' workspaces asked per batch; the next batch on request
   const POOL = 4; // requests in flight at once, within one source's batch
 
   // Fixtures --------------------------------------------------------------------------------------
@@ -299,7 +299,7 @@
     openToken: 0,
   };
   // What the check can read: every request sent, and every address handed to the system.
-  const TEST = { requests: [], handoffs: [], answered: [], canonical: (raw) => canonical(raw), whereIs: (host) => whereIs(host) };
+  const TEST = { requests: [], handoffs: [], answered: [], out: {}, peak: {}, canonical: (raw) => canonical(raw), whereIs: (host) => whereIs(host) };
   CT.searchTest = TEST;
   const offline = () => ["reconnecting", "offline"].includes(app.model.connection);
   const phone = () => $("#root").getBoundingClientRect().width < 688;
@@ -329,9 +329,12 @@
     const gen = S.gen;
     const req = { source, params, gen, done: false };
     TEST.requests.push({ source, ...params });
+    TEST.out[source] = (TEST.out[source] || 0) + 1;
+    TEST.peak[source] = Math.max(TEST.peak[source] || 0, TEST.out[source]);
     const finish = (reply) => {
       if (req.done) return;
       req.done = true;
+      TEST.out[source] -= 1;
       TEST.answered.push({ source, gen, current: gen === S.gen });
       then(reply, gen === S.gen);
     };
@@ -557,7 +560,27 @@
     g.state = "searching";
     unsay();
     render();
-    pool("files", asked, (e, free) => askFilesFor(q, e, free));
+    filesLane(asked.map((e) => ({ gen: S.gen, run: (free) => askFilesFor(q, e, free) })));
+  }
+
+  // Files has one lane: a batch, a single bot's retry and the latest query's batch all go through
+  // it, and at most POOL requests are out at once, whichever query sent them. Work not yet sent is
+  // dropped when the text changes; each request sent has its own 8 s deadline.
+  const FILES = { out: 0, queue: [] };
+  function filesLane(jobs) {
+    FILES.queue.push(...jobs);
+    pumpFiles();
+  }
+  function pumpFiles() {
+    while (FILES.out < POOL && FILES.queue.length) {
+      const job = FILES.queue.shift();
+      if (job.gen !== S.gen) continue;
+      FILES.out++;
+      job.run(() => {
+        FILES.out--;
+        setTimeout(pumpFiles, 0);
+      });
+    }
   }
 
   function askFilesFor(q, e, free) {
@@ -740,17 +763,22 @@
     const unverified = R.filter((e) => !e.via).map((e) => e.bot);
     if (unverified.length) g.lines.push(`Not searched: ${list(unverified.map((id) => `${botName(id)}'s workspace`))} could not be verified.`);
     for (const id of by("noroot")) g.lines.push(`${botName(id)}: the gateway returned no workspace for its task, so nothing was searched.`);
+    const retries = [];
     for (const id of [...by("refused"), ...by("timeout")]) {
       const v = gf.per[id];
       g.lines.push(v.state === "timeout" ? `${botName(id)}: the gateway didn't answer in 8 seconds.` : `${botName(id)}: the gateway refused the search: ${v.error}.`);
       g.tone = "danger";
-      g.actions.push({ key: `act:retry-files:${id}`, label: `Try again for ${botName(id)}`, act: () => { S.filesRetried = true; gf.state = "searching"; askFilesFor(q, gf.order.find((e) => e.bot === id), () => {}); render(); } });
+      const entry = gf.order.find((e) => e.bot === id);
+      retries.push({ key: `act:retry-files:${id}`, label: `Try again for ${botName(id)}`, act: () => { S.filesRetried = true; gf.state = "searching"; gf.per[id] = { state: "searching" }; unsay(); render(); filesLane([{ gen: S.gen, run: (free) => askFilesFor(q, entry, free) }]); } });
     }
     const notAsked = R.filter((e) => e.via && !gf.per[e.bot]);
-    if (by("searching").length) g.state = "searching";
+    // The next batch and each retry are offered only once the lane's current batch has settled.
+    const busy = by("searching").length > 0;
+    if (busy) g.state = "searching";
+    else g.actions.push(...retries);
     if (notAsked.length) {
       g.lines.push(`Not asked yet: ${list(notAsked.map((e) => botName(e.bot)))}.`);
-      g.actions.push({ key: "act:files-next", label: `Search the next ${plural(Math.min(FILES_CAP, notAsked.length), "bot")}' files`.replace("bot' files", "bot's files"), act: () => askFiles(q, 1) });
+      if (!busy) g.actions.push({ key: "act:files-next", label: `Search the next ${plural(Math.min(FILES_CAP, notAsked.length), "bot")}' files`.replace("bot' files", "bot's files"), act: () => askFiles(q, 1) });
     }
     if (R.length && done.length !== R.length) g.lines.push(`${done.length} of ${R.length} bots' workspaces searched.`);
     for (const id of done)
@@ -1239,6 +1267,7 @@
     clearTimeout(S.announceTimer);
     // A request still waiting for its lane belongs to the text before this change.
     for (const l of Object.values(S.lanes)) l.waiting = null;
+    FILES.queue = [];
     const q = value.trim();
     S.groups = {};
     if (q) {

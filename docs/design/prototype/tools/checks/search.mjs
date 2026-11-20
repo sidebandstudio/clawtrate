@@ -559,11 +559,38 @@ p = await open("palette=open&bots=30");
 await type(p, "backup");
 await p.waitForTimeout(400);
 const big = await groupText(p, "files");
-check("R5 8 bots asked per query, the rest named, and how many were searched", (await requests(p, "files")).length === 8 && big.includes("Not asked yet:") && big.includes("Search the next 8 bots' files") && big.includes("8 of 30 bots' workspaces searched."));
+check("R5 8 bots asked per batch, the rest named, and how many were searched", (await requests(p, "files")).length === 8 && big.includes("Not asked yet:") && big.includes("Search the next 8 bots' files") && big.includes("8 of 30 bots' workspaces searched."));
 await activate(p, "Search the next 8 bots' files");
 await p.keyboard.press("Enter");
 await p.waitForTimeout(800);
 check("R5 the next batch is asked", (await requests(p, "files")).length === 16 && (await groupText(p, "files")).includes("16 of 30 bots' workspaces searched."));
+await p.close();
+
+// A slow first batch: no next-batch action while it is out, and a new query waits for the pool.
+p = await open("palette=open&bots=30&src=slow", undefined, { clock: true });
+await p.clock.pauseAt(new Date("2026-11-18T22:00:05Z"));
+await p.fill("#s-field", "backup");
+await p.clock.runFor(1000);
+const slowFiles = await groupText(p, "files");
+check("R5 while a slow first batch is out there is no next-batch action", (await requests(p, "files")).length === 4 && !slowFiles.includes("Search the next 8 bots' files"), slowFiles);
+await p.fill("#s-field", "backups");
+await p.clock.runFor(1000);
+const whileOut = (await requests(p, "files")).length;
+await p.clock.runFor(8000); // the first query's requests time out; the new query's are sent
+check("R5 typing a new query never puts more than 4 Files requests in flight", whileOut === 4 && (await requests(p, "files")).length === 8 && (await p.evaluate(() => CT.searchTest.peak.files)) === 4, `${whileOut} ${await p.evaluate(() => CT.searchTest.peak.files)}`);
+await p.close();
+
+// A retry goes through the same lane: offered only once the batch has settled, and never a fifth request.
+p = await open("palette=open&bots=30&src=filesfail");
+await type(p, "backup");
+await activate(p, "Search the next 8 bots' files");
+await p.keyboard.press("Enter");
+const batchOut = await p.evaluate(() => [...document.querySelectorAll('.s-group[data-group="files"] .s-action')].map((a) => a.textContent));
+await p.waitForTimeout(900);
+await activate(p, "Try again for Pip");
+await p.keyboard.press("Enter");
+await p.waitForTimeout(600);
+check("R5 while a batch is out no retry or next batch is offered, and a retry never puts Files above 4 in flight", !batchOut.some((a) => a.startsWith("Try again") || a.startsWith("Search the next")) && (await groupText(p, "files")).includes("Names the gateway returned from the workspaces of") && !(await groupText(p, "files")).includes("refused") && (await p.evaluate(() => CT.searchTest.peak.files)) <= 4, `${batchOut.join(" | ")} peak ${await p.evaluate(() => CT.searchTest.peak.files)}`);
 await p.close();
 
 // A file name doesn't bind a reader to the workspace searched: file results are names, with no
