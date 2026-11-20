@@ -3,7 +3,7 @@
 // date, versions compare strictly, and the module runs and shows nothing.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BUILD_FEED_ADDRESS,
@@ -53,7 +53,7 @@ describe("the update engine is not wired in", () => {
   it("no entry point of the app imports the update module", () => {
     for (const entry of entries) {
       expect(existsSync(entry), entry).toBe(true);
-      const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}/`));
+      const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}${sep}`));
       expect(
         into.map((file) => relative(APP, file)),
         relative(APP, entry),
