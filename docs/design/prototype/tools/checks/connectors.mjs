@@ -120,10 +120,8 @@ const STATES = [
   ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
   ["screen=connector&id=calendrop", ["Open Settings on your OpenClaw gateway to sign in to calendrop.", "Check again"]],
   ["screen=connector&id=calendrop&checked=1", ["Read again at 5:12 PM."]],
-  ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "To sign in, copy this address into a browser.", "Anyone who opens this link completes this sign-in."]],
-  ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
+  ["screen=chat", ["Add today's standup to team-notes.", "Used team-notes connect", "team-notes__connect"]],
   ["screen=chat&card=history", ["Used team-notes connect", "team-notes__connect", "Connect MCP server \"team-notes\" at", "https://auth.teamnotes.example/authorize?state=example-state-2c41"]],
-  ["screen=chat&card=error", ["team-notes can't ask for a sign-in here:", "gateway.publicOrigin is not configured"]],
   ["screen=picker", ["What do you use every day?", "Pick the apps you use. Nothing is connected now; they come first in Connect apps.", "Search apps", "Quillnote", "Huddlewick", "Skip", "Next"]],
 ];
 for (const [query, words] of STATES) {
@@ -476,6 +474,7 @@ for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   const p = await open("screen=add-server");
   check("the form offers no per-requester sign-in (ruling 1)", (await p.locator("input[name=signin]").count()) === 2 && !(await text(p)).includes("Each person signs in"));
   const card = await open("screen=chat");
+  await card.getByRole("button", { name: "A sign-in page", exact: true }).click();
   check("the connect card never says the sign-in is yours alone", !/your team-notes account|signs in for you/.test(await text(card)));
   await card.close();
   await p.close();
@@ -529,25 +528,58 @@ for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   check(`${label}: Left Arrow goes back to All`, (await at(q, "browse")) && (await q.evaluate(() => document.activeElement?.id)) === "chip-all");
   await q.close();
 }
-{
-  const p = await open("screen=chat");
-  check("the connect card's address is text with a copy button, never a button that opens it (decision on addresses)", (await p.locator(".c-card a").count()) === 0 && (await p.getByRole("button", { name: "Copy sign-in address" }).count()) === 1);
+// Change 4: the connect card comes only from a live result in this page; a reload is ordinary history.
+const liveResult = (name) => (p) => p.getByRole("button", { name, exact: true }).click();
+for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
+  const size = { width, height: width === 390 ? 844 : 900 };
+  const p = await open("screen=chat", size);
+  const requests = [];
+  p.on("request", (r) => {
+    if (/^https?:/.test(r.url())) requests.push(r.url());
+  });
+  check(`${label}: before any live result the card is the ordinary recorded call`, (await text(p, "#c-card")).includes("team-notes__connect") && (await p.locator("#c-card .copy").count()) === 0 && (await p.locator("#c-card a").count()) === 0);
+  await liveResult("A sign-in page")(p);
+  await p.waitForTimeout(40);
+  const t = await text(p, "#c-card");
+  check(`${label}: a live sign-in result is the copy-only card`, !missing(t, ["team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "To sign in, copy this address into a browser.", "After you sign in, ask Pip again.", "Anyone with this address can complete this shared sign-in."]) && (await p.locator("#c-card a").count()) === 0 && (await p.getByRole("button", { name: "Copy sign-in address" }).count()) === 1, missing(t, ["team-notes asks for a sign-in"]));
+  await p.reload();
+  await p.waitForTimeout(60);
+  const r = await text(p, "#c-card");
+  check(`${label}: reloading the same task shows the ordinary card: tool name and literal result, no copy, no anchor, nothing opened`, r.includes("team-notes__connect") && r.includes('Connect MCP server "team-notes" at https://auth.teamnotes.example/authorize?state=example-state-2c41') && (await p.locator("#c-card .copy").count()) === 0 && (await p.locator("#c-card a").count()) === 0 && requests.length === 0);
+  await liveResult("In a shared task")(p);
+  await p.waitForTimeout(40);
+  check(`${label}: in a shared task the possession line is a warning`, (await p.locator("#c-card .c-line[data-tone]").last().getAttribute("data-tone")) === "warn");
+  await liveResult("No public address")(p);
+  await p.waitForTimeout(40);
+  check(`${label}: no public address`, (await text(p, "#c-card")).includes("gateway.publicOrigin is not configured"));
+  await liveResult("Already connected")(p);
+  await p.waitForTimeout(40);
+  check(`${label}: already connected is the gateway's words`, (await text(p, "#c-card")).includes("is connected. Its tools become available on the next message."));
   await p.close();
 }
-await walk("the connect card in a shared task", "screen=chat", [[link("In a shared task"), "chat"]], ["Anyone who opens this link completes this sign-in."]);
-{
-  const p = await open("screen=chat&shared=1");
-  check("in a shared task, the warning line is in --warn", (await p.locator(".c-card .c-line[data-tone]").last().getAttribute("data-tone")) === "warn");
-  await p.close();
+for (const [outcome, words] of [["resolve", "Copied sign-in address"], ["reject", "Couldn't copy the sign-in address."]]) {
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } });
+  await ctx.addInitScript((how) => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: () => (how === "resolve" ? Promise.resolve() : Promise.reject(new Error("denied"))) }, configurable: true });
+  }, outcome);
+  const p = await ctx.newPage();
+  const requests = [];
+  p.on("request", (r) => {
+    if (/^https?:/.test(r.url())) requests.push(r.url());
+  });
+  await p.goto(`${base}&theme=light&screen=chat`);
+  await p.getByRole("button", { name: "A sign-in page", exact: true }).click();
+  await p.getByRole("button", { name: "Copy sign-in address" }).click();
+  await p.waitForTimeout(80);
+  const live = await p.evaluate(() => document.getElementById("c-live").textContent);
+  check(`copy that ${outcome}s says "${words}", and opens nothing`, live === words && (await text(p, "#c-card")).includes(words) && requests.length === 0 && (await screenOf(p)) === "chat", live);
+  await ctx.close();
 }
-await walk("a connect call read from history is the ordinary card", "screen=chat", [[link("Read from history"), "chat"]], ["team-notes__connect"]);
 {
   const p = await open("screen=chat&card=history");
-  check("from history: no connect card, no button, the address only as text (ruling 9)", (await p.locator(".c-card .c-open, .c-card .c-address").count()) === 0 && !(await text(p)).includes("Open in your browser") && (await p.locator(".c-card a").count()) === 0);
+  check("from history: no connect card, no button, the address only as text (ruling 9)", (await p.locator(".c-card .c-open, .c-card .c-address, .c-card .copy").count()) === 0 && !(await text(p)).includes("Open in your browser") && (await p.locator(".c-card a").count()) === 0);
   await p.close();
 }
-await walk("the connect card: no public address", "screen=chat", [[link("No public address"), "chat"]], ["gateway.publicOrigin is not configured"]);
-await walk("the connect card: already connected", "screen=chat", [[link("Already connected"), "chat"]], ["is connected. Its tools become available on the next message."]);
 await walk("what do you use every day: tick, then Browse leads with them", "screen=home", [
   [link("What do you use every day?"), "picker"],
   [tick("Quillnote")],

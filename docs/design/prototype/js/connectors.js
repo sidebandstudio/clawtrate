@@ -444,35 +444,37 @@
 
   // The conversation's connect card (section 11) -------------------------------------------
 
-  const chat = () => {
-    const card = params.get("card") || "open";
+  // The card's words for each live result; `live` exists only in this page's memory.
+  let live = null;
+  const ordinaryCard = () =>
+    `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text mono" data-c="tool">team-notes__connect</p><p class="c-card-text">${esc('Connect MCP server "team-notes" at https://auth.teamnotes.example/authorize?state=example-state-2c41. After sign-in completes, the server\'s tools become available on the next message.')}</p>`;
+  const liveCard = () => {
     const host = "auth.teamnotes.example";
-    const cardHtml = {
-      open:
-        `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.</p>` +
-        address(host) +
-        `<p class="c-line">To sign in, copy this address into a browser.</p>` +
-        `<p class="c-line">After you sign in, ask Pip again.</p>` +
-        `<p class="c-line" data-tone="${params.get("shared") === "1" ? "warn" : ""}">Anyone who opens this link completes this sign-in.</p>`,
-      connected: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text">MCP server "team-notes" is connected. Its tools become available on the next message.</p>`,
-      history: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text mono" data-c="tool">team-notes__connect</p><p class="c-card-text">Connect MCP server "team-notes" at <span class="mono">https://auth.teamnotes.example/authorize?state=example-state-2c41</span>. After sign-in completes, the server's tools become available on the next message.</p>`,
-      error: `<p class="c-card-title"><b>team-notes can't ask for a sign-in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,
-    }[card];
+    if (!live) return ordinaryCard();
+    if (live.kind === "connected") return `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text">${esc('MCP server "team-notes" is connected. Its tools become available on the next message.')}</p>`;
+    if (live.kind === "error") return `<p class="c-card-title"><b>team-notes can't ask for a sign-in here:</b></p><p class="c-card-text mono">${esc('MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.')}</p>`;
     return (
-      `<div class="c-chat"><div class="c-chat-head"><span class="c-chat-title">Pip · Standup notes</span></div><div class="c-transcript">` +
-      `<div class="c-bubble">Add today's standup to team-notes.</div>` +
-      `<article class="c-card" aria-label="Connect card">${initial("team-notes", "sm")}<div>${cardHtml}</div></article>` +
-      `</div>` +
-      proto("the bot's call returned", [
-        link("A sign-in page", "chat", { card: "open" }, { variant: "quiet" }),
-        link("Already connected", "chat", { card: "connected" }, { variant: "quiet" }),
-        link("No public address", "chat", { card: "error" }, { variant: "quiet" }),
-        link("In a shared task", "chat", { card: "open", shared: "1" }, { variant: "quiet" }),
-        link("Read from history", "chat", { card: "history" }, { variant: "quiet" }),
-      ]) +
-      `</div>`
+      `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.</p>` +
+      address(host) +
+      `<p class="c-line" id="c-copy-status" aria-live="polite"></p>` +
+      `<p class="c-line">To sign in, copy this address into a browser.</p>` +
+      `<p class="c-line">After you sign in, ask Pip again.</p>` +
+      `<p class="c-line" data-tone="${live.shared ? "warn" : ""}">Anyone with this address can complete this shared sign-in.</p>`
     );
   };
+  const chat = () =>
+    `<div class="c-chat"><div class="c-chat-head"><span class="c-chat-title">Pip · Standup notes</span></div><div class="c-transcript">` +
+    `<div class="c-bubble">Add today's standup to team-notes.</div>` +
+    `<article class="c-card" id="c-card" aria-label="${params.get("card") === "history" ? "Tool call" : "Connect card"}">${initial("team-notes", "sm")}<div id="c-card-body">${params.get("card") === "history" ? ordinaryCard() : liveCard()}</div></article>` +
+    `</div>` +
+    proto("the bot's call returns, live, to this page", [
+      `<button type="button" class="button" data-variant="quiet" data-size="sm" data-live="open">A sign-in page</button>`,
+      `<button type="button" class="button" data-variant="quiet" data-size="sm" data-live="connected">Already connected</button>`,
+      `<button type="button" class="button" data-variant="quiet" data-size="sm" data-live="error">No public address</button>`,
+      `<button type="button" class="button" data-variant="quiet" data-size="sm" data-live="shared">In a shared task</button>`,
+      link("Read from history", "chat", { card: "history" }, { variant: "quiet" }),
+    ]) +
+    `</div>`;
 
   // The picker (section 15) -----------------------------------------------------------------
 
@@ -921,13 +923,35 @@
 
   root.querySelector("[data-remove]")?.addEventListener("click", (event) => store.set("removing", event.currentTarget.dataset.remove));
 
-  // Copy buttons: a check for 1.4 s, as conversation.md §9 has it.
+  // A live tool result arrives: the card is drawn from it, in this page only.
+  root.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-live]");
+    if (!trigger) return;
+    const kind = trigger.dataset.live;
+    live = { kind: kind === "shared" ? "open" : kind, shared: kind === "shared" };
+    document.getElementById("c-card").setAttribute("aria-label", "Connect card");
+    document.getElementById("c-card-body").innerHTML = liveCard();
+  });
+
+  // Copy buttons: "Copied" only once the clipboard write resolves, as conversation.md §9 has it.
   root.addEventListener("click", (event) => {
     const button = event.target.closest(".copy");
     if (!button) return;
-    navigator.clipboard?.writeText(button.dataset.copy).catch(() => {});
-    button.dataset.copied = "true";
-    document.getElementById("c-live").textContent = `Copied ${button.getAttribute("aria-label").replace(/^Copy /, "")}`;
-    setTimeout(() => delete button.dataset.copied, 1400);
+    const what = button.getAttribute("aria-label").replace(/^Copy /, "");
+    const status = document.getElementById("c-copy-status");
+    const say = (words) => {
+      document.getElementById("c-live").textContent = words;
+      if (status) status.textContent = words;
+    };
+    Promise.resolve()
+      .then(() => navigator.clipboard.writeText(button.dataset.copy))
+      .then(
+        () => {
+          button.dataset.copied = "true";
+          say(`Copied ${what}`);
+          setTimeout(() => delete button.dataset.copied, 1400);
+        },
+        () => say(`Couldn't copy the ${what}.`),
+      );
   });
 })();
