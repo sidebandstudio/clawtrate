@@ -18,6 +18,12 @@ type Command =
   | { kind: "choose"; track: UpdateTrack }
   | { kind: "download"; offerId: string };
 
+const unanswered = {
+  check: "Couldn't get a reply to the update check.",
+  download: "Couldn't get a reply to the download request.",
+  choose: "Couldn't get a reply to the track change.",
+};
+
 const failure = {
   check: "Couldn't start the update check.",
   download: "Couldn't start the download.",
@@ -110,7 +116,6 @@ export class UpdateReading {
         (choosing ? this.choice : this.work) !== command ||
         current.revision !== reply.snapshot.revision ||
         current.pendingTrack ||
-        current.preferenceIssue ||
         (current.state.kind !== "not-checked" && current.revision !== snapshot.revision)
       )
         return;
@@ -119,7 +124,11 @@ export class UpdateReading {
           message:
             command.kind === "download"
               ? "This offer is no longer current."
-              : "The update track changed. Check the selected source again.",
+              : command.kind === "choose"
+                ? "This update track choice is no longer current."
+                : current.selectedTrack !== command.track
+                  ? "The update track changed. Check the selected source again."
+                  : "The update result changed. Review it before checking again.",
         });
       } else if (reply.outcome === "invalid") this.set({ message: failure[command.kind] });
     } catch {
@@ -127,7 +136,7 @@ export class UpdateReading {
         (choosing ? this.choice : this.work) === command &&
         snapshot.revision === this.value.snapshot?.revision
       )
-        this.set({ message: failure[command.kind] });
+        this.set({ message: unanswered[command.kind] });
     } finally {
       if (choosing && this.choice === command) {
         this.choice = null;

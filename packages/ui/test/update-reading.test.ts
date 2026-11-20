@@ -103,7 +103,7 @@ it.each(["busy", "superseded", "stale", "invalid"] as const)(
         ? null
         : outcome === "invalid"
           ? "Couldn't start the update check."
-          : "The update track changed. Check the selected source again.",
+          : "The update result changed. Review it before checking again.",
     );
     expect(h.host.check).toHaveBeenCalledOnce();
   },
@@ -115,7 +115,9 @@ it("F-231: rejected reads and commands release the action without replay", async
   h.event(base);
   h.host.check.mockRejectedValueOnce(Error());
   await h.reader.check("stable", base.revision);
-  expect(h.reader.get().message).toBe("Couldn't start the update check.");
+  expect(h.reader.get().message).toBe("Couldn't get a reply to the update check.");
+  expect(h.host.check.mock.calls).toEqual([["stable", base.revision]]);
+  expect(h.reader.get().working).toBe(false);
   h.reply.resolve({ outcome: "busy", snapshot: base });
   await h.reader.check("stable", base.revision);
   expect(h.host.check).toHaveBeenCalledTimes(2);
@@ -161,4 +163,53 @@ it("F-231: explains a refused offer when its snapshot has no new result", async 
   expect(h.reader.get().message).toBe("This offer is no longer current.");
   h.event({ ...offer, revision: 4 });
   expect(h.reader.get().message).toBeNull();
+});
+
+it.each(["check", "download", "choose"] as const)(
+  "F-231: explains an idle stale %s beside an unrelated settings notice",
+  async (action) => {
+    const h = harness();
+    const previous: DesktopUpdateSnapshot = { ...base, preferenceIssue: "preferences-not-read" };
+    h.event(previous);
+    const pending =
+      action === "check"
+        ? h.reader.check("stable", previous.revision)
+        : action === "download"
+          ? h.reader.download("A")
+          : h.reader.chooseTrack("nightly");
+    const current: DesktopUpdateSnapshot = {
+      ...previous,
+      revision: 4,
+      selectedTrack: action === "choose" ? "stable" : "nightly",
+    };
+    h.reply.resolve({ outcome: "stale", snapshot: current });
+    await pending;
+    expect(h.reader.get()).toMatchObject({
+      snapshot: current,
+      message: {
+        check: "The update track changed. Check the selected source again.",
+        download: "This offer is no longer current.",
+        choose: "This update track choice is no longer current.",
+      }[action],
+    });
+  },
+);
+
+it("F-231: releases unanswered download and track requests without replaying them", async () => {
+  const h = harness();
+  h.event(base);
+  h.host.download.mockRejectedValueOnce(Error());
+  await h.reader.download("A");
+  expect(h.host.download.mock.calls).toEqual([["A"]]);
+  expect(h.reader.get()).toMatchObject({
+    working: false,
+    message: "Couldn't get a reply to the download request.",
+  });
+  h.host.chooseTrack.mockRejectedValueOnce(Error());
+  await h.reader.chooseTrack("nightly");
+  expect(h.host.chooseTrack.mock.calls).toEqual([["nightly"]]);
+  expect(h.reader.get()).toMatchObject({
+    localChoice: null,
+    message: "Couldn't get a reply to the track change.",
+  });
 });
