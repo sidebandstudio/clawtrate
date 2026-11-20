@@ -410,6 +410,29 @@ test.describe("1440", () => {
     await expect(page.getByTestId("routine-delete")).toHaveCount(0);
   });
 
+  test("F-192: a menu opened from the old rows after a reconnect closes when the new list is shown", async ({
+    page,
+  }) => {
+    await open(page);
+    const setStale = (stale: boolean) =>
+      page.evaluate((stale) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => ({ ...state, routines: { ...state.routines, stale } }));
+      }, stale);
+    // Another hello at the address: the rows shown are still the last connection's.
+    await setConnection(page, { connectedAt: Date.now() + 5_000 });
+    await setStale(true);
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    // This connection's list is read: the menu from the old rows goes with them.
+    await setStale(false);
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  });
+
   test("F-192: right-click, Shift+F10 or the Menu key on a routine offers Open, Pause or Resume, Run now, Edit and Delete", async ({
     page,
   }) => {

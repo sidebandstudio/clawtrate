@@ -1234,7 +1234,7 @@ describe("F-189: changing a routine", () => {
   });
 
   it("F-350 F-351 F-352: after a reconnect, a row's pause, run and delete send nothing until this connection's list is read", async () => {
-    const { routines, requests } = engine(
+    const { routines, requests, state } = engine(
       {
         "cron.status": () => ({ enabled: true }),
         "cron.list": () => ({ jobs: [once], hasMore: false }),
@@ -1245,6 +1245,7 @@ describe("F-189: changing a routine", () => {
     );
     // The connection drops and another comes back at the address: the rows shown are the old one's.
     routines.onClose();
+    expect(state().stale).toBe(true);
     expect(await routines.setEnabled(JOB, false)).toEqual({
       status: "not-sent",
       reason: "gateway",
@@ -1253,6 +1254,7 @@ describe("F-189: changing a routine", () => {
     expect(await routines.remove(JOB)).toEqual({ status: "not-sent", reason: "gateway" });
     expect(requests).toEqual([]);
     await routines.load();
+    expect(state().stale).toBe(false);
     expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "saved" });
   });
 

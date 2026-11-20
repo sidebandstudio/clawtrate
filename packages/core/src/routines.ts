@@ -122,6 +122,8 @@ export type RoutinesState = {
    * one-shot removes itself.
    */
   removed: { id: string; ranOnce: boolean; runAt: number | null } | null;
+  /** The list shown was read on a connection that has since closed; true until this one's is read. */
+  stale: boolean;
 };
 
 export const initialRoutinesState: RoutinesState = {
@@ -132,6 +134,7 @@ export const initialRoutinesState: RoutinesState = {
   omitted: 0,
   revision: 0,
   removed: null,
+  stale: false,
 };
 
 export type RoutineRun = {
@@ -697,6 +700,7 @@ export class RoutinesEngine {
         ...state,
         status: "loaded",
         error: null,
+        stale: false,
         ...read,
         revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
       }));
@@ -833,6 +837,7 @@ export class RoutinesEngine {
     this.clearRecheck();
     this.lastFinished = null;
     this.epoch += 1;
+    if (!this.ctx.get().stale) this.ctx.update((state) => ({ ...state, stale: true }));
   }
 
   reset(): void {

@@ -301,6 +301,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       omitted: 0,
       revision: 0,
       removed: null,
+      stale: false,
     };
   if (params.state === "error")
     return {
@@ -311,6 +312,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       omitted: 0,
       revision: 0,
       removed: null,
+      stale: false,
     };
   return {
     status: "loaded",
@@ -321,6 +323,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
     omitted: params.state === "truncated" ? 12 : 0,
     revision: 0,
     removed: null,
+    stale: false,
   };
 }
 
