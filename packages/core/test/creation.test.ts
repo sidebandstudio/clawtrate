@@ -360,3 +360,23 @@ describe("a creation is owned before anything is awaited (D3)", () => {
     }
   });
 });
+
+it("releases the reserved task slot when the creation observer throws", async () => {
+  const gateway = grantingGateway();
+  gateway.handlers["sessions.create"] = () => ({ key: "agent:otto:created" });
+  const { client } = await openTask({ gateway, client: { limits: { trackedTasks: 2 } } });
+  try {
+    await expect(
+      client.createTask("otto", "first", {
+        onStart() {
+          throw new Error("viewer closed");
+        },
+      }),
+    ).rejects.toThrow("viewer closed");
+    expect(client.state.creations).toEqual([]);
+    expect(gateway.calls("sessions.create")).toEqual([]);
+    await expect(client.createTask("otto", "second")).resolves.toBe("agent:otto:created");
+  } finally {
+    client.stop();
+  }
+});

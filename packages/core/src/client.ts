@@ -1809,10 +1809,10 @@ export class ClawtrateClient {
             key: null,
             gatewayBootId: null,
           };
-    options.onStart?.(creation.id);
     this.putCreation(creation);
     let sent = false;
     try {
+      options.onStart?.(creation.id);
       // A viewer that goes away while access is approved takes its request with it (`withdraw`).
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       // The viewer went away while access settled: nothing is asked of the gateway.
