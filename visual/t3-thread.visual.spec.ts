@@ -516,6 +516,23 @@ test.describe("T3 Code thread cards", () => {
     );
   });
 
+  test("F-313: a listing's Readable shows what it listed, and claims nothing of unfinished work", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-listings", "light");
+    await page.locator(".card.action[data-fold] > summary").click();
+    for (const [id, listed] of [
+      ["call_t3pl", "trail-guide"],
+      ["call_t3tl", "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70"],
+    ]) {
+      const row = page.locator(`#action-${id}`);
+      await row.locator(":scope > summary").click();
+      const readable = row.locator('[data-view="readable"]');
+      await expect(readable, id).toContainText(listed);
+      await expect(readable, id).not.toContainText("does not show that the work is finished");
+    }
+  });
+
   test("F-313: a thread whose launch is not in the record says so on its card", async ({
     page,
   }) => {

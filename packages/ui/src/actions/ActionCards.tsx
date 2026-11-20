@@ -507,7 +507,8 @@ function ActionDetail({ call }: { call: ActionCall }) {
 /** A T3 Code call's line opens to that call alone, and to its thread's card (11.4). */
 function T3Readable({ call, env }: { call: ActionCall; env: ActionEnv }) {
   const t3 = t3CallOf(call, env.ctx);
-  if (!t3) return <Readable call={call} env={env} />;
+  // A listing is an ordinary line in T3 Code's family: its Readable is what it listed.
+  if (!t3 || t3.role === "listing") return <Readable call={call} env={env} />;
   return (
     <div className="t3-readable">
       <T3CallBody call={t3} />
