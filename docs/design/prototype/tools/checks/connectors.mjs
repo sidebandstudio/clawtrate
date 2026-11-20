@@ -77,12 +77,11 @@ const STATES = [
   ["screen=app&id=docklet", ["Not available for this gateway's version."]],
   ["screen=app&id=quillnote&access=read", ["Read-only.", "Adding apps needs admin access.", "Request admin access"]],
   ["screen=add-confirm&id=quillnote", ["Add Quillnote to the gateway?", "Package: @quillnote-labs/quillnote, from ClawHub.", "Version 2.4.1, the release reviewed here.", "The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.", "Cancel", "Add"]],
-  ["screen=add-confirm&id=chartwick", ["from the gateway's official catalog", "The gateway picks the release from its catalog."]],
-  ["screen=add-consent&id=quillnote", ["Quillnote asks for more than the catalog listed.", "before_tool_call", "Add anyway"]],
+  ["screen=add-confirm&id=chartwick", ["Package: chartwick, from the gateway's official catalog.", "The gateway picks the release."]],
   ["screen=add-warning&id=quillnote", ["The gateway's install check found something.", "Warning:", "line 12", "Add anyway"]],
   ["screen=add-progress&id=quillnote", ["Adding Quillnote", "Finding the release", "Downloading", "Unpacking", "Writing files", "Installing what it needs", "Starting it on the gateway"]],
   ["screen=add-done&id=quillnote", ["Added Quillnote.", "The gateway lists it as installed and turned on.", "Open Quillnote"]],
-  ["screen=add-restart&id=quillnote", ["The gateway says it needs a restart before Quillnote works. Clawtrate doesn't restart the gateway."]],
+  ["screen=add-restart&id=quillnote", ["The gateway lists Quillnote as installed and says a restart is required. Clawtrate doesn't restart the gateway."]],
   ["screen=add-refused&id=quillnote", ["Couldn't add Quillnote:", "The gateway lists nothing new.", "Try again"]],
   ["screen=add-partial&id=quillnote", ["Quillnote was installed but didn't start:"]],
   ["screen=add-checking&id=quillnote", ["Checking what the gateway has…"]],
@@ -175,7 +174,7 @@ for (const [query, words] of STATES) {
 // Change 5: a read-only gateway says so on every page reachable from Browse, and nothing in a page leads to a write.
 // The section list still opens the custom server page, which then says the settings are read-only.
 {
-  const WRITES = ["add-confirm", "add-consent", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
+  const WRITES = ["add-confirm", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
   const writesOn = (p) =>
     p.evaluate((writes) => {
       const to = [...document.querySelectorAll("#c-root .c-section a[href]")].map((a) => new URL(a.href).searchParams.get("screen")).filter((s) => writes.includes(s));
@@ -277,7 +276,8 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   [row("Quillnote"), "app"],
   [link("Add"), "add-confirm"],
   [link("Add"), "add-progress"],
-  [link("Added"), "add-done"],
+  [link("Added"), "add-checking"],
+  [link("Lists it installed"), "add-done"],
   [link("Open Quillnote"), "connector"],
   [link("Check again"), "connector"],
 ], ["Open Settings on your OpenClaw gateway to sign in to quillnote.", "Read again at 5:12 PM."]);
@@ -328,16 +328,64 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   await s.close();
 }
 await walk("Add from a row, cancelled", "screen=browse", [[link("Add Quillnote"), "add-confirm"], [link("Cancel"), "app"]], ["What it adds"]);
-await walk("add: a capability review, then a failure after writing", "screen=add-confirm&id=quillnote", [
-  [link("A review"), "add-confirm"],
-  [link("Add"), "add-consent"],
-  [link("Add anyway"), "add-progress"],
-  [link("Fails after writing"), "add-partial"],
-], ["was installed but didn't start"]);
-await walk("add: an install warning", "screen=add-confirm&id=quillnote", [[link("An install warning"), "add-confirm"], [link("Add"), "add-warning"], [link("Add anyway"), "add-progress"], [link("Needs a restart"), "add-restart"]], ["needs a restart"]);
-await walk("add: refused, then try again", "screen=add-progress&id=quillnote", [[link("Refused"), "add-refused"], [link("Try again"), "add-confirm"]]);
-await walk("add: no answer, then the read-back lists it", "screen=add-progress&id=quillnote", [[link("No answer"), "add-checking"], [link("Lists it"), "add-done"]], ["Added Quillnote."]);
+await walk("add: an install warning", "screen=add-confirm&id=quillnote", [[link("An install warning"), "add-confirm"], [link("Add"), "add-warning"], [link("Add anyway"), "add-progress"], [link("Needs a restart"), "add-checking"], [link("Lists it installed"), "add-restart"]], ["says a restart is required"]);
+await walk("add: refused, then try again", "screen=add-progress&id=quillnote", [[link("Refused"), "add-checking"], [link("Doesn't list it"), "add-refused"], [link("Try again"), "add-confirm"]]);
+await walk("add: no answer, then the read-back lists it", "screen=add-progress&id=quillnote", [[link("No answer"), "add-checking"], [link("Lists it installed"), "add-done"]], ["Added Quillnote."]);
 await walk("add: no answer, then the read-back doesn't list it", "screen=add-progress&id=quillnote", [[link("No answer"), "add-checking"], [link("Doesn't list it"), "add-refused"]], ["The gateway lists nothing new."]);
+await walk("add: refused by its capability check, with no Add anyway", "screen=add-progress&id=quillnote", [[link("Refused by its capability check"), "add-checking"], [link("Doesn't list it"), "add-refused"]], ["Couldn't add Quillnote:", "quillnote: the gateway's capability check refused this plugin. The gateway lists nothing new."]);
+{
+  const p = await open("screen=add-refused&id=quillnote&ans=capability");
+  check("a capability refusal offers no Add anyway and no second review", (await p.getByRole("link", { name: "Add anyway" }).count()) === 0 && !(await text(p)).includes("asks for more than"));
+  await p.close();
+}
+await walk("add: a failure after writing opens the same plugin, not working", "screen=add-progress&id=quillnote", [[link("Fails after writing"), "add-checking"], [link("Lists it installed"), "add-partial"], [link("Open Quillnote"), "connector"]], ["Quillnote", "Not working: quillnote: the module could not be loaded."]);
+{
+  const p = await open("screen=add-partial&id=quillnote");
+  await link("Open Quillnote")(p);
+  await at(p, "connector");
+  check("the partial install's Open leads to Quillnote, not another plugin", (await p.evaluate(() => new URLSearchParams(location.search).get("id"))) === "quillnote" && (await text(p, "#c-section-title")) === "Quillnote ");
+  await p.close();
+}
+await walk("add: the read-back can't be read, Check again, and it fails again", "screen=add-progress&id=quillnote", [[link("Added"), "add-checking"], [link("Can't read the list"), "add-unconfirmed"], [link("Check again"), "add-checking"], [link("Can't read the list"), "add-unconfirmed"]], ["Couldn't confirm the install.", "The gateway's plugin list couldn't be read.", "Check again"]);
+await walk("add: the read-back disagrees with the answer", "screen=add-progress&id=quillnote", [[link("Added"), "add-checking"], [link("Doesn't list it"), "add-unconfirmed"]], ["Couldn't confirm the install.", "The gateway's plugin list doesn't match its answer."]);
+// Change 7: the request is built from fields the catalog returns.
+{
+  const req = async (q) => {
+    const p = await open(q);
+    const t = await p.locator('[data-c="request"]').textContent();
+    await p.close();
+    return JSON.parse(t.replace(/^plugins\.install /, ""));
+  };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const cases = [
+    ["screen=add-confirm&id=quillnote", { source: "clawhub", packageName: "@quillnote-labs/quillnote", version: "2.4.1" }, "local.install ClawHub, with the reviewed release"],
+    ["screen=add-confirm&id=chartwick", { source: "official", pluginId: "chartwick" }, "official only from local.install, with no version"],
+    ["screen=add-confirm&id=mapwhistle", { source: "clawhub", packageName: "@mapwhistle/mapwhistle", version: "1.1.0" }, "remote-only, pinned to its selected release"],
+    ["screen=add-confirm&id=tunebarrow", { source: "clawhub", packageName: "@tunebarrow/tunebarrow" }, "remote-only, without a version"],
+    ["screen=add-progress&id=quillnote", { source: "clawhub", packageName: "@quillnote-labs/quillnote", version: "2.4.1" }, "an ordinary Add carries no acknowledgement"],
+    ["screen=add-progress&id=quillnote&ack=warning", { source: "clawhub", packageName: "@quillnote-labs/quillnote", version: "2.4.1", acknowledgeInstallPolicyWarning: true }, "only the warning's Add anyway sets the warning flag"],
+  ];
+  for (const [q, want, what] of cases) {
+    const got = await req(q);
+    check(`the install request: ${what}`, same(got, want) && !("expectedIntegrity" in got), JSON.stringify(got));
+  }
+  const t = await open("screen=add-confirm&id=tunebarrow");
+  check("without a reviewed version: The gateway picks the release.", (await text(t, ".c-confirm")).includes("The gateway picks the release.") && !(await text(t, ".c-confirm")).includes("Version "));
+  await t.close();
+  const w = await open("screen=add-warning&id=quillnote");
+  await link("Add anyway")(w);
+  await at(w, "add-progress");
+  await link("Refused")(w);
+  await at(w, "add-checking");
+  await link("Doesn't list it")(w);
+  await at(w, "add-refused");
+  await link("Try again")(w);
+  await at(w, "add-confirm");
+  await link("Add")(w);
+  await at(w, "add-progress");
+  check("a new request after a refusal starts without the warning flag", !(await w.locator('[data-c="request"]').textContent()).includes("acknowledgeInstallPolicyWarning"));
+  await w.close();
+}
 await walk("the catalog can't be reached, try again", "screen=browse-loading", [
   [link("Can't be reached"), "browse-offline"],
   [link("Try again"), "browse-retry"],

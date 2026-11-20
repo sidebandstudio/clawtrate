@@ -31,7 +31,7 @@
   const admin = (access === "admin" || req === "granted") && !readonlyGw;
   const readonlyNote = () => (readonlyGw ? `<div class="b-note" role="status">${CT.icon("lock")}<div><p><b>This gateway's settings are read-only.</b> Plugins and tool servers can't be changed here.</p></div></div>` : "");
   // Screens that write. On a read-only gateway no control leads to one; on the iPhone none leads to a server write.
-  const WRITES = ["add-confirm", "add-consent", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
+  const WRITES = ["add-confirm", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
   const SERVER_WRITES = ["server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
   const blocked = (to) => (readonlyGw && WRITES.includes(to)) || (iphone && SERVER_WRITES.includes(to));
 
@@ -45,10 +45,10 @@
     ["developer-tools", "Developer tools"],
   ];
   const APPS = [
-    { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", local: "install", servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
+    { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", release: "2.4.1", local: "install", install: { source: "clawhub", packageName: "@quillnote-labs/quillnote" }, servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
     { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
     { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true], ["calendrop-rooms", true], ["calendrop-files", true]], mcpAuth: [{ serverName: "calendrop", state: "unauthenticated" }, { serverName: "calendrop-rooms", state: "authorized" }], host: "auth.calendrop.example" },
-    { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", official: true, cats: ["productivity"], version: "0.8.0", local: "install", servers: [["chartwick", false]] },
+    { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", official: true, cats: ["productivity"], version: "0.8.0", local: "install", install: { source: "official", pluginId: "chartwick" }, servers: [["chartwick", false]] },
     { id: "ledgerkin", name: "Ledgerkin", summary: "Invoices and expenses, read-only.", author: "ledgerkin", cats: ["finance"], version: "1.2.0", local: "disabled", servers: [["ledgerkin", true]] },
     { id: "boxwharf", name: "Boxwharf", summary: "Files and shared folders.", author: "boxwharf", cats: ["files"], featured: true, version: "2.1.0", local: "error", error: "boxwharf-sync: the token store couldn't be read" },
     { id: "postlark", name: "Postlark", summary: "Mail: read, draft and file messages.", author: "postlark", cats: ["mail"], version: "1.0.4", local: "needs-setup", missing: ["Account address"] },
@@ -59,8 +59,8 @@
   ];
   // The next page of the overview, after "Show more" (the gateway's nextCursor).
   const MORE = [
-    { id: "mapwhistle", name: "Mapwhistle", summary: "Places, routes and travel times.", author: "mapwhistle", cats: ["productivity"], version: "1.1.0", local: "install" },
-    { id: "tunebarrow", name: "Tunebarrow", summary: "Playlists and listening history.", author: "tunebarrow", cats: ["productivity"], version: "0.9.2", local: "install" },
+    { id: "mapwhistle", name: "Mapwhistle", summary: "Places, routes and travel times.", author: "mapwhistle", cats: ["productivity"], version: "1.1.0", release: "1.1.0", local: "install", packageName: "@mapwhistle/mapwhistle" },
+    { id: "tunebarrow", name: "Tunebarrow", summary: "Playlists and listening history.", author: "tunebarrow", cats: ["productivity"], version: "0.9.2", local: "install", packageName: "@tunebarrow/tunebarrow" },
   ];
   const SKILLS = [
     { name: "Weekly review", text: "Collect the week's notes and tasks into one summary." },
@@ -88,6 +88,16 @@
     SERVERS["notes-work"].diagnostic = "fetch failed <em>refused</em>";
   }
   const app = (id) => [...APPS, ...MORE].find((a) => a.id === id) || APPS[0];
+  // plugins.install from fields the catalog returns: local.install when present, else a remote ClawHub row's
+  // catalog.packageName; the version only from detail.selectedRelease; never expectedIntegrity (section 6).
+  const installRequest = (a) => {
+    if (a.install?.source === "official") return a.install.pluginId ? { source: "official", pluginId: a.install.pluginId } : null;
+    const packageName = a.install?.packageName || a.packageName;
+    if (!packageName) return null;
+    return { source: "clawhub", packageName, ...(a.release ? { version: a.release } : {}) };
+  };
+  const addable = (a) => a.local === "install" && Boolean(installRequest(a));
+  const requestLine = (r) => `<p class="c-faint mono" data-c="request">plugins.install ${esc(JSON.stringify(r))}</p>`;
   // The page's own memory for one operation: the untouched form, the reviewed draft and what was saved.
   // It lives in this tab's session storage and never in an address. Header values are never kept.
   const store = {
@@ -178,7 +188,7 @@
 
   // A catalog row and its end, from its `local` facts (section 4).
   const rowEnd = (a) => {
-    if (a.local === "install") return admin ? link("Add", "add-confirm", { id: a.id }, { attrs: `aria-label="Add ${esc(a.name)}"` }) : "";
+    if (addable(a)) return admin ? link("Add", "add-confirm", { id: a.id }, { attrs: `aria-label="Add ${esc(a.name)}"` }) : "";
     if (a.local === "unavailable") return `<span class="c-faint">Not available</span>`;
     return statePill(a);
   };
@@ -273,6 +283,7 @@
   const connectorState = (a) => {
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
     if (off) return ["Turned off. Its tools aren't offered to any bot.", [admin ? link("Turn on", "connector", { id: a.id, now: "on", said: "on" }) : ""]];
+    if (params.get("after") === "partial") return [`Not working: ${a.id}: the module could not be loaded.`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     if (a.local === "needs-setup") return [`Needs setup. Open Settings on the gateway to finish setup.${a.missing?.length ? ` The gateway reports missing: ${a.missing.join(", ")}.` : ""}`, []];
     if (a.local === "error") return [`Not working: ${a.error}`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     if (a.bundled) return ["Added. Not loaded yet: it loads when a bot first needs it.", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
@@ -550,51 +561,67 @@
           `<p class="c-faint">Version ${esc(a.version)}</p>` +
           (a.local === "unavailable" ? `<p class="c-line">Not available for this gateway's version.</p>` : "") +
           granted(),
-        foot: a.local === "install" ? (admin ? link("Add", "add-confirm", { id: a.id }, { variant: "primary" }) : accessBar("Adding apps needs admin access.")) : "",
+        foot: addable(a) ? (admin ? link("Add", "add-confirm", { id: a.id }, { variant: "primary" }) : accessBar("Adding apps needs admin access.")) : "",
       });
     },
     "add-confirm": () => {
       const a = A();
-      const official = a.official;
+      const r = installRequest(a);
+      const official = r.source === "official";
       return (
         windowHtml({ title: a.name, back: go("app", { id: a.id }), body: "" }) +
         confirm(
           `Add ${a.name} to the gateway?`,
-          `<p>Package: <span class="mono">@${esc(a.author)}/${esc(a.id)}</span>, from ${official ? "the gateway's official catalog" : "ClawHub"}. ${official ? "The gateway picks the release from its catalog." : `Version ${esc(a.version)}, the release reviewed here.`}</p>` +
+          `<p>Package: <span class="mono">${esc(official ? r.pluginId : r.packageName)}</span>, from ${official ? "the gateway's official catalog" : "ClawHub"}. ${r.version ? `Version ${esc(r.version)}, the release reviewed here.` : "The gateway picks the release."}</p>` +
             `<p>The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.</p>`,
           [link("Cancel", "app", { id: a.id }, { variant: "quiet", attrs: "data-autofocus" }), link("Add", params.get("ask") || "add-progress", { id: a.id }, { variant: "primary" })],
-          proto("the gateway first asks for", [link("A review", "add-confirm", { id: a.id, ask: "add-consent" }, { variant: "quiet" }), link("An install warning", "add-confirm", { id: a.id, ask: "add-warning" }, { variant: "quiet" }), link("Nothing", "add-confirm", { id: a.id }, { variant: "quiet" })]),
+          proto("the gateway first answers with", [requestLine(r), link("An install warning", "add-confirm", { id: a.id, ask: "add-warning" }, { variant: "quiet" }), link("Nothing", "add-confirm", { id: a.id }, { variant: "quiet" })]),
         )
       );
     },
-    "add-consent": () =>
-      windowHtml({ title: A().name, back: go("app", { id: A().id }), body: "" }) +
-      confirm(`${A().name} asks for more than the catalog listed.`, `<ul class="c-list"><li>A hook: <span class="mono">before_tool_call</span></li><li>A tool server: <span class="mono">quillnote-sync</span></li></ul>`, [link("Cancel", "app", { id: A().id }, { variant: "quiet" }), link("Add anyway", "add-progress", { id: A().id }, { variant: "primary" })]),
     "add-warning": () =>
       windowHtml({ title: A().name, back: go("app", { id: A().id }), body: "" }) +
-      confirm("The gateway's install check found something.", `<ul class="c-list"><li><b>Warning:</b> Reads environment variables at startup. <span class="mono c-faint">dist/index.js, line 12</span></li></ul>`, [link("Cancel", "app", { id: A().id }, { variant: "quiet" }), link("Add anyway", "add-progress", { id: A().id }, { variant: "primary" })]),
-    "add-progress": () =>
-      windowHtml({
+      confirm("The gateway's install check found something.", `<ul class="c-list"><li><b>Warning:</b> Reads environment variables at startup. <span class="mono c-faint">dist/index.js, line 12</span></li></ul>`, [link("Cancel", "app", { id: A().id }, { variant: "quiet" }), link("Add anyway", "add-progress", { id: A().id, ack: "warning" }, { variant: "primary" })]),
+    "add-progress": () => {
+      const ans = (to) => link(to[0], "add-checking", { id: A().id, ans: to[1] }, { variant: "quiet" });
+      return windowHtml({
         title: `Adding ${A().name}`,
         body:
           steps([["Finding the release", "done"], ["Downloading", "done"], ["Unpacking", "done"], ["Writing files", "running"], ["Installing what it needs", "waiting"], ["Starting it on the gateway", "waiting"]]) +
           proto("the install ends", [
-            link("Added", "add-done", { id: A().id }, { variant: "quiet" }),
-            link("Needs a restart", "add-restart", { id: A().id }, { variant: "quiet" }),
-            link("Refused", "add-refused", { id: A().id }, { variant: "quiet" }),
-            link("Fails after writing", "add-partial", { id: A().id }, { variant: "quiet" }),
-            link("No answer", "add-checking", { id: A().id }, { variant: "quiet" }),
+            requestLine({ ...installRequest(A()), ...(params.get("ack") === "warning" ? { acknowledgeInstallPolicyWarning: true } : {}) }),
+            ...[["Added", "ok"], ["Needs a restart", "restart"], ["Refused", "refused"], ["Refused by its capability check", "capability"], ["Fails after writing", "partial"], ["No answer", "none"]].map(ans),
           ]),
-      }),
-    "add-done": () => windowHtml({ title: `Adding ${A().name}`, body: result("ok", "check", `Added ${A().name}.`, "The gateway lists it as installed and turned on.", link(`Open ${A().name}`, "connector", { id: A().id, auth: "unauthenticated" }, { variant: "primary" })) }),
-    "add-restart": () => windowHtml({ title: `Adding ${A().name}`, body: result("", "warning", `Added ${A().name}.`, esc(`The gateway says it needs a restart before ${A().name} works. Clawtrate doesn't restart the gateway.`)) }),
-    "add-refused": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "x", `Couldn't add ${A().name}:`, esc(`${A().refusal || "fetch failed"}. The gateway lists nothing new.`), link("Try again", "add-confirm", { id: A().id })) }),
-    "add-partial": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "warning", `${A().name} was installed but didn't start:`, esc("quillnote: the module could not be loaded."), link(`Open ${A().name}`, "connector", { id: "boxwharf" })) }),
-    "add-checking": () =>
+      });
+    },
+    "add-checking": () => {
+      const a = A();
+      const ans = params.get("ans") || "none";
+      const listed = { ok: "add-done", restart: "add-restart", partial: "add-partial", none: "add-done" }[ans] || "add-unconfirmed";
+      const absent = ["refused", "capability", "none"].includes(ans) ? "add-refused" : "add-unconfirmed";
+      return windowHtml({
+        title: `Adding ${a.name}`,
+        body:
+          `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` +
+          proto("the read-back", [
+            link("Lists it installed", listed, { id: a.id, ans, why: listed === "add-unconfirmed" ? "differs" : null }, { variant: "quiet" }),
+            link("Doesn't list it", absent, { id: a.id, ans, why: absent === "add-unconfirmed" ? "differs" : null }, { variant: "quiet" }),
+            link("Can't read the list", "add-unconfirmed", { id: a.id, ans }, { variant: "quiet" }),
+          ]),
+      });
+    },
+    "add-unconfirmed": () =>
       windowHtml({
         title: `Adding ${A().name}`,
-        body: `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` + proto("the read-back", [link("Lists it", "add-done", { id: A().id }, { variant: "quiet" }), link("Doesn't list it", "add-refused", { id: A().id }, { variant: "quiet" })]),
+        body: note("warn", "Couldn't confirm the install.", params.get("why") === "differs" ? "The gateway's plugin list doesn't match its answer." : "The gateway's plugin list couldn't be read.", `<div class="c-actions">${link("Check again", "add-checking", { id: A().id, ans: params.get("ans") || "none" })}</div>`),
       }),
+    "add-done": () => windowHtml({ title: `Adding ${A().name}`, body: result("ok", "check", `Added ${A().name}.`, "The gateway lists it as installed and turned on.", link(`Open ${A().name}`, "connector", { id: A().id, auth: "unauthenticated" }, { variant: "primary" })) }),
+    "add-restart": () => windowHtml({ title: `Adding ${A().name}`, body: result("", "warning", `Added ${A().name}.`, esc(`The gateway lists ${A().name} as installed and says a restart is required. Clawtrate doesn't restart the gateway.`)) }),
+    "add-refused": () => {
+      const why = params.get("ans") === "capability" ? `${A().id}: the gateway's capability check refused this plugin` : A().refusal || "fetch failed";
+      return windowHtml({ title: `Adding ${A().name}`, body: result("danger", "x", `Couldn't add ${A().name}:`, esc(`${why}. The gateway lists nothing new.`), link("Try again", "add-confirm", { id: A().id })) });
+    },
+    "add-partial": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "warning", `${A().name} was installed but didn't start:`, esc(`${A().id}: the module could not be loaded.`), link(`Open ${A().name}`, "connector", { id: A().id, after: "partial" })) }),
     installed: () =>
       windowHtml({
         title: "On this gateway",
