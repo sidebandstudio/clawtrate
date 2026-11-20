@@ -1,0 +1,63 @@
+name: Site
+
+# Deploys site/ to GitHub Pages with the newest published beta's feed under
+# updates/beta/. Publishing or withdrawing a release deploys it again, so the
+# feed follows the releases. docs/development/releases.md has the flow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "apps/desktop/packaging/site-feed.ts"
+      - "apps/desktop/packaging/beta-files.ts"
+      - ".github/workflows/site.yml"
+  release:
+    types: [published, unpublished, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Assemble the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The site is main's, whichever release started the run.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Copy the site and add the Beta feed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir _site
+          if [ -d site ]; then cp -R site/. _site/; fi
+          node apps/desktop/packaging/site-feed.ts _site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
