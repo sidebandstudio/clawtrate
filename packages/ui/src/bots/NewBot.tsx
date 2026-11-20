@@ -92,7 +92,7 @@ function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => 
     if (next === null) return;
     event.preventDefault();
     // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
-    // radio it reached, and nothing a frame later takes focus back.
+    // radio it reached, and this handler leaves no focus move for a later frame.
     event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
     choose(values[next]!);
   };
