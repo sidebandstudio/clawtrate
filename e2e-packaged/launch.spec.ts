@@ -100,6 +100,7 @@ test.afterAll(async () => {
 });
 
 test("opens its window from the packaged app on the connect screen", async () => {
+  expect(USER_DATA).toBe(realpathSync.native(USER_DATA));
   // The renderer is the one inside the app's archive, not the source tree.
   const bundled = WINDOWS
     ? decodeURI(
@@ -117,6 +118,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
     ).clawtrateHost.desktopUpdates.get(),
   );
   expect(updates).toMatchObject({
+    pendingTrack: null,
     tracks: [],
     preferenceIssue: null,
     lastCheck: null,

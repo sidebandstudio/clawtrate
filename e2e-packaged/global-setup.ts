@@ -34,6 +34,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  realpathSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -315,7 +316,7 @@ export default async function globalSetup() {
   const listenersBefore = protectedListeners();
   const othersBefore = runningOthers([name, sentinel]);
   let appProcess: ChildProcess | null = null;
-  const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   record.dirs.push(dir);
   saveRecord(RECORDS, record);
   const userData = join(dir, "user-data");
@@ -456,7 +457,7 @@ async function windowsSetup() {
   if (!existsSync(exe)) throw new Error(`${exe} does not exist. Run \`pnpm package:win\` first.`);
   const REAL_DATA = realData();
   const realBefore = fingerprint(REAL_DATA);
-  const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   const userData = join(dir, "user-data");
   mkdirSync(userData);
   let appProcess: ChildProcess | null = null;
