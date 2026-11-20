@@ -1228,29 +1228,31 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
 
   test("F-314 F-313: a follow-up T3 Code refuses is Failed on its own call, with T3 Code's code; its thread's launch is not in the record", async () => {
     test.setTimeout(120_000);
-    const t = await hosted("T3 refused", "#t3-refused");
-    await openTask(page, "Juniper", t.title);
+    const t = await called("t3-refused", "Ready.");
     await clients.plain.terminal(t.runId);
-    const [send] = callIds(t.runId);
-    // Its result names no thread, so it joins none: a card of its own, saying what was asked,
-    // that it failed and T3 Code's reason. No thread is said to exist before the record.
-    const check = async () => {
-      const own = page.locator(`.card.action[data-call="${send}"]`);
-      await expect(own).toHaveAttribute("data-kind", "t3");
-      await expect(own.locator(":scope > summary .action-state")).toHaveText("Failed");
-      await expect(own.locator(":scope > summary")).toContainText("Couldn't follow up with");
-      await expect(own.locator(":scope > summary .action-detail")).toContainText(
-        "thread_not_sendable",
-      );
-      await expect(card(page, "t3-card")).toHaveCount(0);
-      await expect(page.getByText("started before this conversation's record")).toHaveCount(0);
-      return own;
-    };
-    await shot(await check(), "t3-refused");
-    // Reloaded, it is an ordinary failed call of its own: history does not say it was T3 Code's.
+    await openTask(page, "Juniper", t.title);
+    // Send from the open task so its viewer receives the live tool events.
+    const composer = page.getByTestId("composer-input");
+    await composer.fill("#t3-refused");
+    await composer.press("Enter");
+    const own = page.getByTestId("tool-call");
+    await expect(own).toHaveAttribute("data-kind", "t3", { timeout: 30_000 });
+    await expect(own.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(own.locator(":scope > summary")).toContainText("Couldn't follow up with");
+    await expect(own.locator(":scope > summary .action-detail")).toContainText(
+      "thread_not_sendable",
+    );
+    await expect(card(page, "t3-card")).toHaveCount(0);
+    await expect(page.getByText("started before this conversation's record")).toHaveCount(0);
+    await shot(own, "t3-refused");
+
+    const send = await own.getAttribute("data-call");
+    expect(send).toBeTruthy();
+    await inHistory(t.key, 1);
     await reload(page, "Juniper", t.title);
     const again = page.locator(`.card.action[data-call="${send}"]`);
     await expect(again.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(again).not.toHaveAttribute("data-kind", "t3");
     await expect(card(page, "t3-card")).toHaveCount(0);
   });
 
