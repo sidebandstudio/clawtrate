@@ -98,6 +98,31 @@ test.describe("message actions", () => {
     await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
   });
 
+  test("F-066: when write access goes while Reply holds the tab stop, More takes it", async ({
+    page,
+  }) => {
+    await open(page);
+    const actions = answer(page).getByTestId("message-actions");
+    await actions.getByRole("button", { name: "Add a reaction" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(actions.getByRole("button", { name: "Reply in a thread" })).toBeFocused();
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...(state.connection as object), canWrite: false },
+      }));
+    });
+    await expect(actions.getByRole("button")).toHaveCount(1);
+    await expect(actions.getByRole("button", { name: "More" })).toHaveAttribute("tabindex", "0");
+  });
+
   test("F-066: in a turn of a progress bubble and a final one, each bubble's actions act on its own message", async ({
     page,
   }) => {

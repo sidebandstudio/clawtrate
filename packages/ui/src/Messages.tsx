@@ -211,14 +211,16 @@ export function MessageActions({
   if (!env) return null;
   const messageId = message.messageId;
   const order = env.canWrite ? ["react", "reply", "more"] : ["more"];
+  // The tab stop stays on a button that is there when write access comes or goes.
+  const at = Math.min(current, order.length - 1);
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
     event.preventDefault();
-    const next = (current + (event.key === "ArrowRight" ? 1 : -1) + order.length) % order.length;
+    const next = (at + (event.key === "ArrowRight" ? 1 : -1) + order.length) % order.length;
     setCurrent(next);
     event.currentTarget.querySelectorAll<HTMLButtonElement>(":scope > button")[next]?.focus();
   };
-  const tab = (name: string) => (order.indexOf(name) === current ? 0 : -1);
+  const tab = (name: string) => (order.indexOf(name) === at ? 0 : -1);
 
   const reactEntries: MenuEntry[] = REACTIONS.map(({ emoji, name }) => ({
     kind: "item",
