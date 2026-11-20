@@ -769,11 +769,18 @@
   }
 
   // Render and events -----------------------------------------------------------
+  // What has focus, by a key that survives a render: its id, its action, or its radio value.
+  const focusKey = (el) => (el && root.contains(el) ? el.id || el.dataset.d || (el.name ? `${el.name}=${el.value}` : "") : "");
+  const byKey = (scope, key) =>
+    key ? [...scope.querySelectorAll("[id], [data-d], input[name]")].find((el) => el.id === key || el.dataset.d === key || `${el.name}=${el.value}` === key) : null;
+
   function render() {
+    const was = focusKey(document.activeElement);
     if (S.view === "vault") root.innerHTML = vaultSection();
     else if (S.view === "drafts") root.innerHTML = draftsSection();
     else root.innerHTML = conversation();
     CT.hydrate(root);
+    modal(was);
     const field = document.getElementById("secret-value");
     if (field && S.view === "secret") {
       field.addEventListener("input", () => {
@@ -804,6 +811,35 @@
           go({ s: S.s === "pending" ? "hosts" : S.s });
         }
       });
+  }
+
+  // A dialog works as the app's do: the page behind it is inert, focus stays inside, Escape is Cancel, and
+  // focus goes back to the control that opened it.
+  function modal(was) {
+    const dialog = root.querySelector("dialog");
+    if (!dialog) {
+      if (S.opener) root.querySelector(`[data-d="${S.opener}"]`)?.focus();
+      S.opener = null;
+      return;
+    }
+    const shim = dialog.parentElement;
+    for (const el of shim.parentElement.children) if (el !== shim) el.inert = true;
+    const focusable = () => [...dialog.querySelectorAll("button:not([disabled]), input:not([disabled]), a[href]")];
+    const cancel = dialog.querySelector('[data-d="disable-no"], [data-d="v-remove-no"], [data-d="v-cancel"]');
+    (byKey(dialog, was) || (dialog.dataset.kind === "confirm" ? cancel : focusable()[0]))?.focus();
+    dialog.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancel?.click();
+      }
+      if (e.key !== "Tab") return;
+      const items = focusable();
+      const edge = e.shiftKey ? items[0] : items[items.length - 1];
+      if (document.activeElement === edge) {
+        e.preventDefault();
+        (e.shiftKey ? items[items.length - 1] : items[0]).focus();
+      }
+    });
   }
 
   function clearSecret() {
@@ -957,7 +993,7 @@
       case "show-original":
         return go({ showOriginal: !S.showOriginal });
       case "disable":
-        return go({ d: "disable" });
+        return go({ d: "disable", opener: act });
       case "disable-no":
         return go({ d: "pending" });
       case "disable-yes":
@@ -997,11 +1033,11 @@
       case "to-nav":
         return go({ pane: "nav" });
       case "v-new":
-        return go({ v: "new", replacing: false, vkind: "secret" });
+        return go({ v: "new", replacing: false, vkind: "secret", opener: act });
       case "v-cancel":
         return go({ v: S.replacing ? "item" : "list", badName: false });
       case "v-replace":
-        return go({ v: "replace", replacing: true });
+        return go({ v: "replace", replacing: true, opener: act });
       case "v-save": {
         const nameField = document.getElementById("v-name");
         const name = nameField ? nameField.value.trim() : "";
@@ -1024,7 +1060,7 @@
       case "v-retry":
         return go({ v: "list" });
       case "v-remove":
-        return go({ v: "remove" });
+        return go({ v: "remove", opener: act });
       case "v-remove-no":
         return go({ v: "item" });
       case "v-remove-yes":

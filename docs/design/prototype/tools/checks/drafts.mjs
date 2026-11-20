@@ -612,6 +612,30 @@ for (const q of ["view=draft", "view=draft&d=edited"]) {
   await p.close();
 }
 
+// A confirmation keeps focus inside, takes Escape as Cancel, and returns focus to what opened it.
+for (const [q, opener] of [
+  ["view=vault&v=item", '[data-d="v-remove"]'],
+  ["view=draft", '[data-d="disable"]'],
+  ["view=vault", '[data-d="v-new"]'],
+]) {
+  p = await open(q);
+  await p.locator(opener).focus();
+  await p.keyboard.press("Enter");
+  await p.waitForTimeout(80);
+  const inside = () => p.evaluate(() => !!document.activeElement?.closest("dialog"));
+  let kept = await inside();
+  for (let i = 0; i < 8; i += 1) {
+    await p.keyboard.press(i % 3 === 2 ? "Shift+Tab" : "Tab");
+    kept = kept && (await inside());
+  }
+  await p.keyboard.press("Escape");
+  await p.waitForTimeout(80);
+  const closed = (await p.locator("dialog").count()) === 0;
+  const back = await p.evaluate((sel) => document.activeElement === document.querySelector(sel), opener);
+  check(`${q}: the dialog from ${opener} keeps focus inside, Escape cancels it, and focus returns`, kept && closed && back, JSON.stringify({ kept, closed, back }));
+  await p.close();
+}
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
