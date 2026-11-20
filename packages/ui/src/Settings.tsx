@@ -240,12 +240,9 @@ export function Settings({
       data-b="to-nav"
       aria-label="Back to settings"
       onClick={() => {
-        setPane("nav");
-        requestAnimationFrame(() =>
-          dialogRef.current
-            ?.querySelector<HTMLElement>('.b-nav-item[aria-current="page"]')
-            ?.focus(),
-        );
+        // Focus the list's item during navigation, before the next key can reach a control.
+        flushSync(() => setPane("nav"));
+        dialogRef.current?.querySelector<HTMLElement>('.b-nav-item[aria-current="page"]')?.focus();
       }}
     >
       <BackIcon />

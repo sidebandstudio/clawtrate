@@ -13,6 +13,7 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { useFocusOnCommit } from "../focus.ts";
 import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
 import { Connect, keptLabel } from "./Connect.tsx";
@@ -76,8 +77,9 @@ export function useAccountsSection({
     void bridge.send({ type: "refreshAccounts" }).catch(() => {});
   }, [bridge, refreshOnOpen]);
 
+  const focusOnCommit = useFocusOnCommit();
   const focusTitle = () =>
-    requestAnimationFrame(() => document.querySelector<HTMLElement>("#b-section-title")?.focus());
+    focusOnCommit(() => document.querySelector<HTMLElement>("#b-section-title"));
   const go = (next: Page) => {
     setPage(next);
     setEditing(false);

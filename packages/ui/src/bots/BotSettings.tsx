@@ -18,6 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { useFocusOnCommit } from "../focus.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -139,9 +140,12 @@ export function BotSettings({
     setPick(null);
   }
 
-  const focusIn = useCallback((selector: string) => {
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
-  }, []);
+  const focusOnCommit = useFocusOnCommit();
+  const focusIn = useCallback(
+    (selector: string) =>
+      focusOnCommit(() => rootRef.current?.querySelector<HTMLElement>(selector)),
+    [focusOnCommit],
+  );
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
