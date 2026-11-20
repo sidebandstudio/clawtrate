@@ -299,28 +299,32 @@ await p.close();
 // 4. The card says what this device did and what the gateway acknowledged --------------------
 
 await walk("the card: Allow, sent, the gateway accepted", "screen=card-pending", [
-  [none, null, ["Needs permission", "Allow gets your location for this request, and lets every later request for Location that reaches this iPhone get it, until you turn it off.", "This request can be answered until 5:44:30 PM."]],
+  [none, null, ["Needs permission", "Allow gets your location for this request, and lets every later request for Location that reaches this iPhone get it, until you turn it off.", "Clawtrate closes this card by 5:44:30 PM."]],
   [click("[data-ask-allow]"), "card-sent", ["This iPhone got your location and sent it at 5:44 PM; the gateway accepted the answer."]],
 ], phone);
 await walk("the card: an answer the gateway ignored says the operation ran", "screen=card-pending", [
-  [link("Allow, then the gateway ignores the answer"), "card-ignored", ["This iPhone got your location and sent it at 5:44 PM, but the gateway ignored the answer: it was no longer waiting for this request."]],
+  [link("Allow, then the gateway ignores the answer"), "card-ignored", ["This iPhone got your location and sent it at 5:44 PM. The gateway ignored this device's answer. This request set Location to Allowed."]],
 ], phone);
 await walk("the card: no acknowledgement says it couldn't confirm", "screen=card-pending", [
   [link("Allow, and no acknowledgement"), "card-unconfirmed", ["Clawtrate couldn't confirm the gateway received it."]],
 ], phone);
 await walk("the card: Don't allow, refusal accepted", "screen=card-pending", [
-  [click("[data-ask-deny]"), "card-dontallow", ["This iPhone didn't run the request and sent the refusal NOT_ALLOWED_ON_DEVICE; the gateway accepted it."]],
+  [click("[data-ask-deny]"), "card-dontallow", ["This iPhone didn't run the request and sent the refusal NOT_ALLOWED_ON_DEVICE at 5:44 PM; the gateway accepted it. This request set Location to Denied."]],
 ], phone);
 await walk("the card: Don't allow, refusal ignored", "screen=card-pending", [
-  [link("Don't allow, and the gateway ignores it"), "card-dontallow", ["The gateway ignored the refusal: it was no longer waiting."]],
+  [link("Don't allow, and the gateway ignores it"), "card-dontallow", ["sent the refusal NOT_ALLOWED_ON_DEVICE at 5:44 PM. The gateway ignored this device's answer. This request set Location to Denied."]],
 ], phone);
 await walk("the card: turned off on this iPhone while it waited", "screen=card-pending", [
   [link("Turn off Location on this iPhone"), "card-turnedoff", ["Location was turned off on this iPhone while the request waited.", "TURNED_OFF_ON_DEVICE"]],
 ], phone);
-for (const s of ["card-sent", "card-ignored", "card-unconfirmed", "card-dontallow", "card-turnedoff", "card-timedout"]) {
+for (const s of ["card-sent", "card-ignored", "card-unconfirmed", "card-dontallow", "card-turnedoff", "card-stopped", "card-timedout", "card-cap"]) {
   p = await open(`screen=${s}`, phone);
   const t = await text(p);
   check(`${s}: never says what a caller received, never "Resumed"`, !/was told|Resumed|reached Otto|Otto got/.test(t));
+  check(`${s}: the result line is in absolute words: a clock time, no relative time, no standing claim about the app`, await p.evaluate(() => {
+    const w = document.querySelector("[data-words]").textContent;
+    return (/\b\d{1,2}:\d{2} PM\b/.test(w) || /turned off on this iPhone|stopped answering/.test(w)) && !/\b(seconds?|minutes?) (ago|left|from now)\b|from now on|stays Denied|still not decided|no longer waiting/.test(w);
+  }));
   check(`${s}: the resolved card is folded and holds the request and Raw`, await p.evaluate(() => {
     const d = document.querySelector('.d-ask[data-state="resolved"]');
     return d && !d.open && !!d.querySelector(".d-raw") && d.textContent.includes("location.get");
@@ -339,7 +343,15 @@ check("the card is a region named for its request, and does not take focus", awa
 }));
 await p.close();
 p = await open("screen=mac-on&history=1");
-check("records: each says what this device did, what it sent and what the gateway acknowledged", await p.evaluate(() => [...document.querySelectorAll(".d-record")].every((r) => r.querySelector("[data-did]").textContent && r.querySelector("[data-sent]").textContent && r.querySelector("[data-ack]").textContent)));
+check("records: each says what this device did and what it sent; an acknowledgement only for something sent", await p.evaluate(() => [...document.querySelectorAll(".d-record")].every((r) => {
+  const sent = r.querySelector("[data-sent]").textContent;
+  return r.querySelector("[data-did]").textContent && sent && (sent === "Sent nothing." ? !r.querySelector("[data-ack]") : !!r.querySelector("[data-ack]")?.textContent);
+})));
+check("records: a call the gateway timed out after it reached this Mac is kept, with what was sent and the ignored answer", !missing(await text(p, '[data-record="r4"]'), ["Ran it.", "Sent the result.", "The gateway ignored this device's answer."]));
+check("records: a refusal's Raw holds its own request and the code and sentence actually sent", await p.evaluate(() => {
+  const raw = document.querySelector('[data-record="r2"] .d-raw code').textContent;
+  return raw.includes('"command": "reminders.list"') && raw.includes('"code": "NOT_ALLOWED_ON_DEVICE"') && raw.includes("Reminders is not allowed on Studio Mac.");
+}));
 check("records: an automatic refusal with no card is kept", (await text(p, ".d-records")).includes("Didn't run it: Reminders is Denied on this Mac."));
 check("records: never name who asked", !/Otto asked|Otto wants|was told/.test(await text(p, ".d-records")));
 await p.close();
@@ -347,10 +359,10 @@ await p.close();
 // 5. One timing rule; one card per request; the 61-minute route -----------------------------
 
 await walk("timed out: no Allow on the card; the app's row is the route, and changes the permission only", "screen=card-pending", [
-  [link("The deadline passes"), "card-timedout", ["Timed out at 5:44 PM. This iPhone didn't run the request, and Location is still not decided."]],
+  [link("The deadline passes"), "card-timedout", ["Timed out at 5:44 PM. This iPhone didn't run it. No permission was set by this request."]],
   [async (p) => check("timed out: the card offers no Allow", (await p.locator("[data-ask-allow]").count()) === 0), null],
   [link("Location in This iPhone"), "phone-on"],
-  [async (p) => check("This iPhone lists the timed-out request: didn't run it, sent nothing", (await text(p, '[data-record="t1"]')).includes("Timed out. Didn't run it.") && (await text(p, '[data-record="t1"]')).includes("Sent nothing.")), null],
+  [async (p) => check("This iPhone lists the timed-out request: didn't run it, sent nothing", (await text(p, '[data-record="t1"]')).includes("Timed out at 5:44 PM. Didn't run it.") && (await text(p, '[data-record="t1"]')).includes("Sent nothing.") && (await p.locator('[data-record="t1"] [data-ack]').count()) === 0), null],
   [click('[data-allow="location"]'), "phone-on"],
   [async (p) => check("at 61 minutes, Allow on the row: Location Allowed, the request still closed, nothing sent", (await row(p, "location").getAttribute("data-local")) === "allowed" && (await text(p, '[data-record="t1"]')).includes("Didn't run it.") && (await text(p, '[data-record="t1"]')).includes("Sent nothing.")), null],
 ], phone);
@@ -377,6 +389,32 @@ for (const [first, other] of [["c41d", "e7a0"], ["e7a0", "c41d"]]) {
     await q.close();
   }
 }
+// The local decision limit: a shorter budget, and the five-minute cap with each acknowledgement.
+p = await open("screen=card-pending&budget=short", phone);
+check("a 12-second budget: the card closes by its own local limit", (await text(p, ".d-ask-foot")) === "Clawtrate closes this card by 5:44:12 PM.");
+await p.close();
+for (const [ack, link_, words] of [
+  ["accepted", "Five minutes pass; the refusal is accepted", "sent NO_ANSWER_ON_DEVICE; the gateway accepted it."],
+  ["ignored", "Five minutes pass; the refusal is ignored", "sent NO_ANSWER_ON_DEVICE. The gateway ignored this device's answer."],
+  ["none", "Five minutes pass; no acknowledgement", "sent NO_ANSWER_ON_DEVICE. Clawtrate couldn't confirm the gateway received it."],
+]) {
+  await walk(`a 10-minute budget: the five-minute cap comes first, NO_ANSWER_ON_DEVICE attempted, acknowledgement ${ack}`, "screen=card-pending&budget=cap", [
+    [none, null, ["Clawtrate closes this card by 5:49:00 PM."]],
+    [link(link_), "card-cap", ["No answer by 5:49 PM, this iPhone's five-minute limit.", words, "No permission was set by this request."]],
+  ], phone);
+}
+p = await open("screen=card-pending&second=1", phone);
+await p.locator('[data-card="c41d"] [data-ask-allow]').click();
+await at(p, "card-pending");
+await p.locator('[data-card="e7a0"] [data-ask-allow]').click();
+await at(p, "card-pending");
+check("two Allows: only the first says it set Location to Allowed", (await text(p, '[data-card="c41d"] [data-words]')).includes("This request set Location to Allowed.") && !(await text(p, '[data-card="e7a0"] [data-words]')).includes("This request set Location"));
+await p.close();
+p = await open("screen=mac-stopped");
+check("after Stop: a confirmed cancellation, an unconfirmed one and a demonstrated effect, each in its own words", !missing(await text(p, ".d-records"), ["Started it. Stopped the operation: Calendar confirmed it.", "Started it. Clawtrate couldn't confirm whether it stopped.", "Sent the message before Stop."]));
+check("after Stop: the node stopped and an app turned off are separate records", (await text(p, '[data-record="s4"]')).includes("Didn't run it: Clawtrate stopped answering on this Mac.") && (await text(p, '[data-record="s5"]')).includes("Didn't run it: Messages was turned off on this Mac."));
+check("\"Stopped the operation\" only where the cancellation was confirmed", await p.evaluate(() => [...document.querySelectorAll(".d-record [data-did]")].filter((d) => d.textContent.includes("Stopped the operation")).every((d) => d.textContent.includes("confirmed it"))));
+await p.close();
 p = await open("screen=card-settings", phone);
 check("turned off in Settings: Open Settings, no Allow", (await text(p)).includes("Open Settings") && (await p.locator("[data-ask-allow]").count()) === 0);
 await p.close();
@@ -577,7 +615,7 @@ await p.close();
 p = await open("screen=mac-request");
 check("a request that named no task: in Requests to this device, with the banner", !missing(await text(p), ["A request for Calendar on this Mac", "Requests to this device", "The request names no task."]));
 await p.locator("[data-ask-allow]").click();
-check("that request allowed: said in place with what the gateway acknowledged", (await at(p, "mac-request")) && (await text(p)).includes("the gateway accepted the answer. Calendar is allowed from now on."));
+check("that request allowed: said in place with what the gateway acknowledged", (await at(p, "mac-request")) && (await text(p)).includes("the gateway accepted the answer. This request set Calendar to Allowed."));
 await p.close();
 
 // Every state, at desktop and phone width, light and dark ------------------------------------

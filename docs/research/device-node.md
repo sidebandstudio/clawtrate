@@ -252,7 +252,7 @@ node.describe after it left: {"connected":false,"lastSeenReason":"connect","appr
 writer echo, node offline: {"ok":false,"ms":89,"error":"node not connected","code":"UNAVAILABLE","details":{"code":"NOT_CONNECTED","nodeError":{"code":"NOT_CONNECTED","message":"node not connected"},"nodeCommandDispatched":false}}
 ```
 
-- **The request** carries the time left (`timeoutMs`), 30 000 ms when the caller gave none. Its builder also sets `sessionKey` when the caller passed one (`buildNodeInvokeRequest`, `<openclaw>/dist/node-invoke-request-NMUgqchA.mjs` line 3); the published `NodeInvokeRequestEvent` (`schema`) does not list it. A bot's `nodes` tool passes its task's key only for the raw `invoke` action, not for `location_get` and the other named actions (`<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs`, `executeNodeCommandAction`). So the node knows which task asked only sometimes. **Source.**
+- **The request** carries the time left (`timeoutMs`), 30 000 ms when the caller gave none. Its builder also sets `sessionKey` when the caller passed one (`buildNodeInvokeRequest`, `<openclaw>/dist/node-invoke-request-NMUgqchA.mjs` line 3); the published `NodeInvokeRequestEvent` (`schema`) does not list it. A bot's `nodes` tool passes its task's key only for the raw `invoke` action, not for `location_get` and the other named actions (`<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs`, `executeNodeCommandAction`). So the node can sometimes read the task key the caller supplied. **Source.**
 - **A refusal** reaches the caller as `"<code>: <message>"`, the node's own words, with `nodeCommandDispatched: true`. The schema bounds neither (`NodeInvokeResultParams.error`, `schema`), so the words are whatever the node writes.
 - **No answer** ends the call at the caller's limit, `TIMEOUT`. **An answer after it** is acknowledged to the node as `{"ok":true,"ignored":true}` and reaches no one ("late invoke result ignored", `nodes-BW91tb1K.mjs` line 470).
 - **A node not connected**: the gateway tries to wake it, then answers `NOT_CONNECTED` with `nodeCommandDispatched: false` (line 814).
@@ -318,7 +318,7 @@ the waiting call ended: {"ok":false,"ms":1107,"error":"node pairing changed whil
 the node connects again: {"code":"NOT_PAIRED","details":{"code":"PAIRING_REQUIRED","reason":"role-upgrade","requestedRole":"node","approvedRoles":["operator"], …}}
 ```
 
-- Removing an allowlist entry stops the gateway at once: the waiting call ends, the node's answer is ignored, later calls are refused, and the node's surface reads back without the command. It cannot undo what the node already did with the request it received (`nodeCommandDispatched: true`).
+- In this live run an applied allowlist removal ended a dispatched call, without undoing the node's work: the waiting call ended, the node's answer was ignored, later calls were refused, and the node's surface read back without the command. It cannot undo what the node already did with the request it received (`nodeCommandDispatched: true`).
 - Removing the node needs admin: a caller without it, even the node's own device, is refused (`node.pair.remove`, `nodes-BW91tb1K.mjs` line 1211, `role-management-requires-admin`). The device keeps its other roles, and the node connecting again asks for the role afresh.
 - The node can always refuse by itself, at once, whatever the gateway allows.
 

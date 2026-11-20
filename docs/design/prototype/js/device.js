@@ -259,9 +259,14 @@
   };
 
   // Requests to this device: one record per request received.
+  // A record: the operation, its local send attempt and what the gateway acknowledged. "Sent nothing" has no
+  // acknowledgement. Raw holds the request's own ID and parameters, and for a refusal the code and sentence sent.
   const record = (r) =>
     `<li class="d-record" data-record="${r.id}"><p class="d-record-head"><b>${r.when}</b> · ${r.app} · <code>${r.command}</code></p>` +
-    `<p>${r.named}</p><p data-did>${r.did}</p><p data-sent>${r.sent}</p><p data-ack>${r.ack}</p></li>`;
+    `<p>${r.named}</p><p data-did>${r.did}</p><p data-sent>${r.code ? `Sent <code>${r.code}</code>.` : r.sent}</p>${r.ack ? `<p data-ack>${r.ack}</p>` : ""}` +
+    `<details class="d-raw"><summary>Raw</summary><pre><code>${esc(
+      JSON.stringify({ id: `${r.id}7f…`, command: r.command, paramsJSON: r.params || "{}", ...(r.code ? { sent: { ok: false, error: { code: r.code, message: r.sentence } } } : {}) }, null, 1),
+    )}</code></pre></details></li>`;
   const records = (phone, rows) =>
     `<h4 class="b-group">Requests to this device</h4>` +
     (rows.length
@@ -274,9 +279,19 @@
         ? `The request names a task this ${phoneScreen ? "iPhone" : "Mac"} doesn't list (<code>agent:otto:dashboard:5b1e…</code>). This ${phoneScreen ? "iPhone" : "Mac"} can't confirm who sent it.`
         : `The request names no task. This ${phoneScreen ? "iPhone" : "Mac"} can't confirm who sent it.`;
   const MAC_RECORDS = [
-    { id: "r1", when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
-    { id: "r2", when: "5:12 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this Mac.", sent: "Sent <code>NOT_ALLOWED_ON_DEVICE</code>.", ack: "The gateway accepted it." },
-    { id: "r3", when: "4:58 PM", app: "Calendar", command: "calendar.events", named: named("other"), did: "Timed out. Didn't run it.", sent: "Sent nothing.", ack: "—" },
+    { id: "r1", when: "5:44 PM", app: "Location", command: "location.get", params: '{"desiredAccuracy":"balanced"}', named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
+    { id: "r2", when: "5:12 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this Mac.", code: "NOT_ALLOWED_ON_DEVICE", sentence: `Reminders is not allowed on ${MAC}.`, ack: "The gateway accepted it." },
+    { id: "r3", when: "4:58 PM", app: "Calendar", command: "calendar.events", params: '{"from":"2026-11-21"}', named: named("other"), did: "Timed out at 4:58 PM. Didn't run it.", sent: "Sent nothing." },
+    // The gateway's own timer ended this call after it reached this Mac: the record stays.
+    { id: "r4", when: "4:40 PM", app: "Location", command: "location.get", params: '{"desiredAccuracy":"precise"}', named: named("none"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway ignored this device's answer." },
+  ];
+  // What Stop and Turn off left in the records: each from its own evidence.
+  const STOP_RECORDS = [
+    { id: "s1", when: "5:39 PM", app: "Calendar", command: "calendar.events", named: named("none"), did: "Started it. Stopped the operation: Calendar confirmed it.", sent: "Sent nothing." },
+    { id: "s2", when: "5:39 PM", app: "Location", command: "location.get", named: named("listed"), did: "Started it. Clawtrate couldn't confirm whether it stopped.", sent: "Sent nothing." },
+    { id: "s3", when: "5:38 PM", app: "Messages", command: "clawtrate.messages.send", named: named("listed"), did: "Sent the message before Stop.", sent: "Sent the result.", ack: "Clawtrate couldn't confirm the gateway received it." },
+    { id: "s4", when: "5:38 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Clawtrate stopped answering on this Mac.", code: "TURNED_OFF_ON_DEVICE", sentence: `Reminders was turned off on ${MAC} before the request was run.`, ack: "The gateway accepted it." },
+    { id: "s5", when: "5:30 PM", app: "Messages", command: "clawtrate.messages.read", named: named("none"), did: "Didn't run it: Messages was turned off on this Mac.", code: "TURNED_OFF_ON_DEVICE", sentence: `Messages was turned off on ${MAC} before the request was run.`, ack: "The gateway accepted it." },
   ];
 
   // The page once the node is on.
@@ -501,7 +516,7 @@
     },
 
     "mac-stop": () => settings({ title: "This Mac", body: onPage() }) + stopDialog(false),
-    "mac-stopped": () => settings({ title: "This Mac", body: offPage({ after: stoppedNote(false) }) }),
+    "mac-stopped": () => settings({ title: "This Mac", body: offPage({ after: stoppedNote(false) + records(false, STOP_RECORDS) }) }),
 
     "mac-offline": () =>
       settings({
@@ -526,12 +541,12 @@
         body:
           `<div class="d-banner" role="status">${icon("warning")}<span>A request for Calendar on this Mac</span></div>` +
           (st === "allowed"
-            ? resolvedCard({ tag: "Allowed", tone: "accent", line: "A request for Calendar", words: "Allowed. This Mac read your calendar's events and sent them at 5:44 PM; the gateway accepted the answer. Calendar is allowed from now on.", cmd: "calendar.events", p: '{"from":"2026-11-21","to":"2026-11-22"}', kind: "none" })
+            ? resolvedCard({ tag: "Allowed", tone: "accent", line: "A request for Calendar", words: "Allowed. This Mac read your calendar's events and sent them at 5:44 PM; the gateway accepted the answer. This request set Calendar to Allowed.", cmd: "calendar.events", p: '{"from":"2026-11-21","to":"2026-11-22"}', kind: "none" })
             : askCard({
                 title: "Calendar requested on this Mac",
                 kind: "none",
                 scope: "Allow reads your calendar's events for this request, and lets every later request for Calendar that reaches this Mac read them, until you turn it off.",
-                foot: "This request can be answered until 5:44:30 PM.",
+                foot: "Clawtrate closes this card by 5:44:30 PM.",
                 allowTo: go("mac-request", { ask: "allowed", said: "Calendar allowed" }),
                 denyTo: go("mac-on", { off: withId("off", "calendar"), said: "Calendar denied" }),
                 cmd: "calendar.events",
@@ -639,8 +654,8 @@
   // Two fixed request records, keyed by their own invocation IDs. Each card renders from its own
   // record (its ID, task key, parameters, budget and outcome); a control updates only its own ID.
   const REQS = {
-    c41d: { id: "c41d…", line: "Location requested", title: "Location requested on this iPhone", p: '{"desiredAccuracy":"balanced"}', accuracy: "balanced", timeoutMs: 30000, foot: "This request can be answered until 5:44:30 PM." },
-    e7a0: { id: "e7a0…", line: "Location requested again", title: "Location requested on this iPhone again", p: '{"desiredAccuracy":"precise"}', accuracy: "precise", timeoutMs: 70000, foot: "This request can be answered until 5:45:10 PM." },
+    c41d: { id: "c41d…", line: "Location requested", title: "Location requested on this iPhone", p: '{"desiredAccuracy":"balanced"}', accuracy: "balanced", timeoutMs: 30000, foot: "Clawtrate closes this card by 5:44:30 PM." },
+    e7a0: { id: "e7a0…", line: "Location requested again", title: "Location requested on this iPhone again", p: '{"desiredAccuracy":"precise"}', accuracy: "precise", timeoutMs: 70000, foot: "Clawtrate closes this card by 5:45:10 PM." },
   };
   const raw = (cmd, p, kind, req = REQS.c41d) =>
     `<details class="d-raw"><summary>Raw</summary><pre><code>${esc(
@@ -684,7 +699,7 @@
   const LOC = {
     title: "Location requested on this iPhone",
     scope: "Allow gets your location for this request, and lets every later request for Location that reaches this iPhone get it, until you turn it off.",
-    foot: "This request can be answered until 5:44:30 PM.",
+    foot: "Clawtrate closes this card by 5:44:30 PM.",
     cmd: "location.get",
     p: '{"desiredAccuracy":"balanced"}',
   };
@@ -694,34 +709,45 @@
     const from = params.get("from");
     return [
       ...(from === "timedout"
-        ? [{ id: "t1", when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Timed out. Didn't run it.", sent: "Sent nothing.", ack: "—" }]
+        ? [{ id: "t1", when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Timed out at 5:44 PM. Didn't run it. No permission was set by this request.", sent: "Sent nothing." }]
         : []),
       ...(history ? [{ id: "p1", when: "5:20 PM", app: "Calendar", command: "calendar.events", named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
-      { id: "p2", when: "5:02 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this iPhone.", sent: "Sent <code>NOT_ALLOWED_ON_DEVICE</code>.", ack: "The gateway ignored it: it was no longer waiting." }] : []),
+      { id: "p2", when: "5:02 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this iPhone.", code: "NOT_ALLOWED_ON_DEVICE", sentence: `Reminders is not allowed on ${PHONE}.`, ack: "The gateway ignored this device's answer." }] : []),
     ];
   };
 
   // What a card that was answered says, from its own record.
+  // "This request set Location to …" only when this request actually changed the grant; the current grant stays on the app's row.
+  const setBy = (value, changed = true) => (changed ? ` This request set Location to ${value}.` : "");
   const OUTCOME = {
-    allowed: (r) => ({ tag: "Allowed", tone: "accent", line: r.line, words: `Allowed. This iPhone got your location and sent it at 5:44 PM; the gateway accepted the answer. Location is allowed from now on.` }),
-    denied: (r) => ({ tag: "Not allowed", line: r.line, words: "Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code>; the gateway accepted it. Location stays Denied until you change it." }),
+    allowed: (r, changed) => ({ req: r, tag: "Allowed", tone: "accent", line: r.line, words: `Allowed. This iPhone got your location and sent it at 5:44 PM; the gateway accepted the answer.${setBy("Allowed", changed)}` }),
+    denied: (r, changed) => ({ req: r, tag: "Not allowed", line: r.line, words: `Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code> at 5:44 PM; the gateway accepted it.${setBy("Denied", changed)}` }),
   };
 
   Object.assign(SCREENS, {
     // second=1: two requests, each its own record; done=<id>:<outcome>,… holds what each card's own control did.
     "card-pending": () => {
       const two = params.get("second") === "1";
+      // budget=short: 12 seconds left on arrival; budget=cap: 10 minutes, so this device's five-minute cap comes first.
+      const budget = params.get("budget");
       const ids = two ? ["c41d", "e7a0"] : ["c41d"];
       const done = Object.fromEntries(list("done").map((x) => x.split(":")));
+      // In the order answered: an answer changes the grant only when it differs from the one before it.
+      const changed = {};
+      list("done").reduce((grant, x) => {
+        const [k, v] = x.split(":");
+        changed[k] = v !== grant;
+        return v;
+      }, "undecided");
       const withOutcome = (id, v) => [...ids.filter((k) => done[k] && k !== id).map((k) => `${k}:${done[k]}`), `${id}:${v}`].join(",");
       const cards = ids
         .map((id) => {
           const r = REQS[id];
-          if (OUTCOME[done[id]]) return resolvedCard({ req: r, ...OUTCOME[done[id]](r) });
+          if (OUTCOME[done[id]]) return resolvedCard(OUTCOME[done[id]](r, changed[id]));
           return askCard({
             ...LOC,
             title: r.title,
-            foot: r.foot,
+            foot: budget === "short" ? "Clawtrate closes this card by 5:44:12 PM." : budget === "cap" ? "Clawtrate closes this card by 5:49:00 PM." : r.foot,
             p: r.p,
             req: r,
             kind: taskKind(),
@@ -734,20 +760,27 @@
         cards +
           (two
             ? ""
-            : proto(
+            : budget === "cap"
+              ? proto(
+                  link("Five minutes pass; the refusal is accepted", go("card-cap", { ack: "accepted" })),
+                  link("Five minutes pass; the refusal is ignored", go("card-cap", { ack: "ignored" })),
+                  link("Five minutes pass; no acknowledgement", go("card-cap", { ack: "none" })),
+                )
+              : proto(
                 link("The deadline passes", go("card-timedout")),
                 link("Allow, then the gateway ignores the answer", go("card-ignored")),
                 link("Allow, and no acknowledgement", go("card-unconfirmed")),
                 link("Turn off Location on this iPhone", go("card-turnedoff")),
                 link("Don't allow, and the gateway ignores it", go("card-dontallow", { ack: "ignored" })),
+                link("Clawtrate stops answering on this iPhone", go("card-stopped")),
               )),
       );
     },
     "card-sent": () => cardPlace(resolvedCard(OUTCOME.allowed(REQS.c41d))),
     "card-ignored": () =>
-      cardPlace(resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM, but the gateway ignored the answer: it was no longer waiting for this request. Location is allowed from now on." })),
+      cardPlace(resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM. The gateway ignored this device's answer. This request set Location to Allowed." })),
     "card-unconfirmed": () =>
-      cardPlace(resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM. Clawtrate couldn't confirm the gateway received it. Location is allowed from now on." })),
+      cardPlace(resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM. Clawtrate couldn't confirm the gateway received it. This request set Location to Allowed." })),
     "card-dontallow": () =>
       cardPlace(
         resolvedCard({
@@ -755,8 +788,8 @@
           line: "Location requested",
           words:
             params.get("ack") === "ignored"
-              ? "Not allowed. This iPhone didn't run the request. The gateway ignored the refusal: it was no longer waiting. Location stays Denied until you change it."
-              : "Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code>; the gateway accepted it. Location stays Denied until you change it.",
+              ? "Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code> at 5:44 PM. The gateway ignored this device's answer. This request set Location to Denied."
+              : "Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code> at 5:44 PM; the gateway accepted it. This request set Location to Denied.",
         }),
       ),
     "card-turnedoff": () =>
@@ -767,8 +800,30 @@
           words: "Location was turned off on this iPhone while the request waited. This iPhone didn't run it and sent the refusal <code>TURNED_OFF_ON_DEVICE</code>; the gateway accepted it.",
         }),
       ),
+    "card-stopped": () =>
+      cardPlace(
+        resolvedCard({
+          tag: "Stopped",
+          line: "Location requested",
+          words: "Clawtrate stopped answering on this iPhone. This iPhone didn't run it and sent the refusal <code>TURNED_OFF_ON_DEVICE</code>; the gateway accepted it.",
+        }),
+      ),
     "card-timedout": () =>
-      cardPlace(resolvedCard({ tag: "Timed out", line: "Location requested", words: "Timed out at 5:44 PM. This iPhone didn't run the request, and Location is still not decided.", extra: later })),
+      cardPlace(resolvedCard({ tag: "Timed out", line: "Location requested", words: "Timed out at 5:44 PM. This iPhone didn't run it. No permission was set by this request. Sent nothing.", extra: later })),
+    // The five-minute cap came first for a 10-minute budget: NO_ANSWER_ON_DEVICE attempted, its acknowledgement as it came.
+    "card-cap": () => {
+      const ack = params.get("ack");
+      const said =
+        ack === "ignored" ? " The gateway ignored this device's answer." : ack === "none" ? " Clawtrate couldn't confirm the gateway received it." : "; the gateway accepted it.";
+      return cardPlace(
+        resolvedCard({
+          tag: "Timed out",
+          line: "Location requested",
+          words: `No answer by 5:49 PM, this iPhone's five-minute limit. This iPhone didn't run it and sent <code>NO_ANSWER_ON_DEVICE</code>${ack === "ignored" || ack === "none" ? "." : ""}${said} No permission was set by this request.`,
+          extra: later,
+        }),
+      );
+    },
     "card-settings": () =>
       cardPlace(
         `<section class="card d-ask" data-state="pending" role="region" aria-label="Location is turned off for Clawtrate. Needs permission.">` +
