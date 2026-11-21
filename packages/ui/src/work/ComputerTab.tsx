@@ -128,7 +128,10 @@ export function ComputerTab(props: ComputerTabProps) {
     () =>
       transcript?.runs
         .flatMap((run) => run.steps)
-        .filter((step) => step.toolName === "browser" && step.status !== "running").length ?? 0,
+        .filter(
+          (step) =>
+            step.toolName === "browser" && step.status !== "running" && step.status !== "waiting",
+        ).length ?? 0,
     [transcript],
   );
   useEffect(() => {
@@ -342,7 +345,12 @@ export function ComputerTab(props: ComputerTabProps) {
           age={picture}
           onClose={() => {
             setFull(false);
-            requestAnimationFrame(() => openRef.current?.focus());
+            requestAnimationFrame(() =>
+              (openRef.current?.isConnected
+                ? openRef.current
+                : document.getElementById("work-tab-computer")
+              )?.focus(),
+            );
           }}
           onTake={take}
           onWatch={watch}
@@ -426,6 +434,8 @@ function StuckLine({
   onStop: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Nothing to stop: the confirmation closes, and a run started later needs it opened again.
+  if (confirming && !canStop) setConfirming(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -721,11 +731,16 @@ function Tile({
         className="screen computer-dark"
         data-state="live"
         data-picture={picture.kind}
-        role="img"
-        aria-label={`${name}'s browser, ${pictureWords(picture).toLowerCase()}: ${title}`}
         data-testid="computer-tile"
       >
-        <canvas ref={showOn} className="screen-canvas" data-frame={view.frame} />
+        {/* The picture alone is the image: its buttons stay buttons for assistive technology. */}
+        <canvas
+          ref={showOn}
+          className="screen-canvas"
+          data-frame={view.frame}
+          role="img"
+          aria-label={`${name}'s browser, ${pictureWords(picture).toLowerCase()}: ${title}`}
+        />
         <span className="screen-live" data-picture={picture.kind}>
           {pictureWords(picture)}
         </span>
@@ -904,7 +919,8 @@ function MachineSection({
   const target = transcript ? approvalTarget(transcript) : null;
   const ran = transcript ? commandsRanOn(transcript) : null;
   const named = [target?.nodeId, ran?.nodeId].filter((each): each is string => !!each);
-  const namedKey = named.join(",");
+  // Kept by a key the memo can compare: one id a line, as an id may hold a comma but no line break.
+  const namedKey = named.join("\n");
   const [facts, setFacts] = useState<MachineFacts | null>(null);
   const [lastGood, setLastGood] = useState<Record<string, { record: NodeRecord; at: number }>>({});
   const [checking, setChecking] = useState(false);
@@ -916,7 +932,7 @@ function MachineSection({
       bridge.invoke({
         type: "readMachine",
         key: taskKey,
-        nodes: namedKey ? namedKey.split(",") : [],
+        nodes: namedKey ? namedKey.split("\n") : [],
         probe,
       }),
     [bridge, taskKey, namedKey],

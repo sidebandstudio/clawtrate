@@ -13,6 +13,7 @@ import {
   fullView,
   openFull,
   OTTO_COMPUTER,
+  painted,
   take,
   tileReady,
   watch,
@@ -270,7 +271,11 @@ test.describe("the full view on the desktop", () => {
     await expect(badge).toHaveText("Live");
     await page.clock.setFixedTime(new Date(NOW.getTime() + 12_000));
     await expect(badge).toHaveText("Last picture, 12 s ago");
-    await expect(computerPanel(page).getByTestId("computer-tile")).toHaveAccessibleName(
+    const tile = computerPanel(page).getByTestId("computer-tile");
+    // Only the picture is the image: the tile's buttons are not inside it.
+    await expect(tile.locator("[role=img] button")).toHaveCount(0);
+    await expect(tile.getByRole("button", { name: "Stop watching" })).toBeVisible();
+    await expect(tile.getByRole("img")).toHaveAccessibleName(
       /^Juniper's browser, last picture, 12 s ago: /,
     );
     expect((await pane(page))?.view?.status).toBe("live");
@@ -671,14 +676,7 @@ test.describe("closing edits", () => {
     // The view of the new tab: its title, and its picture.
     await expect(fullView(page).locator(".viewer-title")).toContainText("Lending apps");
     await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
-    await expect
-      .poll(() =>
-        fullView(page)
-          .locator("canvas")
-          .evaluate((canvas: HTMLCanvasElement) => canvas.width)
-          .catch(() => 0),
-      )
-      .toBeGreaterThan(0);
+    await painted(fullView(page).locator("canvas"));
     await take(page);
     await expect(controlBar(page)).toContainText("You have control");
     expect(await sentOf(page, "computerTake")).toHaveLength(1);
