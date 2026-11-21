@@ -20,3 +20,12 @@ declare class URL {
   readonly hostname: string;
   toString(): string;
 }
+
+/** For the relay channel (`@clawtrate/relay-protocol`): its text is strict UTF-8. */
+declare class TextEncoder {
+  encode(input?: string): Uint8Array;
+}
+declare class TextDecoder {
+  constructor(label?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
+  decode(input?: Uint8Array): string;
+}

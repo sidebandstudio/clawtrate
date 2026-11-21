@@ -10,6 +10,8 @@ Source: https://github.com/pingdotgg/t3code, commit `18d1c4db`. Licence: MIT.
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `packages/relay-protocol/src/register-proof.ts`       | `packages/shared/src/dpop.ts`, `infra/relay/src/auth/DpopProofs.ts`                            |
 | `packages/relay-protocol/test/register-proof.test.ts` | `packages/shared/src/dpop.test.ts`, `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts` |
+| `packages/core/src/relay/reconnect.ts`                | `packages/client-runtime/src/connection/supervisor.ts`                                         |
+| `packages/core/test/relay-reconnect.test.ts`          | `packages/client-runtime/src/connection/supervisor.test.ts`                                    |
 
 ```
 MIT License

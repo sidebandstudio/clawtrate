@@ -57,6 +57,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/relay/code.ts:CODE_KEYS": "static, the seven fields of a relay code",
+  "packages/core/src/relay/code.ts:SETUP_KEYS": "static, the three fields of a setup code",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",

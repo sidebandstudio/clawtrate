@@ -1,4 +1,12 @@
-export { fromBase64Url, secureRandomBytes, toBase64Url, type RandomBytes } from "./bytes.ts";
+export {
+  fromBase64Url,
+  secureRandomBytes,
+  toBase64Url,
+  utf8Decode,
+  utf8Encode,
+  type RandomBytes,
+} from "./bytes.ts";
+export { readFlatObject, type FlatValue } from "./json.ts";
 export {
   Admission,
   channelPrologue,

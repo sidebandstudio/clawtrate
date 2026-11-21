@@ -123,6 +123,17 @@ import {
   type WorkspacePage,
 } from "./files.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
+import { fromBase64Url, toBase64Url } from "@clawtrate/relay-protocol";
+import type { RelayCode } from "./relay/code.ts";
+import {
+  checkRelayRoute,
+  relayRouteAddress,
+  relayRouteKey,
+  type RelayRoute,
+  type RelayRouteOptions,
+} from "./relay/route.ts";
+import { isPermanentRelayClose, RelaySocket } from "./relay/socket.ts";
+import { RelayReconnectPolicy } from "./relay/reconnect.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -461,11 +472,22 @@ const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
 
+/** What a route's device token is kept under: its URL, or a relay route's connector key. */
+function routeKey(settings: ConnectionSettings): string {
+  return settings.relay ? relayRouteKey(settings.relay.route) : settings.url;
+}
+
 export type ConnectionSettings = {
   url: string;
   token: string | null;
   /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
   suspended?: boolean;
+  /**
+   * A route through Clawtrate's relay. `url` is then its address (`relayRouteAddress`), and its
+   * device token is kept under the connector's key (`relayRouteKey`). `enroll` is the pairing
+   * code's enrollment secret, base64url, until a connector admits this device with it.
+   */
+  relay?: { route: RelayRoute; enroll: string | null };
 };
 
 export type ConnectOptions = { url: string; token?: string | null };
@@ -1018,7 +1040,16 @@ export class ClawtrateClient {
   /** The gateway saved from an earlier run, if any. */
   async savedSettings(): Promise<ConnectionSettings | null> {
     const raw = await this.host.storage.get(SETTINGS_KEY);
-    return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
+    if (!raw) return null;
+    const settings = JSON.parse(raw) as ConnectionSettings;
+    if (settings.relay !== undefined) {
+      // A relay route is used only as it was checked: its address is its route's, always.
+      const route = checkRelayRoute(settings.relay.route, this.relayRouteOptions());
+      if (settings.url !== relayRouteAddress(route)) {
+        throw new Error("The saved relay route does not match its address.");
+      }
+    }
+    return settings;
   }
 
   /** Written first: settings the host could not save are never the ones in use. */
@@ -1059,6 +1090,30 @@ export class ClawtrateClient {
       return;
     }
     if (this.settings) await this.open();
+  }
+
+  /**
+   * Connect to a gateway through Clawtrate's relay, with a pairing code `parseRelayCode` read.
+   * The code's bootstrap token is the gateway token until this device is paired, and its
+   * enrollment secret is kept until a connector admits this device with it.
+   */
+  async connectRelay(code: RelayCode): Promise<void> {
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      if (!this.host.relay) throw new Error("This device does not connect through a relay.");
+      const route = checkRelayRoute(code.route, this.relayRouteOptions());
+      const url = relayRouteAddress(route);
+      if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      const switched = this.settings?.url !== url;
+      await this.saveSettings({
+        url,
+        token: code.bootstrapToken,
+        relay: { route, enroll: toBase64Url(code.enroll) },
+      });
+      if (switched) this.abandonAccessRequest("Switched to another gateway.");
+      this.pairingSeen = null;
+      if (stops === this.stops) await this.open();
+    });
   }
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
@@ -1348,6 +1403,7 @@ export class ClawtrateClient {
     const url = this.settings?.url;
     const auth = this.auth;
     if (this.scopeUpgrade || !protocol || !identity || !url || !auth || auth.url !== url) return;
+    const route = routeKey(this.settings!);
     const generation = this.generation;
     const tier = this.upgradeTier;
     const target = this.upgradeTarget();
@@ -1369,7 +1425,7 @@ export class ClawtrateClient {
           }
           const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
           const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
-          await this.writeToken(url, deviceId, role, {
+          await this.writeToken(route, deviceId, role, {
             token,
             grantedScopes: scopes,
             heldScopes: [
@@ -5007,7 +5063,8 @@ export class ClawtrateClient {
       return;
     }
 
-    const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
+    const route = routeKey(settings);
+    const stored = await this.loadToken(route, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
@@ -5041,7 +5098,7 @@ export class ClawtrateClient {
           ),
     }));
 
-    const tokenStore = this.connectionTokenStore(settings.url, generation);
+    const tokenStore = this.connectionTokenStore(settings, generation);
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => {
         const loaded = await this.loadIdentity();
@@ -5060,6 +5117,8 @@ export class ClawtrateClient {
       mode: CLIENT_MODE,
     } as const;
     const reconnect = this.options.reconnect ?? { initialMs: 1000, maxMs: 30_000 };
+    // A relay route waits as its own policy says, and stops when the connector refuses this device.
+    const relayPolicy = settings.relay ? new RelayReconnectPolicy() : null;
 
     this.protocol = new GatewayProtocolClient<Plan>({
       createSocket: (handlers) => {
@@ -5083,8 +5142,14 @@ export class ClawtrateClient {
         this.attemptGreeted = false;
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
-        const socket = this.host.createWebSocket(settings.url);
-        socket.onopen = () => handlers.open();
+        const socket = settings.relay
+          ? this.relaySocket(settings, generation)
+          : this.host.createWebSocket(settings.url);
+        socket.onopen = () => {
+          // A relay socket opens only once the connector has admitted this device.
+          relayPolicy?.opened(this.now());
+          handlers.open();
+        };
         socket.onmessage = (event) => handlers.message(String(event.data));
         socket.onclose = (event) => handlers.close(event.code, event.reason);
         socket.onerror = () => handlers.error(new Error("WebSocket error"));
@@ -5096,7 +5161,7 @@ export class ClawtrateClient {
       },
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
-        const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        const token = await this.loadToken(route, identity.deviceId, "operator");
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = token ? null : settings.token;
         // Exactly the scopes this client means to hold, never what the token happens to allow.
@@ -5105,7 +5170,12 @@ export class ClawtrateClient {
           client,
           role: "operator",
           defaultScopes: requested,
-          ...(bootstrap ? { token: bootstrap } : {}),
+          // A relay route's code carries a setup code's bootstrap token, not the shared token.
+          ...(bootstrap
+            ? settings.relay
+              ? { bootstrapToken: bootstrap }
+              : { token: bootstrap }
+            : {}),
           nonce,
           challengeTs: challengeTs ?? null,
         });
@@ -5139,7 +5209,7 @@ export class ClawtrateClient {
           // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
           const paired =
             Boolean(hello.auth.deviceToken) ||
-            (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
+            (await this.loadToken(route, identity.deviceId, "operator")) !== null;
           if (!paired) return;
           try {
             await this.saveSettings({ ...current, token: null });
@@ -5175,15 +5245,53 @@ export class ClawtrateClient {
       },
       onConnectFailure: async (error) =>
         this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore),
-      resolveClose: (context) => ({
-        retry: true,
-        notify: true,
-        ...(context.connectFailure?.reconnectDelayMs !== undefined
-          ? { reconnectDelayMs: context.connectFailure.reconnectDelayMs }
-          : {}),
-      }),
-      onClose: () => {
+      resolveClose: (context) => {
+        const failureDelay = context.connectFailure?.reconnectDelayMs;
+        if (relayPolicy) {
+          const decision = relayPolicy.failed(
+            isPermanentRelayClose(context.code)
+              ? "permanent"
+              : failureDelay !== undefined
+                ? "approval-pending"
+                : "transient",
+            this.now(),
+          );
+          if (!decision.retry) return { retry: false, notify: true };
+          // The gateway's own wait (the pairing retry) stays as it is.
+          return { retry: true, notify: true, reconnectDelayMs: failureDelay ?? decision.delayMs };
+        }
+        return {
+          retry: true,
+          notify: true,
+          ...(failureDelay !== undefined ? { reconnectDelayMs: failureDelay } : {}),
+        };
+      },
+      onClose: (context) => {
         if (generation !== this.generation) return;
+        if (relayPolicy?.stopped) {
+          // The connector refused this device: nothing retries until the person acts.
+          this.epoch += 1;
+          this.streams.clear();
+          this.accounts.onClose();
+          this.invalidateCheckIns();
+          this.routines.onClose();
+          this.usage.onClose();
+          this.rejectAccessWaiters(new Error(`The connection stopped: ${context.reason}`));
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            canWrite: false,
+            canAnswer: false,
+            canApprove: false,
+            canAdmin: false,
+            error: {
+              code: "RELAY_REFUSED",
+              message: context.reason,
+              hint: "Scan a new pairing code made on the gateway's computer.",
+            },
+          });
+          return;
+        }
         this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
@@ -6493,11 +6601,11 @@ export class ClawtrateClient {
   }
 
   private async loadToken(
-    url: string,
+    route: string,
     deviceId: string,
     role: string,
   ): Promise<StoredDeviceToken | null> {
-    const raw = await this.host.storage.get(this.tokenKey(url, deviceId, role));
+    const raw = await this.host.storage.get(this.tokenKey(route, deviceId, role));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
@@ -6518,21 +6626,64 @@ export class ClawtrateClient {
   }
 
   private async writeToken(
-    url: string,
+    route: string,
     deviceId: string,
     role: string,
     record: StoredDeviceToken,
   ): Promise<void> {
-    await this.host.storage.set(this.tokenKey(url, deviceId, role), JSON.stringify(record));
+    await this.host.storage.set(this.tokenKey(route, deviceId, role), JSON.stringify(record));
+  }
+
+  private relayRouteOptions(): RelayRouteOptions {
+    return this.host.relay?.allowLoopbackWs === true ? { allowLoopbackWs: true } : {};
+  }
+
+  /**
+   * The socket for a relay route: the gateway's protocol inside an end-to-end channel to the
+   * connector whose key the route pins. Once a connector admits this device with the pairing
+   * code's enrollment secret, the secret is dropped, as the bootstrap token is after hello.
+   */
+  private relaySocket(settings: ConnectionSettings, generation: number): RelaySocket {
+    const relay = this.host.relay;
+    // The settings as they are now: a retry after the admission no longer has the secret.
+    const stored = (this.settings?.url === settings.url ? this.settings : settings).relay!;
+    if (!relay) throw new Error("This device does not connect through a relay.");
+    const enroll = stored.enroll === null ? null : fromBase64Url(stored.enroll);
+    const socket = new RelaySocket({
+      route: stored.route,
+      staticKey: relay.loadStaticKey(),
+      enroll,
+      createTransport: relay.createTransport,
+      ...(relay.budget ? { budget: relay.budget } : {}),
+      ...(relay.clock ? { clock: relay.clock } : {}),
+      onAdmitted: () => {
+        void this.changeConnection(async () => {
+          const current = this.settings;
+          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!current.relay?.enroll) return;
+          try {
+            await this.saveSettings({ ...current, relay: { ...current.relay, enroll: null } });
+          } catch {
+            // Kept: the connector knows this device now, so a later attempt does not need it.
+            this.log("warn", "Could not remove the relay pairing secret from this device.");
+          }
+        });
+      },
+    });
+    enroll?.fill(0);
+    return socket;
   }
 
   private tokenParams(deviceId: string) {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
-  private tokenKey(url: string, deviceId: string, role: string): string {
-    return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+  /**
+   * Device tokens are scoped to one route (`routeKey`): a gateway's URL, or a relay route's
+   * connector key. A token is never offered to another.
+   */
+  private tokenKey(route: string, deviceId: string, role: string): string {
+    return `deviceToken:${encodeURIComponent(route)}:${deviceId}:${role}`;
   }
 
   /**
@@ -6540,13 +6691,18 @@ export class ClawtrateClient {
    * and a write is dropped once that connection is no longer current, checked
    * after every wait, so a late write can never land after a switch.
    */
-  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
+  private connectionTokenStore(
+    settings: ConnectionSettings,
+    generation: number,
+  ): GatewayBrowserDeviceTokenStore {
+    const url = settings.url;
+    const route = routeKey(settings);
     const current = () => generation === this.generation && this.settings?.url === url;
     return {
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
-        const record = await this.loadToken(url, deviceId, role);
+        const record = await this.loadToken(route, deviceId, role);
         if (!record) return null;
         return {
           token: record.token,
@@ -6555,9 +6711,9 @@ export class ClawtrateClient {
       },
       store: async ({ deviceId, role, token, scopes }) => {
         if (!current()) return;
-        const existing = await this.loadToken(url, deviceId, role);
+        const existing = await this.loadToken(route, deviceId, role);
         if (!current()) return;
-        await this.writeToken(url, deviceId, role, {
+        await this.writeToken(route, deviceId, role, {
           token,
           grantedScopes: scopes,
           heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
@@ -6567,7 +6723,7 @@ export class ClawtrateClient {
       },
       clear: async ({ deviceId, role }) => {
         if (!current()) return;
-        await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+        await this.host.storage.delete(this.tokenKey(route, deviceId, role));
       },
     };
   }

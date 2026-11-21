@@ -92,3 +92,38 @@ export {
   type MemoryFile,
   type MemoryList,
 } from "./memory.ts";
+export {
+  checkRelayRoute,
+  relayDialUrl,
+  relayRouteAddress,
+  relayRouteKey,
+  type RelayRoute,
+  type RelayRouteOptions,
+} from "./relay/route.ts";
+export {
+  encodeRelayCode,
+  MAX_RELAY_CODE_CHARS,
+  MAX_RELAY_CODE_LIFETIME_MS,
+  parseRelayCode,
+  RelayCodeError,
+  type RelayCode,
+  type RelayCodeErrorCode,
+  type RelayCodeFields,
+} from "./relay/code.ts";
+export {
+  DEFAULT_RELAY_RECEIVE_BUDGET,
+  isPermanentRelayClose,
+  RELAY_CLOSE,
+  RELAY_OPEN_TIMEOUT_MS,
+  RelaySocket,
+  type RelaySocketOptions,
+  type RelayTimers,
+  type RelayTransport,
+  type RelayTransportFactory,
+} from "./relay/socket.ts";
+export {
+  RelayReconnectPolicy,
+  retryDelayMs,
+  type RelayFailure,
+  type RetryDecision,
+} from "./relay/reconnect.ts";
