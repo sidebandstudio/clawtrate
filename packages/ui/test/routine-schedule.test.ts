@@ -33,6 +33,7 @@ const routine = (over: Partial<Routine> = {}): Routine => ({
   schedule: schedule({ expr: "0 8 * * 1-5", tz: NY }),
   payload: "agentTurn",
   text: "",
+  textCut: false,
   target: "isolated",
   delivery: "none",
   deliveryChannel: null,
