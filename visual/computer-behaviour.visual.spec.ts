@@ -44,6 +44,18 @@ const pane = (page: Page) =>
 test.describe("the full view on the desktop", () => {
   test.use(contextFor(WIDE, "light"));
 
+  test("F-142: the picture fits the stage and is never drawn larger than the page's own size", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    await openFull(page);
+    const width = await fullView(page)
+      .getByTestId("screen-frame")
+      .evaluate((el) => el.getBoundingClientRect().width);
+    expect(width).toBeLessThanOrEqual(1280);
+    expect(width).toBeGreaterThan(1000);
+  });
+
   test("F-142: nothing is drawn until Watch; Escape in Watching closes the full view, focus returns to Open, and watching continues", async ({
     page,
   }) => {
@@ -663,11 +675,12 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
       "You have control" +
         "Juniper's new browser actions are paused. Something it already started can still change this page.",
     );
+    // The picture itself, not its box with the gutters.
     await expect
       .poll(() =>
         fullView(page)
-          .locator(".screen-zoom-inner")
-          .evaluate((el) => el.clientWidth),
+          .locator(".screen-zoom-inner .screen-frame")
+          .evaluate((el) => el.getBoundingClientRect().width),
       )
       .toBe(1280);
     expect(fitted).toBeLessThan(400);

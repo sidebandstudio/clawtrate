@@ -301,6 +301,8 @@ export function ScreenView(props: ScreenViewProps) {
       data-testid="screen-frame"
       data-page-width={view?.width ?? undefined}
       data-page-height={view?.height ?? undefined}
+      // Fitted to smaller stages, never larger than the page's own size.
+      style={!phone && view?.width ? { maxWidth: view.width } : undefined}
       onClick={onClick}
       onPaste={onPaste}
     >
@@ -779,7 +781,8 @@ function PhoneLayout(
       )}
       <div className="screen-stage">
         <div className="screen-zoom" ref={zoomRef} data-level={zoom}>
-          <div className="screen-zoom-inner" style={{ width }}>
+          {/* The picture is `width` wide: its 8 px margins each side are outside it. */}
+          <div className="screen-zoom-inner" style={{ width: width + 16 }}>
             {props.picture}
           </div>
         </div>
