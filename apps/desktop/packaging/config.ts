@@ -9,11 +9,10 @@ import { FuseV1Options, FuseVersion, type FuseV1Config } from "@electron/fuses";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
-import { APP_ID } from "../src/main/identity.ts";
+import { APP_ID, PRODUCT_NAME } from "../src/main/identity.ts";
 import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
 
-export { APP_ID, macSigningRequested, type Env };
-export const PRODUCT_NAME = "Clawtrate";
+export { APP_ID, macSigningRequested, PRODUCT_NAME, type Env };
 
 /**
  * Electron fuses, flipped in the binary at package time. The packaged app has

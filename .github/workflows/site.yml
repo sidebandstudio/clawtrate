@@ -12,8 +12,15 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      # The assembler and every file it loads (apps/desktop/test/site-workflow.test.ts).
       - "apps/desktop/packaging/site-feed.ts"
       - "apps/desktop/packaging/beta-files.ts"
+      - "apps/desktop/packaging/feed.ts"
+      - "apps/desktop/packaging/update-defines.ts"
+      - "apps/desktop/src/main/identity.ts"
+      - "apps/desktop/src/main/update/address.ts"
+      - "apps/desktop/src/main/update/feed.ts"
+      - "apps/desktop/src/main/update/version.ts"
       - ".github/workflows/site.yml"
   release:
     types: [published, unpublished, edited, deleted]
@@ -40,6 +47,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      # Node alone: the assembler loads no package, so nothing is installed.
       - name: Copy the site, add the Beta feed and fill the download page
         env:
           GITHUB_TOKEN: ${{ github.token }}
