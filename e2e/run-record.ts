@@ -62,7 +62,13 @@ export function readRecord(path: string): RunRecord | null {
         (entry) =>
           (entry?.name === `e2e-${record.run}` ||
             entry?.name === `e2e-${record.run}-other` ||
-            entry?.name === `e2e-${record.run}-acct`) &&
+            entry?.name === `e2e-${record.run}-acct` ||
+            // The setup checks' own instance, recorded by e2e/setup.spec.ts.
+            entry?.name === `e2e-${record.run}-setup` ||
+            // The approval checks' own (setup §9): e2e/approve-readback.engine.spec.ts, and
+            // apps/desktop/test/ssh/approve-readback-route.test.ts over the test's own sshd.
+            entry?.name === `e2e-${record.run}-approve` ||
+            entry?.name === `e2e-${record.run}-approve-ssh`) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),
       ) &&
@@ -76,9 +82,20 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */
+/**
+ * The short temporary folder of macOS, where a test whose Unix sockets must
+ * have short paths makes its folder (apps/desktop/test/ssh/harness.ts `tempDir`).
+ */
+const SHORT_TEMP = process.platform === "darwin" ? "/private/tmp" : null;
+
+/**
+ * A temporary folder a run may have created: directly in the system temp
+ * folder, or macOS's short one, with our prefix.
+ */
 export const isRunTempDir = (dir: unknown): dir is string =>
-  typeof dir === "string" && dirname(dir) === tmpdir() && basename(dir).startsWith(TEMP_PREFIX);
+  typeof dir === "string" &&
+  (dirname(dir) === tmpdir() || (SHORT_TEMP !== null && dirname(dir) === SHORT_TEMP)) &&
+  basename(dir).startsWith(TEMP_PREFIX);
 
 /**
  * Remove everything a record lists, synchronously, so it also works from a

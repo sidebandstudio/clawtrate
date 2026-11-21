@@ -2,10 +2,10 @@
 // Runners and preview hosts are `sleep` stand-ins; instance resets are recorded,
 // never run. Every folder is created here and removed here.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   cleanUp,
   readRecord,
@@ -15,17 +15,19 @@ import {
   TEMP_PREFIX,
   type RunRecord,
 } from "../../../e2e/run-record.ts";
-import { newRunId, processIdentity, processState, type Identify } from "../src/state-guard.ts";
+import {
+  newRunId,
+  processIdentity,
+  processState,
+  psIdentity,
+  type Identify,
+} from "../src/state-guard.ts";
 import { children, deadProcess, liveProcess, stopChildren, tempDir } from "./fixtures.ts";
 
 const made: string[] = [];
 afterAll(() => {
   stopChildren();
   for (const dir of made) rmSync(dir, { recursive: true, force: true });
-});
-const realPath = process.env.PATH;
-afterEach(() => {
-  process.env.PATH = realPath;
 });
 
 const own = (dir: string) => (made.push(dir), dir);
@@ -62,11 +64,12 @@ function aRun(runner: { pid: number; identity: string }, host: RunRecord["host"]
   };
 }
 
-function brokenPs(script: string): void {
+/** A process lookup whose `ps` misbehaves as `script` says. */
+function brokenPs(script: string): Identify {
   const dir = own(tempDir("clawtrate-ps-"));
   writeFileSync(join(dir, "ps"), `#!/bin/sh\n${script}\n`);
   chmodSync(join(dir, "ps"), 0o755);
-  process.env.PATH = `${dir}:${realPath}`;
+  return psIdentity([join(dir, "ps")]);
 }
 
 describe("recovering interrupted end-to-end runs (B2)", () => {
@@ -84,9 +87,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
   ] as const) {
     it(`leaves a live run alone when ${what}, and says so`, () => {
       const run = aRun(liveProcess());
-      brokenPs(script);
-      recoverDeadRuns(run.records, run.reset, run.log);
-      process.env.PATH = realPath;
+      recoverDeadRuns(run.records, run.reset, run.log, brokenPs(script));
       expect(run.kept()).toBe(true);
       expect(run.resets).toEqual([]);
       expect(run.lines.join("\n")).toMatch(
@@ -140,6 +141,45 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     recoverDeadRuns(run.records, run.reset, run.log);
     expect(run.gone()).toBe(true);
   });
+
+  it("recovers the setup checks' own instance, named for its run", () => {
+    const run = aRun(deadProcess());
+    run.record.instances.push({ name: `e2e-${run.record.run}-setup`, runId: newRunId() });
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))?.instances).toContainEqual(
+      expect.objectContaining({ name: `e2e-${run.record.run}-setup` }),
+    );
+  });
+
+  it("recovers the approval checks' own instances, named for their run", () => {
+    const run = aRun(deadProcess());
+    for (const suffix of ["approve", "approve-ssh"])
+      run.record.instances.push({ name: `e2e-${run.record.run}-${suffix}`, runId: newRunId() });
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))).not.toBeNull();
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(run.resets.map((line) => line.split(" ")[0])).toEqual(
+      expect.arrayContaining([
+        `e2e-${run.record.run}-approve`,
+        `e2e-${run.record.run}-approve-ssh`,
+      ]),
+    );
+    expect(run.gone()).toBe(true);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "recovers a folder of the run's in macOS's short temporary folder, and no other there",
+    () => {
+      const run = aRun(deadProcess());
+      const short = own(realpathSync(mkdtempSync(join("/tmp", TEMP_PREFIX))));
+      const other = own(realpathSync(mkdtempSync(join("/tmp", "clawtrate-not-e2e-"))));
+      run.record.dirs.push(short, other);
+      saveRecord(run.records, run.record);
+      recoverDeadRuns(run.records, run.reset, run.log);
+      expect(existsSync(short)).toBe(false);
+      expect(existsSync(other)).toBe(true);
+    },
+  );
 
   it("leaves alone a record that names instances other than its run's own", () => {
     const run = aRun(deadProcess());

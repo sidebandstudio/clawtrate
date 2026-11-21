@@ -1,4 +1,4 @@
-import type { ConnectionError, HostInfo } from "@clawtrate/core";
+import { isApprovalDisconnect, type ConnectionError, type HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
@@ -99,7 +99,21 @@ export function App({
   else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
     setMismatch(null);
   }
-  const screen = mismatch ? "connect" : screenFor(state);
+  // Connected through setup opens the app only once the bots were read (docs/design/setup.md §7).
+  // After an approval Clawtrate couldn't confirm, "Look again" and "Review" open the route's own
+  // look (§9, §6): its screens show while that look is under way or shown.
+  const approvalLook =
+    info.setup !== undefined &&
+    isApprovalDisconnect(state.connection.error?.code) &&
+    state.setup !== undefined &&
+    state.setup.phase !== "idle" &&
+    state.setup.phase !== "done";
+  const setupHolds =
+    info.setup !== undefined &&
+    (approvalLook ||
+      state.setup?.phase === "connecting" ||
+      (state.setup?.phase === "failed" && state.setup.failure?.kind === "bots"));
+  const screen = mismatch || setupHolds ? "connect" : screenFor(state);
   // When one screen replaces another and takes focus with it, focus the first
   // control of the new one. Not on launch: nothing had focus to lose.
   const shown = useRef(screen);
@@ -123,6 +137,7 @@ export function App({
           accounts={state.accounts}
           checkIns={state.checkIns}
           bots={state.bots}
+          route={state.setup?.route ?? null}
           updateReading={updated}
           initialUpdates={openUpdates}
           onClose={closeSettings}
@@ -147,6 +162,7 @@ export function App({
           connection={state.connection}
           discovery={state.discovery}
           info={info}
+          setup={state.setup}
           mismatch={mismatch}
           inert={settingsOpen}
         />
