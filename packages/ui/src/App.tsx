@@ -4,6 +4,7 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
+import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { showUpdateFooter } from "./Updates.tsx";
@@ -123,6 +124,7 @@ export function App({
           accounts={state.accounts}
           checkIns={state.checkIns}
           bots={state.bots}
+          waitingMessages={restartWaitingMessages(state)}
           updateReading={updated}
           initialUpdates={openUpdates}
           onClose={closeSettings}

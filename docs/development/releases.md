@@ -16,7 +16,7 @@ The owner has authorized publishing Mac betas. The track reads "Beta" in the app
   - `APPLE_CLAWTRATE_NOTARY_ISSUER_ID`: the issuer ID shown above the keys in App Store Connect.
 - **GitHub**: `gh` signed in as someone who may create releases in `sidebandstudio/clawtrate` and start its workflows: Contents and Actions write access. `gh auth login` gives both; a fine-grained token needs both, or `--publish` and `--withdraw` change the release and then cannot start the Site workflow. Pages is on, with GitHub Actions as its source and `clawtrate.dev` as its custom domain, so the Site workflow can deploy. The `github-pages` environment allows deployments from the `main` branch only, with no tag rule: a tag rule would let anyone who can push a `v*` tag deploy that tag's own copy of the workflow, which is weaker than requiring a merge to `main`. So a release event does not deploy the site; the release commands start the Site workflow on `main` themselves. That workflow is the site's only deploy. It deploys nothing until `site/index.html` is on `main` and a beta is published, while a `__CLAWTRATE_…__` template token is left, or while `site/install.sh` pins the placeholder `APPLE_CLAWTRATE_TEAM_ID` or another team than the beta's. Before the first beta, put the Developer ID team in `CLAWTRATE_TEAM_ID` in `site/install.sh`.
 - **The Mac**: Xcode's command line tools (`codesign`, `spctl`, `xcrun stapler`, `notarytool`), Node 26 and pnpm, and Apple's Developer ID intermediate certificate (Xcode installs it; otherwise it is at [Apple's certificate authority](https://www.apple.com/certificateauthority/)).
-- **The app**: an update installs in place only from a Developer ID build that has the install step (#202, on `main`) and the Restart screen (#204). A beta cut before #204 is on `main` still checks and downloads its successor, but cannot restart into it.
+- **The app**: an update installs in place only from a Developer ID build that has the install step (#202) and the Restart screen (#204), both on `main`, so every beta has them.
 
 ### Cut a beta
 
@@ -72,7 +72,7 @@ Use the command preparation printed. It publishes only what was prepared, and:
 5. downloads every file back through its public address and compares its size and SHA-512 with the record;
 6. starts the Site workflow on `main` (`gh workflow run site.yml --ref main`), only once GitHub lists the release as public and every public file matches, and waits up to 15 minutes for `https://clawtrate.dev/updates/beta/feed.json` to serve the new feed. Pages can cache the old feed for up to ten minutes. If the workflow cannot be started, or the wait ends, the script says so: look at the Site workflow's run on `main`, start it there by hand if needed, and check the feed.
 
-A beta on the Beta track then finds it with Check for Updates in Settings → Updates and downloads it when the person chooses. Restart installs it once #204 is on `main`; #202, the install step, is. New installs come from the site: the download link, or the install script, which reads `latest-mac.json`.
+A beta on the Beta track then finds it with Check for Updates in Settings → Updates and downloads it when the person chooses. Restart to Update installs it once the person confirms (#202 and #204, both on `main`). New installs come from the site: the download link, or the install script, which reads `latest-mac.json`.
 
 ### Withdraw a beta
 
@@ -96,7 +96,7 @@ The tests and the unsigned launch check show the release files, the redirect rul
 
 ## Release candidates
 
-**In-place installation is on `main` (#202); the Restart screen (#204) is not yet.** Keep Stable and Windows closed until #204 is on `main` and the signed upgrade trial passes on all three systems. The Mac beta above is published with the owner's authorization, and its first two signed builds are its trial.
+**In-place installation (#202) and the Restart screen (#204) are on `main`.** Keep Stable and Windows closed until the signed upgrade trial passes on all three systems. The Mac beta above is published with the owner's authorization, and its first two signed builds are its trial.
 
 ## Make a candidate
 
