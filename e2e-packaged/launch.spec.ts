@@ -33,6 +33,7 @@ import { recordSuccessor } from "../e2e/run-record.ts";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { appEnv, debuggingPort } from "./desktop-driver.ts";
+import { quitWithin } from "./quit.ts";
 import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
   integrityLevels,
@@ -503,21 +504,26 @@ test("opens with the same pairing and tasks after a newer build takes its place"
 
   // Quit the running app as an update does, and wait for it and its helpers,
   // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
-  // Asked while the debugging client is attached, as the teardown asks.
-  process.kill(APP_PID, "SIGTERM");
-  await browser.close();
-  await expect
-    .poll(
-      () => {
-        // The runner that started the app reaps it; until then `ps` shows a zombie.
-        const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
-          encoding: "utf8",
-        }).stdout.trim();
-        return state && !state.startsWith("Z") ? `running (${state})` : "gone";
-      },
-      { timeout: 15_000, message: "the app quits within 15 seconds, as an update asks it" },
-    )
-    .toBe("gone");
+  // Asked while the debugging client is attached, as the teardown asks; the
+  // 15 seconds start at SIGTERM, and closing that client runs alongside.
+  const firstGone = async () => {
+    for (const end = Date.now() + 20_000; Date.now() < end; await sleep(100)) {
+      // The runner that started the app reaps it; until then `ps` shows a zombie.
+      const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
+        encoding: "utf8",
+      }).stdout.trim();
+      if (!state || state.startsWith("Z")) return;
+    }
+    await new Promise(() => undefined);
+  };
+  const firstQuit = await quitWithin(
+    () => process.kill(APP_PID, "SIGTERM"),
+    firstGone,
+    () => browser.close(),
+    15_000,
+  );
+  expect(firstQuit, "the app quits within 15 seconds, as an update asks it").toBe(true);
+  // From the app's exit: its helpers' own 10 seconds.
   await expect
     .poll(() => processesUsing(USER_DATA), {
       timeout: 10_000,
@@ -582,9 +588,17 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   } finally {
     // Asked to quit while the debugging client is still attached, as the first
     // app was: a SIGTERM right after that client leaves was seen to go unanswered.
-    if (next.exitCode === null && next.signalCode === null) next.kill("SIGTERM");
-    await second?.close();
-    const outcome = await Promise.race([exited, sleep(15_000).then(() => "running")]);
+    // The 15 seconds start at SIGTERM; closing the client runs alongside.
+    const quit =
+      next.exitCode !== null || next.signalCode !== null
+        ? (await second?.close(), true)
+        : await quitWithin(
+            () => next.kill("SIGTERM"),
+            () => exited,
+            async () => second?.close(),
+            15_000,
+          );
+    const outcome = quit ? "exited" : "running";
     if (outcome === "running") {
       // Ended by its PID, and its helpers by theirs: nothing outlives the test.
       next.kill("SIGKILL");
