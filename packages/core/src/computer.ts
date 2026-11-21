@@ -1667,8 +1667,8 @@ export class ComputerViews {
       answerQueued: lease.answer !== null,
       outOfSight: options.leaving === true || pane.control.outOfSight,
     });
-    if (live.renewTimer) clearTimeout(live.renewTimer);
-    live.renewTimer = null;
+    // The lease is no longer renewed; a view still open is, while the release is on its way.
+    this.reschedule(live);
     const notConfirmed = () => {
       if (live.lease !== lease || lease.sequence !== sequence) return;
       // A refusal does not prove the device still holds control: ownership is not confirmed.

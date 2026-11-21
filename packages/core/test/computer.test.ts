@@ -1955,3 +1955,36 @@ describe("lease recovery across a task switch (F-150, section 18)", () => {
     });
   });
 });
+
+describe("a release on its way (F-145, section 18)", () => {
+  it("F-145: the view goes on being renewed while a slow release is on its way, the lease no longer", async () => {
+    vi.useFakeTimers();
+    const h = harness({
+      "clawtrate-computer.view.open": () => ({
+        streamId: "stream-1",
+        wsPath: `/clawtrate-computer/stream?ticket=${TICKET}`,
+        expiresAtMs: Date.now() + 60_000,
+        renewWithinMs: 6_000,
+        targetId: TAB,
+      }),
+      "clawtrate-computer.view.renew": (p) => ({
+        ok: true,
+        renewWithinMs: 6_000,
+        streamRenewed: p.streamId === "stream-1",
+        leaseRenewed: p.generation === GEN,
+      }),
+      "clawtrate-computer.control.release": () => never(),
+    });
+    await granted(h);
+    h.views.release(h.viewer, {});
+    expect(h.pane().control.status).toBe("releasing");
+    const before = h.calls("clawtrate-computer.view.renew").length;
+    await vi.advanceTimersByTimeAsync(7_000);
+    const renewals = h.calls("clawtrate-computer.view.renew").slice(before);
+    expect(renewals.length).toBeGreaterThan(1);
+    expect(renewals.every((p) => p.streamId === "stream-1" && p.generation === undefined)).toBe(
+      true,
+    );
+    expect(h.pane().view?.status).toBe("live");
+  });
+});
