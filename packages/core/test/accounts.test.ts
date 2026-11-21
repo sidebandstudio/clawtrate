@@ -27,7 +27,8 @@ import {
   type ClawtrateState,
 } from "../src/index.ts";
 import { createBridgeSession } from "../src/bridge.ts";
-import { HELD_KEY } from "../src/accounts-engine.ts";
+import { AccountsEngine, HELD_KEY, type AccountsContext } from "../src/accounts-engine.ts";
+import { initialAccountsState } from "../src/accounts.ts";
 import {
   HELD_BOT_CHARS,
   MAX_HELD_BOTS,
@@ -473,6 +474,7 @@ describe("creating a bot: the one Create sequence (bots.md section 3, controls.m
       status: "confirmed",
       restrictive: true,
       saved: "ask",
+      missingDeny: [],
       reported: "guarded",
       retryable: false,
     });
@@ -730,7 +732,7 @@ describe("creating a bot: the one Create sequence (bots.md section 3, controls.m
     ["no workspace", "none"],
   ] as const) {
     it(`F-034: an entry with ${why} is not taken for the bot Create made: step 3 isn't written`, async () => {
-      const { client, fake, accounts } = await accountsClient();
+      const { client, fake, accounts, storage } = await accountsClient();
       let replaceAt = 1;
       const patch = fake.gateway.handlers["config.patch"]!;
       fake.gateway.handlers["config.patch"] = (params) => {
@@ -742,18 +744,21 @@ describe("creating a bot: the one Create sequence (bots.md section 3, controls.m
         }
         return answer;
       };
-      const settled = client.createBot({ ...viral });
-      if (change === "none") await expect(settled).rejects.toThrow(/changed on the gateway/);
-      else await settled;
+      // Its entry isn't the one Clawtrate wrote: nothing more goes, no record of its account, no
+      // task, no Write it again, and the person is sent to review the bots.
+      await expect(client.createBot({ ...viral })).rejects.toThrow(/changed on the gateway/);
       expect(fake.gateway.calls("config.patch")).toHaveLength(1);
       expect(fake.gateway.calls("sessions.create")).toEqual([]);
+      expect(fake.gateway.calls("users.prefs.set")).toEqual([]);
+      expect(accounts().creation).toMatchObject({ status: "unconfirmed" });
       if (change === "same") {
-        // Its entry isn't the one Clawtrate wrote: held, and Write it again isn't offered.
+        // The same name and workspace: maybe the same bot changed, so it stays held.
         expect(note(accounts())).toMatchObject({ status: "restrictive", retryable: false });
-        expect(client.state.accounts.policies).toHaveLength(1);
+        expect(JSON.parse(storage.data.get(HELD_KEY)!)).toHaveLength(1);
+        await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
         await expect(client.retryBotPolicy("viral")).rejects.toThrow(/can't identify/);
-        expect(fake.gateway.calls("config.patch")).toHaveLength(1);
       } else expect(note(accounts())).toBeNull();
+      expect(fake.gateway.calls("config.patch")).toHaveLength(1);
       client.stop();
     });
   }
@@ -852,16 +857,16 @@ describe("a new bot's Create, bound to its gateway and held until its setting re
 
   it("F-034: a change of gateway after Create's reply: nothing more is sent, on either gateway, and nothing is shown on the other", async () => {
     const { client, fake, storage } = await accountsClient();
-    // The record of the new bot is being kept when the gateway changes.
+    // The first read of the config after Create's reply is under way when the gateway changes.
     const keeping = deferred<unknown>();
     let kept = false;
-    const set = storage.set;
-    storage.set = async (key, value) => {
-      if (key === HELD_KEY && !kept) {
+    const get = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      if (fake.gateway.calls("agents.create").length === 1 && !kept) {
         kept = true;
         await keeping.promise;
       }
-      return set(key, value);
+      return get(params);
     };
     const made = client.createBot({ ...viral });
     await until(() => kept);
@@ -1183,6 +1188,536 @@ describe("a new bot's Create, bound to its gateway and held until its setting re
   });
 });
 
+describe("after Create: who the bot is, what holds it and what a read settles", () => {
+  const held = (storage: { data: Map<string, string> }) =>
+    (
+      JSON.parse(storage.data.get(HELD_KEY) ?? "[]") as Array<{ made: { botId: string } | null }>
+    ).map((each) => each.made?.botId ?? null);
+  const engine = (client: ClawtrateClient) =>
+    (
+      client as unknown as {
+        accounts: { held: Map<string, unknown>; dropNote: (botId: string) => void };
+      }
+    ).accounts;
+  const mode = (answer: unknown, botId = "viral") =>
+    (
+      (answer as { config: { agents: { entries: Record<string, Entry> } } }).config.agents.entries[
+        botId
+      ]?.tools as { exec?: { mode?: string } } | undefined
+    )?.exec?.mode;
+  const mutations = (fake: AccountsGateway) => ({
+    create: fake.gateway.calls("agents.create").length,
+    patch: fake.gateway.calls("config.patch").length,
+    prefs: fake.gateway.calls("users.prefs.set").length,
+    task: fake.gateway.calls("sessions.create").length,
+  });
+
+  for (const [between, at] of [
+    ["step 2 and step 3", "step2"],
+    ["step 3 and the record of its account", "step3"],
+    ["the record of its account and its first task", "prefs"],
+  ] as const) {
+    it(`F-034: a bot made again with the same name and workspace between ${between} is lost: nothing more is sent, it stays held, and Review bots is offered`, async () => {
+      const { client, fake, accounts, storage } = await accountsClient();
+      let replaced = false;
+      const replace = () => {
+        replaced = true;
+        entries(fake).viral = { name: "Viral", workspace: "/w/viral" };
+        fake.revision += 1;
+      };
+      const get = fake.gateway.handlers["config.get"]!;
+      fake.gateway.handlers["config.get"] = (params) => {
+        const answer = get(params);
+        // Just after a read shows the write before the replacement.
+        if (!replaced && mode(answer) === (at === "step2" ? "deny" : "ask") && at !== "prefs")
+          replace();
+        return answer;
+      };
+      const set = fake.gateway.handlers["users.prefs.set"]!;
+      fake.gateway.handlers["users.prefs.set"] = (params) => {
+        const answer = set(params);
+        if (!replaced && at === "prefs") replace();
+        return answer;
+      };
+      await expect(client.createBot({ ...viral })).rejects.toThrow(/changed on the gateway/);
+      expect(mutations(fake)).toEqual({
+        create: 1,
+        patch: at === "step2" ? 1 : 2,
+        prefs: at === "prefs" ? 1 : 0,
+        task: 0,
+      });
+      expect(entries(fake).viral).toEqual({ name: "Viral", workspace: "/w/viral" });
+      expect(accounts().creation).toMatchObject({ status: "unconfirmed" });
+      // Held, without Write it again: no message or task reaches the replacement.
+      expect(note(accounts())).toMatchObject({ status: "unconfirmed", retryable: false });
+      expect(held(storage)).toEqual(["viral"]);
+      await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
+      await expect(client.retryBotPolicy("viral")).rejects.toThrow(/can't identify/);
+      expect(mutations(fake).patch).toBe(at === "step2" ? 1 : 2);
+      client.stop();
+    });
+  }
+
+  it("F-034: Write it again for a bot whose entry changed since the note was read is lost: nothing is written, and it stays held", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    expect(note(accounts())).toMatchObject({ status: "restrictive", retryable: true });
+    entries(fake).viral!.thinkingDefault = "high";
+    fake.revision += 1;
+    await expect(client.retryBotPolicy("viral")).rejects.toThrow(/can't identify/);
+    expect(fake.gateway.calls("config.patch")).toHaveLength(1);
+    expect(note(accounts())).toMatchObject({ status: "restrictive", retryable: false });
+    expect(held(storage)).toEqual(["viral"]);
+    client.stop();
+  });
+
+  it("F-034: Write them again checks the bot again before its first task: one replaced after the writes gets no task", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    let replaced = false;
+    const get = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params);
+      if (!replaced && mode(answer) === "ask") {
+        replaced = true;
+        entries(fake).viral = { name: "Viral", workspace: "/w/viral" };
+        fake.revision += 1;
+      }
+      return answer;
+    };
+    await expect(client.retryBotPolicy("viral")).rejects.toThrow(/can't identify/);
+    expect(fake.gateway.calls("config.patch")).toHaveLength(3);
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    expect(note(accounts())).toMatchObject({ status: "unconfirmed", retryable: false });
+    expect(held(storage)).toEqual(["viral"]);
+    client.stop();
+  });
+
+  it("F-034: a config the gateway says is invalid gets no write, and the bot stays held", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      const made = await create(params);
+      fake.gateway.handlers["config.get"] = () => ({ valid: false, config: {}, hash: "hx" });
+      return made;
+    };
+    const { missing } = await client.createBot({ ...viral });
+    expect(missing).toContain("preference");
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
+    expect(fake.gateway.calls("users.prefs.set")).toEqual([]);
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    expect(note(accounts())).toMatchObject({ status: "restrictive", retryable: false });
+    expect(held(storage)).toEqual(["viral"]);
+    client.stop();
+  });
+
+  it("F-034: a bot deleted and made again with the same id, name and workspace before the first read is taken for the one Create made (the window docs/decisions.md names)", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      const made = await create(params);
+      // Another client deletes it and makes another with the same fields, before any read.
+      entries(fake).viral = { name: "Viral", workspace: "/w/viral", thinkingDefault: "high" };
+      fake.revision += 1;
+      return made;
+    };
+    await client.createBot({ ...viral });
+    // On this gateway version nothing tells the two apart: the writes go to the replacement.
+    expect(fake.gateway.calls("config.patch")).toHaveLength(2);
+    expect(entries(fake).viral).toMatchObject({
+      thinkingDefault: "high",
+      tools: { exec: { mode: "ask" }, deny: ["gateway", "plugins", "t3code__*"] },
+    });
+    expect(note(accounts())).toMatchObject({ status: "confirmed" });
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-034: a read of the notes begun before a Create does not take its new hold for a deletion", async () => {
+    const { client, fake, storage } = await accountsClient();
+    // An earlier bot's note, so the notes are read.
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral, name: "Earlier" });
+    client.dismissBotCreation();
+    // A read of the notes waits on its config while the next bot is made.
+    const gate = deferred<unknown>();
+    const get = fake.gateway.handlers["config.get"]!;
+    let waiting = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!waiting) {
+        waiting = true;
+        await gate.promise;
+      }
+      return answer;
+    };
+    const poll = client.refreshBotPolicies();
+    await until(() => waiting);
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    gate.resolve(undefined);
+    await poll;
+    expect(held(storage)).toEqual(["earlier", "viral"]);
+    await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
+    client.stop();
+  });
+
+  it("F-051: a read of the notes answered after a write to the bot applies nothing", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    // A read of the notes is asked, and its config answered, before Write them again.
+    const gate = deferred<unknown>();
+    const get = fake.gateway.handlers["config.get"]!;
+    let waiting = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!waiting) {
+        waiting = true;
+        await gate.promise;
+      }
+      return answer;
+    };
+    const poll = client.refreshBotPolicies();
+    await until(() => waiting);
+    // Write them again: step 2 lands, step 3 is refused.
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let patched = 0;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      if (++patched === 2) throw new GatewayError({ code: "INVALID_REQUEST", message: "locked" });
+      return patch(params);
+    };
+    await client.retryBotPolicy("viral");
+    const written = note(accounts());
+    expect(written).toMatchObject({ status: "unconfirmed", saved: "deny", retryable: true });
+    gate.resolve(undefined);
+    await poll;
+    // The older answer, from before step 2, is not taken for what the bot now has.
+    expect(note(accounts())).toMatchObject({
+      status: "unconfirmed",
+      saved: "deny",
+      retryable: true,
+    });
+    client.stop();
+  });
+
+  for (const [why, answer] of [
+    ["invalid", { valid: false, config: {}, hash: "hx" }],
+    ["unread", null],
+  ] as const) {
+    it(`F-034: an ${why} config read keeps every hold and clears what the notes said`, async () => {
+      const { client, fake, accounts, storage } = await accountsClient();
+      await client.createBot({ ...viral, name: "Confirmed" });
+      client.dismissBotCreation();
+      fake.failPatch = "config is locked";
+      await client.createBot({ ...viral });
+      fake.gateway.handlers["config.get"] = () => {
+        if (answer) return answer;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "no config" });
+      };
+      await client.refreshBotPolicies();
+      expect(held(storage)).toEqual(["viral"]);
+      expect(note(accounts())).toMatchObject({
+        status: "restrictive",
+        saved: null,
+        reported: null,
+        retryable: false,
+      });
+      // A confirmed note isn't confirmed by a read that settles nothing: its composer waits.
+      expect(note(accounts(), "confirmed")).toMatchObject({ status: "checking", saved: null });
+      await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
+      expect(fake.gateway.calls("sessions.create")).toEqual([
+        { key: "agent:confirmed:main", agentId: "confirmed", label: "Main" },
+      ]);
+      client.stop();
+    });
+  }
+
+  it("F-051: a roster read that fails after a config read leaves no earlier label as current", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.createBot({ ...viral });
+    expect(note(accounts())).toMatchObject({ reported: "guarded" });
+    fake.gateway.handlers["agents.list"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "no list" });
+    };
+    await client.refreshBotPolicies();
+    expect(note(accounts())).toMatchObject({ status: "confirmed", saved: "ask", reported: null });
+    client.stop();
+  });
+
+  it("F-034: a Create takes its place among the held records before anything waits: a second one at the bound is refused, and a restart keeps every hold", async () => {
+    const fake = new AccountsGateway();
+    const { client, storage } = await accountsClient({ gateway: fake });
+    for (let index = 0; index < MAX_HELD_BOTS - 1; index += 1) {
+      fake.failPatch = "config is locked";
+      await client.createBot({ ...viral, name: `Held ${index}` });
+      client.dismissBotCreation();
+    }
+    const creates = fake.gateway.calls("agents.create").length;
+    // Two viewers ask at once.
+    const first = client.createBot({ ...viral, name: "First" });
+    const second = client.createBot({ ...viral, name: "Second" });
+    await expect(second).rejects.toThrow(/already being created/);
+    fake.failPatch = "config is locked";
+    await first;
+    expect(fake.gateway.calls("agents.create")).toHaveLength(creates + 1);
+    expect(held(storage)).toHaveLength(MAX_HELD_BOTS);
+    client.stop();
+    const again = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
+    await again.start();
+    await until(() => again.state.discovery.status === "ready");
+    expect(engine(again).held.size).toBe(MAX_HELD_BOTS);
+    await expect(again.createTask("first", "hello")).rejects.toThrow(/couldn't confirm/);
+    again.stop();
+  });
+
+  it("F-034: storage that refuses the reservation sends no Create", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === HELD_KEY) throw new Error("disk full");
+      return set(key, value);
+    };
+    await expect(client.createBot({ ...viral })).rejects.toThrow(
+      /couldn't save the new bot's record\. Nothing was sent/,
+    );
+    expect(mutations(fake)).toEqual({ create: 0, patch: 0, prefs: 0, task: 0 });
+    expect(accounts().creation).toBeNull();
+    // Its place is given back: the next Create may go once storage takes it.
+    storage.set = set;
+    await client.createBot({ ...viral });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-034: a model reference longer than a kept record allows is refused before anything is sent", async () => {
+    const { client, fake } = await accountsClient();
+    const model = "m".repeat(500);
+    const list = fake.gateway.handlers["models.list"]!;
+    fake.gateway.handlers["models.list"] = (params) => {
+      const answer = list(params) as { models: unknown[] };
+      return {
+        models: [
+          ...answer.models,
+          { id: model, provider: "acme", thinkingLevels: [], available: true },
+        ],
+      };
+    };
+    await expect(client.createBot({ ...viral, model })).rejects.toThrow(
+      /too long for Clawtrate to keep.*Nothing was sent/,
+    );
+    expect(mutations(fake)).toEqual({ create: 0, patch: 0, prefs: 0, task: 0 });
+    client.stop();
+  });
+
+  it("F-472: a change of gateway during Create's account read sends nothing more, and shows nothing it read", async () => {
+    const { client, fake } = await accountsClient();
+    await client.refreshAccounts();
+    // The preferences answer last: the config and every bot's view are in when the gateway changes,
+    // and the catalogue is still to be asked.
+    const gate = deferred<unknown>();
+    let waiting = false;
+    const prefs = fake.gateway.handlers["users.prefs.get"]!;
+    fake.gateway.handlers["users.prefs.get"] = async (params) => {
+      const answer = prefs(params);
+      if (!waiting) {
+        waiting = true;
+        await gate.promise;
+      }
+      return answer;
+    };
+    const made = client.createBot({ ...viral }).catch((error: unknown) => error);
+    await until(() => waiting);
+    await client.connect({ url: URL_B });
+    await until(
+      () =>
+        client.state.connection.gatewayUrl === URL_B &&
+        client.state.connection.status === "connected",
+    );
+    const lists = fake.gateway.calls("models.list").length;
+    const before = JSON.stringify(client.state.accounts);
+    gate.resolve(undefined);
+    expect(String(await made)).toMatch(/connection changed\. Nothing was sent/);
+    expect(fake.gateway.calls("models.list")).toHaveLength(lists);
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    // The new gateway's accounts show nothing the old one answered.
+    expect(JSON.stringify(client.state.accounts)).toBe(before);
+    client.stop();
+  });
+
+  it("F-472: Create's account read checks its connection before each request and before showing what it read", async () => {
+    const fake = new AccountsGateway();
+    let state = initialAccountsState;
+    let connection = { epoch: 1, generation: 1, gateway: { id: null, url: URL_A } };
+    const sent: Array<{ method: string; generation: number }> = [];
+    const ctx: AccountsContext = {
+      async request(method, params) {
+        sent.push({ method, generation: connection.generation });
+        // The gateway changes while this answer is on its way, and the answer still arrives.
+        if (method === "users.prefs.get")
+          connection = { epoch: 2, generation: 2, gateway: { id: null, url: URL_B } };
+        return fake.gateway.handlers[method]!(params);
+      },
+      get: () => state,
+      update: (change) => {
+        state = change(state);
+      },
+      bots: () => fake.bots.map((bot) => ({ ...bot, isDefault: bot.id === "main" })),
+      connected: () => true,
+      connection: () => connection,
+      storage: memoryStorage(),
+      admin: () => true,
+      refreshBots: async () => ({}),
+      createMainTask: async () => {},
+      now: () => 0,
+      randomId: () => "r",
+      log: () => {},
+    };
+    const engine = new AccountsEngine(ctx);
+    await expect(engine.createBot({ ...viral })).rejects.toThrow(
+      /connection changed\. Nothing was sent/,
+    );
+    // Nothing went on the new connection: no catalogue, no Create; and nothing read was shown.
+    expect(sent.filter((each) => each.generation !== 1)).toEqual([]);
+    expect(sent.map((each) => each.method)).not.toContain("models.list");
+    expect(state.readAt).toBe(initialAccountsState.readAt);
+    expect(state.models).toEqual(initialAccountsState.models);
+  });
+
+  it("F-472: a Create entered for another gateway is refused before any request", async () => {
+    const { client, fake } = await accountsClient();
+    const requests = fake.gateway.calls("config.get").length;
+    const lists = fake.gateway.calls("models.list").length;
+    await expect(client.createBot({ ...viral, gateway: { id: null, url: URL_B } })).rejects.toThrow(
+      /gateway changed since this was entered\. Nothing was sent/,
+    );
+    expect(fake.gateway.calls("config.get")).toHaveLength(requests);
+    expect(fake.gateway.calls("models.list")).toHaveLength(lists);
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    client.stop();
+  });
+
+  for (const [why, change] of [
+    ["a model list that can't be read", "unread"],
+    ["a model the list marks unavailable", "unavailable"],
+  ] as const) {
+    it(`F-472: Create with ${why} is refused, and sends nothing`, async () => {
+      const { client, fake, accounts } = await accountsClient();
+      await client.refreshAccounts();
+      const list = fake.gateway.handlers["models.list"]!;
+      fake.gateway.handlers["models.list"] = (params) => {
+        if (change === "unread") throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+        const answer = list(params) as { models: Array<Record<string, unknown>> };
+        return {
+          models: answer.models.map((model) =>
+            model.provider === "acme" && model.id === "dev-1"
+              ? { ...model, available: false }
+              : model,
+          ),
+        };
+      };
+      await expect(client.createBot({ ...viral })).rejects.toThrow(
+        change === "unread" ? /model list couldn't be read/ : /isn't available/,
+      );
+      expect(mutations(fake)).toEqual({ create: 0, patch: 0, prefs: 0, task: 0 });
+      expect(accounts().creation).toBeNull();
+      client.stop();
+    });
+  }
+
+  it("F-051: a later read settles a held bot by the chosen mode and every tool Clawtrate blocks, in any order and beside other blocks", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    // An admin saves the chosen mode, but not every block.
+    entries(fake).viral!.tools = { exec: { mode: "ask" }, deny: ["gateway", "plugins"] };
+    fake.revision += 1;
+    await client.refreshBotPolicies();
+    expect(note(accounts())).toMatchObject({
+      status: "restrictive",
+      saved: "ask",
+      missingDeny: ["t3code__*"],
+    });
+    expect(held(storage)).toEqual(["viral"]);
+    // Then every one, in another order, with one more.
+    entries(fake).viral!.tools = {
+      exec: { mode: "ask" },
+      deny: ["t3code__*", "browser", "plugins", "gateway"],
+    };
+    fake.revision += 1;
+    await client.refreshBotPolicies();
+    expect(note(accounts())).toMatchObject({ status: "confirmed", saved: "ask", missingDeny: [] });
+    expect(held(storage)).toEqual([]);
+    client.stop();
+  });
+
+  it("F-051: a revision the gateway hasn't applied settles nothing", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    const get = fake.gateway.handlers["config.get"]!;
+    let applied = false;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params) as Record<string, unknown>;
+      return applied ? answer : { ...answer, appliedConfigHash: "r-old" };
+    };
+    entries(fake).viral!.tools = {
+      exec: { mode: "ask" },
+      deny: ["gateway", "plugins", "t3code__*"],
+    };
+    fake.revision += 1;
+    await client.refreshBotPolicies();
+    expect(note(accounts())?.status).not.toBe("confirmed");
+    expect(held(storage)).toEqual(["viral"]);
+    applied = true;
+    await client.refreshBotPolicies();
+    expect(note(accounts())).toMatchObject({ status: "confirmed" });
+    expect(held(storage)).toEqual([]);
+    client.stop();
+  });
+
+  it("F-034: past the note bound a held bot's note stays, and a held bot without a note is still settled by a read", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts, storage } = await accountsClient({ gateway: fake });
+    // A held bot first, then a confirmed bot another admin set to Never: not held, not confirmed.
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral, name: "Held 0" });
+    client.dismissBotCreation();
+    await client.createBot({ ...viral, name: "Loose" });
+    client.dismissBotCreation();
+    entries(fake).loose!.tools = { exec: { mode: "deny" }, deny: ["gateway"] };
+    fake.revision += 1;
+    await client.refreshBotPolicies();
+    expect(note(accounts(), "loose")).toMatchObject({ status: "unconfirmed" });
+    for (let index = 1; index < MAX_HELD_BOTS; index += 1) {
+      fake.failPatch = "config is locked";
+      await client.createBot({ ...viral, name: `Held ${index}` });
+      client.dismissBotCreation();
+    }
+    // The loose note gave way, not the first held bot's.
+    expect(note(accounts(), "loose")).toBeNull();
+    expect(note(accounts(), "held-0")).not.toBeNull();
+    entries(fake)["held-0"]!.tools = {
+      exec: { mode: "ask" },
+      deny: ["gateway", "plugins", "t3code__*"],
+    };
+    // A held bot whose note isn't shown is read too.
+    engine(client).dropNote("held-1");
+    entries(fake)["held-1"]!.tools = {
+      exec: { mode: "ask" },
+      deny: ["gateway", "plugins", "t3code__*"],
+    };
+    fake.revision += 1;
+    await client.refreshBotPolicies();
+    expect(held(storage)).not.toContain("held-0");
+    expect(held(storage)).not.toContain("held-1");
+    expect(held(storage)).toHaveLength(MAX_HELD_BOTS - 2);
+    client.stop();
+  });
+});
+
 describe("a bot left half-made", () => {
   const input = viral;
 
@@ -1368,6 +1903,12 @@ describe("the first bot (bots.md section 3): only on a confirmed unused implicit
       unnamedMain,
       noRoster,
       { sessions: [], count: 0, totalCount: 0, hasMore: false, nextOffset: 1 },
+    ],
+    [
+      "an empty page whose count contradicts its total",
+      unnamedMain,
+      noRoster,
+      { sessions: [], count: 1, totalCount: 0, hasMore: false, nextOffset: null },
     ],
     ["an empty page without counts", unnamedMain, noRoster, { sessions: [], hasMore: false }],
     [

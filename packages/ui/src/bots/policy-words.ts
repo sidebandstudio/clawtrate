@@ -94,6 +94,10 @@ export function mainPolicySentence(reported: ReportedPolicy | null): string | nu
 export const whereLine = (bot: string) =>
   `The command setting is tools.exec.mode in ${bot}'s entry of the gateway's settings.`;
 
+/** The tools Clawtrate blocks for a new bot that a read doesn't show blocked. */
+export const missingDenyLine = (tools: readonly string[]) =>
+  `Its settings don't block ${tools.length === 1 ? "this tool" : "these tools"} Clawtrate blocks for a new bot: ${tools.join(", ")}.`;
+
 /** The note in a new bot's first task: its tone, its sentences, and whether it is settled. */
 export function policyNote(policy: NewBotPolicy): {
   tone: "warn" | undefined;
@@ -111,12 +115,17 @@ export function policyNote(policy: NewBotPolicy): {
       lines: [savedSentence(bot, policy.chosen), ...(reported ? [reported] : [])],
     };
   }
+  // What holds the task back, each fact as read: the saved mode, the tools Clawtrate blocks that
+  // aren't blocked, and the gateway's own label beside them.
+  const reported = reportedSentence(bot, policy.reported);
   return {
     tone: "warn",
     title: `Clawtrate couldn't confirm ${bot}'s command setting.`,
     lines: [
       "Review the gateway's settings before sending a task.",
       ...(policy.saved ? [`Its saved command setting is ${modeWord(policy.saved)}.`] : []),
+      ...(policy.missingDeny.length > 0 ? [missingDenyLine(policy.missingDeny)] : []),
+      ...(reported ? [reported] : []),
       whereLine(bot),
     ],
   };

@@ -233,6 +233,57 @@ test("F-034: an unsubmitted draft is kept through Close, and only for its gatewa
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("");
 });
 
+test("F-034: a wizard left open across a change of gateway starts afresh there, sends nothing of the old one, and keeps its draft for its own gateway", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  // The gateway changes while the dialog stays open.
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, gatewayId: 'another-gateway', gatewayUrl: 'ws://another.example:18790' } };",
+  );
+  await expect(page.getByRole("heading", { name: "New bot", level: 2 })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("");
+  await expect(page.getByTestId("create")).toHaveCount(0);
+  expect((await sent(page)).filter((each) => each.type === "createBot")).toEqual([]);
+  // A draft entered there is that gateway's.
+  await page.getByRole("textbox", { name: "Name" }).fill("Other");
+  // Back on the first gateway, its draft is still its own.
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, gatewayId: '6f3b0d2e9a41c7f58e2d4b1a0c9e7f3d5b8a2c4e6f1d0b9a8c7e5f4d3b2a1c0e', gatewayUrl: 'ws://127.0.0.1:18789' } };",
+  );
+  await expect(page.getByRole("heading", { name: "Approvals", level: 2 })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Ask before acting" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  // What Create sends names the gateway it was entered for.
+  await page.getByTestId("create").click();
+  expect((await sent(page)).find((each) => each.type === "createBot")).toMatchObject({
+    name: "Viral",
+    approvals: "ask",
+    gateway: { url: "ws://127.0.0.1:18789" },
+  });
+});
+
+test("F-051: a saved setting with a tool Clawtrate blocks no longer blocked says which", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&policy=nodeny`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  const note = page.getByTestId("policy-note");
+  await expect(note).toContainText("Its saved command setting is Ask before acting.");
+  await expect(note).toContainText(
+    "Its settings don't block this tool Clawtrate blocks for a new bot: t3code__*.",
+  );
+  await expect(page.getByTestId("composer-input")).toBeDisabled();
+});
+
 test("F-034: below admin the outcome of an unconfirmed Create stays, with Review bots; the choices and Create go", async ({
   page,
 }) => {
@@ -333,7 +384,7 @@ test("F-051: a setting that didn't read back as chosen keeps the composer closed
   await page.getByTestId("create").click();
   const note = page.getByTestId("policy-note");
   await expect(note).toContainText(
-    "Clawtrate couldn't confirm Viral's command setting.Review the gateway's settings before sending a task.Its saved command setting is Never.The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
+    "Clawtrate couldn't confirm Viral's command setting.Review the gateway's settings before sending a task.Its saved command setting is Never.The gateway reports no routine approval in the default command policy.The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
   );
   // No button to a settings page that has no command setting yet.
   await expect(note.getByRole("button", { name: "Review settings" })).toHaveCount(0);

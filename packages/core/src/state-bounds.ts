@@ -31,6 +31,7 @@ import {
   type StoredOrder,
 } from "./accounts.ts";
 import {
+  FINAL_DENY,
   MAX_CREATED_WORKSPACE_CHARS,
   MAX_POLICY_NOTES,
   type FirstBotState,
@@ -988,6 +989,7 @@ const newBotPolicy = object<NewBotPolicy>()({
   status: ENUM,
   restrictive: FLAG,
   saved: ENUM,
+  missingDeny: list(FINAL_DENY.length, ENUM),
   reported: ENUM,
   retryable: FLAG,
 });

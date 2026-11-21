@@ -275,6 +275,8 @@ export type BridgeCommand =
       approvals: CommandChoice | null;
       /** The New bot attempt this Create is. */
       attempt: string | null;
+      /** The gateway it was entered for, as the screen showed it: on another the host sends nothing. */
+      gateway: { id: string | null; url: string };
     }
   /** Forget a creation that has settled; with `attempt`, only that attempt's outcome. */
   | { type: "dismissBotCreation"; attempt?: string | null }
@@ -1046,6 +1048,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.attempt === null || command.attempt === undefined
             ? null
             : shortText(command.attempt, 64, "attempt"),
+        gateway: {
+          id: nullable(record(command.gateway, "gateway").id, (value) =>
+            shortText(value, 2048, "gateway id"),
+          ),
+          url: shortText(record(command.gateway, "gateway").url, 2048, "gateway address"),
+        },
       };
     case "changeBotAccount":
       return {
@@ -1632,6 +1640,7 @@ class ViewerSession implements BridgeSession {
           effort: command.effort,
           approvals: command.approvals,
           attempt: command.attempt,
+          gateway: command.gateway,
         });
       case "dismissBotCreation":
         return client.dismissBotCreation(command.attempt ?? null);

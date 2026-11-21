@@ -68,6 +68,27 @@ export function configEntry(config: RawRecord | null, botId: string): RawRecord 
   return entries && Object.hasOwn(entries, botId) ? asRecord(entries[botId]) : null;
 }
 
+/**
+ * Why the host refuses a Create over the account or model chosen, before
+ * anything is sent. New bot takes the person back to the Account step for
+ * exactly these.
+ */
+export const CHOICE_REFUSALS = {
+  unread:
+    "The gateway's accounts couldn't be read, so the account chosen can't be checked. Nothing was sent.",
+  gone: "The account chosen is no longer on the gateway. Choose another, or let the gateway choose. Nothing was sent.",
+  defaultChanged: "The gateway's default model has changed. Choose again. Nothing was sent.",
+  noCatalog:
+    "The gateway's model list couldn't be read, so the model chosen can't be checked. Nothing was sent.",
+  unavailable:
+    "The model chosen isn't available on the gateway now. Choose again. Nothing was sent.",
+  unlisted: "The model chosen is no longer in the gateway's list. Choose again. Nothing was sent.",
+} as const;
+
+/** Whether a refusal is one of `CHOICE_REFUSALS`. */
+export const isChoiceRefusal = (message: string): boolean =>
+  (Object.values(CHOICE_REFUSALS) as string[]).includes(message);
+
 /** What `agents.create` answered: the bot it made, and what names it. */
 export type CreatedIdentity = { botId: string; name: string; workspace: string };
 
@@ -157,6 +178,36 @@ export function chosenReadBack(entry: RawRecord | null, chosen: CommandChoice): 
 }
 
 /**
+ * The tools step 3 denies by name that a read of the entry doesn't deny, in
+ * step 3's order: all of them when the entry has no deny list.
+ */
+export function missingDeny(entry: RawRecord | null): string[] {
+  const deny = asRecord(entry?.tools)?.deny;
+  const named = Array.isArray(deny) ? deny : [];
+  return FINAL_DENY.filter((tool) => !named.includes(tool));
+}
+
+/**
+ * A later read of a held bot settles it: the chosen mode, and every tool step
+ * 3 denies still denied, in any order and with any other blocks an admin
+ * added. Clawtrate's own write reads back exactly (`chosenReadBack`).
+ */
+export function chosenHolds(entry: RawRecord | null, chosen: CommandChoice): boolean {
+  return savedMode(entry) === chosen && missingDeny(entry).length === 0;
+}
+
+/**
+ * A `config.get` answer whose revision the gateway says it has not applied
+ * yet (both hashes given, and different): what it shows is saved, not in
+ * force, and settles nothing. A gateway that gives no hashes says nothing.
+ */
+export function unapplied(read: RawRecord | null): boolean {
+  const revision = read?.configRevisionHash;
+  const applied = read?.appliedConfigHash;
+  return typeof revision === "string" && typeof applied === "string" && revision !== applied;
+}
+
+/**
  * Whether the gateway's approvals file, as `exec.approvals.get` answers it,
  * blocks commands for a bot of this id: its `defaults` deny, and no entry
  * that applies to the bot says otherwise. Absent, unreadable or unsettled is
@@ -237,6 +288,7 @@ function provesNoTasks(page: RawRecord | null): boolean {
   if (!page || !Array.isArray(page.sessions) || page.sessions.length > 0) return false;
   if (page.hasMore !== false && page.hasMore !== undefined) return false;
   if (page.nextOffset !== undefined && page.nextOffset !== null) return false;
+  if (page.count !== undefined && page.count !== 0) return false;
   if (page.totalCount !== undefined) return page.totalCount === 0;
   return page.count === 0 && page.hasMore === false;
 }
@@ -292,6 +344,11 @@ export type NewBotPolicy = {
   restrictive: boolean;
   /** The saved `tools.exec.mode` the latest exact read returned, or null when none was read. */
   saved: string | null;
+  /**
+   * The tools step 3 denies by name that the latest read doesn't show denied;
+   * empty when none was read or all are.
+   */
+  missingDeny: string[];
   /**
    * The reported default policy from the `agents.list` read after the latest
    * read of the saved setting; null until that read.

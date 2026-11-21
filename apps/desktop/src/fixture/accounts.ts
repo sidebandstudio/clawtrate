@@ -29,6 +29,7 @@
 //   defacct=1                 the gateway's default model names an account (openai:work)
 
 import {
+  CHOICE_REFUSALS,
   ADMIN_SCOPES,
   emptyActivity,
   INTERACTIVE_SCOPES,
@@ -668,10 +669,14 @@ function createdPolicy(
     status: "confirmed",
     restrictive: true,
     saved: chosen,
+    missingDeny: [],
     reported: chosen === "ask" ? "guarded" : "full",
     retryable: false,
   };
   if (how === "nolabel") return { ...confirmed, reported: "none" };
+  // Saved as chosen, with a tool Clawtrate blocks no longer blocked.
+  if (how === "nodeny")
+    return { ...confirmed, status: "unconfirmed", missingDeny: ["t3code__*"], retryable: true };
   if (how === "checking") return { ...confirmed, status: "checking", saved: null, reported: null };
   if (how === "unconfirmed")
     return { ...confirmed, status: "unconfirmed", saved: "deny", retryable: true };
@@ -1072,11 +1077,7 @@ export function accountCommand(
       // create=refused: the account chosen went from the gateway while the dialog was open.
       if (params.create === "refused") {
         put((a) => ({ ...a, accounts: a.accounts.filter((x) => x.id !== command.account) }));
-        return Promise.reject(
-          new Error(
-            "The account chosen is no longer on the gateway. Choose another, or let the gateway choose. Nothing was sent.",
-          ),
-        );
+        return Promise.reject(new Error(CHOICE_REFUSALS.gone));
       }
       put((a) => ({
         ...a,

@@ -23,6 +23,7 @@ const policy = (change: Partial<NewBotPolicy>): NewBotPolicy => ({
   status: "confirmed",
   restrictive: true,
   saved: "ask",
+  missingDeny: [],
   reported: "guarded",
   retryable: false,
   ...change,
@@ -80,7 +81,7 @@ describe("F-051: the note in the new bot's first task, as read", () => {
   });
 
   it("says when the setting can't be confirmed, and the mode a fresh read returned", () => {
-    expect(policyNote(policy({ status: "unconfirmed", saved: "deny" }))).toEqual({
+    expect(policyNote(policy({ status: "unconfirmed", saved: "deny", reported: null }))).toEqual({
       tone: "warn",
       title: "Clawtrate couldn't confirm Viral's command setting.",
       lines: [
@@ -90,7 +91,8 @@ describe("F-051: the note in the new bot's first task, as read", () => {
       ],
     });
     expect(
-      policyNote(policy({ status: "restrictive", restrictive: false, saved: null })).lines,
+      policyNote(policy({ status: "restrictive", restrictive: false, saved: null, reported: null }))
+        .lines,
     ).toEqual([
       "Review the gateway's settings before sending a task.",
       "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
@@ -99,6 +101,33 @@ describe("F-051: the note in the new bot's first task, as read", () => {
     expect(policyNote(policy({ saved: "full" })).tone).toBe("warn");
     expect(policyNote(policy({ status: "checking" })).lines).toEqual([
       "Checking what was written…",
+    ]);
+  });
+
+  it("F-051: says which read-back condition holds the task: the saved mode, a tool no longer blocked, and the label beside them", () => {
+    // Saved as chosen, with a tool Clawtrate blocks missing from the deny list.
+    expect(
+      policyNote(policy({ status: "unconfirmed", missingDeny: ["t3code__*"], reported: null }))
+        .lines,
+    ).toEqual([
+      "Review the gateway's settings before sending a task.",
+      "Its saved command setting is Ask before acting.",
+      "Its settings don't block this tool Clawtrate blocks for a new bot: t3code__*.",
+      "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
+    ]);
+    expect(
+      policyNote(policy({ status: "unconfirmed", missingDeny: ["gateway", "plugins"] })).lines[2],
+    ).toBe(
+      "Its settings don't block these tools Clawtrate blocks for a new bot: gateway, plugins.",
+    );
+    // Another mode saved: the gateway's fresh label is said too, as its own fact.
+    expect(
+      policyNote(policy({ status: "unconfirmed", saved: "deny", reported: "read-only" })).lines,
+    ).toEqual([
+      "Review the gateway's settings before sending a task.",
+      "Its saved command setting is Never.",
+      "The gateway reports that the default command policy disables commands.",
+      "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
     ]);
   });
 

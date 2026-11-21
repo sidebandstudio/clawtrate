@@ -603,6 +603,8 @@ export function Shell({
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
       {newBot && (
         <NewBot
+          // A wizard is its gateway's: on another, a new one, and the old one's callbacks end.
+          key={state.connection.gatewayUrl ?? ""}
           accounts={state.accounts}
           bots={state.bots}
           connection={state.connection}

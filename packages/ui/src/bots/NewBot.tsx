@@ -2,9 +2,17 @@
 // Account step, then the Approvals step and Create. Connecting an account
 // opens inside the same dialog. What was entered is kept for its gateway until
 // the app quits, through a sign-in and a request for access; Create clears it,
-// and so does "Review bots" for an attempt whose outcome isn't known.
+// and so does "Review bots" for an attempt whose outcome isn't known. A
+// wizard belongs to the gateway it opened on: on another it is a new one.
 
-import type { AccountsState, Bot, CommandChoice, ConnectionState, HostInfo } from "@clawtrate/core";
+import {
+  isChoiceRefusal,
+  type AccountsState,
+  type Bot,
+  type CommandChoice,
+  type ConnectionState,
+  type HostInfo,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
@@ -14,7 +22,7 @@ import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.tsx";
 import { ModelPair } from "./ModelPair.tsx";
-import { recall, remember } from "./memory.ts";
+import { forgetAll, recall, remember } from "./memory.ts";
 import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
 import { CHOICE_ROWS, chooseLine, fileLine, inheritsLine, machineLine } from "./policy-words.ts";
 
@@ -63,11 +71,12 @@ type Step = "look" | "account" | "connect" | "approvals";
 type DraftGateway = { id: string | null; url: string | null };
 /**
  * Kept until the app quits: closing the dialog does not lose what was
- * entered. A draft is the gateway's it was entered for, and is never offered
- * on another.
+ * entered. A draft is the gateway's it was entered for, kept under that
+ * gateway's address, and is never offered on another.
  */
 type Kept = { draft: Draft; step: Step; gateway: DraftGateway };
-const KEPT = "new-bot";
+const KEPT = "new-bot:";
+const slotOf = (gateway: DraftGateway) => `${KEPT}${gateway.url ?? ""}`;
 
 const gatewayOf = (connection: ConnectionState): DraftGateway => ({
   id: connection.gatewayId,
@@ -78,14 +87,10 @@ const sameDraftGateway = (a: DraftGateway, b: DraftGateway) =>
   a.id !== null && b.id !== null ? a.id === b.id : a.url === b.url;
 
 /** The draft kept for this gateway, or null. */
-function keptFor(connection: ConnectionState): Kept | null {
-  const kept = recall<Kept>(KEPT);
-  return kept && sameDraftGateway(kept.gateway, gatewayOf(connection)) ? kept : null;
+function keptFor(gateway: DraftGateway): Kept | null {
+  const kept = recall<Kept>(slotOf(gateway));
+  return kept && sameDraftGateway(kept.gateway, gateway) ? kept : null;
 }
-
-/** The host refused Create because of the account or model chosen: the Account step says why. */
-const CHOICE_REFUSAL =
-  /no longer on the gateway|default model has changed|no longer in the gateway's list|accounts couldn't be read/;
 
 /** The size of the picture New bot sends: the drawn character, rasterised. */
 const PICTURE_PX = 128;
@@ -150,11 +155,16 @@ export function NewBot({
   onCreated: (botId: string) => void;
 }) {
   const bridge = useBridge();
+  // The gateway this wizard opened on: what it keeps and sends is that gateway's alone.
+  const [route] = useState(() => gatewayOf(connection));
+  const slot = slotOf(route);
+  /** Still the gateway this wizard opened on: once it isn't, nothing more of it is sent or kept. */
+  const onRoute = () => sameDraftGateway(route, gatewayOf(bridge.getState().connection));
   const [draft, setDraftState] = useState<Draft>(() => ({
     ...freshDraft(),
-    ...keptFor(connection)?.draft,
+    ...keptFor(route)?.draft,
   }));
-  const [step, setStepState] = useState<Step>(() => keptFor(connection)?.step ?? "look");
+  const [step, setStepState] = useState<Step>(() => keptFor(route)?.step ?? "look");
   /** Why the host refused the account or model chosen, said on the Account step. */
   const [choiceRefusal, setChoiceRefusal] = useState<string | null>(null);
   const [announcer, announce] = useAnnouncer();
@@ -165,15 +175,11 @@ export function NewBot({
   const setDraft = (change: (draft: Draft) => Draft) =>
     setDraftState((was) => {
       const next = change(was);
-      remember(KEPT, {
-        draft: next,
-        step: keptFor(connection)?.step ?? step,
-        gateway: gatewayOf(connection),
-      });
+      remember(slot, { draft: next, step: keptFor(route)?.step ?? step, gateway: route });
       return next;
     });
   const setStep = (next: Step) => {
-    remember(KEPT, { draft, step: next, gateway: gatewayOf(connection) });
+    remember(slot, { draft, step: next, gateway: route });
     setStepState(next);
     requestAnimationFrame(() => {
       const dialog = document.querySelector<HTMLElement>('[data-testid="new-bot"]');
@@ -255,18 +261,23 @@ export function NewBot({
     if (!accountReady || !draft.approvals || busy || unconfirmed) return;
     announce("Creating the bot");
     try {
+      const avatar = await pictureOf(previewRef.current?.querySelector("svg"));
+      // The gateway changed while the picture was drawn: this wizard's choices were the old one's.
+      if (!onRoute()) return;
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
-        avatar: await pictureOf(previewRef.current?.querySelector("svg")),
+        avatar,
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
         provider: provider!,
         model: draft.model!,
         effort: draft.effort,
         approvals: draft.approvals,
         attempt: draft.attempt,
+        gateway: { id: route.id, url: route.url ?? "" },
       });
-      remember(KEPT, null);
+      remember(slot, null);
+      if (!onRoute()) return;
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
         announce(`Created ${name}, not finished`);
@@ -278,7 +289,7 @@ export function NewBot({
     } catch (error) {
       // The account or model chosen is no longer one the gateway has: back to where it is chosen.
       const words = error instanceof Error ? error.message : String(error);
-      if (CHOICE_REFUSAL.test(words)) {
+      if (onRoute() && isChoiceRefusal(words)) {
         setChoiceRefusal(words);
         setStep("account");
       }
@@ -292,7 +303,7 @@ export function NewBot({
   const review = (attempt: string | null) => {
     void bridge.send({ type: "dismissBotCreation", attempt }).catch(() => {});
     if (attempt === draft.attempt) {
-      remember(KEPT, null);
+      remember(slot, null);
       setDraftState(freshDraft());
       setStepState("look");
     }
@@ -916,5 +927,5 @@ export function NewBot({
 
 /** Forget what New bot kept, for a test that starts afresh. */
 export function forgetNewBotDraft(): void {
-  remember(KEPT, null);
+  forgetAll(KEPT);
 }

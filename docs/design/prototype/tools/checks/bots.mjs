@@ -212,7 +212,7 @@ check("AP Next from Account opens Approvals, focused on its title", (await text(
 check("AP its two choices and the lines under them, in the design's words", await evalOr(p, (w) => {
   const t = document.querySelector("#create-dialog").textContent;
   return w.every((x) => t.includes(x)) && !/runs commands without asking first|on the gateway's computer, as Viral|stricter setting wins/.test(t);
-}, ["When Viral wants to run a command:", "Ask before acting", ASK_LINE, "Run without routine approvals", FULL_LINE, "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot. You can change this later in Viral's settings.", "The gateway's approvals file can require approval or block commands."]));
+}, ["When Viral wants to run a command:", "Ask before acting", ASK_LINE, "Run without routine approvals", FULL_LINE, "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot.", "The gateway's approvals file can require approval or block commands."]));
 check("AP nothing is chosen at first, and Create is unavailable, saying why", await evalOr(p, () => document.querySelectorAll('#create-dialog [data-b-perm][aria-checked="true"]').length === 0 && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose how Viral runs commands.") && !document.querySelector("[data-b-inherits]")));
 check("AP the group's accessible name is Approvals", (await p.getByRole("radiogroup", { name: "Approvals", exact: true }).count()) === 1);
 check("AP each choice's title is its accessible name and its line its description", (await p.getByRole("radio", { name: "Ask before acting", exact: true }).count()) === 1 && (await p.getByRole("radio", { name: "Run without routine approvals", exact: true }).count()) === 1 && (await evalOr(p, (lines) => ["ask", "full"].every((v, i) => { const r = document.querySelector(`[data-b-perm="${v}"]`); const d = (r?.getAttribute("aria-describedby") || "").split(" ").map((id) => document.getElementById(id)?.textContent || "").join(" ").trim(); return d === lines[i]; }), [ASK_LINE, FULL_LINE])));
@@ -297,7 +297,7 @@ p = await open(`${AP}&perm=full&readback=mismatch`);
 await tap(p, '[data-b="create"]');
 check("CR a mismatched read-back: couldn't confirm, with the setting it did read", (await settled(p, "unconfirmed")) && (await text(p, "[data-b-created]")).includes("Clawtrate couldn't confirm Viral's command setting. Review the gateway's settings before sending a task. Its saved command setting is Never.") && (await held(p)));
 check("CR the mismatch is announced", (await said(p)).includes("Clawtrate couldn't confirm Viral's command setting"), await said(p));
-check("CR with Review settings and, for the identified bot, Write it again", await evalOr(p, () => !!document.querySelector('[data-b="review-settings"]') && !!document.querySelector('[data-b="perm-again"]')));
+check("CR says where the setting is, with no Review settings, and for the identified bot Write it again", (await text(p, "[data-b-created]")).includes("The command setting is tools.exec.mode in Viral's entry of the gateway's settings.") && (await evalOr(p, () => !document.querySelector('[data-b="review-settings"]') && !!document.querySelector('[data-b="perm-again"]'))));
 await tap(p, '[data-b="perm-again"]');
 check("CR Write it again repeats only the policy write: no second Create, one Viral", (await settled(p, "confirmed")) && ops(await writesOf(p)) === "agents.create,config.patch:2,config.patch:3,config.patch:3" && (await viralCount(p)) === 1 && (await text(p, "[data-b-saved]")).includes("Run without routine approvals"));
 await p.close();
@@ -310,7 +310,7 @@ check("CR a retry whose read fails stays unconfirmed, the composer held", (await
 await p.close();
 p = await open(`${AP}&perm=ask&readback=fail&retry=gone`);
 await tap(p, '[data-b="create"]');
-check("CR when the bot is no longer identified, no Write it again is offered", (await settled(p, "unconfirmed")) && (await evalOr(p, () => !document.querySelector('[data-b="perm-again"]') && !!document.querySelector('[data-b="review-settings"]'))));
+check("CR when the bot is no longer identified, no Write it again is offered; the note still says where the setting is", (await settled(p, "unconfirmed")) && (await text(p, "[data-b-created]")).includes("The command setting is tools.exec.mode in Viral's entry of the gateway's settings.") && (await evalOr(p, () => !document.querySelector('[data-b="perm-again"]') && !document.querySelector('[data-b="review-settings"]'))));
 await p.close();
 p = await open(`${AP}&perm=ask`);
 await evalOr(p, () => window.bots.setAccess("write"));

@@ -384,7 +384,7 @@
             row("ask", "Ask before acting", `Sets ${n}'s command policy to ask for approval when a command misses the machine's allowlist.`) +
             row("full", "Run without routine approvals", `Sets ${n}'s command policy to run without routine approval. The machine, the task or a rule can still require approval or block a command.`) +
             `</ul></div>` +
-            `<p class="b-hint">Commands use the machine and permissions set by the gateway. ${n}'s command setting replaces the gateway-wide command mode for this bot. You can change this later in ${n}'s settings.</p>` +
+            `<p class="b-hint">Commands use the machine and permissions set by the gateway. ${n}'s command setting replaces the gateway-wide command mode for this bot.</p>` +
             (blocks ? `<p class="b-hint" data-tone="warn" data-b-file="deny">The gateway's approvals file blocks commands.</p>` : `<p class="b-hint" data-b-file>The gateway's approvals file can require approval or block commands.</p>`)
           : "");
       const busy = ["creating", "slow"].includes(B.create.status);
@@ -494,8 +494,8 @@
       return box(
         "warn",
         "unconfirmed",
-        `<p><b>Clawtrate couldn't confirm ${n}'s command setting.</b> Review the gateway's settings before sending a task.${s.read ? ` Its saved command setting is ${PERM_WORDS[s.read]}.` : ""}</p>`,
-        button("Review settings", 'data-b="review-settings" data-size="sm"') + (s.identified ? button("Write it again", 'data-b="perm-again" data-size="sm"') : ""),
+        `<p><b>Clawtrate couldn't confirm ${n}'s command setting.</b> Review the gateway's settings before sending a task.${s.read ? ` Its saved command setting is ${PERM_WORDS[s.read]}.` : ""}</p><p data-b-where>The command setting is tools.exec.mode in ${n}'s entry of the gateway's settings.</p>`,
+        s.identified ? button("Write it again", 'data-b="perm-again" data-size="sm"') : "",
       );
     return box("", "confirmed", `<p data-b-saved>${n}'s saved command setting is ${PERM_WORDS[s.read]}.</p><p data-b-label>${s.label === "none" ? `The gateway didn't report a default command policy for ${n}.` : LABEL_WORDS[s.label]}</p>`);
   }
@@ -1261,10 +1261,6 @@
         B.create = { step: "look", status: "idle", opener: null };
         createDialog.close();
         app.render();
-        break;
-      case "review-settings":
-        app.setPanel(true);
-        $("#tab-settings")?.click();
         break;
       case "perm-again":
       case "restrict-again": {
