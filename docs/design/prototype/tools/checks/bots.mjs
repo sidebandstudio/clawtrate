@@ -20,6 +20,11 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
 };
 const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textContent || "", sel);
 const dlg = (p, id = "create-dialog") => p.evaluate((i) => document.getElementById(i).open, id);
+// The Account step leads to Approvals (controls.md section 10), whose choice Create waits for.
+const toCreate = async (p, perm = "ask") => {
+  await p.click('[data-b="to-approvals"]');
+  await p.click(`[data-b-perm="${perm}"]`);
+};
 const focused = (p) => p.evaluate(() => document.activeElement?.id || document.activeElement?.dataset?.b || document.activeElement?.tagName);
 
 // Print what ran so far if a step throws, so the failing step can be found.
@@ -45,7 +50,7 @@ check("P1 Next goes to the Account step", (await text(p, "#create-title")) === "
 check("P1 the step keeps the name", (await text(p, "#create-dialog .b-lead")).includes("Viral runs on"));
 const order = await p.evaluate(() => [...document.querySelectorAll("#create-dialog .b-group")].map((g) => g.textContent));
 check("P1 subscriptions are listed first", order[0] === "Subscriptions" && order[1] === "API keys", order.join(" / "));
-check("FM-01 nothing is chosen at first, and Create waits for a choice", await p.evaluate(() => !document.querySelector('#create-dialog [role="radio"][aria-checked="true"]') && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose an account, or let the gateway choose.")));
+check("FM-01 nothing is chosen at first, and Next waits for a choice", await p.evaluate(() => !document.querySelector('#create-dialog [role="radio"][aria-checked="true"]') && document.querySelector('[data-b="to-approvals"]').disabled && !document.querySelector('[data-b="create"]') && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose an account, or let the gateway choose.")));
 check("FM-01 Let the gateway choose is the last choice of the one radio group, in words", await p.evaluate(() => { const r = [...document.querySelectorAll('#create-dialog [role="radiogroup"] [role="radio"]')]; const last = r[r.length - 1]; return document.querySelectorAll('#create-dialog [role="radiogroup"]').length === 1 && last.dataset.bChoose === "__gateway" && last.textContent.includes("Let the gateway choose") && last.textContent.includes("picks one of OpenAI's accounts for each run"); }));
 check("FM-10 an account kept by one bot is not offered to a new bot", !(await text(p, "#create-dialog")).includes("Pip's key"));
 await p.focus("#create-title");
@@ -54,7 +59,7 @@ await p.keyboard.press("Tab");
 check("FM-17 Tab reaches the account list with nothing chosen: its first row", await p.evaluate(() => document.activeElement.getAttribute("role") === "radio" && document.activeElement.dataset.bChoose === "openai:work"));
 await p.keyboard.press("Space");
 await p.waitForTimeout(60);
-check("FM-17 Space chooses the row and focus stays on it", await p.evaluate(() => document.activeElement.dataset.bChoose === "openai:work" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
+check("FM-17 Space chooses the row and focus stays on it", await p.evaluate(() => document.activeElement.dataset.bChoose === "openai:work" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="to-approvals"]').disabled));
 check("P1 two accounts of one provider are told apart by label", await p.evaluate(() => { const t = [...document.querySelectorAll("#create-dialog .b-choice-title")].map((x) => x.textContent); return t.includes("OpenAI · Work") && t.includes("OpenAI · Home"); }));
 await p.click('[data-b-choose="xai:default"]');
 check("P1 choosing an account shows model and effort side by side", await p.evaluate(() => { const m = document.querySelector('#create-dialog [data-b-select="model"]'); const e = document.querySelector('#create-dialog [data-b-select="effort"]'); return m && e && Math.abs(m.getBoundingClientRect().top - e.getBoundingClientRect().top) < 2 && m.textContent.includes("grok-4.7"); }));
@@ -81,9 +86,10 @@ check("P1 connected: the label step, with focus in the field", (await text(p, "#
 await p.keyboard.type("Studio");
 await p.click('[data-b="label-done"]');
 check("P1 back on the Account step with the new account chosen and the bot kept", (await text(p, "#create-title")) === "Account" && (await p.evaluate(() => document.querySelector('[role="radio"][aria-checked="true"]')?.textContent.includes("xAI · Studio") && document.querySelector("#create-dialog .b-lead").textContent.includes("Viral"))));
+await toCreate(p);
 await p.click('[data-b="create"]');
 check("P1 Create reads Creating… and is disabled", await p.evaluate(() => { const c = document.querySelector('[data-b="create"]'); return c.disabled && c.textContent === "Creating…"; }));
-await p.waitForTimeout(900);
+await p.waitForTimeout(1600);
 check("P1 after Create the new bot's composer has focus", await p.evaluate(() => document.activeElement.classList.contains("composer-input")));
 check("P1 the new bot is created on its account and opened", !(await dlg(p)) && (await p.evaluate(() => document.querySelector("#title-pill").getAttribute("aria-label").startsWith("Viral, Main") && window.bots.accounts().find((a) => a.id === window.bots.binding.viral.account)?.label === "Studio")));
 await p.close();
@@ -132,19 +138,19 @@ await p.close();
 p = await open("open=create&step=account&name=Viral&accounts=none");
 check("P1 no accounts: the way to connect one, and Let the gateway choose with the default model", await p.evaluate(() => !!document.querySelector('#create-dialog [data-b="connect"]') && document.querySelector("#create-dialog").textContent.includes("No accounts yet") && document.querySelector('[data-b-choose="__gateway"]').textContent.includes("uses what it has for OpenAI, with its default model, gpt-5.5")));
 await p.close();
-p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=failed");
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask&create=failed");
 await p.click('[data-b="create"]');
 await p.waitForTimeout(900);
 check("P1 a failed create keeps the dialog and says so", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Could not create the bot. Please try again."));
 await p.close();
 p = await open("open=create&step=account&name=Viral&access=write");
-check("P1 below admin: no Create, the admin request instead", await p.evaluate(() => !document.querySelector('[data-b="create"]') && document.querySelector("#create-dialog .access-bar").textContent.includes("Admin access needed.")));
+check("P1 below admin: no Next or Create, the admin request instead", await p.evaluate(() => !document.querySelector('[data-b="create"]') && !document.querySelector('[data-b="to-approvals"]') && document.querySelector("#create-dialog .access-bar").textContent.includes("Admin access needed.")));
 await p.click('#create-dialog [data-b="request"]');
 check("P1 asking the gateway", (await text(p, "#create-dialog .access-bar")).includes("Asking the gateway"));
 await p.waitForTimeout(800);
 check("P1 requested: the host's command and the request id", await p.evaluate(() => document.querySelector("#create-dialog .access-bar code").textContent === "openclaw devices approve 3f9a2c71" && document.querySelector('#create-dialog [aria-label="Copy request id"]')));
 await p.click('#create-dialog [data-b="request-check"]');
-check("P1 granted: Create appears, nothing chosen was lost", await p.evaluate(() => !!document.querySelector('[data-b="create"]') && document.querySelector("#create-dialog .b-lead").textContent.includes("Viral")));
+check("P1 granted: Next appears, nothing chosen was lost", await p.evaluate(() => !!document.querySelector('[data-b="to-approvals"]') && document.querySelector("#create-dialog .b-lead").textContent.includes("Viral")));
 await p.close();
 p = await open("access=read");
 check("P1 read-only: no way to create a bot", await p.evaluate(() => document.querySelector("#new-button").hidden));
@@ -171,9 +177,10 @@ await p.close();
 // FM-01: Let the gateway choose, and the default model's own account.
 p = await open("open=create&step=account&name=Viral");
 await p.click('[data-b-choose="__gateway"]');
-check("FM-01 Let the gateway choose enables Create and shows the default model's provider", await p.evaluate(() => !document.querySelector('[data-b="create"]').disabled && document.querySelector('#create-dialog [data-b-select="model"]').textContent.includes("gpt-5.5")));
+check("FM-01 Let the gateway choose enables Next and shows the default model's provider", await p.evaluate(() => !document.querySelector('[data-b="to-approvals"]').disabled && document.querySelector('#create-dialog [data-b-select="model"]').textContent.includes("gpt-5.5")));
+await toCreate(p);
 await p.click('[data-b="create"]');
-await p.waitForTimeout(900);
+await p.waitForTimeout(1600);
 check("FM-01 the bot is created with no fixed account, in its own state", await p.evaluate(() => window.bots.binding.viral.mode === "gateway" && window.bots.binding.viral.account === null));
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 check("FM-01 its settings say the gateway chooses, not No account", (await text(p, '#panel-settings [data-bs="account"]')).includes("Gateway chooses") && !(await text(p, "#panel-settings")).includes("No account"));
@@ -183,21 +190,112 @@ await p.close();
 p = await open("open=create&step=account&name=Viral&defacct=openai:work");
 check("FM-01 when the default model names an account, it is chosen, and the step says why", await p.evaluate(() => document.querySelector('[data-b-choose="openai:work"]').getAttribute("aria-checked") === "true" && document.querySelector("#create-dialog").textContent.includes("Chosen because the gateway's default model names it.")));
 await p.close();
-p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=partial");
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask&create=partial");
 await p.click('[data-b="create"]');
-await p.waitForTimeout(900);
+await p.waitForTimeout(1600);
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 await p.click('#panel-settings [data-bs="account"]');
 check("FM-13 created but the fallback write refused: said on the account page, with Try again for that bot", (await text(p, "#panel-settings")).includes("Clawtrate couldn't write Viral's empty fallback list") && (await p.evaluate(() => !!document.querySelector('#panel-settings [data-bs="write-fallbacks"]'))));
 check("R2-02 the note says no fallback models are set and that in-request reroutes remain, not that nothing moves the bot", (await text(p, "#panel-settings")).includes("Viral has no fallback models set, so the gateway's fallback list doesn't apply to it") && (await text(p, "#panel-settings")).includes("A provider can still switch the model inside a request") && !(await text(p, "#panel-settings")).includes("nothing moves it"));
 await p.close();
-p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=timeout");
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask&create=timeout");
 await p.click('[data-b="create"]');
 await p.waitForTimeout(650);
 check("FM-13 a first write that timed out looks for the bot before anything is sent again", (await text(p, "#create-dialog .b-foot")).includes("Checking whether Viral was created"));
-await p.waitForTimeout(900);
+await p.waitForTimeout(1500);
 check("FM-13 and continues with the one it finds: one bot, not two", await p.evaluate(() => window.app.bots.filter((b) => b.name === "Viral").length === 1));
 await p.close();
+
+// The first bot's command policy (controls.md section 10, bots.md section 3) -------------------------
+p = await open("open=create&step=account&name=Viral&chosen=xai:default");
+await p.click('[data-b="to-approvals"]');
+check("AP Next from Account opens Approvals, focused on its title", (await text(p, "#create-title")) === "Approvals" && (await focused(p)) === "create-title");
+check("AP its two choices, in words", await p.evaluate(() => {
+  const t = document.querySelector("#create-dialog").textContent;
+  return ["When Viral wants to run a command:", "Ask before acting", "Viral asks you before each command that isn't on this machine's allowlist. Listed commands run.", "Run without routine approvals", "Viral runs commands without asking first. It still can't change the gateway's settings or plugins, and anything that always asks still asks.", "Commands run on the gateway's computer, as Viral. You can change this later in Viral's settings."].every((w) => t.includes(w));
+}));
+check("AP nothing is chosen at first, and Create is unavailable, saying why", await p.evaluate(() => document.querySelectorAll('#create-dialog [data-b-perm][aria-checked="true"]').length === 0 && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose how Viral runs commands.")));
+check("AP the two choices are one radio group with one tab stop, neither marked as recommended", await p.evaluate(() => { const g = document.querySelectorAll('#create-dialog [role="radiogroup"]'); const r = [...document.querySelectorAll("#create-dialog [data-b-perm]")]; return g.length === 1 && r.length === 2 && r.filter((x) => x.tabIndex === 0).length === 1 && !/recommended/i.test(document.querySelector("#create-dialog").textContent); }));
+await p.click('[data-b="create"]', { force: true }).catch(() => {});
+await p.waitForTimeout(200);
+check("AP Create with nothing chosen makes nothing", (await dlg(p)) && (await p.evaluate(() => !window.app.bots.some((b) => b.name === "Viral"))));
+await p.focus("#create-title");
+await p.keyboard.press("Tab");
+await p.keyboard.press("Tab");
+check("AP Tab reaches the first choice, past Close", await p.evaluate(() => document.activeElement.dataset.bPerm === "ask"));
+await p.keyboard.press("ArrowDown");
+check("AP an arrow moves and chooses, and Create becomes available", await p.evaluate(() => document.activeElement.dataset.bPerm === "full" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
+await p.click('[data-b="to-account"]');
+check("AP Back returns to Account with its choice kept", (await text(p, "#create-title")) === "Account" && (await p.evaluate(() => document.querySelector('[data-b-choose="xai:default"]').getAttribute("aria-checked") === "true")));
+await p.click('[data-b="to-approvals"]');
+check("AP and Next returns with the approvals choice kept", await p.evaluate(() => document.querySelector('[data-b-perm="full"]').getAttribute("aria-checked") === "true"));
+await p.click('[data-b-perm="ask"]');
+await p.click('[data-b="create"]');
+await p.waitForTimeout(800);
+check("AP after the writes, the read-back comes first: nothing is said about the choice yet", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Checking what was written…") && !(await p.evaluate(() => document.querySelector("[data-b-created]"))));
+await p.waitForTimeout(900);
+check("AP created with Ask: the first task says so, once read back", !(await dlg(p)) && (await text(p, "[data-b-created]")).includes("Created with Ask before acting. Viral asks you before each command that isn't on this machine's allowlist."));
+check("AP the announcement names the choice", (await p.evaluate(() => [...document.querySelectorAll("[aria-live]")].map((e) => e.textContent).join(" "))).includes("Created Viral. Created with Ask before acting."));
+await p.close();
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=full");
+await p.click('[data-b="create"]');
+await p.waitForTimeout(1700);
+check("AP created with Run without routine approvals: the first task says so", (await text(p, "[data-b-created]")).includes("Created with Run without routine approvals. Viral runs commands without asking first.") && !(await p.evaluate(() => document.querySelector("[data-b-created]").dataset.tone)));
+await p.close();
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&stricter=1");
+check("AP a stricter approvals file is said under Run without routine approvals, before Create", (await text(p, '[data-b-perm="full"]')).includes("This computer's approvals file asks first, and the stricter setting wins, so Viral will still ask.") && !(await text(p, '[data-b-perm="ask"]')).includes("stricter"));
+await p.click('[data-b-perm="full"]');
+await p.click('[data-b="create"]');
+await p.waitForTimeout(1700);
+check("AP and after Create, the read-back says Viral will still ask", await p.evaluate(() => { const n = document.querySelector("[data-b-created]"); return n?.dataset.tone === "warn" && n.textContent.includes("Created with Run without routine approvals, but Viral will still ask. This computer's approvals file is stricter, and the stricter setting wins."); }));
+await p.close();
+p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=full&create=permfail");
+await p.click('[data-b="create"]');
+await p.waitForTimeout(1700);
+check("AP a policy that doesn't read back: said, with Write it again, and no choice claimed", await p.evaluate(() => { const n = document.querySelector("[data-b-created]"); return n?.dataset.tone === "warn" && n.textContent.includes("Couldn't confirm how Viral runs commands. Until it is written, Viral can't run commands.") && !!n.querySelector('[data-b="perm-again"]') && !n.textContent.includes("Created with"); }));
+await p.close();
+for (const [label, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["phone", { width: 390, height: 844 }, "&width=phone"]]) {
+  p = await open(`open=create&step=approvals&name=Viral&chosen=xai:default&stricter=1${query}`, viewport);
+  check(`AP at ${label}: the step fits with no sideways scroll, Create in view`, await p.evaluate(() => { const c = document.querySelector('[data-b="create"]').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth + 1 && c.bottom <= innerHeight && c.right <= innerWidth; }));
+  check(`AP at ${label}: each choice is at least 48 px tall`, await p.evaluate(() => { const r = [...document.querySelectorAll("[data-b-perm]")]; return r.length === 2 && r.every((x) => x.getBoundingClientRect().height >= 48); }));
+  await p.close();
+}
+
+// F-005: a gateway with no bots opens on the first-bot prompt.
+p = await open("state=nobots");
+check("FB no bots: the first-bot prompt, in place of No bots to show", (await text(p, "#transcript")).includes("Make your first bot") && (await text(p, "#transcript")).includes("Give it a name and a picture, choose the account it runs on and how it runs commands.") && !(await text(p, "#transcript")).includes("No bots to show"));
+await p.click('[data-b="first-bot"]');
+check("FB New bot on the prompt opens New bot; nothing is created by the prompt", (await dlg(p)) && (await focused(p)) === "b-name" && (await p.evaluate(() => window.app.bots.length === 0)));
+await p.keyboard.type("Viral");
+await p.click('[data-b="next"]');
+await p.click('[data-b-choose="xai:default"]');
+await toCreate(p, "ask");
+await p.click('[data-b="create"]');
+await p.waitForTimeout(1700);
+check("FB after Create the first bot is the only bot, its task open with Message Viral", await p.evaluate(() => window.app.bots.length === 1 && !document.querySelector("[data-b-first]") && document.querySelector(".composer-input")?.getAttribute("placeholder") === "Message Viral"));
+await p.close();
+p = await open("state=nobots&access=read");
+check("FB below admin: the prompt says what the default bot does now and that creating needs admin", await p.evaluate(() => { const t = document.querySelector("#transcript").textContent; return t.includes("Until you make one, the gateway's default bot runs commands without asking.") && t.includes("Creating a bot changes the gateway's settings, which needs admin access.") && !!document.querySelector('#transcript [data-b="request"]') && !document.querySelector('[data-b="first-bot"]'); }));
+await p.click('#transcript [data-b="request"]');
+await p.waitForTimeout(800);
+check("FB below admin: Request admin access leads to the request", (await text(p, "#transcript .access-bar")).includes("Waiting for the gateway's owner."));
+await p.close();
+for (const [perm, words] of [["guarded", "asks before commands that aren't on its machine's allowlist."], ["read-only", "can't run commands."]]) {
+  p = await open(`state=nobots&access=write&defperm=${perm}`);
+  check(`FB below admin, the default bot ${perm}: said as read`, (await text(p, "[data-b-default-policy]")).includes(words));
+  await p.close();
+}
+p = await open("state=nobots&access=write&defperm=none");
+check("FB below admin, no policy read: nothing is said about it", await p.evaluate(() => !document.querySelector("[data-b-default-policy]")));
+await p.close();
+p = await open();
+check("FB a gateway with bots shows no first-bot prompt", await p.evaluate(() => !document.querySelector("[data-b-first]")));
+await p.close();
+for (const [label, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["phone", { width: 390, height: 844 }, "&width=phone"]]) {
+  p = await open(`state=nobots&access=read${query}`, viewport);
+  check(`FB at ${label}: the prompt fits with no sideways scroll`, await p.evaluate(() => { const r = document.querySelector("[data-b-first]")?.getBoundingClientRect(); return !!r && r.width > 0 && document.documentElement.scrollWidth <= innerWidth + 1; }));
+  await p.close();
+}
 
 // Settings, Accounts.
 p = await open();

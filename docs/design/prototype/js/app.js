@@ -424,7 +424,9 @@
     const newButton = b && canWrite() ? `<button type="button" class="button" data-variant="primary" data-new="${b.id}">New task</button>` : "";
     const choose = onePane() ? `<button type="button" class="button" data-action="back">Choose a task</button>` : "";
     if (!b) {
-      el.innerHTML = emptyState(null, state0 === "discovering" ? "Loading" : "No bots to show", state0 === "discovering" ? "Loading this gateway's bots." : "This gateway has no bots yet.");
+      // A page built on this one may draw its own prompt for a gateway with no bots (bots.html: the first bot).
+      const prompt = state0 === "discovering" ? null : CT.emptyGateway?.();
+      el.innerHTML = prompt || emptyState(null, state0 === "discovering" ? "Loading" : "No bots to show", state0 === "discovering" ? "Loading this gateway's bots." : "This gateway has no bots yet.");
     } else if (!b.tasks.length) {
       el.innerHTML = emptyState(b, "No tasks yet", canWrite() ? `Start a task and ${b.name} will take it from there.` : `Conversations with ${b.name} will be listed here.`, newButton);
     } else if (!t) {
@@ -435,7 +437,7 @@
         `<div class="skeleton" style="width:46%;margin-left:auto;margin-top:22px"></div>` +
         `<div class="skeleton" style="width:62%;height:88px;margin-top:16px"></div><div class="skeleton" style="width:38%"></div></div>`;
     } else if (t.fresh && !t.html) {
-      el.innerHTML = emptyState(b, "Nothing here yet", `Say what you need, and ${b.name} will take it from there.`);
+      el.innerHTML = emptyState(b, "Nothing here yet", `Say what you need, and ${b.name} will take it from there.`) + (t.note || "");
     } else {
       const body =
         t.html ??
@@ -1026,6 +1028,6 @@
     });
   }
 
-  window.app = { model, bots, setConnection, setPanel, setTab, openTask, selectBot, toggleFold, togglePin, newTask, send, holdPlace, overlaying };
+  window.app = { model, bots, render, setConnection, setPanel, setTab, openTask, selectBot, toggleFold, togglePin, newTask, send, holdPlace, overlaying };
   ext.ready?.(window.app);
 })();

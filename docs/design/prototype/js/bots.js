@@ -13,7 +13,10 @@
 //   req=asking|requested|denied|expired|failed|granted   the request for admin access
 //   accounts=none            no account connected yet
 //   chosen=<profile id>      the account chosen in the Account step
-//   create=creating|slow|failed
+//   create=creating|slow|failed|permfail (the command policy didn't read back)
+//   step=approvals           the Approvals step; perm=ask|full chooses in it (nothing by default)
+//   stricter=1               the gateway's approvals file asks first (controls.md section 10)
+//   state=nobots             a gateway with no bots: the first-bot prompt (bots.md section 3)
 //   name=<text>              the new bot's name
 
 (function () {
@@ -105,7 +108,7 @@
   const B = {
     access: ["read", "write", "admin"].includes(p("access")) ? p("access") : "admin",
     req: p("req") || "none", // the request for admin access
-    draft: { name: p("name") ?? "", body: "drop", color: "#ff6f9c", account: p("chosen") || DEFAULT_MODEL.account || null, model: null, effort: "Medium" },
+    draft: { name: p("name") ?? "", body: "drop", color: "#ff6f9c", account: p("chosen") || DEFAULT_MODEL.account || null, model: null, effort: "Medium", perm: ["ask", "full"].includes(p("perm")) ? p("perm") : null },
     create: { step: p("step") || "look", status: p("create") || "idle", opener: null },
     connect: null, // { from, view, option, stage, ... }
     settings: { section: p("section") || "gateway", account: p("account") || null, pane: p("account") || p("section") ? "section" : "nav", edit: false },
@@ -262,7 +265,7 @@
   }
 
   // Re-rendering keeps focus on the same control: it is found again by its data.
-  const KEYS = ["bChoose", "bBody", "bColor", "bSelect", "bOption", "bAccount", "bSection", "t3", "c", "bs", "b"];
+  const KEYS = ["bChoose", "bPerm", "bBody", "bColor", "bSelect", "bOption", "bAccount", "bSection", "t3", "c", "bs", "b"];
   function keep(root, render) {
     const el = document.activeElement;
     let selector = null;
@@ -344,15 +347,42 @@
         (DEFAULT_MODEL.account && B.draft.account === DEFAULT_MODEL.account ? `<p class="b-hint">Chosen because the gateway's default model names it.</p>` : "") +
         (B.createNote ? note(`<p>${esc(B.createNote)}</p>`) : "") +
         chosenPart(name);
-      const busy = ["creating", "slow", "checking"].includes(B.create.status);
       const none = !B.draft.account;
+      foot = !isAdmin()
+        ? adminBar("Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask.")
+        : button("Next", `data-b="to-approvals" data-size="lg"${none ? " disabled" : ""}`, "primary") +
+          (none ? `<p class="b-hint" style="text-align:center;margin:0">Choose an account, or let the gateway choose.</p>` : "");
+    } else if (step === "approvals") {
+      // controls.md section 10: nothing is chosen at first; Create waits for a choice.
+      const name = B.draft.name.trim() || "New bot";
+      const n = esc(name);
+      head = `<header class="b-head">${back("Back to accounts", "to-account")}<h2 id="create-title" tabindex="-1">Approvals</h2>${close("Close")}</header>`;
+      const row = (value, title, line) =>
+        `<li><button type="button" class="b-choice" role="radio" aria-checked="${B.draft.perm === value}" tabindex="-1" data-b-perm="${value}" aria-describedby="b-perm-${value}"${isAdmin() ? "" : ' aria-disabled="true"'}>` +
+        `<span class="b-choice-text"><span class="b-choice-title">${title}</span><span class="b-choice-sub b-wrap" id="b-perm-${value}">${line}</span></span>${icon("check", "icon b-tick")}</button></li>`;
+      body =
+        `<span class="b-preview" style="--avatar-create:56px;margin-bottom:10px" aria-hidden="true">${draftArt()}</span>` +
+        `<p class="b-lead" id="b-perm-lead">When ${n} wants to run a command:</p>` +
+        `<div role="radiogroup" aria-labelledby="b-perm-lead" aria-label="Approvals"><ul class="b-choices">` +
+        row("ask", "Ask before acting", `${n} asks you before each command that isn't on this machine's allowlist. Listed commands run.`) +
+        row(
+          "full",
+          "Run without routine approvals",
+          `${n} runs commands without asking first. It still can't change the gateway's settings or plugins, and anything that always asks still asks.` +
+            (p("stricter") === "1" ? ` <span data-tone="warn" data-b-stricter>This computer's approvals file asks first, and the stricter setting wins, so ${n} will still ask.</span>` : ""),
+        ) +
+        `</ul></div>` +
+        `<p class="b-hint">Commands run on the gateway's computer, as ${n}. You can change this later in ${n}'s settings.</p>`;
+      const busy = ["creating", "slow", "checking", "reading"].includes(B.create.status);
+      const none = !B.draft.perm;
       foot = !isAdmin()
         ? adminBar("Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask.")
         : (B.create.status === "failed" ? note(`<p><b>Could not create the bot.</b> Please try again.</p>`, "danger") : "") +
           button(busy ? "Creating…" : "Create", `data-b="create" data-size="lg"${busy || none ? " disabled" : ""}`, "primary") +
-          (none && !busy ? `<p class="b-hint" style="text-align:center;margin:0">Choose an account, or let the gateway choose.</p>` : "") +
+          (none && !busy ? `<p class="b-hint" style="text-align:center;margin:0" data-b-perm-hint>Choose how ${n} runs commands.</p>` : "") +
           (B.create.status === "slow" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Still creating. What you entered is kept.</p>` : "") +
-          (B.create.status === "checking" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Checking whether ${esc(name)} was created…</p>` : "");
+          (B.create.status === "checking" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Checking whether ${n} was created…</p>` : "") +
+          (B.create.status === "reading" ? `<p class="b-hint" role="status" style="text-align:center;margin:0" data-b-reading>Checking what was written…</p>` : "");
     } else {
       const view = renderConnect();
       head = `<header class="b-head">${back(view.backLabel, "connect-back")}<h2 id="create-title" tabindex="-1">${view.title}</h2>${close("Close")}</header>`;
@@ -386,7 +416,7 @@
     `<small>${label}</small><span>${esc(value || "—")}</span>${icon("chevron")}</button>`;
 
   function create() {
-    if (!isAdmin()) return;
+    if (!isAdmin() || !B.draft.perm) return;
     const want = p("create");
     B.create.status = "creating";
     renderCreate();
@@ -396,7 +426,7 @@
       setTimeout(() => {
         B.create.status = "checking";
         renderCreate();
-        setTimeout(finishCreate, 700);
+        setTimeout(readBack, 700);
       }, 500);
       return;
     }
@@ -415,10 +445,28 @@
           if (want === "failed") announce("Could not create the bot");
           return;
         }
-        finishCreate();
+        readBack();
       },
       want === "slow" ? 600 : 700,
     );
+  }
+
+  // Step 3's command policy is said as chosen only after it reads back (controls.md section 10).
+  function readBack() {
+    B.create.status = "reading";
+    renderCreate();
+    setTimeout(finishCreate, 600);
+  }
+
+  // The note in the new bot's first task, from the read-back.
+  function createdNote(name, perm) {
+    const n = esc(name);
+    const box = (tone, html) => `<div class="b-note b-created"${tone ? ` data-tone="${tone}"` : ""} role="status" data-b-created>${icon(tone ? "warning" : "check")}<div><p>${html}</p>${tone && p("create") === "permfail" ? `<div class="b-actions">${button("Write it again", 'data-b="perm-again" data-size="sm"')}</div>` : ""}</div></div>`;
+    if (p("create") === "permfail") return box("warn", `<b>Couldn't confirm how ${n} runs commands.</b> Until it is written, ${n} can't run commands.`);
+    if (perm === "full" && p("stricter") === "1")
+      return box("warn", `<b>Created with Run without routine approvals, but ${n} will still ask.</b> This computer's approvals file is stricter, and the stricter setting wins.`);
+    if (perm === "full") return box("", `<b>Created with Run without routine approvals.</b> ${n} runs commands without asking first.`);
+    return box("", `<b>Created with Ask before acting.</b> ${n} asks you before each command that isn't on this machine's allowlist.`);
   }
 
   function finishCreate() {
@@ -430,13 +478,16 @@
     // An account: its model with @account. "Let the gateway choose": the model, no account.
     // Both with an empty fallback list; create=partial shows that second write refused.
     binding[id] = { account: a ? a.id : null, mode: a ? "account" : "gateway", model: B.draft.model, effort: B.draft.effort, locked: false, fallbackWriteFailed: p("create") === "partial" };
-    app.bots.push({ id, name, label: "", tasks: [{ id: `${id}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
+    const perm = B.draft.perm;
+    const createdWith = createdNote(name, perm);
+    app.bots.push({ id, name, label: "", tasks: [{ id: `${id}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true, note: createdWith }] });
     B.create = { step: "look", status: "idle", opener: null, created: true };
-    B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium" };
+    B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium", perm: null };
     createDialog.close();
     app.selectBot(id);
     $(".composer-input")?.focus();
-    announce(`Created ${name}`);
+    const said = createdWith.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().split(/(?<=\.) /)[0];
+    announce(`Created ${name}. ${said}`);
   }
 
   // Connecting an account: the same component in New bot and in Settings -----------------------------
@@ -820,6 +871,7 @@
   // Re-render whichever dialog shows the connect component.
   function rerender(focus) {
     CT.botsRender?.();
+    if (!app.bots.length) app.render();
     if (createDialog.open) {
       renderCreate();
       if (focus) focusFirst(createDialog);
@@ -1048,6 +1100,14 @@
       renderCreate();
       return;
     }
+    const perm = t.closest("[data-b-perm]");
+    if (perm) {
+      if (!isAdmin()) return;
+      perm.focus();
+      B.draft.perm = perm.dataset.bPerm;
+      renderCreate();
+      return;
+    }
     const sel = t.closest("[data-b-select]");
     if (sel && inDialog === createDialog) {
       if (menu && menu.opener === sel) return closeSelect(true);
@@ -1104,6 +1164,20 @@
         B.create.step = "look";
         renderCreate();
         focusFirst(createDialog);
+        break;
+      case "to-approvals":
+        if (!B.draft.account) break;
+        B.create.step = "approvals";
+        renderCreate();
+        focusFirst(createDialog);
+        break;
+      case "to-account":
+        B.create.step = "account";
+        renderCreate();
+        focusFirst(createDialog);
+        break;
+      case "first-bot":
+        openCreate(t.closest("button"));
         break;
       case "create":
         create();
@@ -1358,7 +1432,7 @@
   // The shell's own question, "may this connection write?", follows the tier.
   if (B.access === "read") {
     app.model.access = "read";
-    app.selectBot(app.model.selectedBot);
+    if (app.bots.length) app.selectBot(app.model.selectedBot);
   }
   if (p("open") === "create") {
     if (B.create.step === "connect") startConnect("create", p("connect"), p("stage"));
@@ -1371,5 +1445,29 @@
     openSettings($(".gateway-pill"));
     if (B.connect?.stage === "connected") connectTo("connected");
   }
+  // A gateway with no bots: the first-bot prompt (bots.md section 3, F-005). Below
+  // admin it says what the gateway's default bot does with commands, as read
+  // (defperm=full|guarded|read-only|none; a fresh install reads full).
+  CT.emptyGateway = () => {
+    const DEFAULT_POLICY = {
+      full: "Until you make one, the gateway's default bot runs commands without asking.",
+      guarded: "Until you make one, the gateway's default bot asks before commands that aren't on its machine's allowlist.",
+      "read-only": "Until you make one, the gateway's default bot can't run commands.",
+      none: "",
+    };
+    const said = DEFAULT_POLICY[p("defperm") || "full"] ?? "";
+    return (
+      `<div class="empty b-first" data-b-first><div>` +
+      `<span class="b-preview" aria-hidden="true">${draftArt()}</span>` +
+      `<h1>Make your first bot</h1><p>Give it a name and a picture, choose the account it runs on and how it runs commands.</p>` +
+      (isAdmin()
+        ? `<div class="empty-actions">${button("New bot", 'data-b="first-bot"', "primary")}</div>`
+        : (said ? `<p class="b-hint" data-b-default-policy>${said}</p>` : "") +
+          `<div class="b-first-bar">${adminBar("Creating a bot changes the gateway's settings, which needs admin access.")}</div>`) +
+      `</div></div>`
+    );
+  };
+  if (!app.bots.length) app.render();
+
   window.bots = { B, accounts: () => accounts, binding, openCreate, openSettings, connectTo, grantAdmin };
 })();
