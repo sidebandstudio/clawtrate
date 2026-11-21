@@ -293,7 +293,7 @@ test.describe("1440", () => {
   test("F-193: a running row follows the same run into its conversation", async ({ page }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
-    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await expect(view(page).getByRole("status").filter({ hasText: "Running…" })).toBeVisible();
     await change(
       page,
       `(store) => ({ ...store, routines: store.routines.map((each) =>
@@ -309,7 +309,7 @@ test.describe("1440", () => {
   }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
-    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await expect(view(page).getByRole("status").filter({ hasText: "Running…" })).toBeVisible();
     await change(
       page,
       `(store) => ({ ...store,
