@@ -783,3 +783,5 @@ Then:
 - Choosing a bot's machine (F-046) and the list of what a bot can reach (F-047).
 - Duplicate, export and delete (F-048, F-049, F-050).
 - A plugin that writes the one-account order and guards it (research C.4); with it, Lock would become a button, and "What a lock doesn't cover" would shrink.
+
+`bots-lifecycle.md` designs the picture editor, the name and label in place, the instructions, duplicate, export and delete, with the primary bot, import and the Settings tab's Manage group.
