@@ -16,7 +16,8 @@ const wait = async (p, ms) => {
 const open = async (query = "", viewport = { width: 1440, height: 900 }, options = {}) => {
   const p = await b.newPage({ viewport, acceptDownloads: true, ...options });
   p.on("pageerror", (e) => out.push("PAGEERROR " + e));
-  await p.clock.install({ time: new Date("2026-11-18T15:12:00Z") });
+  // Paused straight away: a clock installed first would run in real time, and a late pause would
+  // then be in its past. One that pauseAt installs starts at zero, so pausing is always forward.
   await p.clock.pauseAt(new Date("2026-11-18T15:12:01Z"));
   await p.goto(base + query);
   await wait(p, 120);
