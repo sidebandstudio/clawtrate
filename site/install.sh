@@ -2,7 +2,7 @@
 # Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet.
 # Download it whole, then run it:
 #
-#   sh -c 'f=$(mktemp) && trap "rm -f \"$f\"" EXIT && c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
+#   sh -c 'f=$(mktemp) && trap "rm -f \"\$f\"" EXIT && c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
 #
 # It reads the Beta feed, takes the build for this Mac's processor, and checks
 # the download's SHA-256, the archive's layout, the app's bundle id, version and
@@ -58,9 +58,15 @@ finish() {
       say "Nothing was installed." >&2
     fi
   fi
-  if [ -n "$STAGE" ] && [ -z "$KEEP_STAGE" ]; then rm -rf "$STAGE"; fi
-  if [ -n "$LOCKED" ]; then rmdir "$LOCK" 2>/dev/null || :; fi
-  if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+  if [ -n "$STAGE" ] && [ -z "$KEEP_STAGE" ]; then
+    rm -rf "$STAGE" || say "Could not remove the staging folder at $STAGE." >&2
+  fi
+  if [ -n "$LOCKED" ]; then
+    rmdir "$LOCK" || say "Could not remove the install lock at $LOCK." >&2
+  fi
+  if [ -n "$WORK" ]; then
+    rm -rf "$WORK" || say "Could not remove the temporary folder at $WORK." >&2
+  fi
   exit "$status"
 }
 
@@ -181,11 +187,28 @@ JS
   osascript -l JavaScript "$WORK/feed.js" "$WORK/latest-mac.json" "$1" "$RELEASES" "$CLAWTRATE_TEAM_ID" 2>"$WORK/feed-error.txt"
 }
 
+# Older curl versions check only a declared length. Limit the output file even when there is
+# no Content-Length. The Mac's bash measures file limits in KiB outside POSIX mode.
+download() {
+  if [ "$PROTO" = "=http" ]; then set -- "$@" --noproxy 127.0.0.1; fi
+  BASH_ENV=/dev/null /bin/bash -c '
+    set +o posix
+    bytes=$1
+    shift
+    blocks=$((bytes / 1024))
+    current=$(ulimit -Sf) || exit 1
+    if [ "$current" = unlimited ] || [ "$current" -gt "$blocks" ]; then
+      ulimit -Sf "$blocks" || exit 1
+    fi
+    exec curl -q --max-filesize "$bytes" "$@"
+  ' download "$@" -sS --globoff --proto "$PROTO" --max-redirs 0
+}
+
 # Fetches the build: the release download address, and at most one redirect
 # to the release-asset origin, checked before it is followed. A download that
 # stalls below 1 KB/s for 30 seconds fails.
 fetch_zip() {
-  first="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+  first="$(download 2000000000 \
     --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code} %{redirect_url}' --url "$1")" ||
     stop "the download did not finish."
@@ -203,7 +226,7 @@ fetch_zip() {
   case "$next" in
     *'#'* | *' '*) stop "the download's redirect is not a plain address." ;;
   esac
-  code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+  code="$(download 2000000000 \
     --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code}' --url "$next")" ||
     stop "the download did not finish."
@@ -412,7 +435,7 @@ main() {
 
   # 1. The feed: a direct HTTP 200, read strictly.
   say "Reading the Beta feed: $FEED"
-  code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 65536 \
+  code="$(download 65536 \
     --connect-timeout 15 --max-time 30 -o "$WORK/latest-mac.json" -w '%{http_code}' --url "$FEED" 2>/dev/null)" ||
     stop "could not read the Beta feed. Check your connection and try again."
   case "$code" in
@@ -448,9 +471,13 @@ main() {
   # 4. The destination: a real folder, locked for this install, with no Clawtrate.
   [ -d "$DEST" ] && [ ! -L "$DEST" ] || stop "$DEST is not a folder."
   [ -w "$DEST" ] || stop "you cannot write to $DEST without an administrator. Use the download on https://clawtrate.dev instead."
-  mkdir "$LOCK" 2>/dev/null ||
+  cancelled=""
+  trap 'cancelled=1' INT TERM HUP
+  (trap '' INT TERM HUP; exec mkdir "$LOCK") 2>/dev/null ||
     stop "another Clawtrate install is using $DEST. If none is running, remove $LOCK and try again."
   LOCKED=1
+  trap 'exit 1' INT TERM HUP
+  [ -z "$cancelled" ] || exit 1
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then already_installed; fi
 
   # 5. Stage beside the target, check the staged copy as the same build, and
@@ -488,20 +515,26 @@ main() {
       STAGED_ID=""
       stop "$failed, and $TARGET is no longer the copy this installer placed. It was left as it was."
     fi
+    # A signal or a failed stat can leave the moved item unidentified. Preserve it until proven ours.
+    KEEP_STAGE=1 LEFT="Could not confirm what was moved. The staging folder is at $STAGE."
     mv -n "$TARGET" "$STAGE/" 2>/dev/null || :
     moved="$(stat -f '%d:%i' "$STAGE/$APP" 2>/dev/null)" || moved=""
     if [ "$moved" = "$STAGED_ID" ]; then
-      STAGED_ID=""
+      STAGED_ID="" KEEP_STAGE="" LEFT=""
       stop "$failed, so it was taken out again."
     elif [ -n "$moved" ]; then
-      STAGED_ID="" KEEP_STAGE=1 LEFT="What was taken out is at $STAGE/$APP. This installer did not delete it."
+      STAGED_ID="" LEFT="What was taken out is at $STAGE/$APP. This installer did not delete it."
       stop "$failed, and $TARGET changed while it was taken out."
-    elif [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
-      STAGED_ID="" LEFT="Move $TARGET to the Trash."
+    elif [ ! -e "$STAGE/$APP" ] && [ ! -L "$STAGE/$APP" ] && [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
+      STAGED_ID="" KEEP_STAGE="" LEFT="Move $TARGET to the Trash."
       stop "$failed and could not be taken out."
     fi
     STAGED_ID=""
     stop "$failed, and $TARGET is no longer the copy this installer placed. It was left as it was."
+  fi
+  if [ -L "$TARGET" ] || [ ! -d "$TARGET" ] || [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" != "$STAGED_ID" ]; then
+    STAGED_ID=""
+    stop "$TARGET changed during its final check. Run the installer again to check the destination."
   fi
   PHASE=installed
   say "Installed Clawtrate $APP_VERSION in $TARGET."
