@@ -1605,12 +1605,6 @@ test("F-067: on a real gateway, a progress row and two answers delivered as repl
   test.setTimeout(240_000);
   await openShell(page);
   const { key, title } = await ownTask(page, "Answers in threads");
-  const questions = ["The first question. #text", "The second question. #text"];
-  for (const words of questions) {
-    await composer(page).fill(words);
-    await page.keyboard.press("Enter");
-    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
-  }
   type Row = {
     role: string;
     content?: unknown;
@@ -1620,17 +1614,25 @@ test("F-067: on a real gateway, a progress row and two answers delivered as repl
   const rows = async () =>
     (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 50 }))
       .messages;
+  const userRows = async () => (await rows()).filter((row) => row.role === "user").length;
+  // The outbox sends a message once write access is held, after Enter returns: idle means
+  // the turn is done only once the gateway holds the message.
+  const send = async (words: string) => {
+    const before = await userRows();
+    await composer(page).fill(words);
+    await page.keyboard.press("Enter");
+    await expect.poll(userRows, { timeout: 60_000 }).toBe(before + 1);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  };
+  const questions = ["The first question. #text", "The second question. #text"];
+  for (const words of questions) await send(words);
   const parents = (await rows())
     .filter((row) => row.role === "user")
     .map((row) => row.__openclaw!.id!);
   expect(parents).toHaveLength(2);
   // Each turn: text beside a call, a row the gateway marks as no reply, then the answer it marks
   // as a reply to one of the two messages.
-  for (const parent of parents) {
-    await composer(page).fill(`#reply-to ${parent}`);
-    await page.keyboard.press("Enter");
-    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
-  }
+  for (const parent of parents) await send(`#reply-to ${parent}`);
   const answers = (await rows()).filter((row) => row.openclawDelivery?.replyToId);
   expect(answers.map((row) => row.openclawDelivery!.replyToId)).toEqual(parents);
 
