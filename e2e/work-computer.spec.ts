@@ -204,13 +204,21 @@ test.describe.configure({ mode: "serial" });
 test.setTimeout(240_000);
 
 const WATCH_TASK = "Computer watch";
-let watchKey = "";
+let watchKey: Promise<string> | null = null;
+/**
+ * The task the Watch checks share, created and browsed by whichever of them runs first, so a
+ * run that selects only some of them (`-g`) still has it.
+ */
+const watchTask = () =>
+  (watchKey ??= createTask("e2e-computer-watch", WATCH_TASK).then(async (key) => {
+    await runInTask(key, "#browse");
+    return key;
+  }));
 
 test("F-139 F-142: a bot opens a scripted loopback page in its own browser; the Computer tab shows nothing until Watch, then the page live, full window on Open", async ({
   browser,
 }) => {
-  watchKey = await createTask("e2e-computer-watch", WATCH_TASK);
-  await runInTask(watchKey, "#browse");
+  await watchTask();
   const { page, close } = await viewer(browser, true, WATCH_TASK);
   try {
     // The header's button appears once the task used the browser tool, and opens Computer.
@@ -267,6 +275,7 @@ test("F-139 F-142: a bot opens a scripted loopback page in its own browser; the 
 test("F-142 F-145: a take is refused while the bot acts and granted once its work has settled; typed input reaches the page; giving control back frees the bot", async ({
   browser,
 }) => {
+  const key = await watchTask();
   const { page, close } = await viewer(browser, true, WATCH_TASK);
   try {
     await showComputer(page);
@@ -303,7 +312,7 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
     });
 
     // The bot acts in its browser: a slow navigation, past the plugin's drain deadline.
-    const slow = runInTask(watchKey, "#browse-slow");
+    const slow = runInTask(key, "#browse-slow");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("computer-button")).toHaveAttribute("data-active", "true", {
       timeout: 60_000,
@@ -333,7 +342,7 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
       timeout: 20_000,
     });
     // The bot's browser works again: its next browser call is not refused.
-    const read = await runInTask(watchKey, "#browse-read");
+    const read = await runInTask(key, "#browse-read");
     expect(read).not.toContain("A person has control of my browser");
     if (SHOTS) {
       // The phone's full view, watching and in control.
@@ -437,6 +446,7 @@ test("F-144 F-145: a real question while Pip's browser can be taken: its card, W
 test("F-142: when the gateway stops answering renewals, You have control ends within the lease: input stops at once, and the bar says control isn't confirmed", async ({
   browser,
 }) => {
+  await watchTask();
   const { page, close } = await viewer(browser, true, WATCH_TASK);
   // This run's own instance's gateway, by its PID from the tool's marker: paused, never stopped.
   const marker = readMarker(openInstance(COMPUTER).stateDir);
@@ -488,6 +498,7 @@ test("F-142: when the gateway stops answering renewals, You have control ends wi
 test("F-142 F-144: a second device sees who holds the browser, and a read-only device is never offered control", async ({
   browser,
 }) => {
+  await watchTask();
   const holder = await viewer(browser, true, WATCH_TASK);
   const other = await viewer(browser, true, WATCH_TASK);
   const reader = await viewer(browser, false, WATCH_TASK);
@@ -546,6 +557,7 @@ test("F-142 F-144: a second device sees who holds the browser, and a read-only d
 test("F-142 F-150: a dropped connection ends the view and control at once, and once connected again the tab reads the browser's leases before offering anything", async ({
   browser,
 }) => {
+  await watchTask();
   const { page, close } = await viewer(browser, true, WATCH_TASK);
   try {
     await showComputer(page);

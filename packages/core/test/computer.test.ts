@@ -1573,6 +1573,10 @@ describe("closing edits: tab choice, competing takes, confirmation in time, hand
     expect(h.pane().control.status).toBe("unverified");
     await vi.advanceTimersByTimeAsync(1_900);
     answer({ ok: true, renewWithinMs: 6_000, streamRenewed: false, leaseRenewed: true });
+    // As the late reply lands, too: it never restores control, not even for a moment.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control.status).toBe("unverified");
+    expect(h.views.input(h.viewer, { kind: "text", text: "late" })).toBe(false);
     await vi.advanceTimersByTimeAsync(1_200);
     // 7.6 s: the plugin's deadline (7.5 s) has passed; nothing here says control is held.
     expect(h.pane().control.status).toBe("unverified");
