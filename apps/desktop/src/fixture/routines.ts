@@ -468,13 +468,16 @@ const createdId = (key: string) => `routine-${key.slice(0, 8)}`;
 export function routineCommands(now: number, params: RoutineParams) {
   /** Creates in doubt whose write has not landed yet, by draft key. */
   const drafts = new Map<string, Routine>();
-  /** Runs started with Run now, newest first, and the routine's last run before them. */
-  const ranNow = new Map<string, { before: number | null; runs: RoutineRun[] }>();
+  /**
+   * Each routine's recorded runs, newest first, as first read. A run record is
+   * a fact: a later edit or Run now adds to it and never rebuilds it from the
+   * routine as it is now.
+   */
+  const recorded = new Map<string, RoutineRun[]>();
   const runsOf = (routine: Routine) => {
-    const ran = ranNow.get(routine.id);
-    return ran
-      ? [...ran.runs, ...fixtureRuns({ ...routine, lastRunAt: ran.before }, now, params)]
-      : fixtureRuns(routine, now, params);
+    let runs = recorded.get(routine.id);
+    if (!runs) recorded.set(routine.id, (runs = fixtureRuns(routine, now, params)));
+    return runs;
   };
   return (
     command: BridgeCommand,
@@ -499,6 +502,13 @@ export function routineCommands(now: number, params: RoutineParams) {
     // A late answer changes only a routine the gateway still has, never brings back a deleted one.
     const replace = (next: Routine) =>
       put((all) => all.map((each) => (each.id === next.id ? next : each)));
+    // A create with a draft key the gateway already has updates that routine, as `cron.add` does.
+    const created = (next: Routine) =>
+      put((all) =>
+        all.some((each) => each.id === next.id)
+          ? all.map((each) => (each.id === next.id ? next : each))
+          : [...all, next],
+      );
     const admin = () => get().connection.canAdmin;
     // A write names the gateway its draft came from, as the engine refuses one
     // that does not (routines.ts `blocked`): a save before the identity is read,
@@ -541,7 +551,7 @@ export function routineCommands(now: number, params: RoutineParams) {
           return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
         }
         return later(400, () => {
-          put((all) => [...all, made]);
+          created(made);
           return { status: "saved", routine: made };
         });
       }
@@ -553,7 +563,7 @@ export function routineCommands(now: number, params: RoutineParams) {
           // The write lands at the first check; a later one reads what the gateway has now.
           const made = drafts.get(command.key);
           drafts.delete(command.key);
-          if (made) put((all) => [...all, made]);
+          if (made) created(made);
           const routine = kept(createdId(command.key));
           return routine
             ? savedAs(routine, routine.text, { input: command.input })
@@ -645,14 +655,14 @@ export function routineCommands(now: number, params: RoutineParams) {
         return later(300, () => {
           const startedAt = Date.now();
           const runId = `manual:${routine.id}:${startedAt}:1`;
+          // The runs before this one, as recorded while the routine was as it was then.
+          const earlier = runsOf(routine);
           replace({ ...routine, runningAt: startedAt });
           setTimeout(() => {
             const ran = kept(routine.id);
             if (!ran) return;
-            // Recorded as the run it is, so the runs before it keep their ids and times.
-            const record = ranNow.get(routine.id) ?? { before: routine.lastRunAt, runs: [] };
-            record.runs.unshift(run(ran, startedAt, { runId, manual: true }));
-            ranNow.set(routine.id, record);
+            // Recorded as the run it is, on top of the runs before it, which stay as they were.
+            recorded.set(routine.id, [run(ran, startedAt, { runId, manual: true }), ...earlier]);
             replace({ ...ran, runningAt: null, lastRunAt: startedAt, lastStatus: "ok" });
           }, 2500);
           return { status: "started", runId };
@@ -664,6 +674,7 @@ export function routineCommands(now: number, params: RoutineParams) {
           return later(400, () => ({ status: "refused", error: "missing scope: operator.admin" }));
         return later(300, () => {
           put((all) => all.filter((each) => each.id !== command.id));
+          recorded.delete(command.id);
           return { status: "removed" };
         });
       }

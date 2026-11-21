@@ -135,4 +135,53 @@ describe("the fixture's routine host", () => {
     expect(after[0]).toMatchObject({ runId: started.runId, manual: true });
     expect(after.slice(1)).toEqual(before);
   });
+
+  it("Run now keeps a failed run before it as failed, and a later schedule edit rewrites no run", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host();
+    const BACKUP = "routine-backup";
+    const runs = () => ask<RoutineRun[]>({ type: "readRoutineRuns", id: BACKUP } as BridgeCommand);
+    const before = await runs();
+    expect(before[0]).toMatchObject({ status: "error" });
+    await ask({ type: "runRoutineNow", id: BACKUP } as BridgeCommand);
+    const after = await runs();
+    expect(after.slice(1)).toEqual(before);
+    const backup = routines().find((each) => each.id === BACKUP)!;
+    const original: RoutineFields = {
+      name: backup.name,
+      text: backup.text,
+      schedule: backup.schedule,
+      target: backup.target,
+      delivery: backup.delivery,
+    };
+    expect(
+      await ask({
+        type: "updateRoutine",
+        id: BACKUP,
+        original,
+        edit: { ...original, schedule: { ...original.schedule, expr: "0 5 * * 1" } },
+        expected: { ...original, updatedAt: backup.updatedAt },
+        gateway: GATEWAY,
+      } as BridgeCommand),
+    ).toMatchObject({ status: "saved" });
+    expect(await runs()).toEqual(after);
+  });
+
+  it("a create sent again with the same draft key keeps one routine, as the gateway's upsert does", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host();
+    const create = (name: string) =>
+      ask<{ status: string; routine: Routine }>({
+        type: "createRoutine",
+        input: { ...fields(name), botId: "otto" },
+        key: "draft-0001",
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    const first = await create("Weekly reading list");
+    const second = await create("Weekly reading list, short");
+    expect(second.routine.id).toBe(first.routine.id);
+    const kept = routines().filter((each) => each.id === first.routine.id);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.name).toBe("Weekly reading list, short");
+  });
 });
