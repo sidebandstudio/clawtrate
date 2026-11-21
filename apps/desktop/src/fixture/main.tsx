@@ -66,9 +66,18 @@ function seedPreferences() {
   if (panel === "open" || panel === "closed") write("panel", panel);
   const tab = params.get("tab");
   if (tab) write("workTab", tab);
-  // The Computer scenes: the one-time note before the first watch was seen, unless asked for.
-  if (params.has("computer") && params.get("firstwatch") !== "1") {
-    for (const bot of ["main", "otto", "marlow", "pip"]) write(`computerNote.${bot}`, "1");
+  // The Computer scenes: the one-time note before the first watch was seen, unless asked for,
+  // then unseen even when an earlier scene in this browser saw it.
+  if (params.has("computer")) {
+    for (const bot of ["main", "otto", "marlow", "pip"]) {
+      if (params.get("firstwatch") !== "1") write(`computerNote.${bot}`, "1");
+      else
+        try {
+          localStorage.removeItem(`clawtrate.computerNote.${bot}`);
+        } catch {
+          // Storage may be unavailable; the note then shows as it would.
+        }
+    }
   }
   const list = (name: string) => params.get(name)?.split(",").filter(Boolean);
   if (params.has("pins") || params.has("hidden") || params.has("sort")) {

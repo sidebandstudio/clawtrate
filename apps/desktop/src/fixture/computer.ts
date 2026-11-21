@@ -420,10 +420,26 @@ export function computerFixture(
       get().transcripts[key]?.questions.find((q) => q.status === "pending") ?? null,
     questionStatus: (key, id) =>
       get().transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
-    answer: async (key, id) => {
+    answer: async (key, id, answers) => {
       await wait(300);
       const t = get().transcripts[key];
       if (!t) throw new Error("gone");
+      // The option the person chose, by its label, as the gateway records it.
+      const chosen = (q: QuestionCard) =>
+        Object.fromEntries(
+          Object.entries(answers).map(([itemId, list]) => {
+            const item = q.questions.find((each) => each.id === itemId);
+            return [
+              itemId,
+              list.map((answer) =>
+                typeof answer === "string"
+                  ? answer
+                  : (item?.options.find((option) => option.index === answer.option)?.label ??
+                    String(answer.option)),
+              ),
+            ];
+          }),
+        );
       set({
         ...get(),
         transcripts: {
@@ -431,9 +447,7 @@ export function computerFixture(
           [key]: {
             ...t,
             questions: t.questions.map((q) =>
-              q.id === id
-                ? { ...q, status: "answered" as const, answers: { q1: ["I'm done"] } }
-                : q,
+              q.id === id ? { ...q, status: "answered" as const, answers: chosen(q) } : q,
             ),
           },
         },

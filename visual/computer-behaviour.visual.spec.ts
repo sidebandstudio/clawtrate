@@ -185,6 +185,32 @@ test.describe("the full view on the desktop", () => {
     await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
   });
 
+  test("F-145: the answer chosen in the bar is the one recorded: Skip records Skip", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Skip" }).click();
+    await expect(controlBar(page)).toContainText("Answer sent. Juniper can carry on.");
+    const answers = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: {
+              getState(): {
+                transcripts: Record<string, { questions: Array<{ id: string; answers: unknown }> }>;
+              };
+            };
+          }
+        ).clawtrateFixture
+          .getState()
+          .transcripts["agent:main:ebook-apps"]!.questions.find(
+            (q) => q.id === "ask_library_sign_in",
+          )?.answers,
+    );
+    expect(answers).toEqual({ q1: ["Skip"] });
+  });
+
   test("F-145: a release that is refused leaves ownership unknown with Try again and Check; Check finds control still held", async ({
     page,
   }) => {
