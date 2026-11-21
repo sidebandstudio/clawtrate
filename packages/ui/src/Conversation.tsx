@@ -384,6 +384,7 @@ function TranscriptView({
         role="region"
         aria-label="Transcript"
         data-testid="transcript"
+        data-status={transcript.status}
       >
         <div className="transcript-inner">
           <CardScope taskKey={task.key} transcript={transcript}>
