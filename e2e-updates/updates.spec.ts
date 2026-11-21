@@ -222,8 +222,10 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(server.requests).toEqual(["/stable", filePath]);
   await expect(line).not.toContainText("checksum");
   resume();
+  // Windows reads the file back in PowerShell, which first compiles its C# helper.
   await expect(line).toHaveText(
     "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.",
+    { timeout: 30_000 },
   );
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
   const nightly = page.getByRole("radio", { name: "Nightly" });
