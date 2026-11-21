@@ -38,11 +38,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { parseFeed } from "../src/main/update/feed.ts";
 import { isNewer, parseVersion } from "../src/main/update/version.ts";
 import {
@@ -212,7 +213,7 @@ export function signingKeychain(runner: Run, secrets: Secrets, dir: string, base
   const env = kept(base);
   const certificate = join(dir, CERTIFICATE_FILE);
   const key = join(dir, KEY_FILE);
-  const keychain = join(dir, "release.keychain-db");
+  const keychain = join(dir, KEYCHAIN_FILE);
   // Lives only in this process: a keychain left by a killed run stays locked to everyone.
   const unlock = randomBytes(32).toString("base64url");
   const security = (step: string, command: string) => {
@@ -283,6 +284,75 @@ export function signingKeychain(runner: Run, secrets: Secrets, dir: string, base
 /** The raw credential files, by fixed names; neither outlives its tool's call. */
 export const CERTIFICATE_FILE = "developer-id.p12";
 export const KEY_FILE = "notary.p8";
+/** The release keychain's file in the signing folder. */
+export const KEYCHAIN_FILE = "release.keychain-db";
+/** The user's keychain search list before the build, recorded in the signing folder. */
+export const SEARCH_LIST_FILE = "search-list.json";
+
+/**
+ * The user's keychain search list, in order, as `security list-keychains -d
+ * user` prints it: one double-quoted path a line. Anything else stops the
+ * release before the list is changed.
+ */
+export function readSearchList(runner: Run): string[] {
+  const got = runner(SECURITY, ["list-keychains", "-d", "user"]);
+  if (got.status !== 0) stop("Could not read the keychain search list. It was not changed.");
+  const list: string[] = [];
+  for (const line of got.stdout.split("\n")) {
+    const text = line.trim();
+    if (!text) continue;
+    const quoted = /^"([^"]+)"$/.exec(text);
+    if (!quoted) stop(`Could not read the keychain search list (${text}). It was not changed.`);
+    list.push(quoted[1]!);
+  }
+  return list;
+}
+
+/** Sets the user's search list to exactly `list`, each path one argument: no shell splits it. */
+function setSearchList(runner: Run, list: readonly string[]): boolean {
+  return runner(SECURITY, ["list-keychains", "-d", "user", "-s", ...list]).status === 0;
+}
+
+/** Puts `previous` back and reads the list again to confirm it; stops, naming the command, if not. */
+export function restoreSearchList(runner: Run, previous: readonly string[]): void {
+  const set = setSearchList(runner, previous);
+  let now: string[] | null = null;
+  try {
+    now = readSearchList(runner);
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error;
+  }
+  if (!set || now === null || now.join("\n") !== previous.join("\n"))
+    stop(
+      `The keychain search list could not be restored. Set it back with: /usr/bin/security list-keychains -d user -s ${previous.map((path) => `'${path.replaceAll("'", "'\\''")}'`).join(" ")}`,
+    );
+}
+
+/**
+ * Puts the release keychain first on the user's search list for the build,
+ * keeping the user's keychains in order and the default keychain as it is:
+ * electron-builder 26.18.1 asks codesign for the identity by name with
+ * `--keychain`, and codesign finds no identity in a keychain that is not on the
+ * search list. The previous list is recorded in `dir` first, so the next run
+ * can restore it after a run killed outright (`clearLeftovers`). Returns the
+ * one call that restores it, which is safe to make more than once.
+ */
+export function searchListForBuild(runner: Run, keychain: string, dir: string): () => void {
+  const previous = readSearchList(runner);
+  writeFileSync(join(dir, SEARCH_LIST_FILE), JSON.stringify(previous), { mode: 0o600, flag: "wx" });
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    restoreSearchList(runner, previous);
+    console.log("Restored the keychain search list.");
+  };
+  if (!setSearchList(runner, [keychain, ...previous.filter((path) => path !== keychain)])) {
+    restore();
+    stop("Could not put the release keychain on the keychain search list. Nothing was built.");
+  }
+  return restore;
+}
 
 /**
  * The build's environment: the ordinary variables of `base` and nothing else,
@@ -495,8 +565,10 @@ const running = (pid: number) => {
  * Removes the signing folders of runs that have ended, by the pid each one
  * records; refuses while one of them runs. A folder with no readable pid may be
  * a run that is just starting, so it is left for the maintainer to inspect.
+ * Before removing a folder, it puts back the search list that run recorded,
+ * but only while that run's keychain is still on the list.
  */
-function clearLeftovers(parent: string) {
+function clearLeftovers(runner: Run, parent: string) {
   for (const name of readdirSync(parent).filter((entry) => SIGNING_FOLDER.test(entry))) {
     const folder = join(parent, name);
     let pid = Number.NaN;
@@ -513,6 +585,31 @@ function clearLeftovers(parent: string) {
     }
     if (pid !== process.pid && running(pid))
       stop(`Another release (pid ${pid}) is signing from ${folder}. Let it finish first.`);
+    const record = join(folder, SEARCH_LIST_FILE);
+    if (existsSync(record)) {
+      let previous: unknown;
+      try {
+        previous = JSON.parse(readFileSync(record, "utf8"));
+      } catch {
+        previous = null;
+      }
+      if (!Array.isArray(previous) || !previous.every((path) => typeof path === "string"))
+        stop(
+          `${record} is not a keychain search list. Check the list yourself, then remove ${folder}.`,
+        );
+      const keychain = join(folder, KEYCHAIN_FILE);
+      const names = new Set([keychain, join(realpathSync(folder), KEYCHAIN_FILE)]);
+      if (readSearchList(runner).some((path) => names.has(path))) {
+        restoreSearchList(runner, previous);
+        console.log(
+          `Restored the keychain search list that an interrupted release (pid ${pid}) changed.`,
+        );
+      } else {
+        console.log(
+          `The keychain search list no longer holds ${keychain}, so it was left as it is.`,
+        );
+      }
+    }
     rmSync(folder, { recursive: true, force: true });
     console.log(`Removed ${folder}, which an interrupted release (pid ${pid}) left.`);
   }
@@ -590,6 +687,19 @@ export function blockingBuild(runner: Run): StartBuild {
   });
 }
 
+/**
+ * The build log candidate-build.ts names: the last `Build log: <path>` line
+ * whose path is absolute and exists. Node prints the throwing source line, which
+ * holds `Build log: ${log}` itself, before the error, so the first match is not
+ * the path. The rest of the line is the path: a folder's name can hold spaces.
+ */
+export function buildLog(stderr: string): string | undefined {
+  return [...stderr.matchAll(/Build log: (.+?)\r?$/gm)]
+    .map((match) => match[1]!)
+    .filter((path) => isAbsolute(path) && existsSync(path))
+    .at(-1);
+}
+
 export async function prepare(
   runner: Run,
   now: Date,
@@ -598,7 +708,7 @@ export async function prepare(
 ): Promise<void> {
   const { staging, appDir } = places;
   // First, so a retry after any refusal clears what a killed run left.
-  clearLeftovers(places.temp);
+  clearLeftovers(runner, places.temp);
   const read = readSecrets(runner);
   if (!read.ok) {
     stop(
@@ -636,14 +746,37 @@ export async function prepare(
   // (docs/development/releases.md).
   const temp = mkdtempSync(join(places.temp, "clawtrate-signing-"));
   writeFileSync(join(temp, "pid"), String(process.pid), { mode: 0o600 });
-  const remove = () => rmSync(temp, { recursive: true, force: true });
+  let restoreList: (() => void) | null = null;
+  // This run made `out` (its version is one no folder used) and is past the
+  // dist check, so after a failure both are its own: a partial folder and
+  // dist are removed, and a fully staged release (release.json) never is.
+  const madeOut = !existsSync(out);
+  let succeeded = false;
+  const putBack = () => {
+    try {
+      restoreList?.();
+    } catch (error) {
+      console.error((error as Error).message);
+    }
+  };
+  const clearFailed = () => {
+    rmSync(join(appDir, "dist"), { recursive: true, force: true });
+    if (madeOut && existsSync(out) && !existsSync(join(out, "release.json")))
+      rmSync(out, { recursive: true, force: true });
+  };
+  const remove = () => {
+    putBack();
+    rmSync(temp, { recursive: true, force: true });
+  };
   let building: StartedBuild | null = null;
   let interrupting = false;
-  // Stops the build and waits for all of it, then removes the folder and exits.
+  // Stops the build and waits for all of it, restores the search list, removes
+  // what the run made, and exits.
   const interrupted = () => {
     if (interrupting) return;
     interrupting = true;
     void (building?.stop() ?? Promise.resolve()).finally(() => {
+      clearFailed();
       remove();
       process.exit(130);
     });
@@ -655,6 +788,8 @@ export async function prepare(
     const signing = signingKeychain(runner, secrets, temp);
     for (const name of [CERTIFICATE_FILE, KEY_FILE])
       if (existsSync(join(temp, name))) stop(`${name} still exists. Nothing was built.`);
+    // For the build only: restored as soon as it ends, and on every way out.
+    restoreList = searchListForBuild(runner, signing.keychain, temp);
     building = startBuilding(
       process.execPath,
       [join(APP_DIR, "packaging/candidate-build.ts"), out, version],
@@ -664,10 +799,10 @@ export async function prepare(
     building = null;
     // Interrupted while building: the handler exits once the folder is removed.
     if (interrupting) await new Promise(() => undefined);
+    restoreList();
     if (build.status !== 0) {
       // The log is electron-builder's and can name the identity and team; it is not printed.
-      // The rest of the line: a log folder's name can hold spaces.
-      const log = /Build log: (.+?)\r?$/m.exec(build.stderr)?.[1];
+      const log = buildLog(build.stderr);
       stop(
         log
           ? `The build failed. Its log is ${log}; keep it private.`
@@ -758,6 +893,7 @@ export async function prepare(
     writeFileSync(join(out, "release.json"), record);
     const recordSha256 = sha("sha256", record, "hex");
     rmSync(join(appDir, "dist"), { recursive: true, force: true });
+    succeeded = true;
     console.log(`\nPrepared ${out}`);
     for (const file of plan.files)
       console.log(`  ${file.name}  ${file.size} bytes  sha256 ${file.sha256}`);
@@ -766,6 +902,7 @@ export async function prepare(
       `\nNothing was published. Keep the release.json digest above: publishing requires it.\nTo publish it: pnpm release:beta --publish ${version} ${recordSha256}`,
     );
   } finally {
+    if (!succeeded && !interrupting) clearFailed();
     remove();
     process.off("exit", remove);
     process.off("SIGINT", interrupted);

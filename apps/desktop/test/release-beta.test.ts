@@ -217,10 +217,29 @@ interface Call {
  * Each call is recorded with the files then in `dir`; `security -i` steps are
  * keyed by their command's first word, as in `security -i import`.
  */
+/**
+ * A stand-in for the user's keychain search list, never this machine's own: a
+ * path with spaces shows that nothing splits it.
+ */
+const SEARCH_LIST = [
+  "/Users/someone/Library/Keychains/login.keychain-db",
+  "/Users/someone/Library/Keychains/Work Keys.keychain-db",
+];
+
+/** `security list-keychains -d user` against `list`, which `-s` replaces. */
+function listKeychains(list: string[], args: string[]): RunResult | null {
+  if (args[0] !== "list-keychains" || args[1] !== "-d" || args[2] !== "user") return null;
+  if (args.length === 3) return ok(list.map((path) => `    "${path}"\n`).join(""));
+  if (args[3] !== "-s") return fail("unexpected list-keychains");
+  list.splice(0, list.length, ...args.slice(4));
+  return ok("");
+}
+
 function keychainTools(
   calls: Call[],
   overrides: Partial<Record<string, RunResult>> = {},
   dir?: string,
+  searchList: string[] = [...SEARCH_LIST],
 ): Run {
   return (command, args, options) => {
     const files = dir && existsSync(dir) ? readdirSync(dir).sort() : [];
@@ -228,6 +247,8 @@ function keychainTools(
     const step = args[0] === "-i" ? `-i ${options?.input?.split(" ")[0]}` : args[0];
     const key = `${command.split("/").at(-1)} ${step}`;
     if (overrides[key]) return overrides[key]!;
+    const listed = command === SECURITY ? listKeychains(searchList, args) : null;
+    if (listed) return listed;
     if (command === SECURITY && args[0] === "-i") return ok("");
     if (command === SECURITY && args[0] === "show-keychain-info")
       return ok("", `Keychain "${args[1]}" lock-on-sleep timeout=3600s\n`);
@@ -541,9 +562,10 @@ function tools(
 ) {
   const calls: Call[] = [];
   let current = "";
-  const keychain = keychainTools(calls);
+  const searchList = [...SEARCH_LIST];
+  const keychain = keychainTools(calls, {}, undefined, searchList);
   const mac = macTools(() => current, overrides);
-  const seen: { env?: NodeJS.ProcessEnv; signingFiles?: string[] } = {};
+  const seen: { env?: NodeJS.ProcessEnv; signingFiles?: string[]; searchList?: string[] } = {};
   const runner: Run = (command, args, options) => {
     if (command === "fleet") return vault(SECRETS)(command, args);
     if (command === SECURITY || command === XCRUN) return keychain(command, args, options);
@@ -561,6 +583,7 @@ function tools(
       seen.env = options!.env!;
       // What the build could open in the signing folder.
       seen.signingFiles = readdirSync(dirname(options!.env!.CSC_KEYCHAIN!)).sort();
+      seen.searchList = [...searchList];
       return build(args[1]!, args[2]!, options!.env!);
     }
     if (command === "ditto" && overrides[`ditto ${args[0]}`]) return overrides[`ditto ${args[0]}`]!;
@@ -570,7 +593,7 @@ function tools(
     }
     return mac(command, args, options);
   };
-  return { runner, calls, seen };
+  return { runner, calls, seen, searchList };
 }
 
 const builds =
@@ -619,7 +642,8 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     );
     expect(seen.env!.CSC_NAME).toBe(IDENTITY);
     // Neither raw credential file exists when the build starts.
-    expect(seen.signingFiles).toEqual(["pid"]);
+    // No credential: the run's pid and the search list it put back afterwards.
+    expect(seen.signingFiles).toEqual(["pid", "search-list.json"]);
     // No process saw a secret in its arguments or environment.
     for (const call of calls) {
       const outside = JSON.stringify([call.args, call.env ?? {}]);
@@ -679,12 +703,96 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     const log = join(place.root, "Release Builds", "pack.log");
     const { runner } = tools(() => {
       writeFileSync(log, "Signing with Developer ID Application: Example (TEAMID1234)\n");
-      return fail(`Error: Packaging failed (exit 1). Build log: ${log}\n    at build`);
+      // As Node prints an uncaught error: the throwing source line comes first.
+      return fail(
+        [
+          "file:///repo/apps/desktop/packaging/candidate-build.ts:68",
+          "      throw new Error(`Packaging failed (${reason}). Build log: ${log}`);",
+          "            ^",
+          "",
+          `Error: Packaging failed (exit 1). Build log: ${log}`,
+          "    at build (file:///repo/apps/desktop/packaging/candidate-build.ts:68:13)",
+        ].join("\n"),
+      );
     });
     const text = await stopped(() => prepare(runner, NOW, place));
     expect(text).toBe(`The build failed. Its log is ${log}; keep it private.`);
     expect(output.join("\n")).not.toContain("Signing with");
     expect(readdirSync(place.temp)).toEqual([]);
+  });
+
+  it("puts the release keychain first on the search list for the build only, then restores the list exactly", async () => {
+    const { runner, calls, seen, searchList } = tools(builds(place.appDir));
+    await prepare(runner, NOW, place);
+    const keychain = seen.env!.CSC_KEYCHAIN!;
+    expect(seen.searchList).toEqual([keychain, ...SEARCH_LIST]);
+    expect(searchList).toEqual(SEARCH_LIST);
+    // The list is set whole, each path one argument, and the default keychain is never touched.
+    const sets = calls.filter((call) => call.args[0] === "list-keychains" && call.args[3] === "-s");
+    expect(sets.map((call) => call.args.slice(4))).toEqual([
+      [keychain, ...SEARCH_LIST],
+      SEARCH_LIST,
+    ]);
+    expect(calls.some((call) => call.args.includes("default-keychain"))).toBe(false);
+    expect(output.join("\n")).toContain("Restored the keychain search list.");
+  });
+
+  it("restores the search list and removes dist and its partial folder when the build fails, keeping an earlier staged release", async () => {
+    const earlier = join(place.staging, "0.1.1-beta.20261119.1");
+    mkdirSync(earlier, { recursive: true });
+    writeFileSync(join(earlier, "release.json"), "{}");
+    const { runner, seen, searchList } = tools((out) => {
+      // As the real failure left them: dist with the arm64 app, and an empty version folder.
+      mkdirSync(join(place.appDir, "dist", "mac-arm64"), { recursive: true });
+      mkdirSync(out);
+      return fail("Error: Packaging failed (exit 1).");
+    });
+    expect(await stopped(() => prepare(runner, NOW, place))).toContain("The build failed");
+    expect(seen.searchList![0]).toBe(seen.env!.CSC_KEYCHAIN);
+    expect(searchList).toEqual(SEARCH_LIST);
+    expect(existsSync(join(place.appDir, "dist"))).toBe(false);
+    expect(existsSync(join(place.staging, VERSION))).toBe(false);
+    expect(readFileSync(join(earlier, "release.json"), "utf8")).toBe("{}");
+  });
+
+  it("restores the search list when a step after the keychain fails before the build", async () => {
+    const { runner, searchList, calls } = tools(builds(place.appDir));
+    // The build cannot start: the list it was given is put back.
+    const refusing: Run = (command, args, options) =>
+      command === process.execPath
+        ? (() => {
+            throw new Error("spawn failed");
+          })()
+        : runner(command, args, options);
+    await expect(prepare(refusing, NOW, place)).rejects.toThrow("spawn failed");
+    expect(calls.filter((call) => call.args[3] === "-s")).toHaveLength(2);
+    expect(searchList).toEqual(SEARCH_LIST);
+  });
+
+  it("restores the search list a killed run changed, before anything else, only while its keychain is on it", async () => {
+    const dead = join(place.temp, "clawtrate-signing-Abc123");
+    mkdirSync(dead);
+    writeFileSync(join(dead, "pid"), "99999999");
+    writeFileSync(join(dead, "search-list.json"), JSON.stringify(SEARCH_LIST));
+    const { runner, searchList } = tools(builds(place.appDir));
+    searchList.unshift(join(dead, "release.keychain-db"));
+    // A run the vault refuses still restores it first.
+    const refused: Run = (command, args, options) =>
+      command === "fleet" ? vault({})(command, args) : runner(command, args, options);
+    expect(await stopped(() => prepare(refused, NOW, place))).toContain("The vault has no value");
+    expect(searchList).toEqual(SEARCH_LIST);
+    expect(output.join("\n")).toContain(
+      "Restored the keychain search list that an interrupted release (pid 99999999) changed.",
+    );
+    expect(readdirSync(place.temp)).toEqual([]);
+
+    // Changed since by someone else: left as it is.
+    mkdirSync(dead);
+    writeFileSync(join(dead, "pid"), "99999999");
+    writeFileSync(join(dead, "search-list.json"), JSON.stringify(["/elsewhere.keychain-db"]));
+    expect(await stopped(() => prepare(refused, NOW, place))).toContain("The vault has no value");
+    expect(searchList).toEqual(SEARCH_LIST);
+    expect(output.join("\n")).toContain("so it was left as it is.");
   });
 
   it("removes a signing folder a killed run left, before anything else, and refuses while another run signs", async () => {
@@ -1621,7 +1729,7 @@ describe("stopping a release while it builds", () => {
     }
   };
 
-  it("stops the build and what it started, then removes the signing folder, on SIGTERM", async () => {
+  it("stops the build and what it started, restores the search list, then removes the signing folder, dist and the partial folder, on SIGTERM", async () => {
     // A release script of its own, with stand-ins for every tool but the
     // build: a process that never ends and has started a child of its own,
     // as electron-builder waiting on notarytool does.
@@ -1629,28 +1737,37 @@ describe("stopping a release while it builds", () => {
     const script = join(place.root, "release.ts");
     const secrets = join(place.root, "secrets.json");
     const pids = join(place.root, "pids");
+    // The stand-in search list, kept in a file the script's `security` reads and replaces.
+    const list = join(place.root, "search-list");
+    writeFileSync(list, JSON.stringify(SEARCH_LIST));
     writeFileSync(secrets, JSON.stringify(SECRETS));
     const sleeper = [
       "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      // What a build leaves: dist and the version's folder.
+      "fs.mkdirSync(process.argv[2], { recursive: true }); fs.mkdirSync(process.argv[3]);",
       "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "require('node:fs').writeFileSync(process.argv[1], process.pid + ' ' + child.pid);",
+      "fs.writeFileSync(process.argv[1], process.pid + ' ' + child.pid);",
       "setInterval(() => {}, 1000);",
     ].join(" ");
     writeFileSync(
       script,
       [
-        `import { readFileSync } from "node:fs";`,
+        `import { readFileSync, writeFileSync } from "node:fs";`,
         `import { prepare, startBuild, SECURITY } from ${JSON.stringify(join(import.meta.dirname, "../packaging/release-beta.ts"))};`,
         `const secrets = JSON.parse(readFileSync(${JSON.stringify(secrets)}, "utf8"));`,
         `const ok = (stdout = "", stderr = "") => ({ status: 0, stdout, stderr });`,
+        `const list = ${JSON.stringify(list)};`,
         `const runner = (command, args) => {`,
         `  if (command === "fleet") return ok(secrets[args[2]] + "\\n");`,
+        `  if (command === SECURITY && args[0] === "list-keychains" && args.length === 3) return ok(JSON.parse(readFileSync(list, "utf8")).map((path) => '"' + path + '"\\n').join(""));`,
+        `  if (command === SECURITY && args[0] === "list-keychains" && args[3] === "-s") { writeFileSync(list, JSON.stringify(args.slice(4))); return ok(); }`,
         `  if (command === SECURITY && args[0] === "show-keychain-info") return ok("", "lock-on-sleep timeout=3600s");`,
         `  if (command === SECURITY && args[0] === "find-identity") return ok('  1) ${IDENTITY} "Developer ID Application: Example (${TEAM})"\\n');`,
         `  if (command === "git" && args[0] === "rev-parse") return ok("${COMMIT}\\n");`,
         `  return ok();`,
         `};`,
-        `const build = (_command, _args, options) => startBuild(process.execPath, ["-e", ${JSON.stringify(sleeper)}, ${JSON.stringify(pids)}], options);`,
+        `const build = (_command, args, options) => startBuild(process.execPath, ["-e", ${JSON.stringify(sleeper)}, ${JSON.stringify(pids)}, ${JSON.stringify(join(place.appDir, "dist"))}, args[1]], options);`,
         `await prepare(runner, new Date(${JSON.stringify(NOW.toISOString())}), ${JSON.stringify({ staging: place.staging, appDir: place.appDir, temp: place.temp })}, build);`,
       ].join("\n"),
     );
@@ -1664,11 +1781,23 @@ describe("stopping a release while it builds", () => {
       }
       started = readFileSync(pids, "utf8").split(" ").map(Number);
       expect(readdirSync(place.temp)).toHaveLength(1);
+      const signing = join(place.temp, readdirSync(place.temp)[0]!);
+      // While it builds, the release keychain is first on the list.
+      expect(JSON.parse(readFileSync(list, "utf8"))).toEqual([
+        join(signing, "release.keychain-db"),
+        ...SEARCH_LIST,
+      ]);
+      expect(JSON.parse(readFileSync(join(signing, "search-list.json"), "utf8"))).toEqual(
+        SEARCH_LIST,
+      );
       release.kill("SIGTERM");
       const code = await Promise.race([exited, sleep(20_000).then(() => "running")]);
       expect(code, "the release script exits once interrupted").toBe(130);
       for (const pid of started) expect(alive(pid), `pid ${pid}`).toBe(false);
       expect(readdirSync(place.temp)).toEqual([]);
+      expect(JSON.parse(readFileSync(list, "utf8"))).toEqual(SEARCH_LIST);
+      expect(existsSync(join(place.appDir, "dist"))).toBe(false);
+      expect(existsSync(join(place.staging, VERSION))).toBe(false);
     } finally {
       release.kill("SIGKILL");
       for (const pid of started) if (alive(pid)) process.kill(pid, "SIGKILL");
