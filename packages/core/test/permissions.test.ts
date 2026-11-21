@@ -959,6 +959,88 @@ describe("what a bot may do", () => {
   });
 });
 
+describe("a choice whose viewer goes away, or whose Ask doesn't take effect", () => {
+  it("a choice whose viewer went away before anything was sent sends nothing", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["read", "ls"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    const result = await engine.choose(
+      "pip",
+      "read",
+      "ask",
+      { configHash: view.configHash, rulesVersion: view.versions.bot },
+      { withdrawn: () => true },
+    );
+    expect(gw.writes()).toEqual([]);
+    expect(result).toMatchObject({ outcome: "failed" });
+    expect(result.error).toMatch(/closed before it was sent/);
+  });
+
+  it("a viewer that goes away after the Ask was saved: the deny stays, and both parts are said", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["read", "ls"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    let gone = false;
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      const got = await answer(method, params);
+      if (method === "clawtrate-tool-rules.set") gone = true;
+      return got;
+    };
+    const result = await engine.choose(
+      "pip",
+      "read",
+      "ask",
+      { configHash: view.configHash, rulesVersion: view.versions.bot },
+      { withdrawn: () => gone },
+    );
+    expect(gw.writes().map((each) => each.method)).toEqual(["clawtrate-tool-rules.set"]);
+    expect(botTools(gw, "pip").deny).toEqual(["read", "ls"]);
+    expect(result.outcome).toBe("partial");
+  });
+
+  it("an Ask a Never rule for every bot overrides is not said as saved", async () => {
+    const gw = new Gateway();
+    gw.scopes["*"] = {
+      version: 1,
+      fallback: false,
+      rules: [{ id: "e1", version: 1, action: "never", tools: ["read", "ls"] }],
+    };
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    const result = await engine.choose("pip", "read", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(gw.writes().map((each) => each.method)).toEqual(["clawtrate-tool-rules.set"]);
+    expect(result.outcome).toBe("not-shown");
+    expect(line(result.view!, "read")).toMatchObject({ choice: "ask", value: "never" });
+  });
+
+  it("an Ask whose rules can't be read back is unconfirmed, never saved from a copy read earlier", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["read", "ls"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    let set = false;
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      if (set && method === "clawtrate-tool-rules.get") throw new Error("request timed out");
+      const got = await answer(method, params);
+      if (method === "clawtrate-tool-rules.set") set = true;
+      return got;
+    };
+    const result = await engine.choose("pip", "read", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(result.outcome).toBe("unconfirmed");
+    expect(result.error).toMatch(/rules couldn't be read back/);
+  });
+});
+
 describe("a read that fails or can't be read", () => {
   const broken = (method: string, reply: unknown) => {
     const gw = new Gateway();

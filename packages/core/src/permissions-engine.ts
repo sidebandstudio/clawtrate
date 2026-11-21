@@ -136,6 +136,42 @@ export class PermissionsEngine {
   /** Whether the write being made has sent a change of the gateway's settings. */
   private configSent = false;
 
+  /** Whether the viewer of the choice being made went away. */
+  private withdrawn: () => boolean = () => false;
+
+  /** Nothing more is sent for a choice whose viewer went away. */
+  private beforeWrite(): void {
+    if (!this.withdrawn()) return;
+    const error = new Error("The window that made this choice closed before it was sent.");
+    error.name = "WithdrawnError";
+    throw error;
+  }
+
+  /**
+   * One request that changes something. It counts as sent unless it never left
+   * (`NotSentError`); a request that can't be sent after it doesn't make it unsent.
+   */
+  private async send(
+    request: GatewayRequest,
+    method: string,
+    params: unknown,
+    config = false,
+  ): Promise<unknown> {
+    this.beforeWrite();
+    const sent = () => {
+      this.writeSent = true;
+      if (config) this.configSent = true;
+    };
+    try {
+      const answer = await request(method, params);
+      sent();
+      return answer;
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "NotSentError")) sent();
+      throw error;
+    }
+  }
+
   /** One bot's permissions, read now. */
   async read(botId: string): Promise<BotPermissions> {
     return (await this.readAll(botId, this.ctx.session())).view;
@@ -226,12 +262,17 @@ export class PermissionsEngine {
     return { rules: { from: null, readAt: null }, bot: null, every: null };
   }
 
-  /** A line's choice, written, then read back. */
+  /**
+   * A line's choice, written, then read back. `withdrawn` says the viewer that
+   * made it went away: nothing more is sent from then on, and what was already
+   * sent is read back and said as it is.
+   */
   async choose(
     botId: string,
     lineId: string,
     choice: PermissionChoice,
     base: PermissionBase,
+    options: { withdrawn?: () => boolean } = {},
   ): Promise<PermissionWrite> {
     if (!this.ctx.admin()) throw new AdminNeededError("Changing what a bot may do");
     if (this.writing) throw new Error("Another change to a bot's permissions is being saved.");
@@ -251,6 +292,7 @@ export class PermissionsEngine {
       this.writeSent = false;
       this.rulesSaved = false;
       this.configSent = false;
+      this.withdrawn = options.withdrawn ?? (() => false);
       let failure: unknown = undefined;
       try {
         await this.apply(request, botId, facts, line, choice, base);
@@ -285,8 +327,7 @@ export class PermissionsEngine {
         // A refusal that says the change was stored and not applied is no refusal of the write.
         if (
           !this.writeSent ||
-          (failure instanceof GatewayProtocolRequestError && !persisted(failure)) ||
-          (failure instanceof Error && failure.name === "NotSentError")
+          (failure instanceof GatewayProtocolRequestError && !persisted(failure))
         )
           return { outcome: "failed", error, view: after };
         // No answer came, or the change was stored and not applied: only the read after it says.
@@ -303,6 +344,13 @@ export class PermissionsEngine {
           view: null,
         };
       if (shown && applied) return { outcome: "saved", error: null, view: after };
+      // An Ask is shown only by the plugin's rules read now; without them it can't be confirmed.
+      if (!shown && choice === "ask" && after.rules.from !== "now")
+        return {
+          outcome: "unconfirmed",
+          error: "the rules plugin's rules couldn't be read back",
+          view: after,
+        };
       return shown ? stored(null) : { outcome: "not-shown", error: null, view: after };
     } finally {
       this.writing = false;
@@ -336,8 +384,7 @@ export class PermissionsEngine {
           throw new Error("The rules plugin's rules for this bot couldn't be read whole.");
         const kept = rules.filter((rule) => !pageAsk(rule, tools));
         if (kept.length < rules.length) {
-          this.writeSent = true;
-          await request(RULES_SET_METHOD, {
+          await this.send(request, RULES_SET_METHOD, {
             scope: botId,
             rules: kept,
             fallback: scope?.fallback ?? false,
@@ -360,8 +407,7 @@ export class PermissionsEngine {
     if (!hasOwnAsk(scope, tools)) {
       const rules = rulesForSet(answer, botId);
       if (!rules) throw new Error("The rules plugin's rules for this bot couldn't be read whole.");
-      this.writeSent = true;
-      await request(RULES_SET_METHOD, {
+      await this.send(request, RULES_SET_METHOD, {
         scope: botId,
         rules: [...rules, { action: "ask", tools, note: PAGE_RULE_NOTE }],
         fallback: scope?.fallback ?? false,
@@ -388,13 +434,16 @@ export class PermissionsEngine {
     const hash = typeof before?.hash === "string" ? before.hash : null;
     if (baseHash !== null && hash !== baseHash) throw new ConflictError();
     try {
-      this.writeSent = true;
-      this.configSent = true;
-      await request("config.patch", {
-        raw: JSON.stringify(write.patch),
-        ...(hash ? { baseHash: hash } : {}),
-        ...(write.replacePaths.length > 0 ? { replacePaths: write.replacePaths } : {}),
-      });
+      await this.send(
+        request,
+        "config.patch",
+        {
+          raw: JSON.stringify(write.patch),
+          ...(hash ? { baseHash: hash } : {}),
+          ...(write.replacePaths.length > 0 ? { replacePaths: write.replacePaths } : {}),
+        },
+        true,
+      );
     } catch (error) {
       if (/config changed since last load/i.test(message(error))) throw new ConflictError();
       throw error;

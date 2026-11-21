@@ -1006,13 +1006,15 @@ export class ClawtrateClient {
   /** What a bot may do (`permissions-engine.ts`): reads answered and kept nowhere. */
   private readonly permissions = new PermissionsEngine({
     session: () => {
-      // Bound to the connection open now: after a switch it sends nothing, and drops late answers.
+      // Bound to the connection open now: after a switch or a reconnect (the same protocol
+      // client, a new epoch) it sends nothing, and drops late answers.
       const protocol = this.protocol;
+      const epoch = this.epoch;
+      const same = () => protocol === this.protocol && epoch === this.epoch;
       return (method, params, options) => {
-        if (!protocol || protocol !== this.protocol) return Promise.reject(new NotSentError());
+        if (!protocol || !same()) return Promise.reject(new NotSentError());
         return protocol.request(method, params, options).then((answer) => {
-          if (protocol !== this.protocol)
-            throw new Error("The connection to the gateway changed before it answered.");
+          if (!same()) throw new Error("The connection to the gateway changed before it answered.");
           return answer;
         });
       };
@@ -6406,8 +6408,12 @@ export class ClawtrateClient {
     line: string,
     choice: PermissionChoice,
     base: PermissionBase,
+    options: { owner?: object } = {},
   ): Promise<PermissionWrite> {
-    return this.permissions.choose(botId, line, choice, base);
+    const owner = options.owner ?? null;
+    return this.permissions.choose(botId, line, choice, base, {
+      withdrawn: () => owner !== null && this.withdrawnOwners.has(owner),
+    });
   }
 
   /** Change the rail's arrangement on the gateway; `base` is this device's, for the first change. */

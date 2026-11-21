@@ -1337,7 +1337,8 @@ export function choiceShown(
     case "allow":
       return line.choice === "allow" && line.value !== "never";
     case "ask":
-      return line.choice === "ask";
+      // The rule saved is not enough: it shows only where the rules read now make the line ask.
+      return line.choice === "ask" && line.value === "asks" && view.rules.from === "now";
     case "full":
     case "auto":
     case "deny":

@@ -1832,10 +1832,13 @@ class ViewerSession implements BridgeSession {
       case "readPermissions":
         return client.readPermissions(command.botId);
       case "setPermission":
-        return client.setPermission(command.botId, command.line, command.choice, {
-          configHash: command.configHash,
-          rulesVersion: command.rulesVersion,
-        });
+        return client.setPermission(
+          command.botId,
+          command.line,
+          command.choice,
+          { configHash: command.configHash, rulesVersion: command.rulesVersion },
+          { owner },
+        );
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
       case "readUsage":
