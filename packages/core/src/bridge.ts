@@ -1617,7 +1617,11 @@ class ViewerSession implements BridgeSession {
         }
         return;
       case "closeSession":
-        if (this.open.delete(command.key)) client.closeSession(command.key);
+        if (!this.open.delete(command.key)) return;
+        // This viewer's Computer pane on that task is left first: control is given back, the view ends.
+        if (this.viewerId && client.state.computer?.panes[this.viewerId]?.key === command.key)
+          client.computerLeave(this.viewerId);
+        client.closeSession(command.key);
         return;
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
