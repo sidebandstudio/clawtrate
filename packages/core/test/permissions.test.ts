@@ -239,7 +239,7 @@ describe("what a bot may do", () => {
     expect(line(view, "ask")).toMatchObject({ value: "allowed", kind: "question" });
     // A tool server, and a plugin's tools under its name.
     expect(line(view, "server:coder")).toMatchObject({
-      tools: ["coder__*"],
+      tools: ["coder__run_checks"],
       value: "allowed",
       offered: "yes",
     });
@@ -322,7 +322,7 @@ describe("what a bot may do", () => {
           target: { kind: "path", pattern: "secrets/**" },
           note: "Keep keys away",
         },
-        { action: "ask", tools: ["read", "ls"] },
+        { action: "ask", tools: ["read", "ls"], note: "Created in Clawtrate per-bot permissions" },
       ],
       fallback: false,
       expectedVersion: 3,
@@ -376,6 +376,57 @@ describe("what a bot may do", () => {
     view = await engine.read("pip");
     expect(line(view, "read")).toMatchObject({ ownAsk: true, undoAsk: false });
     expect(choiceRefusal(view, line(view, "read"), "allow", true)).toMatch(/rules page/);
+  });
+
+  it("Allow removes only the page's tagged Ask and preserves an identical untagged Ask", async () => {
+    const gw = new Gateway();
+    const untagged = { id: "x1", version: 1, action: "ask", tools: ["read", "ls"] };
+    gw.scopes.pip = { version: 1, fallback: false, rules: [untagged] };
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    // The same shape this page writes, without its note: managed elsewhere, so Allow can't take it off.
+    expect(line(view, "read")).toMatchObject({ ownAsk: true, undoAsk: false, choice: "ask" });
+    expect(choiceRefusal(view, line(view, "read"), "allow", true)).toMatch(/didn't write/);
+    // A tagged Ask beside it: Allow removes the tagged one only, and still can't free the line.
+    gw.scopes.pip = {
+      version: 2,
+      fallback: false,
+      rules: [
+        untagged,
+        {
+          id: "p1",
+          version: 1,
+          action: "ask",
+          tools: ["read", "ls"],
+          note: "Created in Clawtrate per-bot permissions",
+        },
+      ],
+    };
+    const both = await engine.read("pip");
+    expect(line(both, "read")).toMatchObject({ undoAsk: false });
+    // Only the tagged one: Allow removes it, and the scope keeps everything else.
+    gw.scopes.pip = {
+      version: 3,
+      fallback: false,
+      rules: [
+        { id: "n1", version: 1, action: "never", tools: ["write"] },
+        {
+          id: "p1",
+          version: 1,
+          action: "ask",
+          tools: ["read", "ls"],
+          note: "Created in Clawtrate per-bot permissions",
+        },
+      ],
+    };
+    const tagged = await engine.read("pip");
+    expect(line(tagged, "read")).toMatchObject({ undoAsk: true });
+    const result = await engine.choose("pip", "read", "allow", {
+      configHash: tagged.configHash,
+      rulesVersion: tagged.versions.bot,
+    });
+    expect(result.outcome).toBe("saved");
+    expect(gw.scopes.pip!.rules.map((r) => r.id)).toEqual(["n1"]);
   });
 
   it("Ask replaces the deny list it read and no newer one: another client's change after the rule landed is kept, and both outcomes are said", async () => {
@@ -566,6 +617,85 @@ describe("what a bot may do", () => {
     expect(permissionGroups(both.lines).without).not.toContain("web");
   });
 
+  it("Allow and Ask stay disabled when group:fs still denies one of the line's tools", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["group:fs"];
+    const view = await new PermissionsEngine(gw.ctx()).read("pip");
+    const read = line(view, "read");
+    expect(read).toMatchObject({ value: "never", heldBy: ["group:fs"] });
+    for (const choice of ["allow", "ask"] as const)
+      expect(choiceRefusal(view, read, choice, true)).toBe(
+        "This choice is held by group:fs in the bot's deny list.",
+      );
+    expect(view.lines.some((l) => l.id === "deny:group:fs")).toBe(false);
+    // Part of a line under a broad entry: the entry is named beside the tools it denies.
+    botTools(gw, "pip").deny = ["group:web"];
+    gw.hash += 1;
+    gw.applied = gw.hash;
+    const web = await new PermissionsEngine(gw.ctx()).read("pip");
+    expect(line(web, "web").heldBy).toEqual(["group:web"]);
+  });
+
+  it("a bot-only allow-list omission is never attributed to every bot", async () => {
+    const gw = new Gateway();
+    // Every bot's settings deny edit; Pip's own allow list leaves out write and apply_patch.
+    (gw.config.tools as Json).allow = undefined;
+    (gw.config.tools as Json).deny = ["edit", "browser"];
+    botTools(gw, "pip").allow = ["read", "ls", "exec", "web_search", "ask_user"];
+    const view = await new PermissionsEngine(gw.ctx()).read("pip");
+    const files = line(view, "files");
+    expect(files).toMatchObject({ value: "never", mark: "gateway", choice: null });
+    expect(files.exceptions).toEqual(
+      expect.arrayContaining([
+        { kind: "every-deny", tools: ["edit"] },
+        { kind: "not-offered", tools: ["write", "apply_patch"], by: "bot" },
+      ]),
+    );
+    expect(choiceRefusal(view, files, "allow", true)).not.toMatch(/deny this for every bot/);
+    // Only the settings for every bot remove the whole line: the padlock.
+    expect(line(view, "browser")).toMatchObject({ value: "never", mark: "set" });
+  });
+
+  it("fallback Ask and cached rules never appear as an unconditional Allow or Ask", async () => {
+    const gw = new Gateway();
+    gw.scopes.pip = { version: 1, fallback: true, rules: [] };
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    // With "Ask when nothing else decides" on and no rule deciding, the plugin may ask: Limited.
+    expect(line(view, "read")).toMatchObject({ value: "limited", mark: "plugin" });
+    expect(line(view, "read").exceptions).toContainEqual({ kind: "fallback", scope: "bot" });
+    // A whole-line Allow decides: Allowed.
+    gw.scopes.pip = {
+      version: 2,
+      fallback: true,
+      rules: [{ id: "a", version: 1, action: "allow", tools: ["read", "ls"] }],
+    };
+    expect(line(await engine.read("pip"), "read").value).toBe("allowed");
+    // A kept Ask after a failed status read is Unknown, never Asks first.
+    gw.scopes.pip = {
+      version: 3,
+      fallback: false,
+      rules: [{ id: "q", version: 1, action: "ask", tools: ["read", "ls"] }],
+    };
+    await engine.read("pip");
+    gw.plugin = "stopped";
+    expect(line(await engine.read("pip"), "read")).toMatchObject({
+      value: "unknown",
+      mark: "unread",
+    });
+  });
+
+  it("a missing applied or stored revision hash is unknown, never in use", async () => {
+    const gw = new Gateway();
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      const got = (await answer(method, params)) as Json;
+      if (method === "config.get") delete got.appliedConfigHash;
+      return got;
+    };
+    expect((await new PermissionsEngine(gw.ctx()).read("pip")).settingsApplied).toBe("unknown");
+  });
+
   it("a tool the gateway's settings deny for every bot reads Never with the padlock, whatever the bot's own allow or Ask, and no choice can be made", async () => {
     const gw = new Gateway();
     (gw.config.tools as Json).deny = ["web_search", "web_fetch", "browser", "node_inference"];
@@ -608,82 +738,73 @@ describe("what a bot may do", () => {
     expect(line(result.view!, "files")).toMatchObject({ value: "never", choice: "never" });
   });
 
-  it("F-222: a tool server's Never writes `<prefix>__*` to the bot's own deny list, and Allow on that entry takes it off", async () => {
+  it("F-222: a tool server's line shows the tools the gateway listed for it, as read-only facts, and a deny entry naming them is shown and taken off on its own line", async () => {
     const gw = new Gateway();
     const engine = new PermissionsEngine(gw.ctx());
     const view = await engine.read("pip");
-    expect(line(view, "server:coder")).toMatchObject({ tools: ["coder__*"], value: "allowed" });
-    const result = await engine.choose("pip", "server:coder", "never", {
-      configHash: view.configHash,
-      rulesVersion: null,
+    expect(line(view, "server:coder")).toMatchObject({
+      tools: ["coder__run_checks"],
+      value: "allowed",
     });
-    expect(result.outcome).toBe("saved");
-    expect(botTools(gw, "pip").deny).toEqual(["coder__*"]);
-    // Denied, the server's tools aren't listed: its entry shows the deny.
-    expect(line(result.view!, "deny:coder__*")).toMatchObject({ value: "never", mark: "gateway" });
+    for (const choice of ["allow", "ask", "never"] as const)
+      expect(choiceRefusal(view, line(view, "server:coder"), choice, true)).toMatch(
+        /doesn't name one namespace/,
+      );
+    // A deny set elsewhere: the gateway no longer lists the server; its entry is a line of its own.
+    botTools(gw, "pip").deny = ["coder__*"];
+    gw.hash += 1;
+    gw.applied = gw.hash;
+    const denied = await engine.read("pip");
+    expect(line(denied, "server:coder")).toMatchObject({ tools: [], value: "not-offered" });
+    expect(line(denied, "deny:coder__*")).toMatchObject({ value: "never", mark: "gateway" });
     const back = await engine.choose("pip", "deny:coder__*", "allow", {
-      configHash: result.view!.configHash,
+      configHash: denied.configHash,
       rulesVersion: null,
     });
     expect(back.outcome).toBe("saved");
     expect(botTools(gw, "pip").deny).toBeUndefined();
-    expect(line(back.view!, "server:coder")).toMatchObject({
-      tools: ["coder__*"],
-      value: "allowed",
-    });
   });
 
-  it("a tool server's Never writes the prefix the gateway gave its tools, not its configured name, and its deny entry is shown and taken off", async () => {
+  it("a server line cannot write a wildcard that also names another declared server when this task lists only one", async () => {
     const gw = new Gateway();
-    gw.config.mcp = { servers: { "Report.Tools": {}, "Report-Tools": {} } };
+    gw.config.mcp = { servers: { sales__west: {}, sales__east: {} } };
     (gw.config.tools as Json).allow = undefined;
-    // A deny of the configured name, which the gateway doesn't apply to the renamed tools.
-    botTools(gw, "pip").deny = ["Report.Tools__*"];
     const answer = gw.answer.bind(gw);
-    const ids = {
-      "Report.Tools": "Report-Tools__example",
-      "Report-Tools": "Report-Tools-2__example",
-    };
     gw.answer = async (method, params) => {
       if (method !== "tools.effective") return answer(method, params);
       gw.sent.push({ method, params });
-      // As the gateway lists them: renamed, and gone once the bot's deny names them.
-      const deny = (botTools(gw, "pip").deny as string[] | undefined) ?? [];
-      const tools = Object.entries(ids)
-        .filter(([, id]) => !deny.some((d) => id.startsWith(d.slice(0, -1))))
-        .map(([server, id]) => ({ id, source: "mcp", mcpServer: server }));
-      return { toolAccess: { tools: [] }, groups: [{ id: "mcp", tools }] };
+      // The normalized names keep their double underscores; this task lists only West's tool.
+      return {
+        toolAccess: { tools: [] },
+        groups: [
+          {
+            id: "mcp",
+            tools: [
+              {
+                id: "sales__west__list",
+                source: "mcp",
+                mcpServer: "sales__west",
+                mcpToolName: "list",
+              },
+            ],
+          },
+        ],
+      };
     };
     const engine = new PermissionsEngine(gw.ctx());
     const view = await engine.read("pip");
-    expect(line(view, "server:Report.Tools")).toMatchObject({
-      tools: ["Report-Tools__*"],
-      value: "allowed",
-    });
-    expect(line(view, "server:Report-Tools").tools).toEqual(["Report-Tools-2__*"]);
-    expect(line(view, "deny:Report.Tools__*")).toMatchObject({ kind: "entry", value: "never" });
-    const result = await engine.choose("pip", "server:Report.Tools", "never", {
-      configHash: view.configHash,
-      rulesVersion: null,
-    });
-    expect(result.outcome).toBe("saved");
-    expect(botTools(gw, "pip").deny).toEqual(["Report.Tools__*", "Report-Tools__*"]);
-    // Denied, its tools aren't listed: the server says nothing, its entry shows the deny.
-    expect(line(result.view!, "server:Report.Tools")).toMatchObject({
-      tools: [],
-      value: "not-offered",
-      choice: null,
-    });
-    expect(
-      choiceRefusal(result.view!, line(result.view!, "server:Report.Tools"), "allow", true),
-    ).toMatch(/can't name them/);
-    expect(line(result.view!, "server:Report-Tools").value).toBe("allowed");
-    const back = await engine.choose("pip", "deny:Report-Tools__*", "allow", {
-      configHash: result.view!.configHash,
-      rulesVersion: null,
-    });
-    expect(back.outcome).toBe("saved");
-    expect(botTools(gw, "pip").deny).toEqual(["Report.Tools__*"]);
+    expect(line(view, "server:sales__west").tools).toEqual(["sales__west__list"]);
+    for (const choice of ["allow", "ask", "never"] as const)
+      expect(choiceRefusal(view, line(view, "server:sales__west"), choice, true)).toMatch(
+        /doesn't name one namespace/,
+      );
+    await expect(
+      engine.choose("pip", "server:sales__west", "never", {
+        configHash: view.configHash,
+        rulesVersion: null,
+      }),
+    ).rejects.toThrow(/doesn't name one namespace/);
+    expect(gw.writes()).toEqual([]);
   });
 
   it("a tool server whose tools the gateway hasn't listed has no choice and no claim", async () => {

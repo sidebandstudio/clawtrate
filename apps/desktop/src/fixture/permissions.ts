@@ -10,7 +10,8 @@
 // `error`, `fresh`: before the bot's first task), `override=1` (the gateway's
 // settings deny a tool the bot allows), `write=` how a save goes (`refused`,
 // `conflict`, `hidden`: sent and not shown by the read-back, `lost`: no answer came,
-// `stored`: stored and not reported in use), `long=1` (a second tool server, with a long name).
+// `stored`: stored and not reported in use), `long=1` (a second tool server, with a long name),
+// `entry=1` (an entry of Otto's deny list that names no tool).
 
 import {
   choiceRefusal,
@@ -41,6 +42,8 @@ export type PermissionParams = {
   write: string | null;
   /** A second tool server with a long name. */
   long?: boolean;
+  /** An entry of Otto's deny list that names no tool. */
+  entry?: boolean;
 };
 
 export function permissionParams(params: URLSearchParams): PermissionParams {
@@ -50,6 +53,7 @@ export function permissionParams(params: URLSearchParams): PermissionParams {
     perm: params.get("perm"),
     override: params.get("override") === "1",
     long: params.get("long") === "1",
+    entry: params.get("entry") === "1",
     write: params.get("write"),
   };
 }
@@ -86,7 +90,7 @@ const CATALOG = {
 const LONG_SERVER = `Review.ServerLong${"x".repeat(64)}`;
 const LONG_PREFIX = `Review-ServerLong${"x".repeat(13)}`;
 
-function initialConfig(override: boolean, long = false): Json {
+function initialConfig(override: boolean, long = false, entry = false): Json {
   return {
     tools: {
       allow: [
@@ -124,7 +128,12 @@ function initialConfig(override: boolean, long = false): Json {
     agents: {
       entries: {
         main: { tools: {} },
-        otto: { tools: { exec: { mode: "ask" }, deny: ["automations"] } },
+        otto: {
+          tools: {
+            exec: { mode: "ask" },
+            deny: ["automations", ...(entry ? ["retired_tool"] : [])],
+          },
+        },
         marlow: { tools: {} },
         pip: { tools: {} },
       },
@@ -166,7 +175,7 @@ function initialScopes(): Record<string, RulesScope> {
 
 /** The permissions commands, answered on made-up facts. Undefined for any other command. */
 export function permissionCommands(now: number, params: PermissionParams, admin: () => boolean) {
-  let config = initialConfig(params.override, params.long);
+  let config = initialConfig(params.override, params.long, params.entry);
   let hash = 1;
   const scopes = initialScopes();
   const readAt = now - 5 * MINUTE;
@@ -229,15 +238,18 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
           : {
               status: "listed",
               taskKey: `agent:${botId}:main`,
-              available: listed(config, botId),
+              // The latest task was offered what the settings in use leave: the applied
+              // snapshot while a stored revision isn't in use.
+              available: listed(inUse(), botId),
               servers: [
-                ...(listed(config, botId).includes("coder__run_checks")
-                  ? [{ name: "coder", prefix: "coder" }]
-                  : []),
-                ...(params.long && listed(config, botId).includes(`${LONG_PREFIX}__send_message`)
-                  ? [{ name: LONG_SERVER, prefix: LONG_PREFIX }]
-                  : []),
-              ],
+                { name: "coder", prefix: "coder__" },
+                ...(params.long ? [{ name: LONG_SERVER, prefix: `${LONG_PREFIX}__` }] : []),
+              ]
+                .map(({ name, prefix }) => ({
+                  name,
+                  tools: listed(inUse(), botId).filter((id) => id.startsWith(prefix)),
+                }))
+                .filter((server) => server.tools.length > 0),
             },
       plugin: status,
       rules: readable
@@ -251,8 +263,11 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
     };
   };
   const view = (botId: string): BotPermissions => permissionsView(facts(botId));
-  // `write=stored`: the revision the gateway reports in use stays the one before the save.
+  // `write=stored`: the revision the gateway reports in use, and its settings, stay the ones
+  // before the first save, through every save after it.
   let applied: number | null = null;
+  let appliedConfig: Json | null = null;
+  const inUse = () => appliedConfig ?? config;
   const apply = (write: ConfigWrite) => {
     config = structuredClone(config);
     merge(config, write.patch, write.replacePaths, "");
@@ -286,7 +301,10 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
         { outcome: "failed", error: "invalid config", view: view(command.botId) },
         600,
       );
-    if (params.write === "stored") applied = hash;
+    if (params.write === "stored" && applied === null) {
+      applied = hash;
+      appliedConfig = config;
+    }
     if (params.write === "lost")
       return delay<PermissionWrite>(
         {
@@ -308,7 +326,14 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
           fallback: scope.fallback,
           rules: [
             ...scope.rules,
-            { id: "5d0c2e8a1b7f", version: 1, action: "ask", tools: line.tools, target: null },
+            {
+              id: "5d0c2e8a1b7f",
+              version: 1,
+              action: "ask",
+              tools: line.tools,
+              target: null,
+              pageNote: true,
+            },
           ],
         };
         const deny = denyWrite(command.botId, settings, line, false, catalog);

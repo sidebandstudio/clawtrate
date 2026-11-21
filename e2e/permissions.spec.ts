@@ -426,19 +426,28 @@ test("a tool the gateway's settings deny for every bot stays Never and locked wh
   }
 });
 
-test("F-222: a bot's settings choose whether it may use a tool server: Never writes the prefix the gateway gave the server's tools to its own deny list and its calls are refused; Allow on that entry takes it off and they run", async () => {
+test("F-222: a tool server's line shows the tools the gateway listed for it, with no whole-server choice; a deny set as the owner refuses its calls, and Allow on that entry takes it off so they run", async () => {
   test.setTimeout(240_000);
   await permissions("Marlow");
   await expect(lineRow("server:coder")).toContainText("Allowed");
   const line = await openLine("server:coder");
-  // The line names the server's tools as the gateway lists them.
-  await expect(line.locator(".c-tools code")).toHaveText(["coder__*"]);
-  await line.getByRole("radio", { name: "Never", exact: true }).click();
+  // The line names the server's tools as the gateway listed them, and writes no guessed wildcard.
   await expect(
-    page.getByRole("status").filter({ hasText: "Saved. Tool server coder: never" }),
-  ).toHaveCount(1, { timeout: 30_000 });
-  expect(botTools(await config(), "marlow").deny).toEqual(["coder__*"]);
+    line.locator(".c-tools code").filter({ hasText: "coder__send_message" }),
+  ).toHaveCount(1);
+  for (const label of ["Allow", "Ask", "Never"])
+    await expect(line.getByRole("radio", { name: label, exact: true })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  await expect(line.getByTestId("choice-reason")).toContainText(
+    "The gateway doesn't name one namespace that covers all of this server's tools and no other server's",
+  );
   await shots("permissions-connector");
+  // A deny of the server's tools, set as the gateway's owner: its calls are refused.
+  await patch({ agents: { entries: { marlow: { tools: { deny: ["coder__*"] } } } } }, [
+    "agents.entries.marlow.tools.deny",
+  ]);
   const refused = await hostTask("marlow", "Marlow", "Connector off", "#mcp");
   const [call] = await waitResult(refused.key, "coder__send_message");
   expect(call!.text).toBe("Tool coder__send_message not found");
@@ -493,8 +502,10 @@ test("F-414: Otto's command policy is Ask, read from its settings; a command the
   // The fixture: no rule of the rules plugin for Otto or for every bot, so the card is the gateway's.
   expect(await scopeRules("otto")).toEqual([]);
   expect(await scopeRules("*")).toEqual([]);
+  // Otto's own command setting is Ask: "review off", the allowlist on a miss with no automatic review.
+  expect(botTools(await config(), "otto").exec).toMatchObject({ mode: "ask" });
   await permissions("Otto");
-  await expect(lineRow("exec")).toContainText("Asks first");
+  await expect(lineRow("exec")).toContainText("Configured: Ask");
   await expect(lineRow("exec")).toContainText("Otto's setting: Ask");
   const { key } = await hostTask(
     "otto",
@@ -515,8 +526,17 @@ test("F-414: Otto's command policy is Ask, read from its settings; a command the
       { timeout: 60_000 },
     )
     .toBe(true);
+  // After that earlier turn, the command raises the gateway's own command approval for this task.
+  const after = admin.lastSeq;
   await page.getByTestId("composer-input").fill("#approve");
   await page.getByTestId("composer-input").press("Enter");
+  await admin.waitFor(
+    "the gateway's native command approval",
+    (event) =>
+      event.event === "exec.approval.requested" && JSON.stringify(event.payload).includes(key),
+    60_000,
+    after,
+  );
   const card = approvalCard();
   await expect(card).toHaveCount(1, { timeout: 60_000 });
   await expect(card).toContainText("Otto wants to run a command");

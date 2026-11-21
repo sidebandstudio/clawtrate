@@ -35,7 +35,6 @@ import {
 import { useBridge } from "../bridge.tsx";
 import {
   BackIcon,
-  CheckIcon,
   ChevronIcon,
   FileIcon,
   LockIcon,
@@ -93,7 +92,12 @@ export function usePermissions(botId: string, shown: boolean, connection: Connec
     generation.current += 1;
     setRead({ status: "ready", view, error: null });
   }, []);
-  return { read, reload, replace };
+  // A write with no read-back leaves the last view, said as last read.
+  const lose = useCallback((error: string) => {
+    generation.current += 1;
+    setRead((was) => ({ status: "error", view: was.view, error }));
+  }, []);
+  return { read, reload, replace, lose };
 }
 
 // Words -------------------------------------------------------------------------------------
@@ -113,8 +117,11 @@ const MARK_ICONS: Record<Exclude<LineMark, null>, ReactNode> = {
   unread: <WarnIcon />,
 };
 
-/** Whether the gateway reports it isn't using the settings it has stored. */
-const notInUse = (view: BotPermissions) => view.settingsApplied === "no";
+/** Whether the gateway didn't confirm it is using the settings it has stored. */
+const notInUse = (view: BotPermissions) => view.settingsApplied !== "yes";
+/** What is said instead of in-force counts while the gateway doesn't confirm its settings. */
+export const STORED_WORDS =
+  "Stored permissions. The gateway did not confirm which settings it is using.";
 const fromSettings = (mark: LineMark) => mark === "set" || mark === "gateway";
 
 /** Who holds a line. The gateway's stored settings it doesn't use yet hold nothing for sure. */
@@ -166,7 +173,7 @@ function exceptionWords(
     case "every-deny":
       return `Never: ${list(e.tools)} (set on the gateway)`;
     case "bot-deny":
-      return `Never: ${list(e.tools)} (${name}'s settings)`;
+      return `Never: ${list(e.tools)} (${name}'s settings${e.entries?.length ? `: ${list(e.entries)}` : ""})`;
     case "not-offered":
       return e.by === "every"
         ? `Not offered: ${list(e.tools)} (set on the gateway)`
@@ -251,8 +258,13 @@ function glanceExtra(line: PermissionLine, name: string): string | null {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
-const countWords = (view: BotPermissions) => {
-  const g = permissionGroups(view.lines);
+/** The lines whose value is a verdict; Run commands shows its configured mode instead. */
+const verdictLines = (view: BotPermissions) => view.lines.filter((line) => line.kind !== "exec");
+
+/** The settings row's counts: verdicts only, and none while the settings aren't confirmed in use. */
+export const countWords = (view: BotPermissions) => {
+  if (notInUse(view)) return STORED_WORDS;
+  const g = permissionGroups(verdictLines(view));
   const fallback = view.fallback.bot || view.fallback.every;
   const parts = fallback
     ? [`${g.never.length} never`, "the rules plugin can ask for other calls"]
@@ -418,12 +430,18 @@ export function Permissions({
   announce: (text: string) => void;
   onBack: () => void;
 }) {
-  const { read, reload, replace } = usePermissions(bot.id, visible, connection);
+  const { read, reload, replace, lose } = usePermissions(bot.id, visible, connection);
   const [lineId, setLineId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const name = bot.name;
+  // Focus a control of the page; when it is gone (its line left the summary), the page's heading.
   const focusIn = (selector: string) =>
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
+    requestAnimationFrame(() => {
+      const root = rootRef.current;
+      const target = root?.querySelector<HTMLElement>(selector);
+      const shown = target && target.getClientRects().length > 0 ? target : null;
+      (shown ?? root?.querySelector<HTMLElement>("[data-bs-focus]"))?.focus();
+    });
   // Back returns focus to the control that opened the line: its row, or its link in the glance.
   const opener = useRef<string | null>(null);
   const open = (id: string, from: "row" | "glance" = "row") => {
@@ -458,12 +476,27 @@ export function Permissions({
   ) : null;
   const view = read.view;
   const line = lineId && view ? view.lines.find((each) => each.id === lineId) : null;
-  // A read again that failed leaves the last view, said as such.
+  // A read again that failed, a write with no read-back, or no connection: the last view, said as such.
+  const staleError =
+    read.status === "error"
+      ? read.error
+      : connection.status !== "connected"
+        ? "not connected to the gateway"
+        : null;
+  // An open line the latest read no longer has: the overview shows, and its heading takes focus.
+  const vanished = lineId !== null && view !== null && !line;
+  useEffect(() => {
+    if (!vanished) return;
+    const frame = requestAnimationFrame(() =>
+      rootRef.current?.querySelector<HTMLElement>("[data-bs-focus]")?.focus(),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [vanished]);
   const stale =
-    read.status === "error" && view ? (
+    staleError !== null && view ? (
       <Note tone="warn" testId="stale-read">
         <p>
-          Couldn't read {name}'s permissions again: {unstopped(read.error)}. This shows what
+          Couldn't read {name}'s permissions again: {unstopped(staleError)}. This shows what
           Clawtrate read at {clock(view.readAt)}.
         </p>
         <div style={{ marginTop: 8 }}>
@@ -486,6 +519,7 @@ export function Permissions({
           admin={connection.canAdmin}
           announce={announce}
           onRead={replace}
+          onUnread={lose}
         />
         {foot}
       </div>
@@ -564,6 +598,42 @@ function PluginLine({ view, name }: { view: BotPermissions; name: string }) {
   );
 }
 
+/**
+ * "For these rules to hold": configured facts and what the page can't know. Nothing here says
+ * what a bot can or can't do at run time: a task's own settings and the machine decide that.
+ */
+export function holdsWords(
+  view: BotPermissions,
+  name: string,
+): Array<{ text: string; tone?: "warn" }> {
+  const out: Array<{ text: string; tone?: "warn" }> = [];
+  const gateway = view.lines.find((line) => line.id === "gateway");
+  if (gateway) {
+    const denied = gateway.exceptions.flatMap((e) =>
+      e.kind === "bot-deny" || e.kind === "every-deny" ? e.tools : [],
+    );
+    const fact =
+      gateway.value === "never" && fromSettings(gateway.mark)
+        ? "denied in the gateway's settings"
+        : denied.length > 0
+          ? `${list(denied)} denied in the gateway's settings, the rest not denied there`
+          : "not denied in the gateway's settings";
+    const text = `Configured for ${name}: ${list(gateway.tools)}, the tools that change the gateway and its plugins and so its rules: ${fact}.`;
+    out.push(fact.startsWith("denied") ? { text } : { text, tone: "warn" });
+  }
+  if (view.lines.some((line) => line.kind === "exec"))
+    out.push({
+      text: "Command access depends on the task and machine. Commands run on the gateway's machine outside a sandbox can change its files.",
+      tone: "warn",
+    });
+  out.push({ text: "A rule about a file tool covers that tool, not the file." });
+  return out;
+}
+
+/** The configured command mode a Run commands line shows in place of a verdict. */
+const configuredMode = (line: PermissionLine) =>
+  `Configured: ${EXEC_WORDS[line.exec?.own ?? line.exec?.every ?? "none"]}`;
+
 function Overview({
   view,
   name,
@@ -573,8 +643,10 @@ function Overview({
   name: string;
   onLine: (id: string, from?: "row" | "glance") => void;
 }) {
-  const groups = permissionGroups(view.lines);
+  // Run commands is a configured mode, kept out of the verdicts' groups and counts.
+  const groups = permissionGroups(verdictLines(view));
   const byId = new Map(view.lines.map((line) => [line.id, line]));
+  const stored = notInUse(view);
   const of = (ids: string[]) => ids.map((id) => byId.get(id)!).filter(Boolean);
   const fallback = view.fallback.bot || view.fallback.every;
   const blocks: Array<{ title: string; kind: string; lines: PermissionLine[] }> = [
@@ -606,7 +678,6 @@ function Overview({
         ? `The gateway's listing of ${name}'s latest task couldn't be read${view.offered.reason ? ` (${view.offered.reason})` : ""}. These lines come from its settings.`
         : `From ${name}'s settings and the gateway's, read at ${clock(view.readAt)}. Each line opens its exact rule.`;
   const notOffered = of(groups.notOffered);
-  const gatewayLine = byId.get("gateway");
   const execLine = byId.get("exec");
   const everyRules = view.lines.reduce(
     (n, line) => n + line.exceptions.filter((e) => e.kind === "rule" && e.scope === "every").length,
@@ -616,12 +687,9 @@ function Overview({
     <>
       <PluginLine view={view} name={name} />
       <NotEnforced view={view} name={name} />
-      {view.settingsApplied === "no" && (
+      {stored && (
         <Note tone="warn" testId="not-applied">
-          <p>
-            The gateway reports it isn't using its stored settings yet. These lines show the stored
-            settings, which may not be the ones in force.
-          </p>
+          <p>{STORED_WORDS}</p>
         </Note>
       )}
       {view.unread.length > 0 && (
@@ -652,10 +720,21 @@ function Overview({
             className="c-glance-block"
             data-kind={block.kind}
             data-empty={block.lines.length === 0 ? "" : undefined}
-            aria-label={block.lines.length === 0 ? `${block.title}: nothing` : block.title}
+            aria-label={
+              (block.lines.length === 0 ? `${block.title}: nothing` : block.title) +
+              (stored ? ", stored" : "")
+            }
           >
             <h4>
-              {block.title} <span className="c-glance-n">{block.lines.length}</span>
+              {block.title}
+              {stored ? (
+                <span className="b-faint"> stored</span>
+              ) : (
+                <>
+                  {" "}
+                  <span className="c-glance-n">{block.lines.length}</span>
+                </>
+              )}
               {block.lines.length === 0 && <span className="b-faint">Nothing</span>}
             </h4>
             {block.lines.length > 0 && (
@@ -689,7 +768,10 @@ function Overview({
       {blocks.map((block) =>
         block.lines.length === 0 ? null : (
           <div key={block.title}>
-            <h4 className="b-group">{block.title}</h4>
+            <h4 className="b-group">
+              {block.title}
+              {stored ? " (stored)" : ""}
+            </h4>
             <dl className="facts">
               {block.lines.map((line) => (
                 <LineRow key={line.id} line={line} view={view} name={name} onOpen={onLine} />
@@ -713,41 +795,25 @@ function Overview({
           </div>
         </details>
       )}
+      {execLine && (
+        <>
+          <h4 className="b-group">Commands</h4>
+          <dl className="facts">
+            <LineRow line={execLine} view={view} name={name} onOpen={onLine} />
+          </dl>
+        </>
+      )}
       {view.linesOmitted > 0 && (
         <p className="b-hint">{view.linesOmitted} more tools aren't shown.</p>
       )}
       <h4 className="b-group">For these rules to hold</h4>
       <ul className="c-holds" data-testid="holds">
-        {gatewayLine?.value === "never" ? (
-          <li>
-            <CheckIcon />
-            {name} can't change the gateway or its plugins: Never.
+        {holdsWords(view, name).map((item) => (
+          <li key={item.text} data-tone={item.tone}>
+            {item.tone === "warn" ? <WarnIcon /> : <FileIcon />}
+            {item.text}
           </li>
-        ) : (
-          <li data-tone="warn">
-            <WarnIcon />
-            {name} can change the gateway or its plugins, and so its rules.
-          </li>
-        )}
-        {/* Said only of a Run commands line the gateway's catalog gives. */}
-        {execLine &&
-          (execLine.value === "never" ? (
-            <li>
-              <CheckIcon />
-              {name} can't run commands.
-            </li>
-          ) : (
-            <li data-tone="warn">
-              <WarnIcon />
-              {name} can run commands, and this page doesn't show where. On the gateway's machine,
-              outside a sandbox, a command can change the gateway's settings and the rules plugin's
-              store, so {name}'s plugin rules are advice there until Run commands is Never or runs
-              elsewhere.
-            </li>
-          ))}
-        <li>
-          <FileIcon />A rule about a file tool covers that tool, not the file.
-        </li>
+        ))}
       </ul>
       <p className="b-hint">
         Rules for every bot also apply
@@ -770,7 +836,7 @@ function LineRow({
   onOpen: (id: string) => void;
 }) {
   const subs = subWords(line, view, name);
-  const value = VALUE_WORDS[line.value];
+  const value = line.kind === "exec" ? configuredMode(line) : VALUE_WORDS[line.value];
   const label = [line.words, value, ...subs, line.mark ? markWords(line.mark, notInUse(view)) : ""]
     .filter(Boolean)
     .join(", ");
@@ -826,11 +892,74 @@ const SAVED_WORDS: Record<PermissionChoice, string> = {
   deny: "never",
 };
 
+/** What a save's answer says: the words announced, and the note under the choices. */
+export function saveNote(
+  result: PermissionWrite,
+  choice: PermissionChoice,
+  line: Pick<PermissionLine, "words">,
+  name: string,
+): { announce: string | null; note: { text: string; tone?: "warn" | "danger" } | null } {
+  const now = (failedToo: string) =>
+    result.view
+      ? "This shows what the gateway has now."
+      : `Reading what the gateway has now ${failedToo}.`;
+  switch (result.outcome) {
+    case "saved":
+      return { announce: `Saved. ${line.words}: ${SAVED_WORDS[choice]}`, note: null };
+    case "conflict":
+      return {
+        announce: null,
+        note: { text: `Someone else changed ${name}'s settings. ${now("failed")}`, tone: "warn" },
+      };
+    case "stored":
+      return {
+        announce: "Stored, not confirmed in use",
+        note: {
+          text: `Saved in the gateway's settings, and not confirmed in use: ${unstopped(result.error ?? "the gateway didn't say")}. This shows the stored settings.`,
+          tone: "warn",
+        },
+      };
+    case "unconfirmed":
+      return {
+        announce: "Couldn't be confirmed",
+        note: {
+          text: `Sent, but whether it was saved couldn't be confirmed: ${unstopped(result.error ?? "the gateway's answer was lost")}. ${now("failed too")}`,
+          tone: "warn",
+        },
+      };
+    case "partial":
+      // The rules plugin's part landed; whether the deny list changed is not known.
+      return {
+        announce: "Saved in part",
+        note: {
+          text: `The rules plugin saved ${name}'s ${choice === "ask" ? "Ask" : "rule change"}. Clawtrate couldn't confirm the deny-list change. ${unstopped(result.error ?? "The gateway didn't say why")}. ${now("failed")}`,
+          tone: "warn",
+        },
+      };
+    case "not-shown":
+      return {
+        announce: null,
+        note: {
+          text: `Sent, but ${name}'s settings read back don't show it. This shows what the gateway has now.`,
+          tone: "warn",
+        },
+      };
+    case "failed":
+      return {
+        announce: "Couldn't save",
+        note: {
+          text: `Couldn't save: ${unstopped(result.error ?? "the gateway refused it")}. ${now("failed too")}`,
+          tone: "danger",
+        },
+      };
+  }
+}
+
 /** The sentence under a line's choices: what the reads establish about it, and nothing more. */
 export function sentence(line: PermissionLine, view: BotPermissions, name: string): string {
   // Stored settings the gateway doesn't use yet are said as stored, never as in force.
   if (notInUse(view) && fromSettings(line.mark) && line.kind !== "exec")
-    return `${name}'s stored settings say ${VALUE_WORDS[line.value]}. The gateway reports it isn't using its stored settings yet, so this may not be in force.`;
+    return `${name}'s stored settings say ${VALUE_WORDS[line.value]}. ${view.settingsApplied === "no" ? "The gateway reports it isn't using its stored settings yet" : "The gateway did not confirm which settings it is using"}, so this may not be in force.`;
   const verb = line.words.charAt(0).toLowerCase() + line.words.slice(1);
   if (line.kind === "question")
     return `${name} asks its questions in the conversation, which already waits for you.`;
@@ -873,27 +1002,30 @@ export function sentence(line: PermissionLine, view: BotPermissions, name: strin
     return line.value === "never" && line.mark === "gateway"
       ? `${name}'s deny list names ${line.words}. No tool the gateway lists for ${name} now has that name, so this page can't say what it removes. Allow takes it off the list.`
       : `${line.words} names no tool the gateway lists for ${name} now.`;
+  // Rules the plugin may enforce that weren't read now: no Ask or Allow is presented as current.
+  if (line.mark === "unread")
+    return "Clawtrate could not confirm which rules the plugin is enforcing.";
+  if (line.kind === "server")
+    return `These are the tools the gateway listed for this server in ${name}'s latest task at ${clock(view.readAt)}. The gateway doesn't name one namespace that covers all of this server's tools and no other server's, so Clawtrate won't allow, ask or deny the whole server here.`;
   const can =
-    line.kind === "server"
-      ? `use the tool server ${line.id.slice("server:".length)}`
-      : line.kind === "plugin"
-        ? `use the tools ${line.words.charAt(0).toLowerCase()}${line.words.slice(1)}`
-        : line.kind === "tool"
-          ? `use ${line.words}`
-          : verb;
+    line.kind === "plugin"
+      ? `use the tools ${line.words.charAt(0).toLowerCase()}${line.words.slice(1)}`
+      : line.kind === "tool"
+        ? `use ${line.words}`
+        : verb;
   if (line.choice === "never") {
-    // What an attempt then looks like, said only for the kinds established on a development
-    // gateway (OpenClaw 2026.10.6, e2e/permissions.spec.ts): a tool group's and a tool server's.
-    const these = line.tools.length > 1 || line.kind === "server" ? "these tools" : "this tool";
+    // What an attempt then looks like, said only for the kind established on a development
+    // gateway (OpenClaw 2026.10.6, e2e/permissions.spec.ts): a tool group's.
+    const these = line.tools.length > 1 ? "these tools" : "this tool";
     const attempt =
-      line.kind === "group" || line.kind === "server"
-        ? ` The gateway removes ${these} from ${name}. If ${name} tries ${line.tools.length > 1 || line.kind === "server" ? "one" : "it"}, the attempt fails as a tool that was not found.`
+      line.kind === "group"
+        ? ` The gateway removes ${these} from ${name}. If ${name} tries ${line.tools.length > 1 ? "one" : "it"}, the attempt fails as a tool that was not found.`
         : ` The gateway removes ${these} from ${name}.`;
     return `${name} can't ${can}.${attempt}`;
   }
   const ownDeny = line.exceptions.find((e) => e.kind === "bot-deny");
   if (line.choice === null && ownDeny?.kind === "bot-deny")
-    return `${name}'s own settings deny only some of these tools: ${list(ownDeny.tools)}. The gateway still offers the rest unless something else removes them. Never denies them all; Allow takes ${name}'s deny off.`;
+    return `${name}'s own settings deny only some of these tools: ${list(ownDeny.tools)}${ownDeny.entries?.length ? ` (${list(ownDeny.entries)})` : ""}. Never denies them all${line.heldBy.length > 0 ? "" : `; Allow takes ${name}'s deny off them`}.`;
   if (line.ownAsk)
     return `${name} asks you first. Only while Clawtrate's rules plugin runs.${line.undoAsk ? " Allow takes this Ask off." : ""}`;
   if (line.exceptions.some((e) => e.kind === "rule" || e.kind === "fallback"))
@@ -919,6 +1051,7 @@ function LinePage({
   admin,
   announce,
   onRead,
+  onUnread,
 }: {
   bot: Bot;
   view: BotPermissions;
@@ -926,6 +1059,7 @@ function LinePage({
   admin: boolean;
   announce: (text: string) => void;
   onRead: (view: BotPermissions) => void;
+  onUnread: (error: string) => void;
 }) {
   const bridge = useBridge();
   const name = bot.name;
@@ -951,42 +1085,11 @@ function LinePage({
         rulesVersion: view.versions.bot,
       });
       if (result.view) onRead(result.view);
-      if (result.outcome === "saved") announce(`Saved. ${line.words}: ${SAVED_WORDS[choice]}`);
-      else if (result.outcome === "conflict")
-        setNote({
-          text: `Someone else changed ${name}'s settings. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed."}`,
-          tone: "warn",
-        });
-      else if (result.outcome === "stored") {
-        announce("Stored, not confirmed in use");
-        setNote({
-          text: `Saved in the gateway's settings, and not confirmed in use: ${unstopped(result.error ?? "the gateway didn't say")}. This shows the stored settings.`,
-          tone: "warn",
-        });
-      } else if (result.outcome === "unconfirmed") {
-        announce("Couldn't be confirmed");
-        setNote({
-          text: `Sent, but whether it was saved couldn't be confirmed: ${unstopped(result.error ?? "the gateway's answer was lost")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
-          tone: "warn",
-        });
-      } else if (result.outcome === "partial") {
-        announce("Saved in part");
-        setNote({
-          text: `The rules plugin saved ${name}'s ${choice === "ask" ? "Ask" : "rule change"}, and ${name}'s deny list in the gateway's settings wasn't changed: ${unstopped(result.error ?? "the gateway refused it")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed."}`,
-          tone: "warn",
-        });
-      } else if (result.outcome === "not-shown")
-        setNote({
-          text: `Sent, but ${name}'s settings read back don't show it. This shows what the gateway has now.`,
-          tone: "warn",
-        });
-      else {
-        announce("Couldn't save");
-        setNote({
-          text: `Couldn't save: ${unstopped(result.error ?? "the gateway refused it")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
-          tone: "danger",
-        });
-      }
+      // No read-back: the view shown stays, said as last read.
+      else onUnread("the read after the change failed");
+      const said = saveNote(result, choice, line, name);
+      if (said.announce) announce(said.announce);
+      setNote(said.note);
     } catch (error) {
       announce("Couldn't save");
       setNote({ text: `Couldn't save: ${errorText(error)}`, tone: "danger" });

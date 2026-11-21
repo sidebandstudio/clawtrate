@@ -139,6 +139,22 @@ const SCENES: Scene[] = [
     },
   },
   {
+    name: "page-stored",
+    ids: "F-176",
+    query: q("write=stored"),
+    ready: async (page) => {
+      await line("read")(page);
+      await page.getByRole("radio", { name: "Never", exact: true }).click();
+      await expect(page.getByTestId("save-note")).toBeVisible();
+      await page.getByRole("button", { name: "Back to what Otto may do" }).click();
+      // No in-force counts while the gateway doesn't confirm the settings in use.
+      await expect(page.getByTestId("not-applied")).toHaveText(
+        "Stored permissions. The gateway did not confirm which settings it is using.",
+      );
+      await expect(page.getByTestId("glance").locator(".c-glance-n")).toHaveCount(0);
+    },
+  },
+  {
     name: "line-stored",
     ids: "F-176",
     query: q("write=stored"),
@@ -214,5 +230,24 @@ test.describe("keyboard and screen reader", () => {
     await expect(page.getByTestId("permission-line")).toBeVisible();
     await page.getByRole("button", { name: "Back to what Otto may do" }).click();
     await expect(page.locator('[data-c-glance="read"]')).toBeFocused();
+  });
+
+  test("Back takes focus to the overview heading when the line vanishes from its summary", async ({
+    page,
+  }) => {
+    await openFixture(page, q("entry=1"), "light");
+    await ready(page);
+    // An entry of Otto's deny list that names no tool, opened from its link in the glance.
+    await page.locator('[data-c-glance="deny:retired_tool"]').click();
+    const line = page.getByTestId("permission-line");
+    await expect(line.locator("[data-bs-focus]")).toBeFocused();
+    await line.getByRole("radio", { name: "Allow", exact: true }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Saved. retired_tool: allowed" }),
+    ).toHaveCount(1);
+    // The entry and its link are gone: the overview's heading takes focus, not Back to settings.
+    await expect(page.locator('[data-c-glance="deny:retired_tool"]')).toHaveCount(0);
+    await expect(page.getByTestId("permissions").locator("[data-bs-focus]")).toBeFocused();
+    await expect(page.getByRole("button", { name: "Back to settings" })).not.toBeFocused();
   });
 });

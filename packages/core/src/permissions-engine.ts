@@ -22,6 +22,7 @@ import {
   keptScope,
   type KeptScope,
   pageAsk,
+  PAGE_RULE_NOTE,
   permissionsView,
   pluginHolds,
   readToolCatalog,
@@ -362,7 +363,7 @@ export class PermissionsEngine {
       this.writeSent = true;
       await request(RULES_SET_METHOD, {
         scope: botId,
-        rules: [...rules, { action: "ask", tools }],
+        rules: [...rules, { action: "ask", tools, note: PAGE_RULE_NOTE }],
         fallback: scope?.fallback ?? false,
         expectedVersion: version,
       });

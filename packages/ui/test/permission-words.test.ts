@@ -3,7 +3,13 @@
 // list or which listing a fact comes from.
 import { describe, expect, it } from "vitest";
 import type { BotPermissions, PermissionLine } from "@clawtrate/core";
-import { sentence } from "../src/bots/Permissions.tsx";
+import {
+  countWords,
+  holdsWords,
+  saveNote,
+  sentence,
+  STORED_WORDS,
+} from "../src/bots/Permissions.tsx";
 
 // Local time, so the words are the same in any time zone.
 const READ_AT = new Date(2026, 10, 20, 17, 39).getTime();
@@ -28,6 +34,7 @@ const line = (over: Partial<PermissionLine>): PermissionLine => ({
   choice: "allow",
   ownAsk: false,
   undoAsk: false,
+  heldBy: [],
   exec: null,
   offered: "yes",
   ...over,
@@ -58,7 +65,18 @@ describe("the sentence under a line's choices", () => {
       exceptions: [{ kind: "bot-deny", tools: ["edit"] }],
     });
     expect(sentence(partial, view(), "Juniper")).toBe(
-      "Juniper's own settings deny only some of these tools: edit. The gateway still offers the rest unless something else removes them. Never denies them all; Allow takes Juniper's deny off.",
+      "Juniper's own settings deny only some of these tools: edit. Never denies them all; Allow takes Juniper's deny off them.",
+    );
+    // Held by a broader entry: the entry is named, and Allow is promised nothing.
+    const held = line({
+      value: "limited",
+      mark: "gateway",
+      choice: null,
+      heldBy: ["group:fs"],
+      exceptions: [{ kind: "bot-deny", tools: ["edit", "write"], entries: ["group:fs"] }],
+    });
+    expect(sentence(held, view(), "Juniper")).toBe(
+      "Juniper's own settings deny only some of these tools: edit and write (group:fs). Never denies them all.",
     );
   });
 
@@ -68,5 +86,76 @@ describe("the sentence under a line's choices", () => {
     expect(sentence(never, view({ settingsApplied: "no" }), "Otto")).toBe(
       "Otto's stored settings say Never. The gateway reports it isn't using its stored settings yet, so this may not be in force.",
     );
+  });
+
+  it("the overview does not claim runtime command access from the configured mode", () => {
+    const exec = line({
+      id: "exec",
+      kind: "exec",
+      words: "Run commands",
+      tools: ["exec", "process"],
+      value: "never",
+      mark: "set",
+      choice: "deny",
+      exec: { own: null, every: "deny", applies: "deny" },
+    });
+    const gateway = line({
+      id: "gateway",
+      words: "Change the gateway's settings",
+      tools: ["gateway", "plugins"],
+      value: "never",
+      mark: "set",
+    });
+    const read = line({ id: "read", words: "Read files", tools: ["read", "ls"] });
+    const v = view({ lines: [exec, gateway, read], fallback: { bot: false, every: false } });
+    const words = holdsWords(v, "Otto").map((each) => each.text);
+    expect(words.join(" ")).not.toMatch(/can't run commands|can run commands/);
+    expect(words).toContain(
+      "Command access depends on the task and machine. Commands run on the gateway's machine outside a sandbox can change its files.",
+    );
+    expect(words[0]).toBe(
+      "Configured for Otto: gateway and plugins, the tools that change the gateway and its plugins and so its rules: denied in the gateway's settings.",
+    );
+    // Run commands is out of the verdicts' counts.
+    expect(countWords(v)).toBe("1 never · 0 ask first · 1 without asking");
+  });
+
+  it("fallback Ask and cached rules never appear as an unconditional Allow or Ask", () => {
+    const cached = line({
+      id: "read",
+      words: "Read files",
+      tools: ["read", "ls"],
+      value: "unknown",
+      mark: "unread",
+      choice: "ask",
+      ownAsk: true,
+    });
+    expect(sentence(cached, view({ enforcement: "unread" }), "Otto")).toBe(
+      "Clawtrate could not confirm which rules the plugin is enforcing.",
+    );
+  });
+
+  it("an acknowledged rule and a missing settings read-back do not claim the deny list stayed unchanged", () => {
+    const said = saveNote(
+      { outcome: "partial", error: "request timed out", view: null },
+      "ask",
+      { words: "Change files" },
+      "Pip",
+    );
+    expect(said.note!.text).toBe(
+      "The rules plugin saved Pip's Ask. Clawtrate couldn't confirm the deny-list change. request timed out. Reading what the gateway has now failed.",
+    );
+    expect(said.note!.text).not.toMatch(/wasn't changed/);
+  });
+
+  it("an unapplied Never does not change Offered, or appear in the current Never count", () => {
+    const never = line({ value: "never", mark: "gateway", choice: "never" });
+    const v = view({
+      settingsApplied: "no",
+      lines: [never],
+      fallback: { bot: false, every: false },
+    });
+    expect(countWords(v)).toBe(STORED_WORDS);
+    expect(countWords(view({ settingsApplied: "unknown", lines: [never] }))).toBe(STORED_WORDS);
   });
 });

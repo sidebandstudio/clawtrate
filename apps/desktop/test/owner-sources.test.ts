@@ -62,6 +62,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/permissions.ts:lineOf>open":
     "one line's tools that nothing removes, gone when the line is read",
   "packages/core/src/permissions.ts:UNREAD_KEYS": "static, four setting names",
+  "packages/core/src/permissions.ts:lineOf>botDenied":
+    "one line's tools the bot's deny list names, gone when the line is read",
   "packages/core/src/permissions.ts:lineOf>everyLeftOut":
     "one line's tools the allow list for every bot leaves out, gone when the line is read",
   "packages/core/src/permissions.ts:lineOf>botLeftOut":

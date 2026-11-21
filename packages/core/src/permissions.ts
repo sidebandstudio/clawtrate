@@ -51,9 +51,12 @@ export type PluginRule = {
   action: RuleAction;
   tools: string[];
   target: { kind: string; pattern: string } | null;
-  /** Whether the rule carries a note: one this page never writes. */
-  noted?: boolean;
+  /** Whether the rule carries this page's own note (`PAGE_RULE_NOTE`): a rule this page wrote. */
+  pageNote?: boolean;
 };
+
+/** The note this page writes on each rule it creates; a rule without it is managed elsewhere. */
+export const PAGE_RULE_NOTE = "Created in Clawtrate per-bot permissions";
 
 export type RulesScope = { version: number; fallback: boolean; rules: PluginRule[] };
 
@@ -128,11 +131,13 @@ export type ToolSettings = {
 export type CatalogTool = { id: string; group: string; groupLabel: string; plugin: string | null };
 
 /**
- * A tool server the listing names: its name as configured, and the prefix the
- * gateway gave its tools (`<prefix>__<tool>`), when every tool listed for it
- * has that prefix and no other listed tool does; else null.
+ * A tool server the listing names: its name as configured, and the ids the
+ * gateway gave the tools it listed for it. The listing names no namespace
+ * that covers all of a server's tools and no other server's (a normalized
+ * server name can itself hold `__`), so these ids are facts to show, never a
+ * wildcard to write.
  */
-export type ListedServer = { name: string; prefix: string | null };
+export type ListedServer = { name: string; tools: string[] };
 
 /** What the bot's latest task was offered (`tools.effective`). */
 export type Offered =
@@ -231,7 +236,7 @@ export function readToolSettings(answer: unknown, botId: string): ToolSettings {
       .filter(([, list]) => !readWhole(list))
       .map(([name]) => name),
     applied:
-      typeof root?.configRevisionHash !== "string"
+      typeof root?.configRevisionHash !== "string" || typeof root?.appliedConfigHash !== "string"
         ? "unknown"
         : root.appliedConfigHash === root.configRevisionHash
           ? "yes"
@@ -291,19 +296,7 @@ export function readOffered(answer: unknown, taskKey: string): Offered {
       if (!available.includes(id) && available.length < MAX_CATALOG_TOOLS) available.push(id);
     }
   }
-  const servers = [...byServer].map(([name, ids]): ListedServer => {
-    // The gateway renames a server's tools (sanitized, cut, numbered on a clash): the prefix is
-    // read from the names it lists, and kept only when it covers them and nothing else listed.
-    const first = ids[0]!;
-    const at = first.indexOf("__");
-    const prefix = at > 0 ? first.slice(0, at) : null;
-    const covers = (id: string) => prefix !== null && id.startsWith(`${prefix}__`);
-    const sound =
-      prefix !== null &&
-      ids.every(covers) &&
-      !available.some((id) => covers(id) && !ids.includes(id));
-    return { name, prefix: sound ? prefix : null };
-  });
+  const servers = [...byServer].map(([name, tools]): ListedServer => ({ name, tools }));
   return { status: "listed", taskKey, available, servers };
 }
 
@@ -381,7 +374,7 @@ function readRule(value: unknown): PluginRule | null {
     version: typeof r?.version === "number" ? r.version : 0,
     action,
     tools,
-    noted: typeof r?.note === "string" && r.note.length > 0,
+    pageNote: r?.note === PAGE_RULE_NOTE,
     target:
       target && pattern !== null && pattern.length <= 1_000
         ? { kind: typeof target.kind === "string" ? cut(target.kind, 16) : "path", pattern }
@@ -452,7 +445,7 @@ export function keptScope(scope: RulesScope | null, readAt: number): KeptScope {
       action: rule.action,
       tools: rule.tools.slice(0, MAX_RULE_TOOLS),
       target,
-      noted: rule.noted === true,
+      pageNote: rule.pageNote === true,
     });
   }
   return {
@@ -491,7 +484,7 @@ function globMatches(pattern: string, name: string): boolean {
 export function entryNames(entry: string, tool: string, catalog: readonly CatalogTool[]): boolean {
   // `group:plugins` is every plugin's tools, a tool server's among them; a plugin's id, its tools.
   if (entry === "group:plugins")
-    return tool.endsWith("__*") || catalog.some((t) => t.id === tool && t.plugin !== null);
+    return tool.includes("__") || catalog.some((t) => t.id === tool && t.plugin !== null);
   if (entry.startsWith("group:")) {
     const group = entry.slice(6);
     return catalog.some((t) => t.group === group && t.id === tool);
@@ -527,7 +520,8 @@ export type LineMark = "set" | "gateway" | "plugin" | "not-now" | "unread" | nul
 /** A thing a line says beside its value. */
 export type LineException =
   | { kind: "every-deny"; tools: string[] }
-  | { kind: "bot-deny"; tools: string[] }
+  /** `entries`: the deny list's entries that name them, where they aren't the tools' own names. */
+  | { kind: "bot-deny"; tools: string[]; entries?: string[] }
   /** Left out by an allow list: the gateway's for every bot, or the bot's own. */
   | { kind: "not-offered"; tools: string[]; by: "every" | "bot" }
   /** Left open by the settings read here, and not in the latest task's listing. */
@@ -568,7 +562,7 @@ export type PermissionLine = {
   words: string;
   /**
    * The gateway's tool names behind it, as they exist on this gateway: for a
-   * server, `<prefix>__*` with the prefix its listing gives, or none.
+   * server, the ids the latest task's listing gave its tools, or none.
    */
   tools: string[];
   value: LineValue;
@@ -583,6 +577,12 @@ export type PermissionLine = {
    * it is one this page writes (the line's tools exactly, no pattern, no note).
    */
   undoAsk: boolean;
+  /**
+   * Entries of the bot's deny list that name one of the line's tools and that
+   * Allow here wouldn't take off (a group, a pattern, another tool's entry):
+   * while one stays, Allow and Ask can't free the line.
+   */
+  heldBy: string[];
   exec: ExecFacts | null;
   /** In the bot's latest task's tools: yes, no, or not listed (no task, or the listing failed). */
   offered: "yes" | "no" | "unknown";
@@ -689,17 +689,20 @@ export function rulesEnforcement(plugin: RulesPluginStatus, rules: RulesSource):
   }
 }
 
-/** Whether a rule is an Ask as this page writes it for these tools: exactly them, no pattern, no note. */
+/**
+ * Whether a rule is an Ask this page wrote for these tools: exactly them, no
+ * pattern, and this page's note. An identical rule without the note was
+ * written elsewhere and is left alone.
+ */
 export function pageAsk(
-  rule: { action?: unknown; tools?: unknown; target?: unknown; note?: unknown; noted?: boolean },
+  rule: { action?: unknown; tools?: unknown; target?: unknown; note?: unknown; pageNote?: boolean },
   tools: readonly string[],
 ): boolean {
   const named = Array.isArray(rule.tools) ? rule.tools : [];
   return (
     rule.action === "ask" &&
     (rule.target === undefined || rule.target === null) &&
-    rule.note === undefined &&
-    rule.noted !== true &&
+    (rule.note === PAGE_RULE_NOTE || rule.pageNote === true) &&
     named.length === tools.length &&
     tools.every((t) => named.includes(t))
   );
@@ -736,13 +739,12 @@ export function permissionLines(facts: PermissionFacts): {
   const listed = facts.offered.status === "listed" ? facts.offered.servers : [];
   const servers = [...new Set([...settings.servers, ...listed.map((each) => each.name)])];
   for (const server of servers.slice(0, MAX_TOOL_SERVERS)) {
-    // Its tools as the gateway names them; a server it hasn't named them for has none here.
-    const prefix = listed.find((each) => each.name === server)?.prefix ?? null;
+    // Its tools as the gateway listed them; a server it hasn't listed has none here.
     defs.push({
       id: `server:${server}`,
       kind: "server",
       words: `Tool server ${server}`,
-      tools: prefix ? [`${prefix}__*`] : [],
+      tools: listed.find((each) => each.name === server)?.tools ?? [],
     });
   }
   const plugins = new Map<string, { label: string; tools: string[] }>();
@@ -784,6 +786,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       offered: facts.offered.status === "listed" ? "no" : "unknown",
       ownAsk: false,
       undoAsk: false,
+      heldBy: [],
       value: facts.offered.status === "listed" ? "not-offered" : "unknown",
       mark: null,
       exceptions: [{ kind: "unnamed" }],
@@ -828,8 +831,25 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     offered,
     ownAsk: false,
     undoAsk: false,
+    heldBy:
+      def.kind === "entry"
+        ? []
+        : settings.botDeny.filter(
+            (entry) =>
+              def.tools.some((tool) => entryNames(entry, tool, catalog)) &&
+              !takenOffBy(entry, def.tools),
+          ),
   };
   const exceptions: LineException[] = [];
+  const named = settings.botDeny.filter(
+    (entry) =>
+      !def.tools.includes(entry) && botDenied.some((tool) => entryNames(entry, tool, catalog)),
+  );
+  const botDeny = (): LineException => ({
+    kind: "bot-deny",
+    tools: botDenied,
+    ...(named.length > 0 ? { entries: named } : {}),
+  });
   const leftOutBy = (): LineException[] => [
     ...(everyLeftOut.length > 0
       ? [{ kind: "not-offered" as const, tools: everyLeftOut, by: "every" as const }]
@@ -853,7 +873,8 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       };
     }
     exceptions.push(...leftOutBy());
-    if (botDenied.length === 0)
+    // Said as a denial for every bot only when the settings for every bot remove the whole line.
+    if (botDenied.length === 0 && botLeftOut.length === 0)
       return {
         ...base,
         value: "never",
@@ -862,6 +883,16 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
         choice: exec ? (exec.applies === "none" ? null : exec.applies) : "allow",
       };
     if (everyDenied.length > 0) exceptions.push({ kind: "every-deny", tools: everyDenied });
+    if (botDenied.length === 0)
+      // Part denied for every bot, the rest left out of the bot's own allow list: named, no choice.
+      return {
+        ...base,
+        value: "never",
+        mark: "gateway",
+        exceptions,
+        choice: exec ? (exec.applies === "none" ? null : exec.applies) : null,
+      };
+    if (named.length > 0) exceptions.push(botDeny());
     return {
       ...base,
       value: "never",
@@ -871,7 +902,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     };
   }
   if (everyDenied.length > 0) exceptions.push({ kind: "every-deny", tools: everyDenied });
-  if (botDenied.length > 0) exceptions.push({ kind: "bot-deny", tools: botDenied });
+  if (botDenied.length > 0) exceptions.push(botDeny());
   exceptions.push(...leftOutBy());
   if (unlisted.length > 0) exceptions.push({ kind: "not-listed", tools: unlisted });
   // A tool of the line no allow list offers leaves the rest as they are; a denied one limits the line.
@@ -896,6 +927,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   const asks = rules.filter((r) => r.rule.action === "ask");
   // An Ask on every tool of the line, with no pattern, makes it Asks first; any other limits it.
   const wholeAsk = asks.some((r) => whole(r.rule));
+  const wholeAllow = rules.some((r) => r.rule.action === "allow" && whole(r.rule));
   // A Never that holds back only part of the line: under a pattern, or on some of its tools.
   const targetNevers = rules.filter((r) => r.rule.action === "never" && !whole(r.rule));
   const ownAsks = asks.filter((r) => r.scope === "bot" && whole(r.rule));
@@ -922,6 +954,8 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   if (fallbackOn && exceptions.length < MAX_EXCEPTIONS)
     exceptions.push({ kind: "fallback", scope: facts.botScope?.fallback ? "bot" : "every" });
   const pluginPart = rules.length > 0 || fallbackOn;
+  // With "Ask when nothing else decides" on, a line no whole-line rule decides may ask: Limited.
+  const fallbackAsks = fallbackOn && !wholeAllow;
   const pluginMark: LineMark = holds ? "plugin" : "not-now";
   // Rules this client didn't read now may cover any line: Unknown, never Allowed. A plugin that
   // asks before every call holds every line as Asks first.
@@ -969,7 +1003,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       return listed(
         rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk, undoAsk }),
       );
-    const limited = asks.length > 0 || targetNevers.length > 0 || partial;
+    const limited = asks.length > 0 || targetNevers.length > 0 || partial || fallbackAsks;
     const value: LineValue =
       policy === "deny"
         ? "never"
@@ -985,7 +1019,11 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
               : "limited"
             : "asks";
     const mark: LineMark =
-      asks.length > 0 || targetNevers.length > 0 ? pluginMark : exec.own ? "gateway" : "set";
+      asks.length > 0 || targetNevers.length > 0 || fallbackAsks
+        ? pluginMark
+        : exec.own
+          ? "gateway"
+          : "set";
     return listed(rulesOver({ ...base, value, mark, exceptions, choice, ownAsk, undoAsk }));
   }
   // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
@@ -1026,7 +1064,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   return listed(
     rulesOver({
       ...base,
-      value: partial ? "limited" : "allowed",
+      value: partial || fallbackAsks ? "limited" : "allowed",
       mark: partial ? (botDenied.length > 0 ? "gateway" : "set") : fallbackOn ? pluginMark : null,
       exceptions,
       choice,
@@ -1135,12 +1173,21 @@ export function choiceRefusal(
   if ((line.kind === "exec") !== execChoice) return "That choice isn't one of this line's.";
   if (line.kind === "server" && line.tools.length === 0)
     return "The gateway hasn't listed this server's tools for the bot's latest task, so Clawtrate can't name them to allow, ask or deny.";
+  if (line.kind === "server")
+    return "The gateway doesn't name one namespace that covers all of this server's tools and no other server's, so Clawtrate won't allow, ask or deny the whole server here.";
   if (line.value === "not-offered" && line.mark === "set")
     return "The gateway's settings for every bot don't offer this tool. Clawtrate can't change them.";
   if (line.value === "not-offered" && line.mark === "gateway")
     return "The bot's own allow list in the gateway's settings leaves this out. This page doesn't change allow lists.";
   if (line.mark === "set" && line.value === "never")
     return "The gateway's settings deny this for every bot. Clawtrate can't change them.";
+  if (line.value === "never" && line.mark === "gateway" && line.choice === null && !line.exec)
+    return "The gateway's settings for every bot deny some of these tools, and the bot's own allow list leaves out the rest. This page doesn't change allow lists.";
+  if (
+    (choice === "allow" || choice === "ask" || (execChoice && choice !== "deny")) &&
+    line.heldBy.length > 0
+  )
+    return `This choice is held by ${line.heldBy.join(" and ")} in the bot's deny list.`;
   if (line.kind === "question" && choice === "ask") return "A question already asks you.";
   if (line.kind === "entry" && choice === "ask")
     return "This entry of the bot's deny list names no tool the gateway lists now, so there is nothing to ask about.";
@@ -1175,6 +1222,16 @@ function nest(path: readonly string[], value: unknown): RawRecord {
   return out as RawRecord;
 }
 
+/** Whether Allow on a line of these tools takes this deny entry off. */
+export function takenOffBy(entry: string, tools: readonly string[]): boolean {
+  return tools.some(
+    (tool) =>
+      entry === tool ||
+      (tool.endsWith("__*") && entry.startsWith(tool.slice(0, -1))) ||
+      (!entry.includes("*") && canonical(entry) === canonical(tool)),
+  );
+}
+
 /** The bot's deny list with the line's tools added, or taken out. */
 export function denyWrite(
   botId: string,
@@ -1190,13 +1247,7 @@ export function denyWrite(
         (entry) =>
           // An entry's own line takes off that entry and nothing else.
           (line.kind === "entry" && !line.tools.includes(entry)) ||
-          (line.kind !== "entry" &&
-            !line.tools.some(
-              (tool) =>
-                entry === tool ||
-                (tool.endsWith("__*") && entry.startsWith(tool.slice(0, -1))) ||
-                (!entry.includes("*") && canonical(entry) === canonical(tool)),
-            )),
+          (line.kind !== "entry" && !takenOffBy(entry, line.tools)),
       );
   if (next.length === current.length && next.every((e, i) => e === current[i])) return null;
   if (next.length > MAX_LIST_ENTRIES)
