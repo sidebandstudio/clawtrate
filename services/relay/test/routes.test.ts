@@ -1,6 +1,7 @@
 import { createSessionId } from "@clawtrate/relay-protocol";
 import { describe, expect, it } from "vitest";
 import { addressRateKey, addressText, parseRoute, planRequest } from "../src/core/index.ts";
+import { startRelayServer } from "../src/node/server.ts";
 import { connectorKey } from "./support.ts";
 
 describe("the relay's paths", () => {
@@ -75,5 +76,16 @@ describe("the phone's address", () => {
     expect(addressRateKey("2001:db8:0:1:ffff::1")).toBe("2001:db8:0:1::/64");
     expect(addressRateKey("2001:db8:0:2::7")).toBe("2001:db8:0:2::/64");
     expect(addressRateKey("")).toBe("unknown");
+  });
+});
+
+describe("the Node runner", () => {
+  it("listens on loopback only", async () => {
+    // 192.0.2.1 is a documentation address, so even without the check nothing is bound there.
+    for (const host of ["192.0.2.1", "localhost"]) {
+      await expect(startRelayServer({ host }), host).rejects.toThrow(
+        "The Node relay listens on 127.0.0.1 or ::1 only.",
+      );
+    }
   });
 });
