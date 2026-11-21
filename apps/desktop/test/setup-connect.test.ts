@@ -114,7 +114,7 @@ function harness(
     };
   };
   // The listener the recorded status names (pid 4242), by its start time; a test may replace it.
-  const listeners = new Map<number, string>([[4242, "Mon Nov 16 21:27:01 2026"]]);
+  const listeners = new Map<number, string>([[4242, "2026-11-16T21:27:01Z"]]);
   const identify: Identify = (pid) => {
     const started = listeners.get(pid);
     return started ? { state: "alive", identity: started } : { state: "exited", how: "absent" };
@@ -870,7 +870,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
   it("F-516 F-492: the listener replaced by another process, or restarted under its PID, between the dialog and its answer mints nothing and saves no route", async () => {
     for (const replace of [
       (h: ReturnType<typeof harness>) => h.listeners.delete(4242),
-      (h: ReturnType<typeof harness>) => h.listeners.set(4242, "Tue Nov 17 08:00:00 2026"),
+      (h: ReturnType<typeof harness>) => h.listeners.set(4242, "2026-11-17T08:00:00Z"),
     ]) {
       const h: ReturnType<typeof harness> = harness({
         confirm: async () => {
@@ -893,7 +893,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     const h: ReturnType<typeof harness> = harness({
       replies: {
         [`qr --json --voice-node --url ${URL}`]: () => {
-          h.listeners.set(4242, "Tue Nov 17 08:00:00 2026");
+          h.listeners.set(4242, "2026-11-17T08:00:00Z");
           return { stdout: qrJson(URL, CODE, Date.now() + 600_000) };
         },
       },

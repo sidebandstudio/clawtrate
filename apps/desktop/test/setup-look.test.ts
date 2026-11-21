@@ -45,7 +45,7 @@ import * as fake from "./fixtures/sandbox.ts";
 import type { Identify } from "../../../tools/dev-gateway/src/state-guard.ts";
 
 /** The recorded status's listener (pid 4242), alive with this start time. */
-const LISTENER_STARTED = "Mon Nov 16 21:27:01 2026";
+const LISTENER_STARTED = "2026-11-16T21:27:01Z";
 const listening: Identify = (pid) =>
   pid === 4242
     ? { state: "alive", identity: LISTENER_STARTED }
