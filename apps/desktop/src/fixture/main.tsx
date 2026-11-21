@@ -13,6 +13,8 @@
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
+//   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
+//   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
@@ -23,6 +25,8 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { checkInParams } from "./check-ins.ts";
+import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
@@ -81,6 +85,8 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   desktopUpdates: fixtureUpdates(params),
   files: fileParams(params),
   accounts: accountParams(params),
+  checkIns: checkInParams(params),
+  routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
 });
@@ -89,7 +95,7 @@ if (params.has("hold")) bridge.hold();
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");
 // For tests and manual checks: change the state from the console.
-Object.assign(window, { clawtrateFixture: bridge });
+Object.assign(window, { clawtrateFixture: bridge, releaseRoutineReads });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
