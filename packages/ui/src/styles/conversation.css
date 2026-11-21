@@ -1187,11 +1187,18 @@
   transition: opacity var(--dur-quick) linear;
 }
 
-.msg-unit:hover > .msg-actions,
 .msg-actions:focus-within,
 .msg-actions[data-open="true"] {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Only where hovering is real: a tap on a touch screen leaves :hover behind until the next tap. */
+@media (hover: hover) {
+  .msg-unit:hover > .msg-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .msg-actions .icon-button {

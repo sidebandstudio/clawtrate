@@ -678,6 +678,18 @@ test.describe("message actions on a phone", () => {
     await finger.lift();
     await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
   });
+
+  test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    await page.touchscreen.tap(box.x + 30, box.y + 20);
+    // The tap leaves :hover on the message, as iOS does, until the next tap elsewhere.
+    await expect.poll(() => turn.evaluate((el) => el.matches(":hover"))).toBe(true);
+    // pointer-events changes at once, where the opacity fades.
+    await expect(turn.getByTestId("message-actions")).toHaveCSS("pointer-events", "none");
+  });
 });
 
 for (const size of SIZES) {
@@ -691,7 +703,12 @@ for (const size of SIZES) {
         await open(page, "message-actions", theme);
         const turn = report(page);
         await turn.scrollIntoViewIfNeeded();
-        await turn.locator(".msg > .bubble").last().hover();
+        // A phone has no hover: there the actions show after a touch and hold.
+        if (size.phone) {
+          const finger = await fingerOn(turn);
+          await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+          await finger.lift();
+        } else await turn.locator(".msg > .bubble").last().hover();
         await expect.poll(() => shown(turn.getByTestId("message-actions"))).toBe(true);
         await settle(page);
         await expect(page).toHaveScreenshot(`messages-actions-${theme}-${size.name}.png`);
