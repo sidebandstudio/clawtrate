@@ -268,6 +268,28 @@ describe("the room", () => {
     }
   });
 
+  it("acts on nothing from a socket it closed, so a discarded challenge cannot register", async () => {
+    const store = new RelayStore(sqliteDriver(new DatabaseSync(":memory:")));
+    const t = setup({ store });
+    const control = t.connect({ role: "control", relayId: t.key.relayId });
+    const late = proof(t.key, control);
+    // The timer sees the clock go back and ends the idle challenge: the room closes the socket,
+    // and nothing is stored for it.
+    t.clock.t -= 1;
+    t.env.room.alarm();
+    expect(control.closedWith).toEqual({ code: 1000, reason: "idle_timeout" });
+    expect((control.state as ControlState).reg.state).toBe("challenged");
+    // The clock recovers, and a proof arrives while the close finishes, in a room rebuilt as
+    // after hibernation.
+    t.clock.t += 1;
+    t.rebuild();
+    await t.env.room.message(control, JSON.stringify({ t: "register", proof: late }));
+    expect(control.saves.map((saved) => (saved as ControlState).reg.state)).not.toContain(
+      "registered",
+    );
+    expect(store.pinnedKey(t.key.relayId)).toBeNull();
+  });
+
   it("refuses a session socket for a session id it never gave out", () => {
     const t = setup();
     const session = t.connect({

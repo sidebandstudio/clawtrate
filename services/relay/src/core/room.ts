@@ -136,8 +136,13 @@ export class RelayRoom {
     }
   }
 
-  /** A text or binary message from a socket. */
+  /**
+   * A text or binary message from a socket. One that arrives while a close the room started
+   * finishes is ignored: a socket the room closed is discarded, and its record, whatever it
+   * says, is never acted on again.
+   */
   async message(socket: RoomSocket, data: string | Uint8Array): Promise<void> {
+    if (!socket.open) return;
     const state = socket.load();
     if (state === null) return this.#refuse(socket, "internal");
     try {

@@ -2,7 +2,7 @@
 // a host's real socket: the Node runner's `NodeSocket`, and in workerd the Durable Object's
 // hibernatable WebSocket and its attachment (`worker.ts` runs them there). Plain code with no
 // test runner, so the same cases run in both. They port the cases `packages/relay-protocol`
-// runs against `MemoryRegistrationStore`, for a commit that is one synchronous step.
+// runs against `MemoryRegistrationStore` (`register-proof.test.ts`), with its synchronous commit.
 
 import {
   ControlRegistration,
@@ -221,10 +221,16 @@ const CASES: readonly (readonly [string, (context: Context) => Promise<void> | v
       same(store.commitRegistered(tricky, attempt), "committed", "the commit");
       same(read, ["nonce", "issuedAtMs", "lastReadingMs", "state", "live"], "the reads");
       same(reg(socket), { ...snapshot, state: "registered" }, "the stored success");
+      const success = { ...snapshot, state: "registered" };
       for (const bad of [
         { ...snapshot, state: "prepared" },
-        { ...snapshot, state: "registered", lastReadingMs: Number.NaN },
-        { ...snapshot, state: "registered", nonce: 7 },
+        { ...success, lastReadingMs: Number.NaN },
+        { ...success, issuedAtMs: -1 },
+        { ...success, issuedAtMs: 1.5 },
+        { ...success, lastReadingMs: snapshot.issuedAtMs - 1 },
+        { ...success, nonce: 7 },
+        { ...success, nonce: snapshot.nonce.slice(1) },
+        { ...success, nonce: `${snapshot.nonce}=` },
       ]) {
         read.length = 0;
         throws(
@@ -232,7 +238,13 @@ const CASES: readonly (readonly [string, (context: Context) => Promise<void> | v
           `committing ${JSON.stringify(bad)}`,
         );
         same(read, [], "the attempt read for a refused snapshot");
+        const failed = { ...bad, state: bad.state === "prepared" ? "prepared" : "failed" };
+        throws(
+          () => store.persist(failed as unknown as RegistrationSnapshot),
+          `persisting ${JSON.stringify(failed)}`,
+        );
       }
+      same(reg(socket), { ...snapshot, state: "registered" }, "the socket after refusals");
     },
   ],
   [
@@ -301,6 +313,34 @@ const CASES: readonly (readonly [string, (context: Context) => Promise<void> | v
       same(await pending, { ok: false, code: "aborted" }, "the result");
       same(c.states, ["verifying", "failed"], "the states stored");
       same(c.restored().state, "failed", "the restore");
+    },
+  ],
+  [
+    "the timer's expiry while the success is prepared reports the clock failure it saw",
+    async (context) => {
+      for (const [label, timerReading, code] of [
+        ["rollback, then recovery", START - 1, "bad_clock"],
+        ["elapsed deadline", START + REGISTER_CHALLENGE_MS + 1, "challenge_expired"],
+        ["plain abort", null, "aborted"],
+      ] as const) {
+        let now = START;
+        const waiting = waitingClaims();
+        const c = control(context, { clock: () => now, claims: waiting.claims });
+        const pending = c.register();
+        await until(waiting.asked);
+        if (timerReading === null) {
+          c.registration.abort();
+        } else {
+          now = timerReading;
+          same(c.registration.expire(), true, `${label}: the expiry`);
+          // The clock comes back in time; the cause the timer saw stays.
+          now = START;
+        }
+        waiting.release();
+        same(await pending, { ok: false, code }, `${label}: the result`);
+        same(c.states, ["verifying", "failed"], `${label}: the states stored`);
+        same(c.restored().state, "failed", `${label}: the restore`);
+      }
     },
   ],
   [
@@ -385,6 +425,69 @@ const CASES: readonly (readonly [string, (context: Context) => Promise<void> | v
       c.registration.abort();
       same(c.registration.state, "registered", "the state after a later abort");
       same(reg(c.socket).state, "registered", "the stored state after a later abort");
+    },
+  ],
+  [
+    "an expiry or a socket end after completion changes nothing",
+    async (context) => {
+      let now = START;
+      const c = control(context, { clock: () => now });
+      same((await c.register()).ok, true, "the registration");
+      now = START + REGISTER_CHALLENGE_MS + 1;
+      same(c.registration.expire(), false, "the late expiry");
+      c.registration.abort();
+      same(c.registration.state, "registered", "the registration's state");
+      same(c.states, ["verifying", "registered"], "the states stored");
+      same(c.restored().state, "registered", "the restore");
+    },
+  ],
+  [
+    "completes in the same turn as the commit: an abort queued from it is teardown",
+    async (context) => {
+      let inCommit = false;
+      let stateAtAbort: string | null = null;
+      const c = control(context, {
+        clock: () => {
+          if (inCommit) {
+            inCommit = false;
+            queueMicrotask(() => {
+              c.registration.abort();
+              stateAtAbort = c.registration.state;
+            });
+          }
+          return START;
+        },
+        wrap: (store) => ({
+          persist: (snapshot) => store.persist(snapshot),
+          commitRegistered: (snapshot, attempt) => {
+            inCommit = true;
+            return store.commitRegistered(snapshot, attempt);
+          },
+        }),
+      });
+      same((await c.register()).ok, true, "the registration");
+      same(stateAtAbort, "registered", "the state when the queued abort ran");
+      same(c.registration.state, "registered", "the registration's state");
+      same(c.states, ["verifying", "registered"], "the states stored");
+      same(c.restored().state, "registered", "the restore");
+    },
+  ],
+  [
+    "a failure that cannot be stored is store_failed, and leaves no success to restore",
+    async (context) => {
+      const waiting = waitingClaims();
+      const c = control(context, { claims: waiting.claims });
+      const pending = c.register();
+      await until(waiting.asked);
+      c.registration.abort();
+      // The socket no longer holds the registration, so the write of `failed` is refused.
+      const current = c.socket.load() as ControlState;
+      c.socket.save({ ...current, id: "another" });
+      waiting.release();
+      same(await pending, { ok: false, code: "store_failed" }, "the result");
+      same(c.registration.state, "failed", "the registration's state");
+      same(reg(c.socket).state, "verifying", "the state left on the socket");
+      same(c.restored().state, "failed", "the restore");
     },
   ],
   [

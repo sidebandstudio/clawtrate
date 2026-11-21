@@ -6,11 +6,14 @@
 // write. Abort and expiry come from the socket's close and the room's alarm, other events of
 // the same single-threaded object, so they land before the commit or after it, never inside.
 
-import type {
-  RegistrationCommit,
-  RegistrationSnapshot,
-  RegistrationState,
-  RegistrationStore,
+import {
+  fromBase64Url,
+  REGISTER_NONCE_BYTES,
+  toBase64Url,
+  type RegistrationCommit,
+  type RegistrationSnapshot,
+  type RegistrationState,
+  type RegistrationStore,
 } from "@clawtrate/relay-protocol";
 import type { ControlState, RoomSocket } from "./room.ts";
 
@@ -62,7 +65,11 @@ export class SocketRegistrationStore implements RegistrationStore {
   }
 }
 
-/** Reads each field once, into plain data, and refuses anything that is not a snapshot. */
+/**
+ * Reads each field once, into plain data, and refuses anything that is not a snapshot, by the
+ * protocol's own checks: a canonical 32-byte nonce, times in nonnegative whole milliseconds, a
+ * last reading no earlier than the challenge, and one of the four states.
+ */
 function copySnapshot(snapshot: RegistrationSnapshot): RegistrationSnapshot {
   const copy: RegistrationSnapshot = {
     nonce: snapshot.nonce,
@@ -71,12 +78,23 @@ function copySnapshot(snapshot: RegistrationSnapshot): RegistrationSnapshot {
     state: snapshot.state,
   };
   if (
-    typeof copy.nonce !== "string" ||
-    !Number.isSafeInteger(copy.issuedAtMs) ||
-    !Number.isSafeInteger(copy.lastReadingMs) ||
+    !isNonce(copy.nonce) ||
+    !isMillis(copy.issuedAtMs) ||
+    !isMillis(copy.lastReadingMs) ||
+    copy.lastReadingMs < copy.issuedAtMs ||
     !STATES.has(copy.state)
   ) {
     throw new Error("Not a registration snapshot.");
   }
   return copy;
+}
+
+function isNonce(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const bytes = fromBase64Url(value);
+  return bytes !== null && bytes.length === REGISTER_NONCE_BYTES && toBase64Url(bytes) === value;
+}
+
+function isMillis(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
