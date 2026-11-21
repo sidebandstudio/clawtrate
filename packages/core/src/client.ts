@@ -5218,7 +5218,6 @@ export class ClawtrateClient {
     const credential = credentialOf(settings);
     const stored = await this.loadToken(credential, identity.deviceId, "operator");
     if (generation !== this.generation) return;
-    const paired = stored !== null;
     // Reopening the same gateway keeps what is on screen until fresh data arrives: the same
     // address, or the same route at the address it answers on now.
     const sameGateway = settings.route
