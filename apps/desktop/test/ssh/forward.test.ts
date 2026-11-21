@@ -137,7 +137,7 @@ describe("the forward's states", () => {
     expect(h.forward.state).toEqual({ phase: "up", local: "/sockets/f50000.s", restored: false });
   });
 
-  it("is up only after a connection through it was answered as HTTP, and only then runs the LOOK", async () => {
+  it("is up only after a connection through it was answered as HTTP: a failed connection may run the LOOK, never put it up", async () => {
     const h = harness(
       [{ kind: "cant-tell" }, { kind: "same" }],
       ["no-answer", "forwarding-refused", "gateway-closed", "http"],

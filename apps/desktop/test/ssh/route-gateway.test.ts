@@ -18,7 +18,7 @@ import { createNodeHost } from "@clawtrate/core/node";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { userInfo } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -157,13 +157,16 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
       "default",
       statusJson({ port: gatewayPort, home: t.home, pid: mine.gatewayPid }),
     );
+    // Every value quoted for the shell, an apostrophe in a checkout path included; HOME as this
+    // process reads it, which is where `openInstance` finds the instance.
+    const q = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
     stub.setCodeScript(
       "default",
       [
-        `export HOME='${userInfo().homedir}'`,
-        `export PATH='${process.env.PATH ?? "/usr/bin:/bin"}'`,
-        `export OPENCLAW_BIN='${OPENCLAW}'`,
-        `exec '${process.execPath}' '${join(import.meta.dirname, "mint-code.ts")}' '${INSTANCE}' "$@"`,
+        `export HOME=${q(homedir())}`,
+        `export PATH=${q(process.env.PATH ?? "/usr/bin:/bin")}`,
+        `export OPENCLAW_BIN=${q(OPENCLAW!)}`,
+        `exec ${q(process.execPath)} ${q(join(import.meta.dirname, "mint-code.ts"))} ${q(INSTANCE)} "$@"`,
         "",
       ].join("\n"),
     );
@@ -307,6 +310,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
   });
 
   it("F-499: Remove is local only: it closes the forward and forgets the route, its pin and its token", async () => {
+    const deviceId = client.state.connection.deviceId!;
     const forwards = started.filter((run) => run.args.includes("-L")).map((run) => run.pid!);
     expect(forwards.some((pid) => alive(pid))).toBe(true);
     await remote.removeRoute();
@@ -319,5 +323,6 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     expect(client.state.connection.status).toBe("idle");
     // OpenClaw there keeps running, and still lists this device: Remove ran nothing there.
     expect(openInstance(INSTANCE).runner.refusal()).toBeNull();
+    expect((devices().paired ?? []).map((device) => device.deviceId)).toContain(deviceId);
   });
 });
