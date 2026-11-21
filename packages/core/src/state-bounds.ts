@@ -114,6 +114,15 @@ import {
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
 import {
+  MAX_LOOK_OTHER_CHARS,
+  MAX_LOOK_OTHERS,
+  type InstallFailure,
+  type SetupFailure,
+  type SetupInstall,
+  type SetupLook,
+  type SetupState,
+} from "./setup.ts";
+import {
   MAX_CHECKIN_KEPT,
   MAX_CHECKIN_PROMPT_CHARS,
   type CheckInDefaults,
@@ -998,6 +1007,40 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
+/** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
+const setupLook = object<SetupLook>()({
+  outcome: ENUM,
+  reason: ENUM,
+  version: NAME,
+  profile: NAME,
+  listens: ENUM,
+  service: ENUM,
+  port: NUMBER,
+  authMode: ENUM,
+  access: ENUM,
+  others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
+  leftover: FLAG,
+});
+const setup = object<SetupState>()({
+  phase: ENUM,
+  step: NUMBER,
+  slow: FLAG,
+  look: setupLook,
+  failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
+  install: object<SetupInstall>()({
+    step: NUMBER,
+    nodeChecked: FLAG,
+    failure: object<InstallFailure>()({
+      kind: ENUM,
+      step: NUMBER,
+      exitCode: NUMBER,
+      classification: ENUM,
+      retry: FLAG,
+      cleanup: ENUM,
+    }),
+  }),
+});
+
 // Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.
 const checkInJob = object<CheckInJob>()({
   botId: ID,
@@ -1103,6 +1146,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,
+  setup,
   checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   usage: USAGE,

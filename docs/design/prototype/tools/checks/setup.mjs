@@ -181,7 +181,7 @@ await walk("advanced: the address-and-token form as built", "first", [[link("Adv
 
 // Part 2: every state, its words ---------------------------------------------------------------
 const WORDS = {
-  first: ["Where does OpenClaw run?", "This computer", "Clawtrate looks for OpenClaw here.", "Another computer", "A computer you reach with SSH, such as a server or a desktop at home.", "Have a setup code?", "Advanced", "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there."],
+  first: ["Where does OpenClaw run?", "This computer", "Clawtrate looks for OpenClaw here.", "Another computer", "A computer you reach with SSH, such as a server or a desktop at home.", "Have a setup code?", "Advanced", "New to OpenClaw? Choose This computer to look for OpenClaw or set it up here."],
   "looking-here": ["Looking on this computer", "Finding OpenClaw", "Checking its version", "Asking the gateway"],
   found: ["On this computer", "OpenClaw is running", "2026.10.6", "Profile", "default", "On this computer only", "LaunchAgent, starts when you log in", "Connect", "Connect pairs this computer with the gateway as a device that can only read, and the gateway keeps it. Sending or changing anything is asked for later."],
   "connecting-here": ["Connecting", "Making a one-time code", "Pairing this computer, read-only", "Loading your bots"],
@@ -203,9 +203,9 @@ const WORDS = {
   "found-there": ["On you@devbox.example", "OpenClaw is running", "On devbox only", "systemd user service, starts with your session", "Connect"],
   "connecting-there": ["Connecting to you@devbox.example", "Making a one-time code on devbox", "Opening a private connection to devbox", "Pairing this computer, read-only", "Loading your bots"],
   "notfound-there": ["On you@devbox.example", "Clawtrate didn't find OpenClaw here", "Setting OpenClaw up on another computer isn't offered in this version.", "Use a setup code", "Advanced"],
-  "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.", "as a LaunchAgent that starts when you log in", "Nothing is asked for: no account and no model key.", "Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version.", "Set up OpenClaw…"],
+  "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Clawtrate puts the program in its app data and gateway data in the clawtrate profile. OpenClaw also adds a user service and can write service logs.", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.", "Its user service is configured to start when you log in.", "Setup asks for no provider account or model key.", "Clawtrate does not offer OpenClaw removal in this version.", "Set up OpenClaw…"],
   installing: ["Setting up OpenClaw", "Download and check OpenClaw 2026.10.6", "Install Node.js and OpenClaw", "Node.js 24.22.1, checked", "Set up the gateway", "Start and check", "The times are samples."],
-  "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Show details", "Error", "Node.js check", "Exit status"],
+  "install-failed": ["Install Node.js and OpenClaw failed.", "Clawtrate couldn't confirm the installer would use the checked Node.js.", "Show details", "Error", "Node.js check", "Exit status"],
   approve: ["Waiting for the gateway's owner.", "On devbox, approve this request for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now", "Cancel request"],
   restoring: ["Restoring the connection to devbox", "· showing saved messages", "Retry now"],
   "route-changed": ["This address now leads to a different gateway", "Review"],
@@ -250,7 +250,7 @@ const HOST_WORDS = {
   pair: ["Pair this device read-only with the default gateway on this computer?", "The gateway saves this device."],
   pairThere: ["Pair this device read-only with the default gateway on you@devbox.example?", "The gateway saves this device."],
   start: ["Start OpenClaw on this computer?", "Starts the LaunchAgent ai.openclaw.gateway. It keeps running after Clawtrate closes."],
-  install: ["Set up OpenClaw on this computer?", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."],
+  install: ["Set up OpenClaw on this computer?", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."],
   removeRoute: ["Remove devbox from Clawtrate?", "leaves OpenClaw on devbox running", "Also stop OpenClaw on devbox (Clawtrate started it)"],
 };
 check("every host dialog is checked", hostOps.every((op) => op in HOST_WORDS) && Object.keys(HOST_WORDS).every((op) => hostOps.includes(op)), hostOps.join(", "));

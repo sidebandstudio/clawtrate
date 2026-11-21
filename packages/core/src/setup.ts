@@ -1,0 +1,257 @@
+// Setting up on this computer (docs/design/setup.md §3 to §7): what the
+// host's look found and where the setup stands, as plain data for the
+// interface. The host fills it (apps/desktop/src/setup); nothing in it is a
+// credential, a raw program output or a path the host runs.
+
+/** The OpenClaw version this build is tested against (`docs/decisions.md`). */
+export const TESTED_OPENCLAW_VERSION = "2026.10.6";
+
+/** The gateway protocol the pinned client speaks, for a host's synthetic gateway. */
+export { PROTOCOL_VERSION as GATEWAY_PROTOCOL } from "@openclaw/gateway-client/browser";
+
+/** Below this version Clawtrate doesn't offer automatic setup: Clawtrate's choice. */
+export const OLDEST_OPENCLAW_VERSION = "2026.7.0";
+
+/**
+ * What the look found (§4, §6). `running` is a found gateway of the tested
+ * version; `untested` and `too-old` are found gateways of another version;
+ * `stopped` is a program and its gateway's config with nothing listening.
+ */
+export type LookOutcome =
+  | "running"
+  | "untested"
+  | "too-old"
+  | "not-token"
+  | "stopped"
+  | "program-missing"
+  | "cant-tell"
+  /** The program was found but couldn't be started. */
+  | "cant-run"
+  | "not-found"
+  | "windows";
+
+/** Why the look couldn't tell, each shown in fixed copy. */
+export type CantTellReason =
+  | "timeout"
+  | "shape"
+  | "no-answer"
+  | "not-set-up"
+  /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
+  | "endpoint";
+
+/** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
+export type LookService =
+  "launchagent" | "launchagent-stopped" | "systemd" | "systemd-stopped" | "none";
+
+export type SetupLook = {
+  outcome: LookOutcome;
+  reason: CantTellReason | null;
+  /** The running gateway's version, or the program's when nothing runs. */
+  version: string | null;
+  /** The profile's name: `default`, `clawtrate`, or a development instance's. */
+  profile: string | null;
+  /** The configured bind the status reported: `loopback` or `lan`; anything else is not reported. */
+  listens: "loopback" | "lan" | null;
+  service: LookService | null;
+  port: number | null;
+  /** For `not-token`: the gateway's other sign-in. */
+  authMode: "password" | "none" | "trusted-proxy" | null;
+  /** Whether this device has a saved pairing for that address: `new` when it hasn't. */
+  access: "new" | "paired" | null;
+  /** Other OpenClaw services and profiles the look saw, named and never used. */
+  others: string[];
+  /** An earlier setup attempt of Clawtrate's that never reached onboarding is there, and setting up removes it first. */
+  leftover?: boolean;
+};
+
+/** Where Connect, or the look, failed (§7), each in fixed copy. */
+export type SetupFailureKind =
+  /** `openclaw qr` didn't make a code; `exitCode` says how it ended. */
+  | "code-failed"
+  /** The gateway refused the one-time code (`AUTH_BOOTSTRAP_TOKEN_INVALID`). */
+  | "code-refused"
+  /** The gateway granted another role or other scopes than exactly read. */
+  | "grant"
+  /** Nothing answered on the gateway's port. */
+  | "unreachable"
+  /** The facts changed between the host's dialog and its answer, or the dialog expired. */
+  | "changed"
+  /** This host can't confirm a pairing (the web preview). */
+  | "no-dialog"
+  /** The look refused to run here (`docs/development/setup.md`); `reason` says why. */
+  | "refused"
+  /** Connected, but the bots couldn't be read. */
+  | "bots"
+  /** The connection failed in another way; the connection state says how. */
+  | "other";
+
+/**
+ * Why a run that must look in a sandbox couldn't (`docs/development/setup.md`):
+ * it was given none; its description's place or shape; its home and working
+ * folder; its development instance's state, ownership or config; or a pairing
+ * its scenario doesn't offer.
+ */
+export type SetupRefusal = "missing" | "file" | "home" | "state" | "pairing";
+
+export type SetupFailure = {
+  kind: SetupFailureKind;
+  exitCode: number | null;
+  port: number | null;
+  /** For `refused`: what was refused. */
+  reason: SetupRefusal | null;
+};
+
+export type SetupPhase =
+  /** Nothing under way: the first screen. */
+  | "idle"
+  | "looking"
+  /** The look's result is shown. */
+  | "found"
+  /** The host's dialog is open. */
+  | "confirming"
+  | "connecting"
+  /** Connected through setup: the app takes over. */
+  | "done"
+  | "failed"
+  /** Setting OpenClaw up on this computer (§10): the steps run. */
+  | "installing"
+  /** A step of setting OpenClaw up failed, or the install couldn't start. */
+  | "install-failed";
+
+/** The pinned Node.js that setting up installs beside OpenClaw (§10). */
+export const INSTALL_NODE_VERSION = "24.22.1";
+
+/**
+ * Why setting OpenClaw up failed (§10), each in fixed copy.
+ */
+export type InstallFailureKind =
+  /** A `clawtrate` folder, service or install record was there already. */
+  | "exists"
+  /** Clawtrate couldn't write a file of the install's (permission or space). */
+  | "write"
+  /** Linux: this session's systemd user manager can't be reached. */
+  | "user-service"
+  /** A download failed in transport, or answered other than 200. */
+  | "download"
+  /** A download ended before all its bytes arrived. */
+  | "download-short"
+  /** The disk ran out of space while a download was saved. */
+  | "download-space"
+  | "fingerprint"
+  /** A checked download couldn't be unpacked. */
+  | "unpack"
+  /** The checked installer isn't the one this build was made for. */
+  | "installer-changed"
+  /** The installer stopped before it reported completion. */
+  | "installer"
+  /** The installed program couldn't be found, or isn't the checked one. */
+  | "no-program"
+  | "node-not-checked"
+  | "onboard"
+  /** Clawtrate couldn't confirm OpenClaw installed the profile's user service. */
+  | "service"
+  /**
+   * A `clawtrate` service definition that doesn't run this install appeared
+   * between the last check and OpenClaw's service install; it is left as it is.
+   */
+  | "service-appeared"
+  | "not-answering"
+  /** The facts changed between the look and the host's dialog, or before onboarding. */
+  | "changed"
+  /** After the host's dialog, the look's file checks couldn't be made or didn't finish in time. */
+  | "unchecked"
+  /** The host's dialog was answered after the prepared operation's two minutes. */
+  | "expired";
+
+/**
+ * What a failed attempt left: nothing made (`none`); removed and proven
+ * removed (`removed`, the only case that offers Try again); a cleanup that
+ * couldn't be proven (`unproven`); or an attempt that had begun onboarding,
+ * which this version doesn't remove (`kept`).
+ */
+export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
+
+/** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
+export type OnboardClassification =
+  | "auth-mismatch"
+  | "module-missing"
+  | "service-missing"
+  | "service-stopped"
+  | "startup-blocked"
+  | "not-listening"
+  | "systemd-user-unavailable";
+
+export type InstallFailure = {
+  kind: InstallFailureKind;
+  /** The step that failed, from 0; -1 when the install stopped before its first step. */
+  step: number;
+  exitCode: number | null;
+  classification: OnboardClassification | null;
+  /**
+   * Whether "Try again" is offered: the attempt never reached onboarding and
+   * the host removed, and checked it removed, everything it had made.
+   */
+  retry: boolean;
+  cleanup: InstallCleanup;
+};
+
+/** Where setting OpenClaw up stands (§10). */
+export type SetupInstall = {
+  /** The step under way, from 0; 4 once every step is done. */
+  step: number;
+  /** The installer reported that it used the checked Node.js. */
+  nodeChecked: boolean;
+  failure: InstallFailure | null;
+};
+
+export type SetupState = {
+  phase: SetupPhase;
+  /** The step under way while looking or connecting, from 0. */
+  step: number;
+  /** Set after 8 s of looking (§4). */
+  slow: boolean;
+  look: SetupLook | null;
+  failure: SetupFailure | null;
+  /** Setting OpenClaw up, while it runs or after it failed; absent otherwise. */
+  install?: SetupInstall | null;
+};
+
+export const initialSetupState: SetupState = {
+  phase: "idle",
+  step: 0,
+  slow: false,
+  look: null,
+  failure: null,
+};
+
+/** Names of other services or profiles the look keeps, and their length. */
+export const MAX_LOOK_OTHERS = 5;
+export const MAX_LOOK_OTHER_CHARS = 96;
+
+/** What a host that sets up on its own computer offers its viewers (`BridgePolicy.setup`). */
+export type SetupHost = {
+  /** Start the look on this computer, ending one under way. */
+  look(): Promise<void>;
+  /** End the look or the connect under way; the host ends its programs by PID. */
+  cancel(): void;
+  /**
+   * Ask the host to pair with what the last look found. The host shows its own
+   * dialog and runs nothing unless that dialog's answer is yes.
+   */
+  connect(): Promise<void>;
+  /**
+   * Ask the host to set OpenClaw up on this computer, after a look found
+   * nothing, or to try again after a failed attempt. The host shows its own
+   * dialog and downloads and runs nothing unless that dialog's answer is yes.
+   */
+  install(): Promise<void>;
+  /** Back to the first screen. */
+  reset(): void;
+};
+
+/**
+ * Whether the screens of setup are offered, and which: `look` runs on the
+ * host's computer, `pair` needs a native dialog of the host's, `install` is
+ * a person's app on macOS or glibc Linux that may set OpenClaw up (§10).
+ */
+export type SetupOffer = { look: boolean; pair: boolean; platform: string; install?: boolean };

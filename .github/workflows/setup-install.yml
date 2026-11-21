@@ -1,0 +1,76 @@
+name: Setup install
+
+# A real install of OpenClaw through Clawtrate's own host code (docs/design/setup.md §10, §19).
+# It never runs on a developer's computer: it runs only on GitHub's hosted runners, which are
+# discarded after each job, and the script refuses anywhere else. A decoy default OpenClaw home
+# and a sentinel default service definition stand for a person's own OpenClaw and must come
+# through unchanged.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/setup/**"
+      - "apps/desktop/src/main/**"
+      - "apps/desktop/src/host/**"
+      - "apps/desktop/test/hosted/**"
+      - "packages/core/src/setup.ts"
+      - "packages/core/src/bridge.ts"
+      - "packages/core/src/client.ts"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/setup-install.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-install-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15 is Apple silicon (arm64); ubuntu-24.04 is x64 with glibc.
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      # Downloaded code runs in this job: no git credential is left on the runner for it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Nothing of OpenClaw's is there before
+        run: |
+          test ! -e "$HOME/.openclaw"
+          test ! -e "$HOME/.openclaw-clawtrate"
+      # The user manager runs without lingering, as on a person's computer with nothing changed:
+      # the install must never turn lingering on, and the script checks it is still off after.
+      # GitHub's runner has lingering on for its account, so it is turned off first, and the user
+      # manager is then started on its own and must outlast logind's stop delay.
+      - name: A user manager without lingering, on Linux
+        if: runner.os == 'Linux'
+        run: |
+          linger="/var/lib/systemd/linger/$USER"
+          if test -e "$linger"; then sudo loginctl disable-linger "$USER"; fi
+          for _ in $(seq 30); do test ! -e "$linger" && break; sleep 1; done
+          test ! -e "$linger"
+          sudo systemctl start "user@$(id -u).service"
+          for _ in $(seq 30); do test -S "/run/user/$(id -u)/bus" && break; sleep 1; done
+          sleep 15
+          test -S "/run/user/$(id -u)/bus"
+          systemctl is-active "user@$(id -u).service"
+          test ! -e "$linger"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Install, look, connect read-only, uninstall, and check nothing is left
+        run: node apps/desktop/test/hosted/real-install.ts
