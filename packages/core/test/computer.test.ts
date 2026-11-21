@@ -1227,10 +1227,11 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
   });
 
   it("F-149: says Stopped only from each run's own end; a refused stop, one still stopping and an abort of nothing are not a stop", () => {
-    const run = (state: Run["state"], stopError: string | null = null) => ({
+    const run = (state: Run["state"], stopError: string | null = null, outcomeKnown = true) => ({
       id: "run-1",
       state,
       stopError,
+      outcomeKnown,
     });
     const asked = { sending: false, runIds: ["run-1"], aborted: null, error: null };
     expect(stopProgress(null, [])).toEqual({ kind: "none" });
@@ -1245,6 +1246,8 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
       error: "Not allowed.",
     });
     expect(stopProgress(asked, [run("stopped")])).toEqual({ kind: "stopped" });
+    // Stopped by this client's inference, with nothing showing how it ended: not a confirmed stop.
+    expect(stopProgress(asked, [run("stopped", null, false)])).toEqual({ kind: "ended" });
     expect(stopProgress(asked, [run("completed")])).toEqual({ kind: "ended" });
     expect(stopProgress(asked, [])).toEqual({ kind: "stopping" });
     const none = { sending: false, runIds: [], aborted: false, error: null };

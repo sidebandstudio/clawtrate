@@ -82,12 +82,13 @@ export type ComputerStop = {
 
 /**
  * Where a "Stop <Bot> in this task" is, from the runs it named as the task holds them: stopped
- * only once each run's own end says so. A refused stop puts the run back to running with its
- * error (`revertStop`); an abort that aborted nothing is no stop.
+ * only once each run's own end says so, not when this client inferred it (`outcomeKnown`). A
+ * refused stop puts the run back to running with its error (`revertStop`); an abort that
+ * aborted nothing is no stop.
  */
 export function stopProgress(
   stop: ComputerStop | null,
-  runs: readonly Pick<Run, "id" | "state" | "stopError">[],
+  runs: readonly Pick<Run, "id" | "state" | "stopError" | "outcomeKnown">[],
 ):
   | { kind: "none" }
   | { kind: "sending" | "stopping" | "stopped" | "ended" | "nothing" | "accepted" | "unconfirmed" }
@@ -103,7 +104,9 @@ export function stopProgress(
   const refused = named.find((run) => run && !isTerminal(run.state) && run.stopError);
   if (refused) return { kind: "refused", error: refused.stopError! };
   if (named.some((run) => !run || !isTerminal(run.state))) return { kind: "stopping" };
-  return named.every((run) => run!.state === "stopped") ? { kind: "stopped" } : { kind: "ended" };
+  return named.every((run) => run!.state === "stopped" && run!.outcomeKnown)
+    ? { kind: "stopped" }
+    : { kind: "ended" };
 }
 /**
  * The share of the lease's deadline (`renewWithinMs`) after the last confirmed renewal at which
