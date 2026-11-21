@@ -6,6 +6,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  markReadingLine,
+  readingLineSamples,
+  transcriptHeight,
+  waitForFrameAt,
+  waitForTranscriptResize,
+  watchReadingLine,
+} from "./reading-line.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
@@ -1004,19 +1012,59 @@ test.describe("action cards", () => {
       has: page.locator(':scope > summary[aria-label^="Read 3 files"]'),
     });
     await line(reads).click();
-    await reads.locator(".fold-rows .step").nth(3).locator(":scope > summary").click();
-    // Read further down: the next bubble at the reading line, the fold above it.
+    const row = reads.locator(".fold-rows .step").nth(3);
+    const closed = await transcriptHeight(page);
+    await line(row).click();
+    // The row's readable view is drawn once it is open, and the place is held through it.
+    await expect(row.locator(".step-body")).toBeVisible();
+    await waitForTranscriptResize(page, closed, "opening the row");
+    // Read further down: the next bubble at the reading line, the fold above it. The wait is
+    // for the scroll this asks for, told to the conversation as the browser's own event.
     const marker = page.getByText("The house loses most heat through the loft.");
-    await marker.evaluate((element) => {
+    await marker.evaluate(
+      (element) =>
+        new Promise<void>((resolve, reject) => {
+          const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+          const band =
+            Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+          const onScroll = (event: Event) => {
+            if (!event.isTrusted) return;
+            clearTimeout(timer);
+            scroller.removeEventListener("scroll", onScroll);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            scroller.removeEventListener("scroll", onScroll);
+            reject(new Error("no scroll event within 5 s for the scroll to the marker"));
+          }, 5000);
+          scroller.addEventListener("scroll", onScroll);
+          const from = scroller.scrollTop;
+          scroller.scrollTop +=
+            element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+          if (scroller.scrollTop === from) {
+            clearTimeout(timer);
+            scroller.removeEventListener("scroll", onScroll);
+            reject(new Error(`the scroll to the marker left scrollTop at ${from}`));
+          }
+        }),
+    );
+    // The marker is at the reading line, and the reader is above the follow threshold.
+    const placed = await marker.evaluate((element) => {
       const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
       const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
-      scroller.scrollTop +=
-        element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
-      scroller.dispatchEvent(new Event("scroll"));
+      return {
+        offset: element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band,
+        below: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+      };
     });
-    await settle(page);
+    expect(Math.abs(placed.offset), "the marker is at the reading line").toBeLessThanOrEqual(1);
+    expect(placed.below, "the reader is above the follow threshold").toBeGreaterThan(96);
     const before = (await marker.boundingBox())!.y;
+    // The place as the conversation itself holds it, watched in every frame of both changes.
+    const held = await markReadingLine(page, marker);
+    await watchReadingLine(page);
     // History now shows a bubble between the second and third read: the fold splits in two.
+    const unsplit = await transcriptHeight(page);
     await setState(
       page,
       `const key = "agent:otto:disk-space";
@@ -1031,8 +1079,43 @@ test.describe("action cards", () => {
        return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
     );
     await expect(page.getByText("The bills are in.")).toBeVisible();
+    const split = await waitForTranscriptResize(page, unsplit, "the split");
+    await waitForFrameAt(page, split, "the split");
+    // A later update grows the same bubble above the mark: a second paragraph.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space";
+       const t = state.transcripts[key];
+       const items = t.items.map((item) => ({
+         ...item,
+         blocks: item.blocks.map((b) =>
+           b.kind === "text" && b.text === "The bills are in. Two more files to read."
+             ? { ...b, text: b.text + "\\n\\nThe gas bill is the larger one, by about a third." }
+             : b,
+         ),
+       }));
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
+    );
+    await expect(page.getByText("The gas bill is the larger one")).toBeVisible();
+    const grown = await waitForTranscriptResize(page, split, "the second paragraph");
+    await waitForFrameAt(page, grown, "the second paragraph");
     await settle(page);
-    expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
+    // Every frame of both changes, and where it is now. Frames at each new height were seen.
+    const { samples, heights, now } = await readingLineSamples(page);
+    for (const [name, height] of [
+      ["the split", split],
+      ["the second paragraph", grown],
+    ] as const)
+      expect(
+        heights.some((each) => Math.abs(each - height) < 0.5),
+        `a frame drawn at ${height}px, after ${name}; frames at ${heights.join(" ")}`,
+      ).toBe(true);
+    const drawn = (await marker.boundingBox())!.y;
+    expect(
+      Math.max(...[...samples, now].map((top) => Math.abs(top - held.top))),
+      `text at the reading line, from ${held.top}: ${[...samples, now].map((top) => top.toFixed(1)).join(" ")}`,
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(drawn - before)).toBeLessThanOrEqual(1);
     // The first part keeps the fold's key and its open state; the part after it opens too.
     // The second part holds the failed read, which its plural does not count.
     const parts = cards(page).filter({
