@@ -6,7 +6,7 @@
     <title>Clawtrate — Your OpenClaw bots, in one app</title>
     <meta
       name="description"
-      content="Clawtrate is a free, open-source desktop app for OpenClaw: every bot and task in one sidebar, tool calls as readable cards, and approvals answered in place. Public beta for macOS."
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Open action cards and answer approvals in the conversation. Beta for Mac."
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#101112" />
@@ -56,7 +56,7 @@
               <path d="M13.25 9.6A5.5 5.5 0 0 1 6.4 2.75a5.5 5.5 0 1 0 6.85 6.85Z" />
             </svg>
           </button>
-          <a class="btn btn-small" href="https://clawtrate.dev/download/mac">Download</a>
+          <a class="btn btn-small" href="download/mac/">Download</a>
         </div>
       </div>
     </header>
@@ -67,18 +67,18 @@
         <div class="hero-copy">
           <h1 id="hero-title" class="rise">Your OpenClaw bots, in one app.</h1>
           <p class="lede rise">
-            A free, open-source desktop app for OpenClaw. Keep every bot and task in one sidebar,
-            see each tool call as a readable card, and answer approvals in place.
+            A free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar.
+            Open action cards and answer approvals in the conversation.
           </p>
           <div class="get rise">
-            <a class="btn btn-primary" href="https://clawtrate.dev/download/mac">
+            <a class="btn btn-primary" href="download/mac/">
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10" />
               </svg>
               Download for Mac
             </a>
             <p class="get-note">
-              Public beta, signed and notarized for Apple silicon and Intel.
+              Mac beta for Apple silicon and Intel, Developer ID signed and notarized by Apple.
               <a href="https://github.com/sidebandstudio/clawtrate/releases">All releases</a>
             </p>
           </div>
@@ -87,18 +87,13 @@
             <div class="cmd-box">
               <pre
                 aria-labelledby="cmd-hero-label"
-              ><code>curl -fsSL https://clawtrate.dev/install.sh | sh</code></pre>
-              <button
-                class="copy"
-                type="button"
-                data-copy="curl -fsSL https://clawtrate.dev/install.sh | sh"
-              >
-                Copy
-              </button>
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              <button class="copy" type="button" data-copy>Copy</button>
             </div>
             <p class="cmd-note">
-              Verifies the SHA-256, signature, and notarization before copying to Applications. Asks
-              before overwriting; no sudo. <a href="install.sh">Read install.sh</a>
+              It downloads the installer whole before running it. The installer checks the download
+              and the app's signature before it installs, and asks before replacing a copy. No sudo.
+              <a href="install.sh">Read install.sh</a>
             </p>
           </div>
         </div>
@@ -134,7 +129,7 @@
                   <button type="button" class="ui-btn ui-quiet" data-answer="deny">Deny</button>
                 </div>
                 <p class="card-foot" data-when="pending">
-                  Expires in 28 minutes; the command is not run if it does.
+                  This example request expires in 28 minutes.
                 </p>
               </div>
               <p class="event" data-when="allowed">
@@ -153,8 +148,7 @@
           </div>
           <figcaption>
             <span data-when="pending"
-              >Try Allow once or Deny. In the app, a command that asks for approval waits for your
-              answer.</span
+              >Try Allow once or Deny. An approval card shows a request from your gateway.</span
             >
             <button type="button" class="link-btn" data-when="answered" data-reset>
               Reset demo
@@ -170,75 +164,69 @@
           <article class="path path-have rise" aria-labelledby="have-title">
             <h3 id="have-title">Already have OpenClaw</h3>
             <p class="path-state">Ready in this beta</p>
-            <p>
-              Connect the gateway you already run. Your bots, tasks, provider accounts, and
-              permissions stay untouched—Clawtrate is just the client.
-            </p>
+            <p>Connect the gateway you already run. Keep the bots, tasks, and accounts you have.</p>
             <ol class="steps">
-              <li>Enter your gateway address and token (used only for the first pairing).</li>
-              <li>Approve the new device on your gateway.</li>
-              <li>Your bots and tasks appear, ready to pick up where they left off.</li>
+              <li>Enter the gateway address and the token for pairing.</li>
+              <li>Approve the device if your gateway asks.</li>
+              <li>Open your bots and tasks.</li>
             </ol>
           </article>
           <article class="path path-new rise" aria-labelledby="new-title">
             <h3 id="new-title">Starting from scratch</h3>
-            <p class="path-state">Coming in a beta update</p>
-            <p>
-              Clawtrate will install, start, and manage OpenClaw for you, then guide you to your
-              first working bot.
-            </p>
-            <ol class="steps">
-              <li>
-                Sets up OpenClaw and its own copy of Node.js in Clawtrate's folders, checking both
-                downloads against built-in fingerprints.
-              </li>
-              <li>Sign in to a model provider with a subscription you already pay for.</li>
-              <li>
-                Create your first bot and choose whether it asks before acting or runs without
-                routine approvals.
-              </li>
-            </ol>
+            <p class="path-state">Planned</p>
+            <p>We're working on setup for people new to OpenClaw.</p>
             <p class="path-note">
-              Until this ships, install OpenClaw with
-              <a href="https://openclaw.ai">its own installer</a>, then connect it as an existing
-              gateway.
+              For now, <a href="https://docs.openclaw.ai/install">Install OpenClaw</a>, then connect
+              it as an existing gateway.
             </p>
           </article>
         </div>
       </section>
 
-      <!-- Real screens from the app's fixture mode, which runs on sample data. -->
+      <!-- Real screens from the app's fixture mode, which runs on sample data. Each theme has its own. -->
       <section id="tour" class="tour" aria-labelledby="tour-title">
         <h2 id="tour-title" class="rise">Inside the app</h2>
 
         <div class="row row-wide">
           <div class="row-text rise">
-            <h3>Every bot and task, one list.</h3>
+            <h3>Bots and their tasks, one list.</h3>
             <p>
               Bots live in the sidebar with their tasks underneath, leaving the middle for the
-              conversation. Each read, edit, or command collapses to one quiet line, with the raw
-              tool call a click away.
+              conversation. Tool calls appear in action cards you can open to see the details.
             </p>
           </div>
           <div class="stage stage-blue rise">
-            <picture data-ui>
+            <picture class="theme-dark" data-ui>
               <source
                 media="(max-width: 560px)"
                 srcset="shots/phone-dark.webp"
                 width="390"
                 height="844"
-                data-dark="shots/phone-dark.webp"
-                data-light="shots/phone-light.webp"
               />
               <img
                 src="shots/run-dark.webp"
                 width="1440"
                 height="828"
-                data-dark="shots/run-dark.webp"
-                data-light="shots/run-light.webp"
-                alt="Clawtrate with five bots in the sidebar. Otto's task about a full disk is open: the disk went from 94% to 61%, and Otto is reading last night's backup log."
+                loading="lazy"
+                alt="Clawtrate's bot and task list, with Otto's disk task selected."
               />
             </picture>
+            <picture class="theme-light" data-ui>
+              <source
+                media="(max-width: 560px)"
+                srcset="shots/phone-light.webp"
+                width="390"
+                height="844"
+              />
+              <img
+                src="shots/run-light.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
+                alt="Clawtrate's bot and task list, with Otto's disk task selected."
+              />
+            </picture>
+            <p class="narrow-note">Clawtrate desktop in a narrow window.</p>
           </div>
         </div>
 
@@ -246,18 +234,26 @@
           <div class="row-text rise">
             <h3>See when bots message each other.</h3>
             <p>
-              When one bot hands work to another, you see what it sent and what came back—and you
-              can jump straight into the other bot's thread.
+              Open a Messaged card to see what the gateway reported. Jump to the other bot's task
+              when the card links to it.
             </p>
           </div>
           <div class="stage stage-orange stage-card rise">
-            <picture data-ui>
+            <picture class="theme-dark" data-ui>
               <img
                 src="shots/messaged-dark.webp"
                 width="640"
                 height="275"
-                data-dark="shots/messaged-dark.webp"
-                data-light="shots/messaged-light.webp"
+                loading="lazy"
+                alt="A Messaged card: Otto asked Marlow for a two-line entry for the house log, and Marlow replied a minute later."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/messaged-light.webp"
+                width="640"
+                height="275"
+                loading="lazy"
                 alt="A Messaged card: Otto asked Marlow for a two-line entry for the house log, and Marlow replied a minute later."
               />
             </picture>
@@ -266,20 +262,28 @@
 
         <div class="row row-split row-flip">
           <div class="row-text rise">
-            <h3>Sign in with what you already pay for.</h3>
+            <h3>Use a provider account you already have.</h3>
             <p>
-              Create each bot on the provider account you choose. Your gateway handles the sign-in
-              and keeps it; Clawtrate never sees your password.
+              Choose an available account when you create a bot. Your gateway handles provider
+              sign-in.
             </p>
           </div>
           <div class="stage stage-green stage-tall rise">
-            <picture data-ui>
+            <picture class="theme-dark" data-ui>
               <img
                 src="shots/signin-dark.webp"
                 width="440"
                 height="696"
-                data-dark="shots/signin-dark.webp"
-                data-light="shots/signin-light.webp"
+                loading="lazy"
+                alt="The Connect an account dialog, listing subscriptions such as ChatGPT, GitHub Copilot, and MiniMax, and OpenRouter billed per token."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/signin-light.webp"
+                width="440"
+                height="696"
+                loading="lazy"
                 alt="The Connect an account dialog, listing subscriptions such as ChatGPT, GitHub Copilot, and MiniMax, and OpenRouter billed per token."
               />
             </picture>
@@ -290,18 +294,26 @@
           <div class="row-text rise">
             <h3>Routines, on a calendar.</h3>
             <p>
-              See every scheduled routine, its runs, and what each bot has coming up this week—in
-              your own time zone.
+              See the routines your gateway reports, their recent runs, and this week's calendar in
+              your time zone.
             </p>
           </div>
           <div class="stage stage-yellow rise">
-            <picture data-ui>
+            <picture class="theme-dark" data-ui>
               <img
                 src="shots/routines-dark.webp"
                 width="1440"
                 height="828"
-                data-dark="shots/routines-dark.webp"
-                data-light="shots/routines-light.webp"
+                loading="lazy"
+                alt="The Routines week view: a nightly backup check every night, a morning digest on weekdays, and a weekly plan on Sunday."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/routines-light.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
                 alt="The Routines week view: a nightly backup check every night, a morning digest on weekdays, and a weekly plan on Sunday."
               />
             </picture>
@@ -312,18 +324,26 @@
           <div class="row-text rise">
             <h3>Track what each bot uses.</h3>
             <p>
-              Tokens and cost from the gateway's own records, with a weekly budget that warns you as
-              you approach the limit.
+              See token totals and estimated costs your gateway reports. Set a weekly token budget
+              for warnings.
             </p>
           </div>
           <div class="stage stage-sky stage-tall rise">
-            <picture data-ui>
+            <picture class="theme-dark" data-ui>
               <img
                 src="shots/usage-dark.webp"
                 width="359"
                 height="788"
-                data-dark="shots/usage-dark.webp"
-                data-light="shots/usage-light.webp"
+                loading="lazy"
+                alt="Otto's usage this week: 1,640,000 of a 2,500,000 token budget (65%), with input, output, and cache totals below and a cost of about $3.29."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/usage-light.webp"
+                width="359"
+                height="788"
+                loading="lazy"
                 alt="Otto's usage this week: 1,640,000 of a 2,500,000 token budget (65%), with input, output, and cache totals below and a cost of about $3.29."
               />
             </picture>
@@ -331,39 +351,46 @@
         </div>
       </section>
 
-      <!-- What is in the beta and what is coming, from the project's own checklist and pull requests. -->
+      <!-- What is in the first beta and what is planned, from the project's own checklist and pull requests. -->
       <section id="beta" class="beta" aria-labelledby="beta-title">
         <h2 id="beta-title" class="rise">In the beta, and what's next</h2>
-        <p class="beta-intro rise">
-          This is a public beta: it works day to day, and it still has rough edges. Here is what
-          ships today and what is being built on GitHub.
-        </p>
+        <p class="beta-intro rise">What's in the first Mac beta, and what's planned.</p>
         <div class="lists">
           <div class="list list-now rise">
             <h3>In this beta</h3>
+            <p class="list-note">Some actions need gateway permissions or a plugin.</p>
             <ul>
               <li>Connect the OpenClaw gateway you already run</li>
-              <li>Every bot with its avatar, latest activity, and unread marker</li>
+              <li>Your bots with avatars and unread activity</li>
               <li>Start, rename, pin, archive, and delete tasks</li>
-              <li>Send messages, watch replies stream in, and steer or stop a run</li>
-              <li>Readable cards for tool calls, with the raw call one click away</li>
+              <li>
+                Send messages, watch replies stream in, and ask your gateway to steer or stop a run
+              </li>
+              <li>Open action cards to see raw tool calls</li>
               <li>Approvals and questions answered in place</li>
-              <li>Messages between bots, and calls to T3 Code, as cards</li>
+              <li>Cards for bot-to-bot messages and T3 Code calls reported by your gateway</li>
               <li>A task's files in the Work pane beside the conversation</li>
-              <li>Create a bot using the provider account you choose</li>
-              <li>Read and edit each bot's memory notes</li>
+              <li>Create a bot on an available provider account</li>
+              <li>Read bot memory and edit notes with the Clawtrate memory plugin</li>
               <li>Per-bot usage tracking with weekly budget warnings</li>
               <li>Routines, run history, and a week calendar</li>
               <li>Which machine each bot runs on, and per-machine approvals</li>
               <li>A read-only mode for watching a gateway</li>
-              <li>Update checks on the Beta track, with verified downloads</li>
+              <!--
+                Updates, written for a first signed build that includes #202 and #204.
+                If it does not: keep the first row below, drop "Restart into a
+                downloaded update" here and add it under "Being built" with #202.
+                The FAQ's update answer has its own variant.
+              -->
+              <li>Check for Beta updates and download verified builds in Settings</li>
+              <li>Restart into a downloaded update</li>
             </ul>
           </div>
           <div class="list list-next rise">
             <h3>Being built</h3>
             <ul>
               <li>
-                <span>Guided setup that installs OpenClaw for you</span>
+                <span>Setup for people new to OpenClaw</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/design/setup.md"
                   >Design</a
                 >
@@ -371,6 +398,10 @@
               <li>
                 <span>Auto-detect OpenClaw on this Mac and connect without typing a token</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/pull/145">#145</a>
+              </li>
+              <li>
+                <span>Connect to another computer over SSH in read-only mode</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/247">#247</a>
               </li>
               <li>
                 <span>Per-bot tool permissions: allow, ask, or never</span>
@@ -387,10 +418,6 @@
               <li>
                 <span>Watch a bot's browser and take control</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/pull/122">#122</a>
-              </li>
-              <li>
-                <span>Apply a verified update on restart</span>
-                <a href="https://github.com/sidebandstudio/clawtrate/pull/202">#202</a>
               </li>
               <li>
                 <span>iPhone app</span>
@@ -429,32 +456,32 @@
               </button>
               <div class="faq-a" id="a2" role="region" aria-labelledby="q2" hidden>
                 <p>
-                  A Mac (Apple silicon or Intel) and an OpenClaw gateway it can reach. Built-in
-                  OpenClaw setup is coming in a beta update.
+                  You'll need a supported Mac and an OpenClaw gateway it can reach. You can install
+                  OpenClaw separately.
                 </p>
               </div>
             </li>
             <li>
               <button type="button" aria-expanded="false" aria-controls="a3" id="q3">
-                Is the download safe to open?
+                Can I verify the Mac download?
               </button>
               <div class="faq-a" id="a3" role="region" aria-labelledby="q3" hidden>
                 <p>
-                  Yes. Each beta is signed and notarized by Apple, and the Terminal script verifies
-                  the SHA-256, the signature, the signing team, and the notarization before
-                  installing.
+                  The Mac beta is Developer ID signed and Apple-notarized. The Terminal installer
+                  checks the download and the app's signature before it installs.
                 </p>
               </div>
             </li>
             <li>
               <button type="button" aria-expanded="false" aria-controls="a4" id="q4">
-                Does Clawtrate keep my passwords or keys?
+                What does Clawtrate store?
               </button>
               <div class="faq-a" id="a4" role="region" aria-labelledby="q4" hidden>
                 <p>
-                  No. Your gateway does every provider sign-in and keeps it, along with any API key
-                  you add. Clawtrate never sees your password and stores only its own device key for
-                  pairing.
+                  Your gateway's address, and the setup token until the gateway issues a device
+                  token. Then it keeps that device token and its own device key so it can reconnect.
+                  Provider passwords stay with the provider. Clawtrate passes any API key you enter
+                  to your gateway, which keeps it.
                 </p>
               </div>
             </li>
@@ -464,8 +491,8 @@
               </button>
               <div class="faq-a" id="a5" role="region" aria-labelledby="q5" hidden>
                 <p>
-                  The desktop app also runs on Windows, though the first beta download is Mac-only.
-                  The iPhone app is in progress.
+                  The desktop app builds for Windows. The first public beta is for Mac. The iPhone
+                  app is in development.
                 </p>
               </div>
             </li>
@@ -474,9 +501,13 @@
                 How does it update?
               </button>
               <div class="faq-a" id="a6" role="region" aria-labelledby="q6" hidden>
+                <!--
+                  Written for a first signed build that includes #202 and #204. If it does not, use:
+                  "Settings checks the Beta track and downloads verified builds. Install a newer build from its Mac download."
+                -->
                 <p>
-                  Settings checks the Beta track for newer builds and verifies every download.
-                  Restarting directly into an update is in progress.
+                  Settings checks the Beta track and downloads verified builds. After downloading an
+                  update in Settings, choose Restart to Update to install it in place.
                 </p>
               </div>
             </li>
@@ -502,9 +533,7 @@
             <h2 id="get-title" class="rise">Get the beta</h2>
             <p class="rise">Free, open source, and yours to read before you run it.</p>
             <div class="close-actions rise">
-              <a class="btn btn-close" href="https://clawtrate.dev/download/mac"
-                >Download for Mac</a
-              >
+              <a class="btn btn-close" href="download/mac/">Download for Mac</a>
               <a class="btn btn-ghost" href="https://github.com/sidebandstudio/clawtrate">
                 <svg viewBox="0 0 16 16" aria-hidden="true" class="star">
                   <path
@@ -520,14 +549,8 @@
             <div class="cmd-box cmd-close">
               <pre
                 aria-labelledby="cmd-close-label"
-              ><code>curl -fsSL https://clawtrate.dev/install.sh | sh</code></pre>
-              <button
-                class="copy"
-                type="button"
-                data-copy="curl -fsSL https://clawtrate.dev/install.sh | sh"
-              >
-                Copy
-              </button>
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              <button class="copy" type="button" data-copy>Copy</button>
             </div>
             <p class="oss">
               MIT licensed. The source, roadmap, and design decisions live on

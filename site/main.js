@@ -1,19 +1,10 @@
 // The site's only script: the theme switch, copy buttons, the approval demo,
 // the questions, and the entrances. The page reads fully without it, in dark.
+// Screens follow the theme through CSS, so the first paint is already right.
 
 (function () {
   const root = document.documentElement;
   const isLight = () => root.dataset.theme === "light";
-
-  // Screens follow the theme: each image or source names its dark and light file.
-  function syncShots() {
-    const theme = isLight() ? "light" : "dark";
-    document.querySelectorAll("[data-dark][data-light]").forEach((el) => {
-      const file = el.dataset[theme];
-      if (el.tagName === "SOURCE") el.srcset = file;
-      else el.src = file;
-    });
-  }
 
   const toggle = document.querySelector("[data-theme-toggle]");
   function labelToggle() {
@@ -29,16 +20,14 @@
       // Without storage the choice lasts for this visit.
     }
     labelToggle();
-    syncShots();
   });
   labelToggle();
-  syncShots();
 
   // Copy the install command.
   document.querySelectorAll("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(button.dataset.copy);
+        await navigator.clipboard.writeText(button.parentElement.querySelector("code").textContent);
         button.textContent = "Copied";
       } catch {
         const code = button.parentElement.querySelector("code");
