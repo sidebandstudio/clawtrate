@@ -111,6 +111,26 @@ describe("reactions (F-283)", () => {
     client.stop();
   });
 
+  it("F-283: a reaction waiting for identity ends when its connection closes", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = history(["m1"]);
+    gateway.handlers["session.reactions.list"] = () => ({ reactions: {} });
+    const self = deferred<unknown>();
+    gateway.handlers["users.self"] = () => self.promise;
+    const { client } = await openTask({ gateway });
+    try {
+      const reads = gateway.calls("users.self").length;
+      const reacting = client.setReaction(KEY, "m1", "👍", false);
+      await until(() => gateway.calls("users.self").length > reads);
+      gateway.dropAll();
+      await expect(reacting).rejects.toThrow("That message is no longer shown here.");
+      expect(gateway.calls("session.reactions.set")).toEqual([]);
+    } finally {
+      self.resolve({ profile: { id: "me" } });
+      client.stop();
+    }
+  });
+
   it("F-283: a viewer gone while its identity was being read sends no reaction", async () => {
     const gateway = grantingGateway();
     gateway.handlers["chat.history"] = history(["m1"]);
