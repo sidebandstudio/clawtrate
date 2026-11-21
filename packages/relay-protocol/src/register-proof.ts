@@ -386,7 +386,62 @@ export type RegistrationState = "challenged" | "verifying" | "registered" | "fai
 export interface RegistrationSnapshot {
   readonly nonce: string;
   readonly issuedAtMs: number;
+  /** The latest elapsed-clock reading checked; a restored registration refuses a lower one. */
+  readonly lastReadingMs: number;
   readonly state: RegistrationState;
+}
+
+export type RegistrationCommit = "committed" | "cancelled";
+
+/**
+ * Keeps one control socket's registration across hibernation. The contract a relay's store
+ * must meet:
+ * - `persist` stores a snapshot that is not a success (`challenged`, `verifying`, `failed`), in
+ *   the order it is called; it never stores `registered`.
+ * - `commitRegistered` is the only way a success is stored. In one operation, ordered against
+ *   every other write for the same socket, it reads `attempt.live`: when that is false it stores
+ *   nothing and returns `cancelled`; when true it stores the snapshot and returns `committed`.
+ *   Reading `live` may end the attempt (an abort or an expiry that came first); it then reads false.
+ * - Restore uses the latest snapshot stored, never an older one, and `registered` only for a
+ *   committed success. A store that stages a success before committing it restores the staged
+ *   state as `failed`, as it does any state other than these four.
+ * - A store that cannot answer throws or rejects, and the registration fails (`store_failed`).
+ *   When a commit fails with its outcome unknown, the store restores the socket as `failed`, so
+ *   the connector registers again on a fresh connection.
+ * `MemoryRegistrationStore` is the reference implementation, for tests and a single Node process.
+ */
+export interface RegistrationStore {
+  persist(snapshot: RegistrationSnapshot): void | Promise<void>;
+  commitRegistered(
+    snapshot: RegistrationSnapshot,
+    attempt: { readonly live: boolean },
+  ): RegistrationCommit | Promise<RegistrationCommit>;
+}
+
+export class MemoryRegistrationStore implements RegistrationStore {
+  #latest: RegistrationSnapshot | null = null;
+
+  /** The snapshot to restore from; null before the first write. */
+  get latest(): RegistrationSnapshot | null {
+    return this.#latest;
+  }
+
+  persist(snapshot: RegistrationSnapshot): void {
+    if (snapshot.state === "registered") {
+      fail("unexpected", "A success is stored only by commitRegistered.");
+    }
+    this.#latest = { ...snapshot };
+  }
+
+  commitRegistered(
+    snapshot: RegistrationSnapshot,
+    attempt: { readonly live: boolean },
+  ): RegistrationCommit {
+    if (snapshot.state !== "registered") fail("unexpected", "Only a success is committed.");
+    if (!attempt.live) return "cancelled";
+    this.#latest = { ...snapshot };
+    return "committed";
+  }
 }
 
 export interface ControlRegistrationOptions extends OriginOptions {
@@ -405,13 +460,12 @@ export interface ControlRegistrationOptions extends OriginOptions {
   readonly replay: ReplayStore;
   readonly claims: KeyClaims;
   /**
-   * Stores the snapshot. Called, and awaited, after every change of state: `verifying` before
-   * any store is asked, and the outcome before it is returned. A success is stored while the
-   * attempt can still be cancelled; if it is cancelled during that wait, `failed` is stored
-   * after it. A failure to store fails the attempt. The relay restores only the latest
-   * snapshot it stored; an older one must never replace it.
+   * Keeps the registration across hibernation. `verifying` is stored before any other store is
+   * asked and stays stored while the success is prepared; the success is stored only by
+   * `commitRegistered`, and a failure is stored before it is returned. A failure to store fails
+   * the attempt.
    */
-  readonly persist?: (snapshot: RegistrationSnapshot) => void | Promise<void>;
+  readonly store?: RegistrationStore;
   /** A registration restored after hibernation, instead of a fresh challenge. */
   readonly restore?: RegistrationSnapshot;
   /** Tests only; production uses `crypto.getRandomValues`. */
@@ -425,9 +479,9 @@ export interface ControlRegistrationOptions extends OriginOptions {
  * - The state moves to `verifying` before the first await, so a second attempt, even one that
  *   overlaps the first, gets `already_used`.
  * - The attempt is bound to this object's one in-flight token. After every await it checks
- *   that the token is still current and the challenge still in time, before the key claim and
- *   before returning success; the key claim itself is told whether the attempt is live. It
- *   stays cancellable until its success is stored.
+ *   that the token is still current and the challenge still in time: before the key claim,
+ *   before the success is committed and before it is returned. The key claim and the commit
+ *   are told whether the attempt is live. The first clock failure is the attempt's cause.
  * - `expire()` ends a challenge that ran out with no proof; the relay calls it from a timer,
  *   since a quiet socket sends nothing. `abort()` ends the registration when the socket goes.
  */
@@ -442,26 +496,34 @@ export class ControlRegistration {
   #attempt: object | null = null;
   /** The latest clock reading; a later one may not be lower. */
   #lastReading: number;
+  /** The clock failure that ended the attempt, kept so a later reading cannot change it. */
+  #clockFailure: "bad_clock" | "challenge_expired" | null = null;
 
   constructor(options: ControlRegistrationOptions) {
     this.#options = options;
     this.#relayId = options.relayId;
     this.#allowLoopbackWs = options.allowLoopbackWs === true;
     this.#origin = canonicalRelayOrigin(options.origin, options);
-    if (options.restore) {
-      if (fromBase64UrlOfLength(options.restore.nonce, REGISTER_NONCE_BYTES) === null) {
+    const restore = options.restore;
+    if (restore) {
+      if (fromBase64UrlOfLength(restore.nonce, REGISTER_NONCE_BYTES) === null) {
         fail("malformed", "The restored nonce is not 32 bytes of canonical base64url.");
       }
-      this.#nonce = options.restore.nonce;
-      this.#issuedAtMs = checkMillis(options.restore.issuedAtMs, "The challenge time");
-      // An attempt cut off by hibernation cannot be resumed.
-      this.#state = options.restore.state === "verifying" ? "failed" : options.restore.state;
+      this.#nonce = restore.nonce;
+      this.#issuedAtMs = checkMillis(restore.issuedAtMs, "The challenge time");
+      this.#lastReading = checkMillis(restore.lastReadingMs, "The last clock reading");
+      if (this.#lastReading < this.#issuedAtMs) {
+        fail("malformed", "The last clock reading is before the challenge.");
+      }
+      // An attempt cut off by hibernation, or any state but these, cannot be resumed.
+      this.#state =
+        restore.state === "challenged" || restore.state === "registered" ? restore.state : "failed";
     } else {
       this.#nonce = createRegisterNonce(options.random);
       this.#issuedAtMs = checkMillis(options.clock(), "The clock");
+      this.#lastReading = this.#issuedAtMs;
       this.#state = "challenged";
     }
-    this.#lastReading = this.#issuedAtMs;
   }
 
   get state(): RegistrationState {
@@ -484,7 +546,12 @@ export class ControlRegistration {
   }
 
   snapshot(): RegistrationSnapshot {
-    return { nonce: this.#nonce, issuedAtMs: this.#issuedAtMs, state: this.#state };
+    return {
+      nonce: this.#nonce,
+      issuedAtMs: this.#issuedAtMs,
+      lastReadingMs: this.#lastReading,
+      state: this.#state,
+    };
   }
 
   /**
@@ -492,15 +559,16 @@ export class ControlRegistration {
    * with or without an attempt in flight. Returns true if it ended it now.
    */
   expire(): boolean {
-    if (this.#state !== "challenged" && this.#state !== "verifying") return false;
-    if (this.#inTime()) return false;
+    if (!this.#open()) return false;
+    const failure = this.#readClock();
+    if (failure === null || !this.#open()) return false;
     this.#end();
     return true;
   }
 
   /** Ends the registration, for a socket that closed. Safe to call any number of times. */
   abort(): void {
-    if (this.#state === "challenged" || this.#state === "verifying") this.#end();
+    if (this.#open()) this.#end();
   }
 
   /** Checks the socket's one register proof. Any failure ends the registration for good. */
@@ -509,34 +577,45 @@ export class ControlRegistration {
     const token = {};
     this.#attempt = token;
     this.#state = "verifying";
+    const store = this.#options.store;
     let result: RegisterProofResult;
-    let storedSuccess = false;
     try {
-      await this.#options.persist?.(this.snapshot());
+      await store?.persist(this.snapshot());
       result = await this.#verify(token, proof);
-      if (result.ok) {
-        // Still cancellable while the success is stored: an abort or an expiry during the
-        // wait wins, and the failure is stored after it.
-        storedSuccess = true;
-        await this.#options.persist?.({ ...this.snapshot(), state: "registered" });
-        if (!this.#live(token)) result = this.#lost(token);
+      if (result.ok && store) {
+        // Anything that ended the attempt since the proof checked out wins over storing it.
+        const lost = this.#check(token);
+        if (lost !== null) {
+          result = { ok: false, code: lost };
+        } else {
+          const outcome = await store.commitRegistered(
+            { ...this.snapshot(), state: "registered" },
+            this.#view(token),
+          );
+          if (outcome !== "committed") {
+            result = { ok: false, code: this.#check(token) ?? "store_failed" };
+          }
+        }
       }
     } catch {
       result = { ok: false, code: "store_failed" };
     }
     if (result.ok) {
-      this.#attempt = null;
-      this.#state = "registered";
-      return result;
-    }
-    const current = this.#attempt === token;
-    if (current) this.#end();
-    if (current || storedSuccess) {
-      try {
-        await this.#options.persist?.(this.snapshot());
-      } catch {
-        return { ok: false, code: "store_failed" };
+      // The last check; nothing waits between it and the success becoming visible.
+      const lost = this.#check(token);
+      if (lost === null) {
+        this.#attempt = null;
+        this.#state = "registered";
+        return result;
       }
+      result = { ok: false, code: lost };
+    }
+    if (this.#attempt === token) this.#end();
+    // This call took the token, so it stores the failure, whatever ended the attempt.
+    try {
+      await store?.persist(this.snapshot());
+    } catch {
+      return { ok: false, code: "store_failed" };
     }
     return result;
   }
@@ -549,7 +628,8 @@ export class ControlRegistration {
     } catch {
       return { ok: false, code: "bad_clock" };
     }
-    if (!this.#live(token)) return this.#lost(token);
+    let lost = this.#check(token);
+    if (lost !== null) return { ok: false, code: lost };
     const result = await verifyRegisterProof({
       proof,
       relayId: this.#relayId,
@@ -561,54 +641,64 @@ export class ControlRegistration {
     });
     if (!result.ok) return result;
     // A store that took its time may have outlasted the challenge or the socket.
-    if (!this.#live(token)) return this.#lost(token);
-    const live = (): boolean => this.#live(token);
+    lost = this.#check(token);
+    if (lost !== null) return { ok: false, code: lost };
     let claimed: boolean;
     try {
-      claimed = await options.claims.claim(result.relayId, Uint8Array.from(result.publicKey), {
-        get live() {
-          return live();
-        },
-      });
+      claimed = await options.claims.claim(
+        result.relayId,
+        Uint8Array.from(result.publicKey),
+        this.#view(token),
+      );
     } catch {
       return { ok: false, code: "store_failed" };
     }
-    if (!this.#live(token)) return this.#lost(token);
+    lost = this.#check(token);
+    if (lost !== null) return { ok: false, code: lost };
     return claimed === true ? result : { ok: false, code: "claimed_by_other_key" };
   }
 
-  /** True while `token` is the attempt in flight and the challenge is in time. */
-  #live(token: object): boolean {
-    return this.#attempt === token && this.#state === "verifying" && this.#inTime();
+  /** The attempt as a store sees it: live while `#check` finds it live. */
+  #view(token: object): { readonly live: boolean } {
+    const check = (): boolean => this.#check(token) === null;
+    return {
+      get live() {
+        return check();
+      },
+    };
   }
 
-  /** Why a live check failed, ending the registration if it has not ended yet. */
-  #lost(token: object): RegisterProofResult {
-    const clockOk = this.#read() !== null;
-    const aborted = this.#attempt !== token || this.#state !== "verifying";
-    if (!aborted) this.#end();
-    if (aborted) return { ok: false, code: "aborted" };
-    return { ok: false, code: clockOk ? "challenge_expired" : "bad_clock" };
+  /**
+   * The one liveness check: null while `token` is the attempt in flight and the challenge is in
+   * time, or else why it ended. It reads the clock before the token, so a clock that ended the
+   * attempt is seen. A clock failure ends the attempt and stays its cause.
+   */
+  #check(token: object): "aborted" | "bad_clock" | "challenge_expired" | null {
+    const clock = this.#readClock();
+    if (this.#attempt !== token || this.#state !== "verifying") {
+      return this.#clockFailure ?? "aborted";
+    }
+    if (clock === null) return null;
+    this.#clockFailure = clock;
+    this.#end();
+    return clock;
   }
 
-  #inTime(): boolean {
-    const now = this.#read();
-    if (now === null) return false;
-    const elapsed = now - this.#issuedAtMs;
-    return elapsed >= 0 && elapsed <= REGISTER_CHALLENGE_MS;
-  }
-
-  /** A checked clock reading, or null for one that is not whole milliseconds or went back. */
-  #read(): number | null {
+  /** Null for a reading in time; a reading that is not whole milliseconds or went back is bad. */
+  #readClock(): "bad_clock" | "challenge_expired" | null {
     let now: number;
     try {
       now = checkMillis(this.#options.clock(), "The clock");
     } catch {
-      return null;
+      return "bad_clock";
     }
-    if (now < this.#lastReading) return null;
+    if (now < this.#lastReading) return "bad_clock";
     this.#lastReading = now;
-    return now;
+    return now - this.#issuedAtMs > REGISTER_CHALLENGE_MS ? "challenge_expired" : null;
+  }
+
+  #open(): boolean {
+    return this.#state === "challenged" || this.#state === "verifying";
   }
 
   #end(): void {

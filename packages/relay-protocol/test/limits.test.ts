@@ -328,6 +328,60 @@ describe("handshake state", () => {
       expect.objectContaining({ code: "unexpected" }),
     );
   });
+
+  it("copies the random bytes without running the returned array's iterator", () => {
+    let iterated = 0;
+    const phone: Initiator = new Initiator({
+      relayId: RELAY_ID,
+      connectorKey: generateKeyPair().publicKey,
+      staticKey: generateKeyPair(),
+      random: (length) => {
+        const bytes = new Uint8Array(length).fill(5);
+        const values = bytes[Symbol.iterator].bind(bytes);
+        Object.defineProperty(bytes, Symbol.iterator, {
+          value: () => {
+            iterated++;
+            phone.abort();
+            return values();
+          },
+        });
+        return bytes;
+      },
+    });
+    phone.start();
+    expect(iterated).toBe(0);
+    expect(phone.currentState).toBe("handshaking");
+    phone.abort();
+  });
+
+  it("a step that a callback ended during it fails and keeps no new key", () => {
+    // A proxy is copied element by element, through its traps; one of them ends the channel.
+    let ended = false;
+    const phone: Initiator = new Initiator({
+      relayId: RELAY_ID,
+      connectorKey: generateKeyPair().publicKey,
+      staticKey: generateKeyPair(),
+      random: (length) => {
+        const bytes = new Uint8Array(length).fill(5);
+        return new Proxy(bytes, {
+          get: (target, key) => {
+            if (!ended) {
+              ended = true;
+              phone.abort();
+            }
+            return key === Symbol.iterator
+              ? () => target[Symbol.iterator]()
+              : Reflect.get(target, key, target);
+          },
+        });
+      },
+    });
+    expect(() => phone.start()).toThrow(expect.objectContaining({ code: "failed" }));
+    expect(ended).toBe(true);
+    expect(phone.currentState).toBe("failed");
+    expect(secretsOf(phone).ephemeralSecret).toBeNull();
+    wiped(phone);
+  });
 });
 
 describe("ending a channel", () => {

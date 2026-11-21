@@ -75,6 +75,7 @@ export {
   ControlRegistration,
   createRegisterProof,
   MemoryKeyClaims,
+  MemoryRegistrationStore,
   MemoryReplayStore,
   REGISTER_PROOF_MAX_AGE_SECONDS,
   REGISTER_PROOF_TYP,
@@ -83,8 +84,10 @@ export {
   type KeyClaims,
   type OriginOptions,
   type RegisterProofFailureCode,
+  type RegistrationCommit,
   type RegistrationSnapshot,
   type RegistrationState,
+  type RegistrationStore,
   type RegisterProofResult,
   type ReplayStore,
 } from "./register-proof.ts";

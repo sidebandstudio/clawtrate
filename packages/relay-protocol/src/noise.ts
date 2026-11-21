@@ -316,6 +316,8 @@ export class IKHandshake {
     this.#busy = true;
     try {
       const result = body();
+      // A callback inside the step (the random source) that ended the handshake ended it.
+      if (this.#step !== step) fail("failed", "The handshake ended while its step ran.");
       this.#step = next;
       return result;
     } catch (error) {
@@ -337,7 +339,14 @@ export class IKHandshake {
     const seed = this.#random(KEY_BYTES);
     // A random source that disposed of the handshake ended it; install nothing.
     if (this.#step === "failed") fail("failed", "The handshake ended while its random source ran.");
-    this.#ephemeral = keyPairFromSecret(seed);
+    if (!(seed instanceof Uint8Array)) fail("bad_key", "The random source returned no bytes.");
+    // Copied natively, so no iterator of the returned array runs; the copy is wiped after.
+    const owned = new Uint8Array(seed);
+    try {
+      this.#ephemeral = keyPairFromSecret(owned);
+    } finally {
+      owned.fill(0);
+    }
     if (this.#random === secureRandomBytes) seed.fill(0);
     this.#symmetric.mixHash(this.#ephemeral.publicKey);
     return this.#ephemeral.publicKey;

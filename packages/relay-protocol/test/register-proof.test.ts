@@ -35,6 +35,7 @@ import {
   createRegisterNonce,
   decodeRelayToConnector,
   MemoryKeyClaims,
+  MemoryRegistrationStore,
   createRegisterProof,
   isRelayId,
   MemoryReplayStore,
@@ -44,6 +45,7 @@ import {
   verifyRegisterProof,
   type KeyClaims,
   type RegistrationSnapshot,
+  type RegistrationStore,
   type ReplayStore,
 } from "../src/index.ts";
 
@@ -292,7 +294,7 @@ describe("one control socket's registration", () => {
       claims: KeyClaims;
       origin: string;
       restore: RegistrationSnapshot;
-      persist: (snapshot: RegistrationSnapshot) => void | Promise<void>;
+      store: RegistrationStore;
     }> = {},
   ) {
     return new ControlRegistration({
@@ -309,6 +311,42 @@ describe("one control socket's registration", () => {
     const challenge = decodeRelayToConnector(registration.challengeMessage);
     if (challenge.t !== "challenge") throw new Error("No challenge.");
     return createRegisterProof({ secretKey, audience, nonce: challenge.nonce, nowMs: NOW_MS });
+  }
+  /**
+   * The reference store, recording each write and each commit's outcome. `hold` pauses a commit
+   * before it decides or after; `failFailure` makes storing `failed` reject.
+   */
+  function recording(options: { hold?: "before" | "after"; failFailure?: boolean } = {}) {
+    const memory = new MemoryRegistrationStore();
+    const seen: string[] = [];
+    let release = (): void => {};
+    const held = (): Promise<void> => new Promise((resolve) => (release = resolve));
+    const store: RegistrationStore = {
+      persist: (snapshot) => {
+        seen.push(snapshot.state);
+        if (snapshot.state === "failed" && options.failFailure) throw new Error("down");
+        memory.persist(snapshot);
+      },
+      commitRegistered: async (snapshot, attempt) => {
+        seen.push("commit");
+        if (options.hold === "before") await held();
+        const outcome = memory.commitRegistered(snapshot, attempt);
+        seen.push(outcome);
+        if (options.hold === "after") await held();
+        return outcome;
+      },
+    };
+    return {
+      store,
+      seen,
+      latest: () => memory.latest!,
+      release: () => release(),
+      /** Lets the attempt run until the store has been asked to commit. */
+      reach: async (step: string) => {
+        for (let i = 0; i < 50 && !seen.includes(step); i++) await Promise.resolve();
+        expect(seen).toContain(step);
+      },
+    };
   }
 
   it("issues a fresh challenge per socket and registers once", async () => {
@@ -474,59 +512,225 @@ describe("one control socket's registration", () => {
     expect(pinned.claim(relayId, new Uint8Array(32).fill(3), { live: true })).toBe(true);
   });
 
-  it("stays cancellable while its success is stored, and stores the failure after it", async () => {
-    for (const end of ["abort", "expire"] as const) {
-      let now = 5_000;
-      const seen: string[] = [];
-      let release = (): void => {};
-      const registration = socket({
-        clock: () => now,
-        persist: (snapshot) => {
-          seen.push(snapshot.state);
-          if (snapshot.state !== "registered") return;
-          return new Promise<void>((resolve) => (release = resolve));
+  it("stores verifying until the commit, which an abort that came first cancels", async () => {
+    const saved = recording({ hold: "before" });
+    const registration = socket({ store: saved.store });
+    const pending = registration.register(proofFor(registration));
+    await saved.reach("commit");
+    // While the success is prepared, the stored state is verifying, which restores as failed.
+    expect(saved.latest().state).toBe("verifying");
+    expect(socket({ restore: saved.latest() }).state).toBe("failed");
+    registration.abort();
+    saved.release();
+    expect(await pending).toEqual({ ok: false, code: "aborted" });
+    expect(saved.seen).toEqual(["verifying", "commit", "cancelled", "failed"]);
+    expect(socket({ restore: saved.latest() }).state).toBe("failed");
+  });
+
+  it("an expiry that came before the commit cancels it", async () => {
+    let now = 5_000;
+    const saved = recording({ hold: "before" });
+    const registration = socket({ clock: () => now, store: saved.store });
+    const pending = registration.register(proofFor(registration));
+    await saved.reach("commit");
+    now = 5_000 + 60_001;
+    saved.release();
+    expect(await pending).toEqual({ ok: false, code: "challenge_expired" });
+    expect(saved.seen).toEqual(["verifying", "commit", "cancelled", "failed"]);
+    expect(registration.state).toBe("failed");
+  });
+
+  it("an abort after the commit stores the failure after the success", async () => {
+    const saved = recording({ hold: "after" });
+    const registration = socket({ store: saved.store });
+    const pending = registration.register(proofFor(registration));
+    await saved.reach("committed");
+    registration.abort();
+    saved.release();
+    expect(await pending).toEqual({ ok: false, code: "aborted" });
+    expect(saved.seen).toEqual(["verifying", "commit", "committed", "failed"]);
+    expect(socket({ restore: saved.latest() }).state).toBe("failed");
+  });
+
+  it("a failure that cannot be stored after a cancelled commit leaves no success to restore", async () => {
+    const saved = recording({ hold: "before", failFailure: true });
+    const registration = socket({ store: saved.store });
+    const pending = registration.register(proofFor(registration));
+    await saved.reach("commit");
+    registration.abort();
+    saved.release();
+    expect(await pending).toEqual({ ok: false, code: "store_failed" });
+    expect(registration.state).toBe("failed");
+    expect(saved.latest().state).toBe("verifying");
+    expect(socket({ restore: saved.latest() }).state).toBe("failed");
+  });
+
+  it("an abort just after the proof checks out asks the store for no success", async () => {
+    let afterClaim = false;
+    const saved = recording();
+    const registration: ControlRegistration = socket({
+      // The reading after the claim ends the socket once the attempt's next step has begun.
+      clock: () => {
+        if (afterClaim) {
+          afterClaim = false;
+          queueMicrotask(() => registration.abort());
+        }
+        return 5_000;
+      },
+      claims: {
+        claim: (_id, _key, attempt) => {
+          const live = attempt.live;
+          afterClaim = true;
+          return live;
         },
+      },
+      store: saved.store,
+    });
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "aborted",
+    });
+    expect(saved.seen).toEqual(["verifying", "failed"]);
+  });
+
+  it("a clock that ends the attempt while it is read cannot revive it", async () => {
+    // Without a store: the abort comes from the last reading before success.
+    let abortOnRead = false;
+    const registration: ControlRegistration = socket({
+      clock: () => {
+        if (abortOnRead) registration.abort();
+        return 5_000;
+      },
+      claims: {
+        claim: (_id, _key, attempt) => {
+          const live = attempt.live;
+          abortOnRead = true;
+          return live;
+        },
+      },
+    });
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "aborted",
+    });
+    expect(registration.state).toBe("failed");
+
+    // With a store: the abort comes from the reading the commit makes of `live`.
+    let inCommit = false;
+    const memory = new MemoryRegistrationStore();
+    const seen: string[] = [];
+    const committing: ControlRegistration = socket({
+      clock: () => {
+        if (inCommit) committing.abort();
+        return 5_000;
+      },
+      store: {
+        persist: (snapshot) => void (seen.push(snapshot.state), memory.persist(snapshot)),
+        commitRegistered: (snapshot, attempt) => {
+          inCommit = true;
+          const outcome = memory.commitRegistered(snapshot, attempt);
+          inCommit = false;
+          seen.push(outcome);
+          return outcome;
+        },
+      },
+    });
+    expect(await committing.register(proofFor(committing))).toEqual({
+      ok: false,
+      code: "aborted",
+    });
+    expect(seen).toEqual(["verifying", "cancelled", "failed"]);
+  });
+
+  it("an uninterrupted success is committed once and leaves the attempt no longer live", async () => {
+    const saved = recording();
+    let claimed: { readonly live: boolean } | null = null;
+    const registration = socket({
+      store: saved.store,
+      claims: { claim: (_id, _key, attempt) => ((claimed = attempt), attempt.live) },
+    });
+    expect((await registration.register(proofFor(registration))).ok).toBe(true);
+    expect(registration.state).toBe("registered");
+    expect(saved.seen).toEqual(["verifying", "commit", "committed"]);
+    expect(claimed!.live).toBe(false);
+    expect(socket({ restore: saved.latest() }).state).toBe("registered");
+  });
+
+  it("the reference store takes a success only through a commit that finds the attempt live", () => {
+    const memory = new MemoryRegistrationStore();
+    const snapshot = socket().snapshot();
+    const registered = { ...snapshot, state: "registered" as const };
+    expect(() => memory.persist(registered)).toThrow(RelayProtocolError);
+    expect(() => memory.commitRegistered(snapshot, { live: true })).toThrow(RelayProtocolError);
+    expect(memory.commitRegistered(registered, { live: false })).toBe("cancelled");
+    expect(memory.latest).toBeNull();
+    expect(memory.commitRegistered(registered, { live: true })).toBe("committed");
+    expect(memory.latest).toEqual(registered);
+  });
+
+  it("fails an attempt whose clock goes back between readings, whatever it reads later", async () => {
+    // Issued at 5,000; in time at 55,000; then 10,000, still inside the window but behind.
+    for (const later of [10_000, 55_000, 60_000]) {
+      const readings = [5_000, 55_000, 10_000];
+      const registration = socket({ clock: () => readings.shift() ?? later });
+      expect(await registration.register(proofFor(registration)), String(later)).toEqual({
+        ok: false,
+        code: "bad_clock",
       });
-      const pending = registration.register(proofFor(registration));
-      for (let i = 0; i < 10 && seen.length < 2; i++) await Promise.resolve();
-      expect(seen, end).toEqual(["verifying", "registered"]);
-      if (end === "abort") {
-        registration.abort();
-      } else {
-        now = 5_000 + 60_001;
-        expect(registration.expire()).toBe(true);
-      }
-      release();
-      // Either way the relay ended it, so the attempt reports it was cut off.
-      expect(await pending, end).toEqual({ ok: false, code: "aborted" });
       expect(registration.state).toBe("failed");
-      expect(seen, end).toEqual(["verifying", "registered", "failed"]);
     }
   });
 
-  it("fails an attempt whose clock goes back between readings", async () => {
-    // Issued at 5,000; in time at 55,000; then 10,000, still inside the window but behind.
-    const readings = [5_000, 55_000, 10_000];
-    const registration = socket({ clock: () => readings.shift() ?? 10_000 });
+  it("a lower reading inside the key claim ends the attempt with bad_clock", async () => {
+    let now = 5_000;
+    let live: boolean | null = null;
+    const registration = socket({
+      clock: () => now,
+      replay: { consume: () => ((now = 55_000), true) },
+      claims: {
+        claim: (_id, _key, attempt) => {
+          now = 10_000;
+          live = attempt.live;
+          now = 55_000;
+          return live;
+        },
+      },
+    });
     expect(await registration.register(proofFor(registration))).toEqual({
       ok: false,
       code: "bad_clock",
     });
+    expect(live).toBe(false);
     expect(registration.state).toBe("failed");
   });
 
   it("stores verifying before any store is asked, and the outcome before it returns", async () => {
-    const seen: string[] = [];
+    const saved = recording();
     const replay = new MemoryReplayStore();
     const registration = socket({
-      persist: (snapshot) => void seen.push(snapshot.state),
-      replay: { consume: (input) => (seen.push("replay"), replay.consume(input)) },
+      store: saved.store,
+      replay: { consume: (input) => (saved.seen.push("replay"), replay.consume(input)) },
     });
     expect((await registration.register(proofFor(registration))).ok).toBe(true);
-    expect(seen).toEqual(["verifying", "replay", "registered"]);
-    const failing = socket({ persist: () => Promise.reject(new Error("down")) });
+    expect(saved.seen).toEqual(["verifying", "replay", "commit", "committed"]);
+    const failing = socket({
+      store: {
+        persist: () => Promise.reject(new Error("down")),
+        commitRegistered: () => "committed",
+      },
+    });
     expect(await failing.register(proofFor(failing))).toEqual({ ok: false, code: "store_failed" });
     expect(failing.state).toBe("failed");
+    // A clock failure ends the attempt early; its failure is stored too.
+    let now = 5_000;
+    const early = recording();
+    const clocked = socket({
+      clock: () => now,
+      store: early.store,
+      replay: { consume: () => ((now = Number.NaN), true) },
+    });
+    expect(await clocked.register(proofFor(clocked))).toEqual({ ok: false, code: "bad_clock" });
+    expect(early.seen).toEqual(["verifying", "failed"]);
   });
 
   it("pins its origin when it starts; changing the options later changes nothing", async () => {
@@ -575,8 +779,33 @@ describe("one control socket's registration", () => {
     const restored = socket({ restore: snapshot });
     expect(restored.challengeMessage).toBe(registration.challengeMessage);
     expect((await restored.register(proofFor(registration))).ok).toBe(true);
-    const cut = socket({ restore: { ...snapshot, state: "verifying" } });
-    expect(cut.state).toBe("failed");
+    // Only a challenge, a committed success or a failure is restored; anything else fails.
+    for (const state of ["verifying", "prepared"]) {
+      const cut = socket({ restore: { ...snapshot, state } as unknown as RegistrationSnapshot });
+      expect(cut.state, state).toBe("failed");
+    }
+    expect(socket({ restore: { ...snapshot, state: "registered" } }).state).toBe("registered");
+    expect(() => socket({ restore: { ...snapshot, lastReadingMs: 4_999 } })).toThrow(
+      RelayProtocolError,
+    );
+  });
+
+  it("keeps the last clock reading across hibernation, so a lower one is refused", async () => {
+    let now = 5_000;
+    const clock = () => now;
+    const original = socket({ clock });
+    now = 55_000;
+    expect(original.expire()).toBe(false);
+    const snapshot = original.snapshot();
+    expect(snapshot).toMatchObject({
+      state: "challenged",
+      issuedAtMs: 5_000,
+      lastReadingMs: 55_000,
+    });
+    now = 10_000;
+    const restored = socket({ clock, restore: snapshot });
+    expect(await restored.register(proofFor(restored))).toEqual({ ok: false, code: "bad_clock" });
+    expect(restored.state).toBe("failed");
   });
 });
 
