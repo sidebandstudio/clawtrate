@@ -1065,12 +1065,13 @@ describe("a choice whose viewer goes away, or whose Ask doesn't take effect", ()
     botTools(gw, "pip").deny = ["read", "ls"];
     const engine = new PermissionsEngine(gw.ctx());
     const view = await engine.read("pip");
-    let set = false;
+    // The rules read once the settings were written fails: the read-back can't show the Ask.
+    let patched = false;
     const answer = gw.answer.bind(gw);
     gw.answer = async (method, params) => {
-      if (set && method === "clawtrate-tool-rules.get") throw new Error("request timed out");
+      if (patched && method === "clawtrate-tool-rules.get") throw new Error("request timed out");
       const got = await answer(method, params);
-      if (method === "clawtrate-tool-rules.set") set = true;
+      if (method === "config.patch") patched = true;
       return got;
     };
     const result = await engine.choose("pip", "read", "ask", {
@@ -1079,6 +1080,41 @@ describe("a choice whose viewer goes away, or whose Ask doesn't take effect", ()
     });
     expect(result.outcome).toBe("unconfirmed");
     expect(result.error).toMatch(/rules couldn't be read back/);
+  });
+
+  it("Never to Ask with a second operator taking the Ask off before the deny comes off: the tool stays restricted throughout", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["read", "ls"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    expect(line(view, "read").value).toBe("never");
+    // Restricted: the bot's deny names the tool, or an Ask of the bot's covers it whole.
+    const restricted = () =>
+      ((botTools(gw, "pip").deny as string[] | undefined) ?? []).includes("read") ||
+      (gw.scopes.pip?.rules ?? []).some(
+        (rule) =>
+          rule.action === "ask" && !rule.target && (rule.tools as string[]).includes("read"),
+      );
+    const unrestricted: string[] = [];
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      const got = await answer(method, params);
+      // A second operator takes the Ask off as soon as it is saved.
+      if (method === "clawtrate-tool-rules.set")
+        gw.scopes.pip = { ...gw.scopes.pip!, version: gw.scopes.pip!.version + 1, rules: [] };
+      if (!restricted()) unrestricted.push(method);
+      return got;
+    };
+    const result = await engine.choose("pip", "read", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(unrestricted).toEqual([]);
+    expect(gw.writes().map((each) => each.method)).toEqual(["clawtrate-tool-rules.set"]);
+    expect(botTools(gw, "pip").deny).toEqual(["read", "ls"]);
+    expect(result.outcome).toBe("partial");
+    expect(result.error).toMatch(/deny stays/);
+    expect(line(result.view!, "read").value).toBe("never");
   });
 });
 

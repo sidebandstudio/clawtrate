@@ -417,7 +417,22 @@ export class PermissionsEngine {
     }
     // The deny list replaced is the one this choice read: against its hash, never a newer one.
     const deny = denyWrite(botId, settings, { tools }, false, catalog);
-    if (deny) await this.patch(request, deny, settings.hash);
+    if (!deny) return;
+    // The deny comes off only while the Ask is read back in force: another operator may have
+    // taken the rule off, or the plugin may have stopped, since it was written. Otherwise the
+    // deny stays, and the tool stays restricted.
+    const [status, again] = await Promise.all([
+      request(RULES_STATUS_METHOD, {}),
+      request(RULES_GET_METHOD, { scope: botId }),
+    ]);
+    if (
+      !pluginHolds(readStatus(status, this.ctx.now())) ||
+      !hasOwnAsk(readScope(again, botId), tools)
+    )
+      throw new Error(
+        "The Ask wasn't in force when read back before the deny came off, so the deny stays.",
+      );
+    await this.patch(request, deny, settings.hash);
   }
 
   /**
