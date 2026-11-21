@@ -669,36 +669,34 @@ export function routineCommands(now: number, params: RoutineParams) {
           error: `Automation not found: ${routine.id}. List automations and retry with a current job id.`,
         });
         if (params.run === "fail") return later(300, notFound);
-        if (params.run === "held")
-          return later(300, () => {
-            if (!kept(routine.id)) return notFound();
-            // The gateway took the request; the run itself starts later, so the
-            // view first says the routine is queued, then running.
-            setTimeout(() => {
-              const held = kept(routine.id);
-              if (held) replace({ ...held, runningAt: Date.now() });
-            }, 800);
-            return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
-          });
+        const removed = removals.get(routine.id);
         return later(300, () => {
           // Deleted before the request reached it: the gateway has no such job to run.
           const current = kept(routine.id);
-          if (!current) return notFound();
+          if (!current || removals.get(routine.id) !== removed) return notFound();
           const startedAt = Date.now();
           // Counted, as the gateway does, so two runs in one millisecond (a frozen clock) differ.
           const n = (manualRuns += 1);
           const runId = `manual:${routine.id}:${startedAt}:${n}`;
-          const removed = removals.get(routine.id);
+          if (params.run === "held") {
+            // The gateway took the request; the run itself starts later, so the
+            // view first says the routine is queued, then running.
+            setTimeout(() => {
+              const held = kept(routine.id);
+              if (held && removals.get(routine.id) === removed)
+                replace({ ...held, runningAt: Date.now() });
+            }, 800);
+            return { status: "started", runId };
+          }
+          // The run's session belongs to the target it started on, even if the routine is edited.
+          const completed = run(current, startedAt, { runId, manual: true }, `${startedAt}-${n}`);
           transcripts.set(runId, current.text);
           replace({ ...current, runningAt: startedAt });
           setTimeout(() => {
             const ran = kept(routine.id);
             if (!ran || removals.get(routine.id) !== removed) return;
             // On top of the history as it is now, which a run that ended first may have added to.
-            recorded.set(routine.id, [
-              run(ran, startedAt, { runId, manual: true }, `${startedAt}-${n}`),
-              ...runsOf(ran),
-            ]);
+            recorded.set(routine.id, [completed, ...runsOf(ran)]);
             replace({ ...ran, runningAt: null, lastRunAt: startedAt, lastStatus: "ok" });
           }, 2500);
           return { status: "started", runId };

@@ -295,6 +295,24 @@ describe("the fixture's routine host", () => {
     });
   });
 
+  it("a manual run keeps its original conversation when edited to run on Main", async () => {
+    vi.useFakeTimers();
+    const { send, ask, routines } = host();
+    const started = send<{ runId: string }>({ type: "runRoutineNow", id: DIGEST, listedOn: 0 });
+    await vi.advanceTimersByTimeAsync(300);
+    const digest = routines().find((each) => each.id === DIGEST)!;
+    const update = send(editOf(digest, { target: "main" }));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await update).toMatchObject({ status: "saved", routine: { target: "main" } });
+    await vi.runAllTimersAsync();
+    const [ran] = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST });
+    expect(ran).toMatchObject({
+      runId: (await started).runId,
+      sessionKey: expect.stringContaining(`:cron:${DIGEST}:run:`),
+    });
+    expect(await ask(conversationOf(ran!))).toMatchObject({ status: "kept" });
+  });
+
   it("the newest scheduled run's conversation stays readable after Run now", async () => {
     vi.useFakeTimers();
     const { ask } = host();
@@ -381,6 +399,26 @@ describe("the fixture's routine host", () => {
       runningAt: null,
     });
     expect(await ask({ type: "readRoutineRuns", id: routine.id } as BridgeCommand)).toEqual([]);
+  });
+
+  it("a queued manual run does not start on a recreated routine", async () => {
+    vi.useFakeTimers();
+    const { send, ask, routines } = host({ run: "held" });
+    const create = {
+      type: "createRoutine",
+      input: { ...fields("Reading list"), botId: "otto" },
+      key: "draft-queued",
+      gateway: GATEWAY,
+    } as BridgeCommand;
+    const { routine } = await ask<{ routine: Routine }>(create);
+    const started = send({ type: "runRoutineNow", id: routine.id, listedOn: 0 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await started).toMatchObject({ status: "started" });
+    const remove = send({ type: "removeRoutine", id: routine.id, listedOn: 0 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await remove).toMatchObject({ status: "removed" });
+    expect(await ask(create)).toMatchObject({ status: "saved" });
+    expect(routines().find((each) => each.id === routine.id)?.runningAt).toBeNull();
   });
 
   it("a history read held while its routine is removed and made again answers for the new one", async () => {
