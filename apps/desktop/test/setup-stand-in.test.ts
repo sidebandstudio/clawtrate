@@ -117,7 +117,7 @@ function sandbox(scenario?: Scenario) {
     file,
     platform: "darwin",
     context: {
-      platform: "darwin",
+      platform: process.platform,
       home: at.home,
       uid: at.uid,
       checkout: at.checkout,
@@ -409,7 +409,7 @@ describe("a sandboxed setup, from the look to Connect", () => {
     const opener = sandboxOpener({
       file: s.file,
       platform: "darwin",
-      context: { ...s.at, platform: "darwin", identify: s.processes.identify },
+      context: { ...s.at, platform: process.platform, identify: s.processes.identify },
       startGateway: async () => server,
     });
     const setup = new SetupController({

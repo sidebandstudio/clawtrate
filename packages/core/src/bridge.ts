@@ -23,6 +23,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import type { SetupHost, SetupOffer } from "./setup.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -32,7 +33,6 @@ import {
   type CheckInRead,
 } from "./check-ins.ts";
 import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
-import type { SetupHost, SetupOffer } from "./setup.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {

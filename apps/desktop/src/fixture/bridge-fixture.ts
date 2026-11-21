@@ -60,9 +60,9 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
-import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -480,8 +480,8 @@ export function createFixtureBridge(
     desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
-    routines?: RoutineParams;
     setup?: string | null;
+    routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
     checkIns?: CheckInParams;

@@ -5410,9 +5410,9 @@ export class ClawtrateClient {
 
   private close(): void {
     this.generation += 1;
-    this.invalidateCheckIns();
     // The replaced or stopped socket's credential is no longer needed to take it out of text.
     this.heldToken = null;
+    this.invalidateCheckIns();
     this.accounts.onClose();
     this.routines.onClose();
     this.usage.onClose();

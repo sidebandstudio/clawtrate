@@ -33,7 +33,8 @@ import {
   PlusIcon,
   WarnIcon,
 } from "../icons.tsx";
-import "../bots/bots.css";
+// The `b-` rows and notes come with bots.css, which Shell and Settings load; importing it
+// here too would move it ahead in the cascade and change other screens.
 import "./setup.css";
 
 /** The screens the person moves between here; the look's own come from the host. */
