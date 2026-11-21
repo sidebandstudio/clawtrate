@@ -424,8 +424,19 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
-/** The two strings in the desktop updater's private preference store. */
+/** The records in the desktop updater's private preference store. */
 export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  attempt: {
+    max: 1,
+    each: JSON.stringify({
+      target: "v".repeat(50),
+      from: "v".repeat(50),
+      track: "nightly",
+      time: "2000-01-01T00:00:00.000Z",
+      phase: "handoff",
+    }).length,
+    row: "updatePreferences",
+  },
   selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
   lastCheck: {
     max: 1,
