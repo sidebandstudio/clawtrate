@@ -65,8 +65,6 @@ export async function steps(
     appId?: string;
     /** The whole run's bound, past which the driver is stopped and the steps fail. */
     timeoutMs?: number;
-    /** False when a driver restart would invalidate a timed assertion. */
-    retryDriverStartup?: boolean;
   } = {},
 ): Promise<void> {
   const dir = join(OUTPUT, name);
@@ -104,12 +102,7 @@ export async function steps(
     } catch (error) {
       const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
       const output = `${stdout}${stderr}`;
-      if (
-        attempt === 1 &&
-        options.retryDriverStartup !== false &&
-        DRIVER_DID_NOT_START.test(output)
-      )
-        continue;
+      if (attempt === 1 && DRIVER_DID_NOT_START.test(output)) continue;
       throw new Error(`Steps "${name}" failed:\n${output}`, { cause: error });
     }
   }
@@ -283,6 +276,11 @@ export function launch(options: {
 /** Bring the app, still running, back to the front, as tapping it again would. */
 export function activate() {
   simctl("launch", env.device, env.bundle);
+}
+
+/** Put the app in the background without starting a Maestro flow. */
+export function openSystemSettings() {
+  simctl("launch", env.device, "com.apple.Preferences");
 }
 
 /** Whether an app runs on the device now, from the system's own list of the apps it launched. */

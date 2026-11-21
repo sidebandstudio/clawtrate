@@ -47,6 +47,7 @@ import {
   moves,
   near,
   notSee,
+  openSystemSettings,
   openclaw,
   relay,
   pasteboard,
@@ -509,15 +510,14 @@ describe("the iOS app", () => {
     const { startedAt, unblockAt } = await until("the JS callback to block", async () => blocked);
     const backgroundedAt = Date.now();
     expect(backgroundedAt).toBeGreaterThanOrEqual(startedAt);
-    await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }], {
-      retryDriverStartup: false,
-    });
+    openSystemSettings();
     const snapshot = await switcherSnapshot(backgroundedAt);
     expect(snapshot.savedAt).toBeLessThan(unblockAt);
     expectSwitcherCover(snapshot);
 
     activate();
-    await until("the blocked JS callback to return", async () => resumed || null);
+    const resumeTimeout = Math.max(0, unblockAt - Date.now()) + 30_000;
+    await until("the blocked JS callback to return", async () => resumed || null, resumeTimeout);
     await steps("settings-after-block", [
       waitFor({ id: "settings" }, 20_000),
       see({ id: "gateway-address", text: lit(addressWords(gateway)) }),

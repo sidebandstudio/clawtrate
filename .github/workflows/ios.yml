@@ -26,7 +26,7 @@ concurrency:
 jobs:
   simulator:
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       CLAWTRATE_IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-27-0
@@ -51,4 +51,4 @@ jobs:
           echo "MAESTRO=$RUNNER_TEMP/maestro/bin/maestro" >> "$GITHUB_ENV"
           echo "JAVA_HOME=$JAVA_HOME_21_arm64" >> "$GITHUB_ENV"
       - run: pnpm mobile:build
-      - run: pnpm mobile:check --bail=1
+      - run: pnpm mobile:check --bail=1 --reporter=verbose

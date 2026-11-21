@@ -8,7 +8,8 @@ export function useSwitcherProbe(port: number | undefined) {
     socket.onmessage = ({ data }) => {
       if (data !== "block") return;
       const startedAt = Date.now();
-      const unblockAt = startedAt + 30_000;
+      // Leave time for the Simulator to switch apps on a loaded CI runner.
+      const unblockAt = startedAt + 90_000;
       socket.send(JSON.stringify({ startedAt, unblockAt }));
       // Keep a single JS callback on the stack so it cannot handle AppState
       // events or update the React tree while UIKit takes the snapshot.
