@@ -6,6 +6,7 @@
 import { GITHUB_RELEASE_ASSETS } from "../src/main/update/address.ts";
 import { parseFeed, type FileKey } from "../src/main/update/feed.ts";
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { artifactName } from "./feed.ts";
 
 export const REPOSITORY = "sidebandstudio/clawtrate";
 /** Where the app built for the Beta track reads its feed. */
@@ -26,7 +27,7 @@ export interface LatestMac {
   x86_64: { version: string; url: string; sha256: string };
 }
 
-const TEAM_ID = /^[A-Z0-9]{10}$/;
+export const TEAM_ID = /^[A-Z0-9]{10}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 export function betaTag(version: string): string {
@@ -70,9 +71,11 @@ export function checkBetaFiles(tag: string, feedText: string, latestText: string
   if (feed.version !== version) throw new Error(`The feed of ${tag} names ${feed.version}.`);
   const keys = Object.keys(feed.files).sort();
   if (keys.join() !== "mac-arm64,mac-x64") throw new Error(`The feed of ${tag} names ${keys}.`);
+  // Each architecture's own zip, by its canonical name, in this release.
   for (const key of keys as FileKey[]) {
     const url = feed.files[key]!.url;
-    if (!url.startsWith(releaseFolder(tag))) throw new Error(`${key} is outside ${tag}.`);
+    if (url !== `${releaseFolder(tag)}${artifactName(version, key)}`)
+      throw new Error(`The feed of ${tag} does not name ${artifactName(version, key)} for ${key}.`);
   }
   let latest: LatestMac;
   try {
