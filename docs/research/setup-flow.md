@@ -101,6 +101,47 @@ On a loopback connection with `autoApproveLocal` at its default, the request wai
 
 So "Approve from here" (F-500) is the gateway's own `openclaw devices approve <requestId>`, run by the host on the gateway's computer (this computer, or over SSH) after the person confirms. The request id comes from `device.scopes.requestUpgrade`.
 
+### 2.1 Approving from the host: what the command checks, and what it follows (live, 2026-11-20)
+
+Added for `docs/design/setup.md` section 9. On instance `addenda` (`--default-local-pairing --no-seed`), `setup-flow/approve-probe.ts`, this project's client paired read-only, then asked for the interactive tier. Every command ran through the tool's guarded runner, so with `--profile clawtrate-dev-addenda`.
+
+**The pending entry** (`devices list --json`, `pending[]`) has exactly these fields: `requestId`, `deviceId`, `publicKey`, `displayName`, `platform`, `clientId`, `clientMode`, `role`, `roles`, `scopes`, `silent`, `isRepair`, `ts`. For this client: `clientId: "gateway-client"`, `clientMode: "ui"`, `role: "operator"`, `roles: ["operator"]`, `isRepair: true` (the device was already paired), `silent: false`, and the four interactive scopes, **sorted differently from the request** (`["operator.approvals","operator.questions","operator.read","operator.write"]`). Scopes compare as sets.
+
+**`devices approve <id> --json`** exited 0 and printed one JSON object, `{requestId, device}`. `requestId` is the id given. `device` is the paired record with `deviceId`, `clientId`, `role`, `roles`, `scopes`, `approvedVia: "owner"`, `approvedAtMs`, and `tokens: [{role, scopes, createdAtMs, rotatedAtMs}]`, with no token value. The record read back from `devices list --json` agreed: the operator role, exactly the four interactive scopes, `approvedVia: "owner"`. The client, still connected, held the interactive tier.
+
+**Stale, premature, superseded.** Each of these exited 1 with `{"ok": false, "error": {"type": "cli_error", "message": "No pending device request matches <id>. Run openclaw --profile clawtrate-dev-addenda devices list and retry with the current request ID."}}`, and approved nothing:
+
+- the same id approved a second time;
+- an id that was never pending;
+- the first of two requests. The client asked for the interactive tier, then for admin. The gateway replaced the first entry with a new id whose scopes are the union (`requestDevicePairingInWorker`, `<openclaw>/dist/device-pairing-core.worker-B-kYFMQS.mjs` lines 279-325: a request that asks for more is a new id and the device's other pending entries are deleted). The new entry stayed pending, untouched, and was then rejected.
+
+**What "follows a compatible replacement" means** (source, `<openclaw>/dist/devices-cli.runtime-CllfBpVQ.mjs` lines 173-232 and 273-288). The command approves through the gateway (`device.pair.approve {requestId}`), which approves only that exact pending row or nothing (`withPendingDevicePairingApproval`, worker lines 79-89). There is one exception. When the CLI's own call to a loopback gateway is refused with `PAIRING_REQUIRED`, the CLI falls back to the local store. If the gateway named another request id there, the CLI may approve that other request instead: the same device and public key, the same role, compatible client fields, and scopes that **cover** the original (they may be broader). Its JSON then carries a different `requestId` and `resolved: {kind: "same-device-replacement", requestedRequestId, approvedRequestId}`. Not reproduced live: the CLI on the instance is itself paired, so the fallback never ran. A refresh of a pending entry keeps its id and its stored scopes, and is allowed only for the same public key and for scopes the entry already covers (worker lines 240-273).
+
+So the host can enforce exactly what it showed:
+
+- before running anything, the pending entry with the id it holds, this device's id and public key, `gateway-client`, the operator role alone, and exactly the asked scopes, and no other pending entry for this device;
+- after, an exit 0 whose `requestId` is that id and that carries no `resolved` field;
+- and the device's record read back with exactly the scopes it had plus those asked.
+
+Anything else is a mismatch.
+
+### 2.2 A new bot's command policy, written and read back (live, 2026-11-20)
+
+Added for `docs/design/controls.md` section 10, on the same instance, through the tool's admin operator.
+
+| Write (`config.patch`, `operator.admin`)       | `config.get` reads back                                       | Effective (`openclaw approvals get --json`)                          | `agents.list` (`operator.read`) |
+| ---------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------- |
+| None: `agents.create` alone                    | no `tools.exec.mode` for the bot; the instance's global `deny` | `deny` (the global)                                                  | `read-only`                     |
+| `agents.entries.<bot>.tools.exec.mode: "ask"`  | `"ask"`                                                       | `mode: ask, security: allowlist, ask: on-miss, askFallback: deny`    | `guarded` (Otto, also `ask`)    |
+| `agents.entries.<bot>.tools.exec.mode: "full"` | `"full"`                                                      | `mode: full, security: full, ask: off, askFallback: deny`            | `full`                          |
+| `"full"`, then the host's approvals file's `defaults` set to `security: allowlist, ask: on-miss` (`exec.approvals.set`, admin) | `"full"` | `mode: ask, security: allowlist, ask: on-miss`: the stricter file wins | (not read)                      |
+
+The other bots read back as before each write (`otto` `ask`, `main` `deny`), and the approvals file was restored afterwards. `exec.approvals.get` (`operator.admin`) returned `{path, exists, file, hash, resolvedDefaults}`, with `file.defaults: {}` and `resolvedDefaults: {security: full, ask: off, askFallback: deny, autoAllowSkills: false}` on this instance. That is the empty-file default of section 6's installs too.
+
+`agents.list` gives every bot a `defaultPermissionMode` at `operator.read`. The gateway resolves it from the config and the gateway host's approvals file together, and leaves it out when the bot is sandboxed or its pair is not one of the canonical modes (`resolvedPermissionLabel`, `<openclaw>/dist/session-utils-store-C-0MBZ3E.mjs` lines 203-246). It is the one read of a bot's effective command policy that needs no admin.
+
+**A gateway with no bots** (source, `<openclaw>/dist/agent-list-NuNAO01y.mjs` lines 10-60, `agent-roster-CIplRONg.mjs` lines 77-84). With no `agents` entries in the config, `agents.list` is never empty: it lists the gateway's implicit default agent, `main`, with no name, and `defaultId: "main"`. Once a configured entry exists, that implicit `main` is listed only if it is configured too. A fresh install of section 6 has no entries, so it lists one implicit `main`. Not reproduced live: every development instance is seeded with bots by its contract.
+
 ## 3. Setup codes
 
 ### What a code is
