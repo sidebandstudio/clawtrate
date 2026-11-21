@@ -1011,8 +1011,7 @@ export class ClawtrateClient {
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  private bootstrapping = false;
-  private changedDuringBootstrap = false;
+  private discoveryRead: { sessionsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   /** The last change to the selected gateway; the next one starts once it has settled. */
@@ -5789,6 +5788,8 @@ export class ClawtrateClient {
       onClose: () => {
         if (generation !== this.generation) return;
         this.epoch += 1;
+        this.discoveryRead = null;
+        this.selectionReady = -1;
         this.streams.clear();
         this.accounts.onClose();
         this.invalidateCheckIns();
@@ -5912,6 +5913,8 @@ export class ClawtrateClient {
 
   private close(): void {
     this.generation += 1;
+    this.discoveryRead = null;
+    this.selectionReady = -1;
     this.endSocketReads();
     this.endSocketReads = () => {};
     // The replaced or stopped socket's credential is no longer needed to take it out of text.
@@ -6167,8 +6170,9 @@ export class ClawtrateClient {
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
     this.quietReconnect = false;
+    const epoch = this.epoch;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || epoch !== this.epoch) return;
       this.accounts.onHello();
       // Every connect reads the list again: runs that started or ended while away are in it.
       if (this.state.connection.status === "connected") void this.routines.load();
@@ -6220,8 +6224,13 @@ export class ClawtrateClient {
    */
   private async bootstrap(generation: number, resync: CaughtUp["reason"] | null): Promise<void> {
     const selection = this.selectionApplied;
-    this.bootstrapping = true;
-    this.changedDuringBootstrap = false;
+    // Closing the socket or starting another discovery retires this read.
+    const epoch = this.epoch;
+    const read = { sessionsChanged: false };
+    this.discoveryRead = read;
+    const sameSocket = () => generation === this.generation && epoch === this.epoch;
+    const current = () =>
+      this.discoveryRead === read && selection === this.selectionApplied && sameSocket();
     this.setDiscovery({ status: "loading", error: null });
     // The last gateway's identity goes with the connection it came from, so a
     // write waits for this one's read (routines.ts `blocked`).
@@ -6232,7 +6241,7 @@ export class ClawtrateClient {
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
     void gatewayId.then((id) => {
-      if (id !== null && generation === this.generation) this.setConnection({ gatewayId: id });
+      if (id !== null && sameSocket()) this.setConnection({ gatewayId: id });
     });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
@@ -6240,7 +6249,7 @@ export class ClawtrateClient {
     const [agents, sessions] = await Promise.allSettled([
       this.request("agents.list", {}).then(async (result) => {
         const id = await gatewayId;
-        if (generation === this.generation) {
+        if (current()) {
           // A read asked later, after a bot was created, may have answered first.
           const newest = this.newestBots(botsIssued);
           // Only a read that found the identity writes it: an older refresh whose
@@ -6255,8 +6264,7 @@ export class ClawtrateClient {
       }),
       this.loadAllSessions(generation, "sessions.subscribe"),
     ]);
-    this.bootstrapping = false;
-    if (generation !== this.generation) return;
+    if (!current()) return;
 
     const failures: string[] = [];
     if (agents.status !== "fulfilled") {
@@ -6264,11 +6272,11 @@ export class ClawtrateClient {
     }
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
-      if (this.changedDuringBootstrap) await this.refreshSessions(generation);
+      if (read.sessionsChanged) await this.refreshSessions(generation);
     } else {
       failures.push(`tasks: ${errorMessage(sessions.reason)}`);
     }
-    if (generation !== this.generation) return;
+    if (!current()) return;
     for (const key of Object.keys(this.state.transcripts)) {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
@@ -6280,6 +6288,8 @@ export class ClawtrateClient {
     // the connection is the saved gateway's own. A read that failed leaves setup on its failure
     // screen, so the connection stays setup's, and every handshake from there, a retry or a
     // reconnect included, asks for read alone; Back or another gateway ends it.
+    if (!current()) return;
+    this.discoveryRead = null;
     const setup = this.isSetup(this.settings?.url);
     if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
@@ -6414,7 +6424,7 @@ export class ClawtrateClient {
    * re-read instead of inserting it.
    */
   private handleSessionsChanged(payload: unknown, generation: number): void {
-    if (this.bootstrapping) this.changedDuringBootstrap = true;
+    if (this.discoveryRead) this.discoveryRead.sessionsChanged = true;
     this.noteRunChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;

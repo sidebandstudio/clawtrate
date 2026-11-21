@@ -66,6 +66,34 @@ describe("a setup reconnect with a saved pairing", () => {
     client.stop();
   });
 
+  it("F-492: after a reconnect, setup waits for discovery from the new socket", async () => {
+    const gateway = granting([READ_SCOPE]);
+    const identity = deferred<unknown>();
+    gateway.handlers["gateway.identity.get"] = () => identity.promise;
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await client.start();
+      const selection = client.nextSelection();
+      let reportedReady = false;
+      client.store.subscribe(() => {
+        if (client.readyFor(selection)) reportedReady = true;
+      });
+      await client.connectForSetup(URL);
+      await until(() => gateway.calls("sessions.subscribe").length === 1);
+      gateway.dropAll();
+      await until(() => gateway.calls("gateway.identity.get").length === 2);
+      expect(reportedReady).toBe(false);
+      identity.resolve({ deviceId: "fixture-gateway" });
+      await until(() => client.readyFor(selection));
+      gateway.dropAll();
+      expect(client.readyFor(selection)).toBe(false);
+    } finally {
+      identity.resolve({});
+      client.stop();
+    }
+  });
+
   it("F-492: a setup whose bots failed to load keeps asking for read alone, on a reconnect and a retry", async () => {
     const gateway = granting([READ_SCOPE, WRITE_SCOPE]);
     const bots = gateway.handlers["agents.list"]!;
