@@ -111,6 +111,10 @@ const STATES: Array<{ scene: string; setup?: string; check: (page: Page) => Prom
       await expect(bar(page).getByRole("button", { name: "Review" })).toBeVisible();
       await expect(bar(page).getByRole("button", { name: "Look again" })).toHaveCount(0);
       await expect(bar(page).getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+      // The status strip offers the bar's own action, never a reconnect to that gateway.
+      const strip = page.getByTestId("status-strip");
+      await expect(strip.getByRole("button", { name: "Review" })).toBeVisible();
+      await expect(strip.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
     },
   },
   {
