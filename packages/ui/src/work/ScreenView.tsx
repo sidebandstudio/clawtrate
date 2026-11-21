@@ -172,15 +172,17 @@ export function ScreenView(props: ScreenViewProps) {
     y: 0,
     timer: null,
   });
-  /** A queued scroll belongs to the focused picture that received it. */
-  const dropWheel = () => {
+  const inputSession = useRef(0);
+  /** A queued scroll or the rest of a paste belongs to the focused picture that received it. */
+  const retireInput = () => {
+    inputSession.current++;
     const w = wheel.current;
     if (w.timer !== null) window.clearTimeout(w.timer);
     w.timer = null;
     w.dx = 0;
     w.dy = 0;
   };
-  useLayoutEffect(() => dropWheel, [canSendInput, view?.n]);
+  useLayoutEffect(() => retireInput, [canSendInput, view?.n]);
   useLayoutEffect(() => {
     const element = frameRef.current;
     if (!element) return;
@@ -208,10 +210,10 @@ export function ScreenView(props: ScreenViewProps) {
       }, 80);
     };
     element.addEventListener("wheel", onWheel, { passive: false });
-    element.addEventListener("blur", dropWheel);
+    element.addEventListener("blur", retireInput);
     return () => {
       element.removeEventListener("wheel", onWheel);
-      element.removeEventListener("blur", dropWheel);
+      element.removeEventListener("blur", retireInput);
     };
   });
 
@@ -291,14 +293,16 @@ export function ScreenView(props: ScreenViewProps) {
     // In order, one call after another's answer: a refused part stops the rest, so nothing goes
     // after a gap, and what didn't go is said.
     const parts = callParts(text, 4);
+    const session = inputSession.current;
     void (async () => {
       let sent = 0;
       for (const part of parts) {
+        if (session !== inputSession.current) break;
         if ((await Promise.resolve(props.onInput({ kind: "text", text: part }))) === false) break;
         sent += part.length;
       }
       const left = [...text.slice(sent)].length;
-      if (left > 0)
+      if (left > 0 && dialogRef.current)
         showHint(
           sent === 0
             ? "The paste wasn't sent. Try again in a moment."

@@ -140,6 +140,40 @@ test.describe("the full view on the desktop", () => {
     expect(texts).toEqual([2000]);
   });
 
+  test("F-142: closing the view during a paste drops the unsent suffix", async ({ page }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    await frame.evaluate((element) => {
+      type Command = { type: string };
+      const { clawtrateFixture: bridge } = window as unknown as {
+        clawtrateFixture: { invoke(command: Command): Promise<unknown> };
+      };
+      const invoke = bridge.invoke.bind(bridge);
+      const ack = new Promise<void>((resolve) =>
+        window.addEventListener("ack-paste", () => resolve(), { once: true }),
+      );
+      bridge.invoke = async (command) => {
+        const result = await invoke(command);
+        if (command.type === "computerInput") await ack;
+        return result;
+      };
+      const data = new DataTransfer();
+      data.setData("text/plain", "a".repeat(2000) + "suffix");
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    });
+    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(1);
+    await fullView(page).getByRole("button", { name: "Close the full view (Esc)" }).click();
+    await expect(fullView(page)).toHaveCount(0);
+    await page.evaluate(async () => {
+      window.dispatchEvent(new Event("ack-paste"));
+      await new Promise(requestAnimationFrame);
+    });
+    const attempts = await sentOf(page, "computerInput");
+    expect(attempts.map((cmd) => cmd.input)).toEqual([{ kind: "text", text: "a".repeat(2000) }]);
+  });
+
   test("F-142: typed text, clicks and scrolling reach the page only while this viewer holds control and the picture has focus; Enter is not sent; a paste goes only on a paste", async ({
     page,
   }) => {
