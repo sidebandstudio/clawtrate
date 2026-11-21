@@ -120,7 +120,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Outbox                                  | 16 × 64,655                                                                                                                            |       1,034,498 |
   | Questions                               | (4 pending + 4 settled) × 81,509                                                                                                       |         652,082 |
   | Approvals                               | (16 pending + 8 settled) × 88,109                                                                                                      |       2,114,642 |
-  | History page                            | 200 items × 6,097, plus 300 blocks × 4,172 shared by the page                                                                          |       2,471,503 |
+  | History page                            | 200 items × 6,097, plus 300 blocks × 4,172 shared by the page                                                                          |       2,471,502 |
   | Inter-session messages                  | 64 × 5,772                                                                                                                             |         369,474 |
   | Linked runs                             | 32 × (key 1,024 + 2,204)                                                                                                               |         103,362 |
   | Steer aliases                           | 16 × (key 1,024 + 1,024)                                                                                                               |          32,802 |
@@ -128,7 +128,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Tool map                                | `MAX_MCP_TOOLS` (128) tool-server tools by effective name, from `tools.effective`                                                      |          84,750 |
   | Tool inventory and workspace root       | `MAX_BUILTIN_TOOLS` (256) built-in and plugin tool names from `tools.effective`, and the bot's workspace root from `agents.files.list` |          33,571 |
   | Reactions                               | 200 messages shown × (key 1,024 + 12 emoji × 123), from `session.reactions.list` and `session.reaction`                                |         503,214 |
-  | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                |          21,916 |
+  | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                                                                                                |          21,917 |
   | Per task                                |                                                                                                                                        |      14,628,378 |
 
 - **The state**, and what one viewer is sent:
