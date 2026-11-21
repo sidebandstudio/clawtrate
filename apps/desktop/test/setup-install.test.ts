@@ -932,7 +932,7 @@ describe("F-502 F-503 F-505: reading what the programs print", () => {
     const facts = onboardingFacts(
       JSON.stringify({
         ok: false,
-        gateway: { port: 40002, bind: "/Users/someone", authMode: "token" },
+        gateway: { port: 40002, bind: "/srv/a-path", authMode: "token" },
         installDaemon: false,
         classification: "a message with a token sk-123",
         secretKey: "x",
