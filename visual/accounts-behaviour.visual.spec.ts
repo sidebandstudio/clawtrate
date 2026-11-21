@@ -2,7 +2,7 @@
 // 19): the "+" menu and ⌘N, focus in and out of the dialogs, the radio groups'
 // one tab stop and arrows, the selects, Escape that belongs to the innermost
 // thing, the access bar for admin, and what a read-only connection shows.
-import type { ClawtrateState } from "../packages/core/src/index.ts";
+import type { ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
@@ -179,6 +179,37 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
+});
+
+test("F-157: late pairing answers leave a newer admin grant in place", async ({ page }) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&access=write&admin=grant&pairing=grant`,
+    "light",
+  );
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await page.evaluate(async () => {
+    const { clawtrateFixture: bridge } = window as unknown as {
+      clawtrateFixture: ClawtrateBridge & { hold(): void; release(): void };
+    };
+    await bridge.send({ type: "requestAccess", tier: "pairing" });
+    bridge.hold();
+    await bridge.send({ type: "requestAccess", tier: "admin" });
+    bridge.release();
+  });
+  const connection = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState()
+          .connection,
+    );
+  const granted = await connection();
+  expect(granted.scopes).toContain("operator.admin");
+  await page.clock.runFor(300);
+  expect((await connection()).upgrade.status).toBe("approved");
+  await page.clock.runFor(1_000);
+  expect((await connection()).scopes).toEqual(granted.scopes);
 });
 
 test("F-472: an approval released before the request turns pending stays approved", async ({

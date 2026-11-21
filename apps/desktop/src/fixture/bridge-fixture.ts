@@ -573,6 +573,7 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
@@ -599,12 +600,20 @@ export function createFixtureBridge(
       sent.push(command);
       return usage;
     }
-    const machine = machineCommand(command, () => state, set, deferred);
+    // Pairing and admin share one upgrade. A delayed answer belongs to the request that started it.
+    let setAnswer = set;
+    if (command.type === "requestAccess" && command.tier) {
+      const request = ++latestAccessRequest;
+      setAnswer = (next) => {
+        if (request === latestAccessRequest) set(next);
+      };
+    }
+    const machine = machineCommand(command, () => state, setAnswer, deferred);
     if (machine) {
       sent.push(command);
       return machine;
     }
-    const account = accountCommand(command, () => state, set, accountParams, deferred);
+    const account = accountCommand(command, () => state, setAnswer, accountParams, deferred);
     if (account) {
       sent.push(command);
       return account;
