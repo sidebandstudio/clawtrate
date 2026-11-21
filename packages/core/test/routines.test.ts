@@ -898,6 +898,45 @@ describe("F-189: creating a routine", () => {
     expect(state().routines.map((r) => r.id)).toEqual([JOB]);
   });
 
+  it.each([
+    { name: "plain text", prefix: "a".repeat(4_094) },
+    { name: "quoted text", prefix: '"'.repeat(2_047) },
+  ])(
+    "F-189: confirms the full $name instruction in create and edit replies before clipping it for display",
+    async ({ prefix }) => {
+      const text = prefix + "x";
+      const original = parseRoutine(job())!;
+      const fields = fieldsOf(original);
+      for (const [reply, status] of [
+        [text, "saved"],
+        [prefix + "y", "unknown"],
+      ]) {
+        const answer = job({ payload: { kind: "agentTurn", message: reply } });
+        const { routines } = engine(
+          {
+            "cron.add": () => ({ created: true, job: answer }),
+            "cron.get": () => job(),
+            "cron.update": () => answer,
+          },
+          initialRoutinesState,
+          ADMIN,
+        );
+        const edit = { ...fields, text };
+        const results = [
+          await routines.create({ ...edit, botId: "marlow" }, "draft-1"),
+          await routines.update(JOB, fields, edit, original),
+        ];
+        for (const result of results) {
+          expect(result.status).toBe(status);
+          if (result.status === "saved") {
+            expect(result.routine.textCut).toBe(true);
+            expect(result.routine.text.length).toBeLessThan(text.length);
+          }
+        }
+      }
+    },
+  );
+
   it("sends nothing before the gateway's identity is confirmed, so a draft cannot reach a replacement gateway", async () => {
     const { routines, requests } = engine({ "cron.add": () => job() }, initialRoutinesState, {
       ...ADMIN,

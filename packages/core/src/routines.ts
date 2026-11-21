@@ -222,6 +222,12 @@ function parseSchedule(value: unknown): RoutineSchedule {
   return { ...base, kind: "other", name: kind ?? "unknown" };
 }
 
+function instructionOf(payload: RawRecord): string {
+  return (
+    str(payload.message) ?? str(payload.text) ?? str(payload.script) ?? str(payload.command) ?? ""
+  );
+}
+
 /** A `cron.list` job as a routine; null for a check-in job, which is a bot's check-ins, not a routine. */
 export function parseRoutine(value: unknown): Routine | null {
   const job = asRecord(value);
@@ -235,8 +241,7 @@ export function parseRoutine(value: unknown): Routine | null {
   const mode = str(delivery?.mode);
   const last = str(state.lastRunStatus) ?? str(state.lastStatus);
   const target = str(job.sessionTarget);
-  const fullText =
-    str(payload.message) ?? str(payload.text) ?? str(payload.script) ?? str(payload.command) ?? "";
+  const fullText = instructionOf(payload);
   const schedule = parseSchedule(job.schedule);
   const gated = asRecord(job.trigger) !== null || asRecord(job.pacing) !== null;
   const toolsAllow = arr(payload.toolsAllow);
@@ -599,8 +604,22 @@ function unsent(error: unknown): boolean {
 /** The job in an answer: `cron.add` with a declaration key wraps it (`{created, job}`). */
 const answeredJob = (result: unknown) => {
   const record = asRecord(result);
-  return parseRoutine(asRecord(record?.job) ?? record);
+  return asRecord(record?.job) ?? record;
 };
+
+/** Confirm the written fields against the whole reply. Only the bounded routine goes to a viewer. */
+function confirmedWrite(
+  result: unknown,
+  sent: RoutineFields,
+  changed?: Array<keyof RoutineFields>,
+): Routine | null {
+  const job = answeredJob(result);
+  const routine = parseRoutine(job);
+  if (!routine) return null;
+  const actual = { ...fieldsOf(routine), text: instructionOf(asRecord(job?.payload) ?? {}) };
+  const differs = changedFields(sent, actual).some((field) => !changed || changed.includes(field));
+  return differs ? null : routine;
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -929,7 +948,7 @@ export class RoutinesEngine {
       schedule.staggerMs = input.schedule.staggerMs;
     const epoch = this.epoch;
     try {
-      const routine = answeredJob(
+      const routine = confirmedWrite(
         await this.ctx.request("cron.add", {
           name: input.name,
           agentId: input.botId,
@@ -940,8 +959,9 @@ export class RoutinesEngine {
           delivery: { mode: input.delivery === "announce" ? "announce" : "none" },
           declarationKey: `${DECLARATION_PREFIX}${key}`,
         }),
+        input,
       );
-      if (!routine || changedFields(input, fieldsOf(routine)).length > 0)
+      if (!routine)
         return {
           status: "unknown",
           error: "The gateway answered, but doesn't show this routine as written.",
@@ -1059,19 +1079,17 @@ export class RoutinesEngine {
       try {
         // Held to the definition just checked: another editor's save that lands
         // between the read and this write is refused, not overwritten.
-        const routine = answeredJob(
+        const routine = confirmedWrite(
           await this.ctx.request("cron.update", {
             id,
             patch,
             ...(revision === null ? {} : { expectedConfigRevision: revision }),
           }),
+          fields,
+          changedFields(original, fields),
         );
         if (pending.removed) return { status: "deleted" };
-        const wanted = changedFields(original, fields);
-        if (
-          !routine ||
-          changedFields(fields, fieldsOf(routine)).some((key) => wanted.includes(key))
-        )
+        if (!routine)
           return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
         this.keep(routine, epoch);
         return { status: "saved", routine };
@@ -1105,8 +1123,8 @@ export class RoutinesEngine {
     const pending = { id, removed: false };
     this.updates.add(pending);
     try {
-      const routine = answeredJob(
-        await this.ctx.request("cron.update", { id, patch: { enabled } }),
+      const routine = parseRoutine(
+        answeredJob(await this.ctx.request("cron.update", { id, patch: { enabled } })),
       );
       if (pending.removed) return { status: "deleted" };
       if (!routine || routine.enabled !== enabled)
