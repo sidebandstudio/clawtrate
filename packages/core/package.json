@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json"
   },
   "dependencies": {
+    "@clawtrate/relay-protocol": "workspace:*",
     "@openclaw/gateway-client": "2026.10.6",
     "@openclaw/gateway-protocol": "2026.10.6"
   },

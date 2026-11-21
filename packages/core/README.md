@@ -139,6 +139,16 @@ A file tool's step carries `files` (`StepFiles`): the paths its arguments name, 
 - Every write is refused before anything is sent below its tier or on a host that only reads (`PlacementWriteError`). A command machine, a workspace and a machine's defaults need admin, and so does renaming or removing another device's or a machine's record; this device's own name needs device access. `setCommandMachine` sends the revision the page showed and answers whether the gateway reports it applied. `setMachineDefaults` reads the file again, refuses a hash other than `expectedHash`, and writes the whole file back with only its defaults changed. A removal is done when the whole listing read back lacks the id.
 - Bounds: 16 machines, 32 devices, 32 names per inventory list, an approvals file's entries only for listed bots, names and ids of 128 characters, so the largest answer fits one result frame of the web host.
 
+## Relay routes
+
+A gateway can also be reached through Clawtrate's relay (`src/relay/`, decisions in `docs/decisions.md`, "Remote access"). Nothing in the apps uses it yet.
+
+- `parseRelayCode(text, nowMs)` reads a scanned or pasted pairing code and throws `RelayCodeError` (`malformed`, `too_large`, `expired`, `bad_expiry`) for anything else. `client.connectRelay(code)` connects to its route.
+- The host supplies `ClawtrateHost.relay`: `createTransport` (a WebSocket that carries binary messages), `loadStaticKey` (this device's Noise key pair, kept as the signing key is), and optionally one `budget` and a monotonic `clock` for every relay channel. A host without it refuses relay routes.
+- `RelaySocket` is the route's `WebSocketLike`; `RELAY_CLOSE` lists the codes it ends with, and `isPermanentRelayClose` the two the client does not retry. `RelayReconnectPolicy` decides each wait.
+- The route's device token is kept under `relayRouteKey(route)`, the connector's key; `connection.gatewayUrl` is `relayRouteAddress(route)`. A refusal shows `connection.error.code` `RELAY_REFUSED`.
+- `test/relay-e2e.ts` at the repository root runs the route against a named development gateway started with `--trust-loopback-proxy`.
+
 ## The state
 
 `ClawtrateState` (`src/types.ts`):

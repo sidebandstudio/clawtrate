@@ -1,6 +1,9 @@
 // What a host process provides to the core. Core itself uses no DOM and no
 // Node APIs, so the same code runs in Electron's main process, plain Node and Expo.
 
+import type { KeyPair, ReceiveBudget } from "@clawtrate/relay-protocol";
+import type { RelayTransportFactory } from "./relay/socket.ts";
+
 /**
  * Async key/value persistence. Values are strings; core stores JSON. `set` and
  * `delete` resolve only once the change is kept; a change that could not be kept
@@ -46,8 +49,29 @@ export type ClientIdentity = {
 
 export type ApprovalInstructions = { command: string; note: string | null };
 
+/**
+ * What a host provides to reach gateways through Clawtrate's relay (`RelaySocket`). Without it
+ * the client refuses relay routes.
+ */
+export type RelayHost = {
+  /** A WebSocket to the relay that sends and receives binary messages. */
+  createTransport: RelayTransportFactory;
+  /**
+   * This device's Noise static key pair for relay routes, kept by the host as it keeps the
+   * signing key. The same pair on every relay route: connectors enroll its public half.
+   */
+  loadStaticKey(): Promise<KeyPair>;
+  /** Shared by every relay channel of this host; a default one otherwise. */
+  budget?: ReceiveBudget;
+  /** A monotonic clock in whole milliseconds, for the relay channel's deadlines. */
+  clock?: () => number;
+  /** Tests only: relay routes to a `ws:` relay on this machine. */
+  allowLoopbackWs?: boolean;
+};
+
 export type ClawtrateHost = {
   createWebSocket: WebSocketFactory;
+  relay?: RelayHost;
   storage: KeyValueStore;
   signer: DeviceSigner;
   client: ClientIdentity;
