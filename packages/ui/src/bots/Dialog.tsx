@@ -45,7 +45,9 @@ export function Dialog({
       if (dialog.open) dialog.close();
       requestAnimationFrame(() => {
         // Behind a dialog still open, the browser does not let it take focus: nothing happens.
-        if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
+        // Opened with nothing focused, the fallback takes focus.
+        if (opener?.isConnected && opener !== document.body && !opener.closest("[inert]"))
+          opener.focus();
         else if (fallback?.isConnected) fallback.focus();
       });
     };
@@ -103,6 +105,7 @@ export function Confirm({
   text,
   details,
   action,
+  cancel = "Cancel",
   onAction,
   onCancel,
   busy,
@@ -112,6 +115,8 @@ export function Confirm({
   text: ReactNode;
   details?: string;
   action: string;
+  /** The words on Cancel. */
+  cancel?: string;
   onAction: () => void;
   onCancel: () => void;
   busy?: boolean;
@@ -143,7 +148,7 @@ export function Confirm({
             onClick={onCancel}
             data-b-focus=""
           >
-            Cancel
+            {cancel}
           </button>
           <button
             type="button"

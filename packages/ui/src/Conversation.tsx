@@ -779,6 +779,8 @@ export function Conversation({
   inert = false,
   granted,
   onShowComputer,
+  chatLink = null,
+  onChatLinkDone,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -810,6 +812,9 @@ export function Conversation({
   granted: boolean;
   /** Open the Work pane on Computer, focusing its tab (work-pane.md, section 15). */
   onShowComputer?: () => void;
+  /** A Clawtrate link's text for this task's composer. */
+  chatLink?: { id: number; text: string } | null;
+  onChatLinkDone?: ((id: number) => void) | undefined;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -1192,6 +1197,8 @@ export function Conversation({
           }}
           onAnnounce={onAnnounce}
           focusRef={fieldRef}
+          chatLink={chatLink}
+          onChatLinkDone={onChatLinkDone}
         />
       )}
       {task && bot && !interactive && (

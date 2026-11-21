@@ -2,7 +2,7 @@ import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/co
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
@@ -55,6 +55,8 @@ export function Shell({
   onOpenSettings,
   inert = false,
   onCaughtUp,
+  chatLink = null,
+  onChatLinkDone,
 }: {
   state: ClawtrateState;
   info: HostInfo;
@@ -69,6 +71,10 @@ export function Shell({
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
   onCaughtUp?: (caughtUp: boolean) => void;
+  /** A Clawtrate link that opens a bot's chat, with the text for its composer. */
+  chatLink?: { id: number; botId: string; text: string } | null;
+  /** The link's text went in, or the person kept their draft. */
+  onChatLinkDone?: (id: number) => void;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -428,6 +434,32 @@ export function Shell({
     // view and taskKey did not change.
   }, [view, taskKey, routinesOpen]);
 
+  // A Clawtrate link opens the chat selecting its bot would: its last selected task,
+  // or else its most recent. Routines and a Work drawer close, so the conversation can
+  // take focus, and only then does its composer get the text.
+  const linkTask = chatLink ? selection.taskFor(chatLink.botId) : null;
+  const openedLink = useRef<number | null>(null);
+  const { selectTask } = selection;
+  const openLinkedChat = useEffectEvent((botId: string, key: string) => {
+    selectTask(botId, key);
+    if (panelOpen && overlay) {
+      keepFocus.current = true;
+      setPanel(false);
+    }
+    openDetail();
+  });
+  const linkId = chatLink?.id ?? null;
+  const linkBot = chatLink?.botId ?? null;
+  const linkKey = linkTask?.key ?? null;
+  useEffect(() => {
+    if (linkId === null || linkBot === null || linkKey === null) return;
+    if (openedLink.current === linkId) return;
+    openedLink.current = linkId;
+    openLinkedChat(linkBot, linkKey);
+  }, [linkId, linkBot, linkKey]);
+  const linkHere =
+    chatLink && linkTask?.key === taskKey && !drawerOpen && !routines && !inert ? chatLink : null;
+
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
 
@@ -751,6 +783,8 @@ export function Shell({
                 toggleRef={toggleRef}
                 inert={drawerOpen || inert}
                 onShowComputer={showComputer}
+                chatLink={linkHere}
+                onChatLinkDone={onChatLinkDone}
               />
             </WorkLinksContext.Provider>
           </OpenTaskContext.Provider>

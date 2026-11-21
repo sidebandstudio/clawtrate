@@ -599,6 +599,18 @@
   display: none;
 }
 
+/* What a Clawtrate link did, above the field; it takes no room while empty. */
+.composer-link-note {
+  margin: 0 0 6px;
+  padding: 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.composer-link-note:empty {
+  margin: 0;
+}
+
 .shelf-row {
   display: flex;
   align-items: center;

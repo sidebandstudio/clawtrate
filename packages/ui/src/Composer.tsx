@@ -23,7 +23,9 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { Confirm } from "./bots/Dialog.tsx";
 import { useBridge } from "./bridge.tsx";
+import { LINK_TEXT_ADDED } from "./chat-link.ts";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
 import {
   composerFor,
@@ -183,6 +185,8 @@ export function Composer({
   onAnnounce,
   focusRef,
   limits,
+  chatLink = null,
+  onChatLinkDone,
 }: {
   bot: Bot;
   /** The gateway's address: drafts are kept per gateway and per task. */
@@ -200,6 +204,10 @@ export function Composer({
   focusRef: React.RefObject<HTMLTextAreaElement | null>;
   /** What the gateway said one message may carry; Clawtrate's own ceilings until it has. */
   limits: SendLimits | null;
+  /** A Clawtrate link's text for this draft. */
+  chatLink?: { id: number; text: string } | null;
+  /** The link's text went in, or the person kept their draft. */
+  onChatLinkDone?: ((id: number) => void) | undefined;
 }) {
   const ceilings = limits ?? DEFAULT_LIMITS;
   const bridge = useBridge();
@@ -235,6 +243,36 @@ export function Composer({
     focusRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
   });
+  // A Clawtrate link's text (links.md section 2) fills an empty draft. Any other draft,
+  // whitespace too, stays until the person chooses to replace it. Nothing is sent. It is
+  // applied a frame later, once focus moved by closing Settings or the Work drawer has landed.
+  const [linkText, setLinkText] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<number | null>(null);
+  const handledLink = useRef<number | null>(null);
+  const fillFromLink = useCallback(
+    (link: { id: number; text: string }) => {
+      setText(link.text);
+      setLinkText(link.text);
+      caretAt.current = link.text.length;
+      focusRef.current?.focus();
+      onChatLinkDone?.(link.id);
+    },
+    [setText, focusRef, onChatLinkDone],
+  );
+  const linkId = chatLink?.id ?? null;
+  const linkWords = chatLink?.text ?? null;
+  useEffect(() => {
+    if (linkId === null || linkWords === null || handledLink.current === linkId) return;
+    const frame = requestAnimationFrame(() => {
+      handledLink.current = linkId;
+      if (text === "") return fillFromLink({ id: linkId, text: linkWords });
+      // The draft is what the choice returns focus to.
+      focusRef.current?.focus();
+      setChoosing(linkId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [linkId, linkWords, text, fillFromLink, focusRef]);
+  const choice = choosing !== null && chatLink?.id === choosing ? chatLink : null;
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
   /** Open a menu; focus returns to `from` when it closes (Send, for a long press). */
@@ -814,6 +852,9 @@ export function Composer({
         <div className="composer-shelf" aria-label="Waiting to send">
           {rows}
         </div>
+        <p className="composer-link-note" role="status" aria-live="polite" data-testid="link-note">
+          {linkText !== null && linkText === text ? LINK_TEXT_ADDED : ""}
+        </p>
         <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
           {pickerOpen && (
             <div className="composer-menu" data-testid="composer-menu">
@@ -950,6 +991,7 @@ export function Composer({
               data-testid="composer-input"
               onChange={(event) => {
                 setText(event.target.value);
+                setLinkText(null);
                 watchCaret(
                   event.target.value,
                   event.target.selectionStart ?? event.target.value.length,
@@ -1056,6 +1098,22 @@ export function Composer({
             <Menu label="How to send" entries={menuEntries} onClose={closeMenu} trigger={trigger} />
           </div>
         </>
+      )}
+      {choice && (
+        <Confirm
+          title="Replace your draft?"
+          text={`You already have a draft in this chat with ${bot.name}. Replacing it discards that draft.`}
+          action="Replace draft"
+          cancel="Keep draft"
+          onAction={() => {
+            setChoosing(null);
+            fillFromLink(choice);
+          }}
+          onCancel={() => {
+            setChoosing(null);
+            onChatLinkDone?.(choice.id);
+          }}
+        />
       )}
     </footer>
   );

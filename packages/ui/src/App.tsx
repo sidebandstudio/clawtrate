@@ -1,7 +1,9 @@
-import type { ConnectionError, HostInfo } from "@clawtrate/core";
+import type { ChatLinkDelivery, ConnectionError, HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
+import { connectionSettled, resolveChatLink, type LinkRefusal as Refusal } from "./chat-link.ts";
 import { ConnectScreen } from "./ConnectScreen.tsx";
+import { LinkRefusal } from "./LinkRefusal.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor, setupHolds } from "./screen.ts";
 import { restartWaitingMessages } from "./update-restart.ts";
@@ -48,7 +50,8 @@ export function App({
   onUnreadCount?: ((count: number) => void) | undefined;
 }) {
   const state = useClawtrateState();
-  const { desktopUpdates } = useBridge();
+  const bridge = useBridge();
+  const { desktopUpdates } = bridge;
   const updated = useDesktopUpdateSnapshot(desktopUpdates);
   const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
   useInputAndMotion();
@@ -110,6 +113,37 @@ export function App({
     if (document.activeElement && document.activeElement !== document.body) return;
     document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
   }, [screen]);
+  // Clawtrate links (docs/design/links.md). One waits at a time, a later one in
+  // its place, while startup connects or a connection's bots and tasks load.
+  // It then opens its chat, or the card says why it cannot; a refused link is
+  // dropped, never retried.
+  const [link, setLink] = useState<ChatLinkDelivery | null>(null);
+  const [refusal, setRefusal] = useState<{ id: number; refusal: Refusal } | null>(null);
+  useEffect(
+    () =>
+      bridge.onChatLink?.((next) => {
+        setRefusal(null);
+        setLink(next);
+      }),
+    [bridge],
+  );
+  const [starting, setStarting] = useState(true);
+  if (starting && connectionSettled(state)) setStarting(false);
+  const outcome = link && resolveChatLink(link, state, info, starting);
+  if (link && outcome?.kind === "refused") {
+    setRefusal({ id: link.id, refusal: outcome.refusal });
+    setLink(null);
+  }
+  const opening =
+    link?.status === "valid" && outcome?.kind === "open"
+      ? { id: link.id, botId: outcome.botId, text: link.link.text }
+      : null;
+  // The chat opens in front of Settings, which would leave it unusable behind.
+  if (opening && settingsOpen) setSettingsOpen(false);
+  const linkDone = useCallback(
+    (id: number) => setLink((current) => (current?.id === id ? null : current)),
+    [],
+  );
   // One flag for the whole window: while the connection is anything but
   // connected, and after a reconnect until the open task has caught up,
   // nothing that stands for the gateway's work moves; it is last seen.
@@ -143,6 +177,8 @@ export function App({
           onOpenSettings={openSettings}
           inert={settingsOpen}
           onCaughtUp={setCaughtUp}
+          chatLink={opening}
+          onChatLinkDone={linkDone}
         />
       ) : (
         <ConnectScreen
@@ -152,6 +188,14 @@ export function App({
           setup={state.setup}
           mismatch={mismatch}
           inert={settingsOpen}
+        />
+      )}
+      {refusal && (
+        <LinkRefusal
+          key={refusal.id}
+          refusal={refusal.refusal}
+          firstControl={FIRST_CONTROL}
+          onClose={() => setRefusal(null)}
         />
       )}
     </div>
