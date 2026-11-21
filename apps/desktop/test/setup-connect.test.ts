@@ -98,12 +98,13 @@ function harness(
 ) {
   const timeline: string[] = [];
   const requests: ProgramRequest[] = [];
+  const now = options.now ?? Date.now;
   const replies: Record<string, Reply> = {
     "--version": { stdout: VERSION_LINE },
     "gateway status --json": { stdout: statusJson({ port: PORT }) },
     "gateway status --json --deep": { stdout: statusJson({ port: PORT }) },
     "config get gateway.auth.mode --json": { stdout: authJson() },
-    [`qr --json --voice-node --url ${URL}`]: { stdout: qrJson(URL, CODE, Date.now() + 600_000) },
+    [`qr --json --voice-node --url ${URL}`]: () => ({ stdout: qrJson(URL, CODE, now() + 600_000) }),
     ...options.replies,
   };
   const run = async (request: ProgramRequest): Promise<ProgramResult> => {
@@ -141,6 +142,7 @@ function harness(
   const logs: string[] = [];
   const host = {
     ...testHost(gateway, storage),
+    now,
     log: (_level: string, line: string) => void logs.push(line),
   };
   const client = new ClawtrateClient(host, { reconnect: { initialMs: 20, maxMs: 40 } });
@@ -166,7 +168,7 @@ function harness(
     stopPrograms: () => void (stopped += 1),
     confirm,
     log: (line) => logs.push(line),
-    ...(options.now ? { now: options.now } : {}),
+    now,
   });
   /** Everything the code must never reach, as one string. */
   const everywhere = () =>
@@ -369,7 +371,7 @@ describe("Connect on this computer", () => {
 
   it("F-492: two minutes passing while the socket signs sends no credential, the code's nor a saved token's", async () => {
     for (const saved of [false, true]) {
-      let now = Date.now();
+      let now = 1_000_000;
       const h = harness({ now: () => now });
       if (saved)
         h.storage.data.set(
@@ -384,7 +386,7 @@ describe("Connect on this computer", () => {
       const host = h.client as unknown as {
         host: { signer: { sign: (p: string) => Promise<string> } };
       };
-      const sign = host.host.signer.sign;
+      const sign = vi.fn(host.host.signer.sign);
       host.host.signer.sign = async (payload) => {
         now += OPERATION_LIFETIME_MS + 1;
         return sign(payload);
@@ -393,6 +395,7 @@ describe("Connect on this computer", () => {
       await h.setup.look();
       await h.setup.connect();
       await until(() => h.setup.current.phase === "failed" || h.gateway.connects.length > 0);
+      expect(sign).toHaveBeenCalled();
       expect(h.gateway.connects).toEqual([]);
       expect(h.setup.current.failure?.kind).toBe("changed");
       h.client.stop();
@@ -749,6 +752,50 @@ describe("the programs setup starts", () => {
     expect(runner.running()).toEqual([]);
   }, 20_000);
 
+  it("F-492: a listener read's signal ends the commands it started, and only those", async () => {
+    const runner = loose();
+    const reads = new AbortController();
+    const started = Date.now();
+    const cancelled = runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+      signal: reads.signal,
+    });
+    const other = runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["0.5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    reads.abort();
+    expect(await cancelled).toMatchObject({ timedOut: true });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // The run nobody cancelled finishes as it would have.
+    expect(await other).toMatchObject({ exitCode: 0, timedOut: false });
+    // A signal already ended starts nothing.
+    const spawned = vi.fn(spawn);
+    const counted = new ProgramRunner({
+      check: () => {},
+      spawn: spawned as unknown as typeof spawn,
+    });
+    const late = await counted.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+      signal: reads.signal,
+    });
+    expect(late.timedOut).toBe(true);
+    expect(spawned).not.toHaveBeenCalled();
+    expect(runner.running()).toEqual([]);
+  }, 20_000);
+
   /** Whether a process is gone, by its PID: the system says there is none. */
   const gone = (pid: number) => {
     try {
@@ -885,7 +932,10 @@ describe("the programs setup starts", () => {
     const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const quit = main.slice(main.indexOf('app.on("before-quit"'));
     expect(quit).toContain("event.preventDefault();");
-    expect(quit.indexOf("programs.stopAllAndWait()")).toBeLessThan(quit.indexOf("app.quit();"));
+    const wait = quit.indexOf("programs.stopAllAndWait()");
+    const resumeQuit = quit.indexOf("app.quit();");
+    expect(wait).toBeGreaterThanOrEqual(0);
+    expect(resumeQuit).toBeGreaterThan(wait);
   }, 20_000);
 
   it("the host's runner refuses anything but the look's commands before it starts", async () => {

@@ -296,8 +296,11 @@ describe("the setup connection's token gate", () => {
       bootstrapToken: CODE,
       expiresAtMs: Date.now() - 1,
     });
-    await until(() => gateway.connects.length === 1);
-    expect((gateway.connects[0] as ConnectParams).auth?.bootstrapToken).toBeUndefined();
+    // An initial pairing whose plan carries no code sends no frame at all, with or without auth.
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+    expect(gateway.sockets.length).toBeGreaterThan(0);
+    expect(gateway.connects).toHaveLength(0);
     client.stop();
   });
 
