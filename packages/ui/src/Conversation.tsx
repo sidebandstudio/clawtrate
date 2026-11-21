@@ -293,6 +293,20 @@ function TranscriptView({
   const follow = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
+    // The browser reports a scroll a frame late, so an update can arrive before it. A view
+    // moved up from where the end was put, and not near the end, was scrolled away by the
+    // reader, and onScroll will stop following it: so does this, instead of pulling it back.
+    // A hidden transcript measures zero, so it counts as near and keeps following.
+    if (
+      followTop.current !== null &&
+      element.scrollTop < followTop.current - 1 &&
+      element.scrollHeight - element.scrollTop - element.clientHeight >= NEAR_BOTTOM_PX
+    ) {
+      pinAt(null);
+      following.current = false;
+      setAtEnd(false);
+      return;
+    }
     const held = opened.current;
     const line =
       held?.isConnected && held.open ? (held.querySelector(":scope > summary") ?? held) : null;
