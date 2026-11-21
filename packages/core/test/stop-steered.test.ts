@@ -19,14 +19,13 @@ function gatewayWithWaitingRun() {
     expiresAtMs: Date.now() + 600_000,
   };
   let pending = true;
-  let steers = 0;
   gateway.handlers["exec.approval.list"] = () => (pending ? [approval] : []);
   gateway.handlers["plugin.approval.list"] = () => [];
   gateway.handlers["openclaw.approval.list"] = () => [];
   gateway.handlers["question.list"] = () => ({ questions: [] });
-  gateway.handlers["chat.send"] = () => {
-    // Each steer is held as a queued turn of its own.
-    const id = `steer-${(steers += 1)}`;
+  gateway.handlers["chat.send"] = (params) => {
+    // Each steer is held as a queued turn of its own, under its send's key, as the gateway does.
+    const id = (params as { idempotencyKey: string }).idempotencyKey;
     queued.push(id);
     return { runId: id, status: "started", messageSeq: 5 };
   };
@@ -122,9 +121,9 @@ async function stoppedRightly(task: Task, withdrawn = 0) {
 describe("Stop after a steer (F-097, F-169)", () => {
   it("F-097 F-169: Stop after a steer into a run waiting on an approval aborts that run, which the gateway ends and whose approval it settles", async () => {
     const task = await waiting();
-    task.client.sendMessage(KEY, "Only the notes folder.");
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
     await until(() => task.gateway.calls("chat.history").length >= 2);
-    await until(() => run(task, "steer-1") !== undefined);
+    await until(() => run(task, sent) !== undefined);
     await stopNewest(task);
     await stoppedRightly(task, 1);
     task.client.stop();
@@ -152,8 +151,8 @@ describe("Stop after a steer (F-097, F-169)", () => {
       task.gateway.emit("session.message", { sessionKey: KEY });
       return answer.promise.then(() => reply);
     };
-    task.client.sendMessage(KEY, "Only the notes folder.");
-    await until(() => run(task, "steer-1") !== undefined);
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
+    await until(() => run(task, sent) !== undefined);
     answer.resolve(undefined);
     await until(() => task.transcript().outbox[0]?.status === "sent");
     await stopNewest(task);

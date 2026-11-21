@@ -401,6 +401,8 @@ export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
  */
 export const REQUEST_TIMEOUT_MS = 60_000;
 
+/** How long Stop waits for the gateway to answer the withdrawal of the run's steers. */
+export const STEER_WITHDRAWAL_WAIT_MS = 2_000;
 /** Longest message text the client sends. */
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
@@ -2555,7 +2557,14 @@ export class ClawtrateClient {
    */
   private async abortRun(key: string, runId: string): Promise<void> {
     try {
-      await this.withdrawSteers(key, runId);
+      // A withdrawal the gateway does not answer must not hold the Stop: after a short wait the
+      // run is aborted anyway, and that steer stays as it was.
+      let waited: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.withdrawSteers(key, runId),
+        new Promise<void>((resolve) => (waited = setTimeout(resolve, STEER_WITHDRAWAL_WAIT_MS))),
+      ]);
+      clearTimeout(waited);
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);

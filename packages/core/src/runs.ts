@@ -3607,13 +3607,20 @@ export function parkAfterStop(
 }
 
 /**
- * Steers the gateway answered it withdrew (`chat.abort` naming their own ids): never run, so
- * on the shelf, Not sent, as a message a Stop parked is.
+ * Steers the gateway answered it withdrew (`chat.abort` naming their own ids, the messages'
+ * ids): never run, so on the shelf, Not sent, as a message a Stop parked is. Only a steer still
+ * known by its alias alone qualifies. One whose own run the gateway's events showed (the alias
+ * went with them) was delivered, and the answer stopped that run: it is not withdrawn.
  */
 export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): TaskActivity {
   let next = activity;
   for (const message of activity.outbox)
-    if (message.mode === "steer" && message.status === "sent" && ids.includes(message.id))
+    if (
+      message.mode === "steer" &&
+      message.status === "sent" &&
+      ids.includes(message.id) &&
+      Object.hasOwn(activity.steerAliases, message.id)
+    )
       next = updateMessage(next, message.id, {
         status: "not-sent",
         steer: "withdrawn",

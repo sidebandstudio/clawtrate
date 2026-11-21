@@ -4,6 +4,7 @@
 // goes on; one it holds can be withdrawn with `chat.abort` naming that id, which ends it `chat`
 // aborted and lifecycle end `aborted: true`, with no start, and never runs it.
 import { describe, expect, it } from "vitest";
+import { STEER_WITHDRAWAL_WAIT_MS } from "../src/client.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
 
@@ -117,6 +118,35 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     task.client.sendMessage(KEY, "/stop");
     await until(() => task.transcript().outbox[0]?.status === "not-sent");
     expect(task.transcript().outbox[0]!.steer).toBe("withdrawn");
+    task.client.stop();
+  });
+
+  it("F-097 F-468: a typed /stop that stops a steer's own turn leaves it delivered, not Not sent", async () => {
+    const task = await steered();
+    // The gateway ran the steer as a turn of its own: it was delivered.
+    task.gateway.emit("agent", agentEvent(task.id, 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, task.id)?.state === "running");
+    task.gateway.handlers["chat.send"] = () => ({ ok: true, aborted: true, runIds: [task.id] });
+    task.client.sendMessage(KEY, "/stop");
+    await until(() => task.transcript().outbox[1]?.status === "handled");
+    expect(task.transcript().outbox[0]).toMatchObject({ status: "sent", runId: RUN });
+    expect(task.transcript().outbox[0]!.steer).toBeUndefined();
+    task.client.stop();
+  });
+
+  it("F-097: a withdrawal the gateway does not answer holds the run's Stop only briefly", async () => {
+    const task = await steered();
+    const abort = task.gateway.handlers["chat.abort"]!;
+    task.gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId: string }).runId === RUN ? abort(params) : new Promise(() => {});
+    const asked = Date.now();
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    expect(Date.now() - asked).toBeLessThan(STEER_WITHDRAWAL_WAIT_MS + 1_000);
+    // Its fate is not established: it is not withdrawn, and the stop note says it may still run.
+    expect(task.transcript().outbox[0]!.runId).toBe(RUN);
+    expect(task.transcript().outbox[0]!.status).not.toBe("not-sent");
+    expect(task.transcript().outbox[0]!.steer).toBeUndefined();
     task.client.stop();
   });
 });
