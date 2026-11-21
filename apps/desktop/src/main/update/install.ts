@@ -17,11 +17,14 @@ export interface UpdateInstaller {
   completesOnQuit?: true;
   retire?(): void;
   inspect(file: VerifiedArtifact): Promise<UpdateInstallRefusal | null>;
-  /** Recheck identity, bytes and signature under protection through launch. */
+  /**
+   * Recheck identity, bytes and signature under protection through launch. `submitted` runs once
+   * the native updater has requested the archive; until then it cannot have staged the update.
+   */
   launch(
     file: VerifiedArtifact,
     signal: AbortSignal,
     handed: () => void,
     submitted?: () => void,
-  ): Promise<UpdateInstallRefusal | "installer-failed" | null>;
+  ): Promise<UpdateInstallRefusal | "installer-failed" | "mac-updater-refused" | null>;
 }

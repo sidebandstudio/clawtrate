@@ -91,7 +91,13 @@ function updateRow(
         line: "Clawtrate couldn’t confirm that the macOS updater accepted the update. Check the running version after reopening Clawtrate.",
       };
     case "handoff-failed":
-      return { line: "Clawtrate couldn’t hand the update to the system updater." };
+      return {
+        line:
+          state.reason === "mac-updater-refused"
+            ? "The macOS updater refused the update before receiving it. Nothing was installed."
+            : "Clawtrate couldn’t hand the update to the system updater.",
+        action: "Check for Updates",
+      };
     case "verified":
       return {
         line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,

@@ -56,13 +56,15 @@ export type DesktopUpdateState =
   | { kind: "preparing"; offerId: string; version: string }
   /** macOS may complete this authorized handoff on any later quit. */
   | { kind: "handed-to-system"; offerId: string; version: string }
-  /** Native staging was requested, but Electron did not confirm it. */
+  /** The native updater requested the archive, but Electron did not confirm staging. */
   | { kind: "handoff-unconfirmed"; offerId: string; version: string }
   | { kind: "handing-off"; offerId: string; version: string }
   | {
       kind: "handoff-failed";
       version: string;
-      reason: UpdateInstallRefusal | "attempt-not-saved" | "installer-failed";
+      /** `mac-updater-refused`: the macOS updater stopped before it requested the archive. */
+      reason:
+        UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused";
     }
   | { kind: "not-checked" }
   | { kind: "checking" }

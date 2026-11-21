@@ -77,6 +77,25 @@ const cases: Array<[DesktopUpdateState, string, string[], boolean]> = [
     [],
     true,
   ],
+  // A definite refusal leaves nothing pending, so the person can check again.
+  [
+    { kind: "handoff-failed", version: "1.1.0", reason: "mac-updater-refused" },
+    "The macOS updater refused the update before receiving it. Nothing was installed.",
+    ["Check for Updates"],
+    false,
+  ],
+  [
+    { kind: "handoff-failed", version: "1.1.0", reason: "installer-failed" },
+    "Clawtrate couldn’t hand the update to the system updater.",
+    ["Check for Updates"],
+    false,
+  ],
+  [
+    { kind: "handoff-unconfirmed", version: "1.1.0", offerId: "opaque" },
+    "Clawtrate couldn’t confirm that the macOS updater accepted the update.",
+    [],
+    false,
+  ],
 ];
 it.each(cases)(
   "F-231 F-030: shows the host reading %j and its actions",

@@ -1259,27 +1259,66 @@ it.skipIf(process.platform === "win32")(
       quitAndInstall: vi.fn(),
     });
     vi.doMock("electron", () => ({ autoUpdater: updater }));
+    // The stand-in updater reads what Squirrel would: the feed, then perhaps the archive.
+    async function read(feed: string, archive: boolean) {
+      const { url } = (await (await fetch(feed)).json()) as { url: string };
+      if (archive) await (await fetch(url)).arrayBuffer();
+    }
     try {
-      for (const scenario of ["feed-error", "throw", "deadline", "ready"] as const) {
-        updater.setFeedURL.mockImplementation(() => {
+      for (const scenario of [
+        "feed-error",
+        "throw",
+        "error-after-feed",
+        "deadline",
+        "error-after-archive",
+        "deadline-after-archive",
+        "ready",
+      ] as const) {
+        let feed = "";
+        updater.setFeedURL.mockImplementation(({ url }: { url: string }) => {
+          feed = url;
           if (scenario === "feed-error") updater.emit("error", Error("refused"));
         });
         updater.checkForUpdates.mockClear().mockImplementation(() => {
           if (scenario === "throw") throw Error("refused");
           if (scenario === "ready") updater.emit("update-downloaded");
+          if (scenario === "error-after-feed" || scenario === "error-after-archive")
+            void read(feed, scenario === "error-after-archive").then(() =>
+              // Squirrel's read-only volume check fails here, before the archive request.
+              updater.emit("error", Error("refused")),
+            );
+          if (scenario === "deadline-after-archive") void read(feed, true);
         });
         updater.quitAndInstall.mockImplementation(() => {
           updater.emit("error", Error("late"));
         });
-        const installer = macInstaller("arm64", async () => null, undefined, 100);
+        const installer = macInstaller("arm64", async () => null, undefined, 1000);
         const states: string[] = [];
         const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
         const id = await offer(service);
         await service.download(id);
         const result = (await service.restart(id)).snapshot.state;
-        if (scenario === "feed-error") {
-          expect(updater.checkForUpdates).not.toHaveBeenCalled();
-          expect(result).toMatchObject({ kind: "handoff-failed", reason: "installer-failed" });
+        if (scenario === "feed-error") expect(updater.checkForUpdates).not.toHaveBeenCalled();
+        if (
+          scenario === "feed-error" ||
+          scenario === "throw" ||
+          scenario === "error-after-feed" ||
+          scenario === "deadline"
+        ) {
+          // No archive was served, so nothing can have been staged: the person can check again.
+          expect(result).toEqual({
+            kind: "handoff-failed",
+            version: "1.1.0",
+            reason: scenario === "deadline" ? "installer-failed" : "mac-updater-refused",
+          });
+          expect((await service.restart(id)).outcome).toBe("stale");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("accepted");
+          expect((await service.chooseTrack("stable")).outcome).toBe("accepted");
+          const again = await offer(service);
+          expect((await service.download(again)).snapshot.state).toMatchObject({
+            kind: "verified",
+            offerId: again,
+          });
         } else {
           expect(result).toEqual({
             kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",

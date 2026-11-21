@@ -164,7 +164,8 @@ export class DesktopUpdateService {
     else if (
       state.kind === "handoff-failed" &&
       state.reason !== "attempt-not-saved" &&
-      state.reason !== "installer-failed"
+      state.reason !== "installer-failed" &&
+      state.reason !== "mac-updater-refused"
     )
       install = { kind: "unavailable-in-this-build", reason: state.reason };
     this.pendingInstall = null;
@@ -502,7 +503,10 @@ export class DesktopUpdateService {
     )
       return this.reply("invalid");
     const version = state.version;
-    const fail = (reason: UpdateInstallRefusal | "attempt-not-saved" | "installer-failed") => {
+    const fail = (
+      reason:
+        UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused",
+    ) => {
       this.retireFile();
       this.publish({ kind: "handoff-failed", version, reason });
       return this.reply("accepted");
