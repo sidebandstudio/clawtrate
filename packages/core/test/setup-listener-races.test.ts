@@ -7,7 +7,12 @@
 // person's consent never goes out.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, SETUP_ENDPOINT_CHANGED } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_APPEARED,
+  SETUP_PAIRING_GONE,
+} from "../src/client.ts";
 import { READ_SCOPE } from "../src/scopes.ts";
 import { FAST } from "./client-harness.ts";
 import {
@@ -29,6 +34,7 @@ const SAVED = JSON.stringify({
   grantedScopes: [READ_SCOPE],
   heldScopes: [READ_SCOPE],
 });
+type Connect = { auth?: { bootstrapToken?: string; deviceToken?: string } };
 
 /** A gateway that grants read and a device token to any connect. */
 function readGateway() {
@@ -122,4 +128,57 @@ describe("a setup socket's listener reads", () => {
     expect(gateway.sockets).toHaveLength(1);
     client.stop();
   });
+});
+
+describe("a setup plan against the consent given, after its last wait", () => {
+  it("F-492: a saved pairing missing on the lifecycle's own read sends nothing, not a frame without auth", async () => {
+    const gateway = readGateway();
+    const storage = memoryStorage({ [tokenKey(URL)]: SAVED });
+    const get = storage.get;
+    let reads = 0;
+    const host = testHost(gateway, {
+      ...storage,
+      // Each socket's plan reads the token itself first, then the lifecycle reads it again,
+      // then the plan reads it once more after its last listener read. Missing only for the
+      // lifecycle's read: the plan it builds carries no token, and only its own check stops it.
+      get: async (key) => {
+        if (key !== tokenKey(URL) || gateway.sockets.length === 0) return get(key);
+        reads += 1;
+        if (reads === 2) return null;
+        return get(key);
+      },
+    });
+    const client = new ClawtrateClient(host, FAST);
+    await client.start();
+    await client.connectForSetup(URL, { verify: async () => true });
+    await until(() => client.state.connection.error?.code === SETUP_PAIRING_GONE);
+    await sleep(100);
+    expect(gateway.connects).toHaveLength(0);
+    client.stop();
+  });
+
+  for (const change of ["appears", "goes"] as const) {
+    it(`F-492: a saved pairing that ${change === "appears" ? "appears" : "goes"} while the last listener read is pending sends nothing`, async () => {
+      const gateway = readGateway();
+      const storage = memoryStorage(change === "goes" ? { [tokenKey(URL)]: SAVED } : {});
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      await client.start();
+      const last = deferred<boolean>();
+      let reads = 0;
+      const verify = async () => (++reads === 1 ? true : last.promise);
+      if (change === "appears") await client.connectWithSetupCode(code(), { verify });
+      else await client.connectForSetup(URL, { verify });
+      await until(() => reads === 2);
+      if (change === "appears") storage.data.set(tokenKey(URL), SAVED);
+      else storage.data.delete(tokenKey(URL));
+      last.resolve(true);
+      const expected = change === "appears" ? SETUP_PAIRING_APPEARED : SETUP_PAIRING_GONE;
+      await until(() => client.state.connection.error?.code === expected);
+      await sleep(100);
+      expect(gateway.connects).toHaveLength(0);
+      expect(JSON.stringify(gateway.connects as Connect[])).not.toContain(CODE);
+      expect(JSON.stringify(client.state)).not.toContain(CODE);
+      client.stop();
+    });
+  }
 });

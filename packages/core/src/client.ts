@@ -5460,25 +5460,19 @@ export class ClawtrateClient {
         }
         this.heldToken = token?.token ?? null;
         const setup = this.isSetup(settings.url);
+        // A new pairing, keyed on the host's pending code for this address whether or not it has
+        // run out; a reuse, on the person's consent to reuse this device's saved pairing.
+        const newPairing = setup && this.setupCode?.url === settings.url;
+        const reuse = setup && !newPairing && this.setupIntent?.reuse === true;
         // A new pairing that finds a saved token for this address sends neither: the person
         // agreed to a new pairing, so the card asks whether to reuse that one.
-        if (setup && token && this.setupCode?.url === settings.url) {
+        if (newPairing && token) {
           this.pairingAppeared();
           throw new Error("a saved pairing appeared");
         }
         // A setup reuse whose token is gone sends nothing: the person consents again.
-        if (setup && !token && this.setupIntent?.reuse) {
-          this.close();
-          this.setupIntent = null;
-          this.setConnection({
-            status: "error",
-            retryAt: null,
-            error: {
-              code: SETUP_PAIRING_GONE,
-              message: "This device's saved pairing for this address is gone.",
-              hint: null,
-            },
-          });
+        if (reuse && !token) {
+          this.pairingGone();
           throw new Error("the saved pairing is gone");
         }
         // The host's one-time code, while it lives, for a device not yet paired with this gateway.
@@ -5507,12 +5501,10 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
-        // The plan as the lifecycle chose it, which may have read the store again: a new
-        // pairing sends its code, never a stored token.
-        if (setup && code && (plan.selectedAuth.usingStoredDeviceToken || plan.auth?.deviceToken)) {
-          this.pairingAppeared();
-          throw new Error("a saved pairing appeared");
-        }
+        // The plan as the lifecycle chose it, which may have read the store again, against the
+        // consent given: a new pairing sends its code and never a stored token, a reuse sends
+        // this device's token and nothing else.
+        this.planMatchesConsent(plan, newPairing, reuse);
         // Just before the frame that carries the credential: the listener read again, within the
         // time this socket's reads share and stopped with the plan.
         if (setup) {
@@ -5521,6 +5513,17 @@ export class ClawtrateClient {
           if (!holds) {
             this.close();
             throw new Error("the setup connection's endpoint changed");
+          }
+          // And the saved pairing as it is after that last wait: still what the person agreed to.
+          const saved = await this.loadToken(settings.url, identity.deviceId, "operator");
+          stillCurrent();
+          if (newPairing && saved) {
+            this.pairingAppeared();
+            throw new Error("a saved pairing appeared");
+          }
+          if (reuse && !saved) {
+            this.pairingGone();
+            throw new Error("the saved pairing is gone");
           }
         }
         // The signed payload covers these scopes, so check them before sending.
@@ -7102,6 +7105,29 @@ export class ClawtrateClient {
     return false;
   }
 
+  /**
+   * The plan the lifecycle chose, against the consent the person gave: a new
+   * pairing carries the host's code and no stored token, a reuse carries this
+   * device's token. Any other plan sends nothing, and the card asks again.
+   */
+  private planMatchesConsent(plan: Plan, newPairing: boolean, reuse: boolean): void {
+    const storedToken = Boolean(plan.selectedAuth.usingStoredDeviceToken || plan.auth?.deviceToken);
+    if (newPairing && storedToken) {
+      this.pairingAppeared();
+      throw new Error("a saved pairing appeared");
+    }
+    if (newPairing && !plan.auth?.bootstrapToken) {
+      // The code ran out before its frame: nothing goes, as with an endpoint that changed.
+      this.setupEndpointChanged(this.setupCode?.url ?? this.settings?.url ?? "", this.generation);
+      this.close();
+      throw new Error("the setup code ran out");
+    }
+    if (reuse && !storedToken) {
+      this.pairingGone();
+      throw new Error("the saved pairing is gone");
+    }
+  }
+
   /** A setup connection whose endpoint changed: it keeps failing, its credentials go, it says "changed". */
   private setupEndpointChanged(url: string, generation: number): void {
     this.setupCheck = { url, check: () => false, verify: async () => false };
@@ -7137,6 +7163,21 @@ export class ClawtrateClient {
       error: {
         code: SETUP_PAIRING_APPEARED,
         message: "This device has a saved pairing for this address now.",
+        hint: null,
+      },
+    });
+  }
+
+  /** A setup reuse found no saved token for its gateway: nothing is sent, the person consents again. */
+  private pairingGone(): void {
+    this.close();
+    this.setupIntent = null;
+    this.setConnection({
+      status: "error",
+      retryAt: null,
+      error: {
+        code: SETUP_PAIRING_GONE,
+        message: "This device's saved pairing for this address is gone.",
         hint: null,
       },
     });
