@@ -913,6 +913,61 @@ test.describe("action cards", () => {
     await expect(page.locator(".transcript details.card.action[open]")).toHaveCount(1);
   });
 
+  // On a busy machine the next step can reach the page before the browser reports the
+  // reader's scroll, which it does in a later frame, and before or after the opened card's
+  // toggle event, a task of its own. The reader's part and the step's release run in one
+  // task here, so no frame comes between them on any run; for "after", the check delivers
+  // the toggle itself.
+  for (const order of ["before", "after"] as const) {
+    test(`F-293: a card opened right after scrolling back keeps its place when the next step arrives ${order} its toggle, before the scroll is reported`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await open(page, "actions-becoming-fold", "light", "&hold");
+      const opened = cards(page).filter({
+        has: page.locator(':scope > summary[aria-label^="Read AGENTS.md"]'),
+      });
+      const seen = await line(opened).evaluate(async (summary: HTMLElement, order) => {
+        const scroller = summary.closest<HTMLElement>('[data-testid="transcript"]')!;
+        const above =
+          summary.getBoundingClientRect().bottom <= scroller.getBoundingClientRect().top;
+        scroller.addEventListener(
+          "scroll",
+          () => {
+            scroller.dataset.reported = "";
+          },
+          { once: true },
+        );
+        summary.scrollIntoView({ block: "center" });
+        summary.focus({ preventScroll: true });
+        summary.click();
+        if (order === "after") {
+          summary.parentElement!.dispatchEvent(new Event("toggle"));
+          // React draws the card's body in a microtask, still before the frame.
+          await Promise.resolve();
+        }
+        const top = summary.getBoundingClientRect().top;
+        const below = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release();
+        return { above, below, top };
+      }, order);
+      expect(seen.above, "the card starts above the view, with the reader at the end").toBe(true);
+      expect(seen.below, "scrolling back leaves the end").toBeGreaterThan(96);
+      await expect(
+        line(page.locator(".transcript details.card.action[data-fold]")),
+      ).toHaveAccessibleName(/^Read 2 files/);
+      // The scroll is reported in a later frame; after it, the card has still not moved.
+      await expect(transcript(page)).toHaveAttribute("data-reported", "");
+      await settle(page);
+      await expect(opened).toHaveAttribute("open", "");
+      await expect(opened.getByRole("tab", { name: "Readable" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect((await line(opened).boundingBox())!.y).toBe(seen.top);
+    });
+  }
+
   test("an open card becomes a fold with its first row open in its view; focus stays on the same control; nothing above moves", async ({
     page,
   }) => {
