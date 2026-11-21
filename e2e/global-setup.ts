@@ -18,7 +18,7 @@
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
@@ -105,7 +105,10 @@ export const resetInstance = (name: string, runId: string) => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error || result.status !== 0) {
-    const printed = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    const printed = [result.stdout, result.stderr]
+      .map((text) => (text ?? "").trim())
+      .filter(Boolean)
+      .join("\n");
     throw new Error(
       `dev-gateway ${args.join(" ")} failed (${result.error?.message ?? result.status ?? result.signal})` +
         (printed ? `:\n${printed}` : " and printed nothing"),
@@ -249,7 +252,12 @@ export default async function globalSetup() {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  process.on("exit", () => void cleanUpOnce());
+  process.on("exit", () => {
+    const first = cleaned === null;
+    const problems = cleanUpOnce();
+    // Said only when nothing cleaned up before, and written at once: the process ends next.
+    if (first && problems.length > 0) writeSync(2, `${problems.join("\n")}\n`);
+  });
 
   /** A dev-gateway command, run so that signals are handled while it runs. */
   const cli = (instance: string, ...args: string[]) =>

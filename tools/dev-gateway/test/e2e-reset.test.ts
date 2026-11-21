@@ -2,11 +2,12 @@
 // fails (e2e/global-setup.ts). The reset is the real tool, run under a temporary
 // HOME on a folder seeded here, with a `ps` that fails so that it cannot prove the
 // instance idle. No gateway is started and no port is used.
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { resetInstance } from "../../../e2e/global-setup.ts";
-import { cleanUp, saveRecord, type RunRecord } from "../../../e2e/run-record.ts";
+import { cleanUp, recordPath, saveRecord, type RunRecord } from "../../../e2e/run-record.ts";
 import { deadProcess, seedInstance, tempDir } from "./fixtures.ts";
 
 const made: string[] = [];
@@ -25,7 +26,8 @@ const own = (dir: string) => (made.push(dir), dir);
 describe("a failed reset in the end-to-end teardown says why", () => {
   it("the problem carries what the reset printed: its output, then its error", () => {
     const home = own(tempDir("clawtrate-home-"));
-    const run = "0badc0de";
+    // A run of its own: the reset reads this checkout's run folder, which other runs share.
+    const run = randomBytes(4).toString("hex");
     const name = `e2e-${run}-other`;
     const { stateDir, runId } = seedInstance(home, name);
     // With ps failing, the reset cannot list the instance's browser processes, so it keeps the folder.
@@ -57,5 +59,6 @@ describe("a failed reset in the end-to-end teardown says why", () => {
       ),
     );
     expect(existsSync(stateDir)).toBe(true);
+    expect(existsSync(recordPath(records, run))).toBe(true);
   });
 });
