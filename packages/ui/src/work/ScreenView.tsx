@@ -23,6 +23,7 @@ import {
   emptyTyping,
   fieldText,
   nextCall,
+  restart,
   sendAgain,
   typedInto,
   type Typing,
@@ -754,7 +755,10 @@ function PhoneLayout(
     setTyped(call.typing);
     void Promise.resolve(props.onInput({ kind: "text", text: call.text })).then((sent) => {
       const ok = sent === true;
-      setTyped(answered(textRef.current, ok));
+      const before = textRef.current;
+      setTyped(answered(before, ok, call.session));
+      // A call of a field closed since says nothing of the text typed now.
+      if (call.session !== before.session) return;
       if (ok) pump();
       else {
         setHint("That wasn't taken: it waits below. Send it again in a moment.");
@@ -880,7 +884,7 @@ function PhoneLayout(
             aria-expanded={typing}
             onClick={() => {
               setTyping(!typing);
-              setTyped(emptyTyping);
+              setTyped(restart(textRef.current));
             }}
           >
             <KeyboardIcon />
@@ -933,7 +937,7 @@ function PhoneLayout(
             data-size="sm"
             onClick={() => {
               setTyping(false);
-              setTyped(emptyTyping);
+              setTyped(restart(textRef.current));
             }}
           >
             Done

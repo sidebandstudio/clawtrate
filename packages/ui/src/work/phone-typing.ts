@@ -17,9 +17,20 @@ export type Typing = {
   unsent: string;
   /** A refusal holds what wasn't accepted until the person sends it again. */
   held: boolean;
+  /** Each opening of the field is a session: a call's answer counts only in its own. */
+  session: number;
 };
 
-export const emptyTyping: Typing = { accepted: "", flight: "", unsent: "", held: false };
+export const emptyTyping: Typing = {
+  accepted: "",
+  flight: "",
+  unsent: "",
+  held: false,
+  session: 0,
+};
+
+/** The field closed or opened again: a new session, empty; a call still out belongs to the old one. */
+export const restart = (t: Typing): Typing => ({ ...emptyTyping, session: t.session + 1 });
 
 /** What the field shows. */
 export const fieldText = (t: Typing) => t.accepted + t.flight;
@@ -34,14 +45,22 @@ export function typedInto(t: Typing, value: string): Typing {
 }
 
 /** The next call to make, if any: the oldest text not accepted, one call's worth, never two at once. */
-export function nextCall(t: Typing): { typing: Typing; text: string } | null {
+export function nextCall(t: Typing): { typing: Typing; text: string; session: number } | null {
   if (t.flight || t.held || !t.unsent) return null;
   const text = t.unsent.slice(0, CALL_CHARS);
-  return { typing: { ...t, flight: text, unsent: t.unsent.slice(text.length) }, text };
+  return {
+    typing: { ...t, flight: text, unsent: t.unsent.slice(text.length) },
+    text,
+    session: t.session,
+  };
 }
 
-/** The host answered the call on its way: accepted, or refused and held, ahead of what followed. */
-export function answered(t: Typing, accepted: boolean): Typing {
+/**
+ * The host answered the call on its way: accepted, or refused and held, ahead of what followed.
+ * An answer for a call of an earlier session changes nothing.
+ */
+export function answered(t: Typing, accepted: boolean, session: number): Typing {
+  if (session !== t.session) return t;
   return accepted
     ? { ...t, accepted: t.accepted + t.flight, flight: "" }
     : { ...t, flight: "", unsent: t.flight + t.unsent, held: true };
