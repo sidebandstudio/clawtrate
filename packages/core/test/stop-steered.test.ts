@@ -266,6 +266,63 @@ describe("Stop with no one current run (F-097)", () => {
       task.client.stop();
     },
   );
+  it("F-097: when live events alone leave two runs active, the gateway's run record ends the older and Stop names the current run", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.abort"] = (params) => ({
+      ok: true,
+      aborted: true,
+      runIds: [(params as { runId: string }).runId],
+    });
+    gateway.handlers["agent.wait"] = (params) => {
+      const { runId } = params as { runId: string };
+      return runId === "original"
+        ? { runId, status: "error", error: "aborted", stopReason: "rpc", endedAt: 5_000 }
+        : { runId, status: "timeout" };
+    };
+    const task = await openTask({ gateway });
+    const reads = task.gateway.calls("chat.history").length;
+    // The original run's end never arrives here, and the next run starts.
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("current", 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, "original")?.state === "stopped");
+    expect(task.gateway.calls("chat.history")).toHaveLength(reads);
+    expect(run(task, "original")).toMatchObject({ outcomeKnown: true, endedAt: 5_000 });
+    expect(run(task, "current")?.state).toBe("running");
+    await task.client.stopRun(KEY, "current");
+    expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "current" }]);
+    task.client.stop();
+  });
+  it("F-097: runs live events leave active are checked one set at a time, and each set once", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<void>();
+    gateway.handlers["agent.wait"] = async (params) => {
+      await answer.promise;
+      return { runId: (params as { runId: string }).runId, status: "timeout" };
+    };
+    const task = await openTask({ gateway });
+    const waits = () => task.gateway.calls("agent.wait").length;
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("current", 1, "lifecycle", { phase: "start" }));
+    await until(() => waits() === 2);
+    // A third run while that check is on its way waits for it.
+    gateway.emit("agent", agentEvent("third", 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, "third")?.state === "running");
+    expect(waits()).toBe(2);
+    answer.resolve();
+    await sleep(10);
+    // The next change asks about the three, once: the gateway says each is still going.
+    gateway.emit("agent", agentEvent("third", 2, "assistant", { text: "Working" }));
+    await until(() => waits() === 5);
+    gateway.emit("agent", agentEvent("third", 3, "assistant", { text: "Working on it" }));
+    await sleep(10);
+    expect(waits()).toBe(5);
+    expect(task.transcript().runs.map((each) => each.state)).toEqual([
+      "running",
+      "running",
+      "running",
+    ]);
+    task.client.stop();
+  });
   it("F-097: a turn the gateway withdrew, still listed as cancelled, does not keep an inferred end from settling", async () => {
     const gateway = grantingGateway();
     const task = await openTask({ gateway });
