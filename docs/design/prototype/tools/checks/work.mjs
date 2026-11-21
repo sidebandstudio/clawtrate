@@ -7,11 +7,19 @@ const base = pageUrl("work.html") + "?chrome=0&theme=light";
 const b = await chromium.launch();
 const out = [];
 const check = (name, ok, extra = "") => out.push(`${ok ? "ok  " : "FAIL"} ${name}${extra ? ` ${extra}` : ""}`);
+// The page's timers run on a paused fake clock that only a wait moves, so its simulated gateway answers
+// in order even when the OS fires real timers late (#238). The real wait is for the browser's own work.
+const wait = async (p, ms) => {
+  await p.waitForTimeout(ms);
+  await p.clock.runFor(ms);
+};
 const open = async (query = "", viewport = { width: 1440, height: 900 }, options = {}) => {
   const p = await b.newPage({ viewport, acceptDownloads: true, ...options });
   p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  await p.clock.install({ time: new Date("2026-11-18T15:12:00Z") });
+  await p.clock.pauseAt(new Date("2026-11-18T15:12:01Z"));
   await p.goto(base + query);
-  await p.waitForTimeout(120);
+  await wait(p, 120);
   return p;
 };
 const q = (p, fn, arg) => p.evaluate(fn, arg);
@@ -212,11 +220,11 @@ await p.close();
 p = await open(`${files}&files=writing&file=notes/disk-2026-11-16.md&fileview=source`);
 check("F-448 a file being written shows the working mark and a line", await q(p, () => document.querySelector(".reader-banner").textContent.includes("Otto is writing this file") && !!document.querySelector(".reader-banner .glyph[data-state='working']")));
 await q(p, () => window.CT.work.finishWrite());
-await p.waitForTimeout(100);
+await wait(p, 100);
 check("F-448 when the write lands, the open file reloads in place", await q(p, () =>
   document.querySelector(".reader-banner").textContent === "Updated just now" && document.querySelectorAll(".code-line").length === 11 &&
   document.querySelector("#files-title").textContent === "disk-2026-11-16.md"));
-await p.waitForTimeout(150);
+await wait(p, 150);
 check("the update is announced", (await q(p, () => document.querySelector("#announcer")?.textContent)) === "disk-2026-11-16.md updated");
 check("the reloaded file has the new line and a third change", await q(p, () => {
   document.querySelector('[data-fileview="changes"]').click();
@@ -232,14 +240,14 @@ p = await open(`${files}&files=commands`);
 check("F-448 the list says commands ran since it was checked", await q(p, () => document.querySelector(".files-fresh-note").textContent.startsWith("Otto ran commands since then")));
 await p.click('[data-files="refresh"]');
 check("refreshing says Checking…", await q(p, () => document.querySelector(".files-fresh").textContent.startsWith("Checking")));
-await p.waitForTimeout(800);
+await wait(p, 800);
 check("after refreshing the note goes and the time updates", await q(p, () => !document.querySelector(".files-fresh-note") && document.querySelector(".files-fresh").textContent.startsWith("Checked 5:41 PM")));
 await p.close();
 
 p = await open(`${files}&files=error`);
 check("F-320 a failed listing shows the error and Try again", await q(p, () => document.querySelector("#panel-files [role=alert]").textContent.includes("Couldn't load this task's files")));
 await p.click('[data-files="retry"]');
-await p.waitForTimeout(800);
+await wait(p, 800);
 check("F-320 a successful retry replaces the error with the listing", await q(p, () => !document.querySelector("#panel-files [role=alert]") && document.querySelectorAll("#panel-files [data-open]").length === 9));
 await p.close();
 
@@ -290,8 +298,8 @@ const downloads = async (p, action, count) => {
   const got = [];
   p.on("download", (d) => got.push(d));
   await action();
-  for (let i = 0; i < 40 && got.length < count; i++) await p.waitForTimeout(50);
-  await p.waitForTimeout(150);
+  for (let i = 0; i < 40 && got.length < count; i++) await wait(p, 50);
+  await wait(p, 150);
   return got;
 };
 
@@ -299,7 +307,7 @@ p = await open("");
 check("F-115 a file card shows its name, type and size", (await q(p, () => document.querySelector("#card-a-report .artifact-main").getAttribute("aria-label"))) === "disk-report.md, Markdown, 37 KB. Open in the Work pane.");
 await p.click("#card-a-report .artifact-main");
 check("F-115 choosing it opens the item in the pane, loading first", await q(p, () => document.querySelector("#files-title").textContent === "disk-report.md" && !!document.querySelector('#reader-body [aria-busy="true"]')));
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("F-115 then its preview, with the source line", await q(p, () => !!document.querySelector("#reader-body .reader-preview h2") && document.querySelector(".reader-source").textContent.startsWith("Sent by Otto at 5:37 PM")));
 await p.click(".artifact-raw .link-button");
 check("Raw shows the artifact's record, never its bytes", await q(p, () => {
@@ -358,7 +366,7 @@ check("F-117 Escape closes the viewer and returns focus to the picture", await q
 await p.close();
 
 p = await open(`${juniper}&viewer=a-walk`);
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.viewer [data-v="speed"]');
 check("F-117 video speed is a menu of 0.5× to 2×", await q(p, () => [...document.querySelectorAll(".speed-menu .menu-item")].map((x) => x.textContent).join() === "0.5×,1×,1.5×,2×" && document.activeElement.dataset.speed === "1×"));
 await p.click('[data-speed="2×"]');
@@ -367,22 +375,22 @@ await p.close();
 
 // What cannot be fetched, and failures.
 p = await open(`${juniper}&panel=open&artifact=a-card`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("F-307 an item with no content says so, with no Download", await q(p, () => !document.querySelector('#panel-files [data-art="download"]') && document.querySelector(".reader-why").textContent.startsWith("The gateway lists this item, but not its content")));
 await p.close();
 p = await open(`${juniper}&panel=open&artifact=a-screens`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("F-307 a format with no preview shows its details and Download", await q(p, () => document.querySelector(".reader-why").textContent === "There's no preview for this kind of file." && document.querySelectorAll('#panel-files [data-art="download"]').length === 2));
 await p.close();
 p = await open(`${juniper}&panel=open&artifact=a-cover`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("M8 a picture with no content at the gateway: the quiet tile, no Download, and why", await q(p, () => !document.querySelector('#panel-files [data-art="download"]') && !document.querySelector("#reader-body svg:not(.icon)") && document.querySelector(".reader-why").textContent.startsWith("The gateway lists this picture, but not its content")));
 await p.close();
 p = await open(`${juniper}&panel=open&artifact=a-terms&artifactload=failed`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("F-307 a failed load shows the error and Try again", await q(p, () => document.querySelector("#reader-body [role=alert]").textContent.startsWith("Couldn't open lending-terms.pdf")));
 await p.click('[data-art="retry"]');
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("F-307 a successful retry shows the preview", await q(p, () => document.querySelectorAll(".pdf-page").length === 3 && !document.querySelector("#reader-body [role=alert]")));
 await p.close();
 
@@ -395,7 +403,7 @@ await p.click("#card-a-cover", { button: "right" });
 check("a picture with no content has no Download in its menu", await q(p, () => ![...document.querySelectorAll(".artifact-menu .menu-item")].some((x) => x.textContent === "Download")));
 await p.keyboard.press("Escape");
 await p.hover("#card-link .artifact-main");
-await p.waitForTimeout(650);
+await wait(p, 650);
 check("F-116 a link's preview appears on hover, fetched then", await q(p, () => !!document.querySelector(".link-preview") && document.querySelector(".link-preview").textContent.includes("library.example")));
 await p.click("#card-link .artifact-main");
 check("F-116 choosing a link card leaves the app for the browser, not the pane", await q(p, () => location.href.includes("work.html") && document.querySelector(".shell").dataset.panel === "closed"));
@@ -411,17 +419,17 @@ check("M9 an item at another address says where it is, and its menu only opens i
 await p.keyboard.press("Escape");
 await p.close();
 p = await open(`${juniper}&panel=open&artifact=a-faq`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 check("M9 opened, it is marked as leaving the app, with no Download and no preview", await q(p, () =>
   document.querySelector(".reader-why").textContent.startsWith("This file is at help.library.example, outside the gateway. Opening it leaves the app") &&
   !document.querySelector('#panel-files [data-art="download"]') && !!document.querySelector('#panel-files [data-art="browser"]')));
 await p.close();
 p = await open(`${juniper}&viewer=a-chart`);
-await p.waitForTimeout(50);
+await wait(p, 50);
 check("M8 an item with no content is left out of the viewer's sequence", await q(p, () => document.querySelector(".viewer-title").textContent.includes("1 of 2") && document.querySelectorAll(".viewer-thumb").length === 2));
 await p.close();
 p = await open(`${juniper}&panel=open&artifact=a-report`);
-await p.waitForTimeout(350);
+await wait(p, 350);
 await p.click(".artifact-raw .link-button");
 check("M8 Raw is the card's own record: no bytes and no address", await q(p, () => {
   const t = document.querySelector(".reader .raw-panel").textContent;
@@ -438,7 +446,7 @@ check("it still opens the viewer", await q(p, () => document.querySelector(".vie
 await p.close();
 p = await open("");
 check("before the thumbnail arrives the tile is busy", await q(p, () => document.querySelector("#card-a-growth").getAttribute("aria-busy") === "true"));
-await p.waitForTimeout(700);
+await wait(p, 700);
 check("then it shows the thumbnail", await q(p, () => !document.querySelector("#card-a-growth .media-quiet") && !!document.querySelector("#card-a-growth svg")));
 await p.close();
 
@@ -447,7 +455,7 @@ check("Sent in chat lists the task's items in the Files tab", await q(p, () => d
 await p.close();
 
 p = await open(`${juniper}&viewer=a-chart&width=phone`, { width: 390, height: 844 });
-await p.waitForTimeout(50);
+await wait(p, 50);
 check("phone: the viewer fills the screen", await q(p, () => document.querySelector(".viewer").getBoundingClientRect().width >= 389));
 await p.close();
 
@@ -479,7 +487,7 @@ check("Got it removes the note for good", await q(p, () => !document.querySelect
 check("F-144 the banner says the bot waits, with Take control and Show the question", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is waiting for you" && !!document.querySelector('.computer-banner [data-cmp="take"]')));
 await p.click('[data-cmp="watch"]');
 check("Watch connects first", await q(p, () => document.querySelector('.screen[data-state="connecting"]').getAttribute("aria-busy") === "true"));
-await p.waitForTimeout(600);
+await wait(p, 600);
 check("F-140 F-143 then the live picture, labelled Live, with Open and Stop watching", await q(p, () =>
   !!document.querySelector('.screen[data-state="live"] svg') && document.querySelector(".screen-live").textContent === "Live" && !!document.querySelector('[data-cmp="open"]') && !!document.querySelector('[data-cmp="stop"]')));
 await p.click("#tab-files");
@@ -488,7 +496,7 @@ check("leaving the Computer tab ends the view", await q(p, () => !document.query
 await p.check('[data-cmp="auto"]');
 await p.click("#tab-files");
 await p.click("#tab-computer");
-await p.waitForTimeout(600);
+await wait(p, 600);
 check("with Show live on, opening Computer watches at once", await q(p, () => !!document.querySelector('.screen[data-state="live"]')));
 await p.click('[data-cmp="stop"]');
 check("Stop watching clears the picture", await q(p, () => !document.querySelector(".screen > svg") && document.activeElement.dataset.cmp === "watch"));
@@ -510,7 +518,7 @@ check("F-142 Escape closes the full view, back to Open; watching goes on", await
 await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 check("F-142 Take control waits for the bot and says so", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Waiting for Juniper to finish") && !!document.querySelector('[data-cmp="cancel-take"]')));
-await p.waitForTimeout(1000);
+await wait(p, 1000);
 check("F-145 granted: the question's own answers and Give back control", await q(p, () =>
   [...document.querySelectorAll(".control-bar .button")].map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && document.querySelector(".screen-frame").dataset.control === "true"));
 check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet.")));
@@ -540,9 +548,9 @@ check("M7 an answer first gives control back, and says so; nothing is answered y
   document.querySelector(".control-bar").textContent === "Giving control back…" && document.querySelector("#q-library").dataset.state === "pending"));
 check("M7 until the release is confirmed, the bar neither says Watching nor offers Take control", await q(p, () =>
   !document.querySelector(".screen-view .screen-mode") && !document.querySelector('.screen-view [data-cmp="take"]')));
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("M7 once the release is confirmed, the answer is sent", await q(p, () => document.querySelector(".control-bar").textContent === "Sending your answer…" && window.CT.work.computer.control === "answering"));
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("F-145 then the question is answered and control is back with the bot", await q(p, () =>
   window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state !== "pending" &&
   document.querySelector(".control-bar").textContent === "Answer sent. Juniper can carry on." &&
@@ -550,18 +558,18 @@ check("F-145 then the question is answered and control is back with the bot", aw
 await p.close();
 
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view [data-cmp="release"]');
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("F-145 Give back control alone leaves the bot waiting", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is still waiting for you" && document.querySelector("#q-library").dataset.state === "pending"));
 await p.close();
 
 // M7: giving back control, in every ending (work-pane.md, section 18).
 // A refused release.
 p = await open(comp + "&computer=releasefail");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view .control-bar [data-answer="0"]');
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("M7 a refused release: ownership unconfirmed, nothing claimed, input stopped, and no answer sent", await q(p, () => {
   const bar = document.querySelector(".screen-view .control-bar").textContent;
   return window.CT.work.computer.control === "unconfirmed" && bar.startsWith("Giving control back wasn't confirmed. This device may still have control of Juniper's browser.") &&
@@ -576,9 +584,9 @@ await p.close();
 
 // No answer to the release, then Check says it ended, with no cause.
 p = await open(comp + "&computer=releaseunknown");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view [data-cmp="release"]');
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("M7 no answer to the release: unconfirmed, with Try again and Check", await q(p, () =>
   window.CT.work.computer.control === "unconfirmed" && !!document.querySelector('.screen-view [data-cmp="check-release"]') && !!document.querySelector('.screen-view .control-bar [data-cmp="release"]')));
 await p.click('.screen-view [data-cmp="check-release"]');
@@ -590,10 +598,10 @@ await p.close();
 
 // Leaving after a refused release, and coming back.
 p = await open(comp + "&computer=releasefail", { width: 1100, height: 760 });
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view [data-cmp="close-full"]');
 await p.click("#tab-files");
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("M7 leaving after a refused release: the frames go at once and renewals stop", await q(p, () =>
   window.CT.work.computer.view === "idle" && !document.querySelector(".screen-view") && window.CT.work.computer.renewing === false && window.CT.work.computer.control === "unconfirmed"));
 await p.click("#tab-computer");
@@ -608,10 +616,10 @@ await p.close();
 
 // A drop during the release.
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view .control-bar [data-answer="0"]');
 await q(p, () => window.app.setConnection("reconnecting"));
-await p.waitForTimeout(1100);
+await wait(p, 1100);
 check("M7 a drop during the release retires the sequence: no release assumed, no answer sent", await q(p, () =>
   window.CT.work.computer.control === "maybeheld" && document.querySelector("#q-library").dataset.state === "pending" &&
   ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
@@ -619,14 +627,14 @@ check("M7 …and says input has stopped and the gateway ends control when it obs
 await q(p, () => window.app.setConnection("connected"));
 check("M7 on reconnect it reads the question and the browser again before offering anything", await q(p, () =>
   window.CT.work.computer.control === "checking" && !document.querySelector(".computer-banner") && !document.querySelector('#panel-computer [data-cmp="take"]')));
-await p.waitForTimeout(600);
+await wait(p, 600);
 check("M7 …then shows what it read, and the queued answer was never sent", await q(p, () =>
   window.CT.work.computer.control === "ended" && document.querySelector("#q-library").dataset.state === "pending" && !!document.querySelector(".computer-banner")));
 await p.close();
 
 // A drop while holding.
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await q(p, () => window.app.setConnection("reconnecting"));
 check("M7 a drop while holding: the view ends and the tab says the gateway ends control when it observes the close", await q(p, () =>
   !document.querySelector(".screen-view") && window.CT.work.computer.control === "maybeheld" && !document.querySelector('#panel-computer [data-cmp="take"]') &&
@@ -635,10 +643,10 @@ await p.close();
 
 // The question closes during the release.
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view .control-bar [data-answer="0"]');
 await work(p, "answered-elsewhere");
-await p.waitForTimeout(1000);
+await wait(p, 1000);
 check("M7 the question answered elsewhere during the release: the queued answer is removed and the bar says why", await q(p, () =>
   window.CT.work.computer.control === "none" && document.querySelector(".control-bar").textContent === "Juniper's question was answered on another device, so your answer wasn't sent." &&
   document.querySelector("#q-library").dataset.state === "pending" && !document.querySelector(".computer-banner")));
@@ -646,19 +654,19 @@ await p.close();
 
 // The task's run ends during the release.
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view .control-bar [data-answer="0"]');
 await work(p, "run-ends");
-await p.waitForTimeout(1000);
+await wait(p, 1000);
 check("M7 the run ends during the release: the answer is removed, the bar says why, and nothing says the bot is waiting", await q(p, () =>
   window.CT.work.computer.control === "none" && document.querySelector(".control-bar").textContent === "Juniper's run ended, so your answer wasn't sent." &&
   !/still waiting/.test(document.body.textContent)));
 await p.close();
 p = await open(comp + "&computer=complexquestion");
-await p.waitForTimeout(50);
+await wait(p, 50);
 check("M7 a question the bar can't answer offers Give back control and answer instead", await q(p, () => !document.querySelector('.control-bar [data-answer]') && !!document.querySelector('.control-bar [data-cmp="answer-in-chat"]')));
 await p.click('.control-bar [data-cmp="answer-in-chat"]');
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("…which gives control back first, then shows the question card", await q(p, () => window.CT.work.computer.control === "none" && !document.querySelector(".screen-view") && document.activeElement.id === "q-library"));
 await p.close();
 
@@ -666,7 +674,7 @@ await p.close();
 p = await open(comp, { width: 1100, height: 760 });
 await p.click('[data-cmp="watch"]');
 await p.click("#tab-files");
-await p.waitForTimeout(700);
+await wait(p, 700);
 check("M6 leaving while the view connects: nothing goes live, and the late ticket is disposed of", await q(p, () => window.CT.work.computer.view !== "live" && window.CT.work.computer.disposed.includes("ticket")));
 await p.click("#tab-computer");
 check("…coming back shows Watch, not the browser", await q(p, () => !!document.querySelector('[data-cmp="watch"]') && !document.querySelector(".screen > svg")));
@@ -675,7 +683,7 @@ p = await open(comp + "&computer=watching", { width: 1100, height: 760 });
 await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 await p.click('.screen-view [data-cmp="cancel-take"]');
-await p.waitForTimeout(1100);
+await wait(p, 1100);
 check("M6 Cancel while waiting withdraws the take with its generation: no grant, and nothing claims control", await q(p, () =>
   window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.join() === "g1" && window.CT.work.computer.lateReleased === 0 &&
   !/You have control/.test(document.body.textContent) && ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control"))));
@@ -684,7 +692,7 @@ p = await open(comp + "&computer=watching&takerace=grant", { width: 1100, height
 await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 await p.click('.screen-view [data-cmp="cancel-take"]');
-await p.waitForTimeout(1100);
+await wait(p, 1100);
 check("M6 a grant that wins the race against the withdrawal is given back at once and never shown", await q(p, () =>
   window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !/You have control/.test(document.body.textContent)));
 await p.close();
@@ -693,26 +701,26 @@ await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 await p.click('.screen-view [data-cmp="close-full"]');
 await p.click("#tab-files");
-await p.waitForTimeout(1100);
+await wait(p, 1100);
 await p.click("#tab-computer");
 check("M6 leaving while waiting withdraws the take, and nothing claims control", await q(p, () =>
   window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.length === 1 && window.CT.work.computer.lateReleased === 0 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
 await p.close();
 p = await open(comp + "&computer=control", { width: 1100, height: 760 });
-await p.waitForTimeout(50);
+await wait(p, 50);
 await p.click('.screen-view [data-cmp="close-full"]');
 check("M6 closing the full view keeps control, with Give back control in the tile", await q(p, () => window.CT.work.computer.control === "granted" && !!document.querySelector('#panel-computer [data-cmp="release"]')));
 check("R2 the tile in control says the same second line beside You have control", await q(p, () =>
   document.querySelector("#panel-computer .screen-caption .control-paused")?.textContent === "Juniper's new browser actions are paused. Something it already started can still change this page."));
 await p.click("#tab-files");
-await p.waitForTimeout(500);
+await wait(p, 500);
 check("M6 leaving the tab while in control gives control back first", await q(p, () =>
   window.CT.work.computer.control === "none" && window.CT.work.computer.view === "idle" && [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
 await p.close();
 
 // Read-only: no view at all, but the control state, files and artifacts.
 p = await open(comp + "&state=readonly&computer=control");
-await p.waitForTimeout(100);
+await wait(p, 100);
 check("read-only: no full view, no picture and no control, whatever the address asks", await q(p, () =>
   !document.querySelector(".screen-view") && !document.querySelector(".screen > svg") && window.CT.work.computer.control === "none" && !/You have control/.test(document.body.textContent)));
 await p.close();
@@ -728,9 +736,9 @@ for (const [m, words, name] of [
   ["conflict", "Someone on another device has control of Juniper's browser.", "someone else has control"],
 ]) {
   p = await open(comp + `&computer=${m}`);
-  await p.waitForTimeout(50);
+  await wait(p, 50);
   await p.click('.screen-view [data-cmp="take"]');
-  await p.waitForTimeout(1000);
+  await wait(p, 1000);
   check(`F-142 take refused: ${name}`, (await q(p, () => document.querySelector(".control-bar").textContent)).startsWith(words));
   if (m !== "conflict") {
     check(`R2 take refused (${name}) offers to try again, and claims no control`, await q(p, () =>
@@ -739,7 +747,7 @@ for (const [m, words, name] of [
   await p.close();
 }
 p = await open(comp + "&computer=control");
-await p.waitForTimeout(50);
+await wait(p, 50);
 await work(p, "lease-ends");
 check("M7 an expired event for this lease: Your control ended, with the cause it reports", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Your control ended. It expired.")));
 await p.close();
@@ -809,7 +817,7 @@ check("F-148 F-150 a node that isn't connected: its state, when last seen with i
   return t.includes("StateNot connected") && t.includes("Last seen5:12 PM, while going to sleep") && document.querySelector("#panel-computer [role=alert]").textContent.startsWith("media-box isn't connected to the gateway") && !/recover|reset|offline/i.test(t);
 }));
 await p.click('[data-cmp="check"]');
-await p.waitForTimeout(800);
+await wait(p, 800);
 check("Check again reads the node again and says when", await q(p, () => document.querySelector("#panel-computer [role=alert]").textContent.includes("Checked 5:42 PM")));
 await p.close();
 p = await open("&panel=open&tab=computer&computer=nodeunknown");
@@ -829,7 +837,7 @@ p = await open(comp + "&computer=watching&motion=reduce");
 check("reduced motion: the watched pointer holds still", await q(p, () => document.getAnimations().filter((a) => a.playState === "running").length === 0));
 await p.close();
 p = await open("&bot=juniper&task=j2&computer=full&width=phone", { width: 390, height: 844 });
-await p.waitForTimeout(50);
+await wait(p, 50);
 check("phone: the full view fills the screen", await q(p, () => document.querySelector(".screen-view").getBoundingClientRect().width >= 389));
 await p.close();
 
@@ -846,7 +854,7 @@ await p.close();
 
 // M10: taking over on a phone.
 p = await open("&bot=juniper&task=j2&computer=full&width=phone", { width: 390, height: 844 });
-await p.waitForTimeout(100);
+await wait(p, 100);
 check("M10 phone, watching: the page opens fitted to the screen's width", await q(p, () => {
   const frame = document.querySelector(".screen-view .screen-frame").getBoundingClientRect();
   return document.querySelector(".screen-view").dataset.layout === "phone" && frame.width <= 390 && frame.width > 300;
@@ -854,7 +862,7 @@ check("M10 phone, watching: the page opens fitted to the screen's width", await 
 check("M10 phone, watching: Take control is the dock's one button", await q(p, () => [...document.querySelectorAll(".control-dock .button")].map((x) => x.textContent).join() === "Take control"));
 await p.close();
 p = await open("&bot=juniper&task=j2&computer=control&width=phone", { width: 390, height: 844 });
-await p.waitForTimeout(100);
+await wait(p, 100);
 check("M10 phone, in control: the page opens at its own size, so its 48px fields are 48 points", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width === 1280));
 check("M10 it opens centred on the last place acted on, and can be panned", await q(p, () => {
   const box = document.querySelector(".screen-zoom");
