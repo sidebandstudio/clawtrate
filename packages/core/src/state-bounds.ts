@@ -538,6 +538,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     kind: ENUM,
     text: text(MAX_BLOCK_CHARS),
     messageId: ID,
+    replyToId: ID,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,
@@ -565,6 +566,7 @@ const item = flagged<TranscriptItem>()({
     text: text(MAX_REPLY_PREVIEW_CHARS),
     sender: NAME,
   }),
+  idempotencyKey: ID,
 });
 const reaction = object<MessageReaction>()({
   emoji: id(MAX_EMOJI_CHARS),

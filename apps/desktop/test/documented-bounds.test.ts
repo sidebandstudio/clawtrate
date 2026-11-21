@@ -12,13 +12,14 @@ import {
   QUESTION,
   RUN,
   STEP,
+  TRANSCRIPT,
   WORST_STATE_CHARS,
   WORST_TASK_CHARS,
   worstCase,
   worstViewerChars,
 } from "@clawtrate/core";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   MAX_RESULT_CHARS,
   MAX_SNAPSHOTS_IN_FLIGHT,
@@ -53,12 +54,14 @@ describe("the documented retention totals", () => {
   };
 
   it("are the arithmetic over the constants", () => {
+    assert(TRANSCRIPT.kind === "object");
     const rows: Array<[string, number]> = [
       ["Step", worstCase(STEP)],
       ["Run", worstCase(RUN)],
       ["Outgoing message", worstCase(OUTGOING)],
       ["Question card", worstCase(QUESTION)],
       ["Approval card", worstCase(APPROVAL)],
+      ["History page", worstCase(TRANSCRIPT.fields.items!)],
       ["Per task", WORST_TASK_CHARS],
       ["State", WORST_STATE_CHARS],
       ["One viewer's snapshot", worstViewerChars(MAX_VIEWER_OPEN_TASKS)],
