@@ -1,10 +1,13 @@
 // A routine's schedule in words, its times in zones, and the calendar's
 // occurrences (automation.md sections 4 and 5). The gateway gives only a
 // routine's next run, so later occurrences are computed here from the
-// schedule, the way the gateway's scheduler (OpenClaw 2026.10.6) does around
-// daylight saving: a skipped time moves forward by the gap, and a time the
-// clock passes twice runs once, the first time. What cannot be computed
-// is drawn only at its next run.
+// schedule. A time the clock passes twice runs once, the first time, as the
+// gateway's scheduler (OpenClaw 2026.10.6) does. What cannot be computed is
+// drawn only at its next run.
+//
+// shortcut: a time the clocks skip is moved forward by the gap here, but the
+// gateway skips it that day (as the editor's preview now does); fix with the
+// gateway's rule in #224.
 
 import type { Bot, Routine, RoutineRun, RoutineSchedule } from "@clawtrate/core";
 

@@ -1117,6 +1117,8 @@ const routineSchedule = object<RoutineSchedule>()({
   expr: NAME,
   tz: NAME,
   everyMs: NUMBER,
+  anchorMs: NUMBER,
+  staggerMs: NUMBER,
   at: NAME,
   name: NAME,
 });
@@ -1128,6 +1130,8 @@ const routine = object<Routine>()({
   schedule: routineSchedule,
   payload: ENUM,
   text: text(MAX_ROUTINE_TEXT_CHARS),
+  textCut: FLAG,
+  canRecreate: FLAG,
   target: ENUM,
   sharedSessionKey: ID,
   delivery: ENUM,
@@ -1154,6 +1158,7 @@ export const ROUTINES: Bound = object<RoutinesState>()({
     ranOnce: FLAG,
     runAt: NUMBER,
   }),
+  listedOn: NUMBER,
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
