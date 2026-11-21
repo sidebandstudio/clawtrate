@@ -585,6 +585,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     expect(h.remote.allows(url)).toBe(true);
     expect(h.remote.placeFor(url)).toEqual({
       route: "ssh",
+      name: "devbox",
       account: `${t.world.localUser}@127.0.0.1`,
       port: sshd.port,
       profile: "default",

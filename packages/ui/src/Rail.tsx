@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, isApprovalDisconnect } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -83,7 +83,9 @@ export function presenceWords(connection: ConnectionState, catchingUp: boolean):
     case "pairing":
       return "Awaiting approval";
     case "error":
-      return "Can't reach the gateway";
+      return isApprovalDisconnect(connection.error?.code)
+        ? "Disconnected"
+        : "Can't reach the gateway";
     case "idle":
       return "Not connected";
     case "disconnected":

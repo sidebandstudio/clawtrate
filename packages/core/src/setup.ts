@@ -93,6 +93,16 @@ export type SetupFailureKind =
   | "identity-unread"
   /** Over SSH: the route's saved token is gone or was refused; a new pairing is needed. */
   | "pairing-gone"
+  /**
+   * After the owner approved a first pairing, the read-back or the reconnect
+   * showed anything but the operator role and exactly read, or couldn't be
+   * read (§9): disconnected, nothing saved.
+   */
+  | "approval-unconfirmed"
+  /** After an approval, the identity read is a different gateway's (§9). */
+  | "approval-identity"
+  /** After an approval, the gateway's identity couldn't be read (§9). */
+  | "approval-identity-unread"
   /** Connected, but the bots couldn't be read. */
   | "bots"
   /** The connection failed in another way; the connection state says how. */
@@ -279,6 +289,8 @@ export type ApprovalPlace =
   | { route: "this-computer"; profile: "default" | "clawtrate" }
   | {
       route: "ssh";
+      /** The name typed, without the user, as the words name the computer: "devbox". */
+      name?: string;
       /** The route's full account, as resolved: "you@devbox.example". */
       account: string;
       /** Its SSH port. */
@@ -287,36 +299,40 @@ export type ApprovalPlace =
     };
 
 /** A gateway's pairing request id, as OpenClaw makes them: a UUID. Anything else is never put in a command. */
-const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The approve command and its line for a place (§9): the selected profile, by
- * name. Only a request id of the gateway's shape is put in the command; without
- * one, the command lists the pending devices and the line says to match this
- * device's id.
+ * The waiting state's words and command for a place (§9, "The waiting
+ * state"): where the request waits, the selected profile by name, and the
+ * approve command for exactly the request id this client holds. Only a
+ * request id of the gateway's shape is put in the command; without one, the
+ * command lists the pending devices and the line says to match this device's
+ * id. The profile is one of two fixed names, never text from elsewhere.
  */
 export function approvalForPlace(
   place: ApprovalPlace,
   requestId: string,
-): { command: string; note: string } {
+): { command: string; note: string; title: string; where: string } {
   const profileArgs = place.profile === "clawtrate" ? "--profile clawtrate " : "";
+  const profile = place.profile === "clawtrate" ? "Clawtrate's profile" : "the default profile";
   const known = REQUEST_ID.test(requestId);
   const command = known
     ? `openclaw ${profileArgs}devices approve ${requestId}`
     : `openclaw ${profileArgs}devices list`;
-  if (place.route === "this-computer")
-    return {
-      command,
-      note: known
-        ? `On this computer, approve this request for the ${place.profile} profile:`
-        : `On this computer, approve this device for the ${place.profile} profile from the requests this lists.`,
-    };
-  const on = `On ${place.account} (SSH port ${place.port})`;
+  const there =
+    place.route === "this-computer"
+      ? { where: "this computer", on: "In Terminal on this computer" }
+      : {
+          where: place.name || place.account,
+          on: `On ${place.account} (SSH port ${place.port})`,
+        };
   return {
     command,
+    title: `Waiting for approval on ${there.where}.`,
+    where: there.where,
     note: known
-      ? `${on}, approve this request for the ${place.profile} profile.`
-      : `${on}, list pending devices for the ${place.profile} profile and match this device ID before you approve.`,
+      ? `${there.on}, run this for ${profile}:`
+      : `${there.on}, list pending devices for ${profile} and match this device ID before you approve.`,
   };
 }
 

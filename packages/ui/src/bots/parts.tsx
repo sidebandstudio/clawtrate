@@ -17,6 +17,7 @@ import {
   WarnIcon,
 } from "../icons.tsx";
 import { CopyValue } from "../AccessBar.tsx";
+import { approvalShelf, WaitingRow } from "../ApprovalWait.tsx";
 
 /** A sentence on a soft fill: neutral, something to act on, or a failure. */
 export function Note({
@@ -266,7 +267,8 @@ export function askingAdmin(connection: ConnectionState): boolean {
  * The access bar of conversation.md section 3, asking for admin, with this
  * screen's words (bots.md section 2). The command and the request id are the
  * host's. The engine waits on the gateway's answer continuously, as the
- * conversation's bar says, so there is no "Check now" and no countdown.
+ * conversation's bar says, so there is no countdown; "Check now" and "Stop
+ * waiting" are setup.md §9's.
  */
 export function AdminBar({
   connection,
@@ -286,28 +288,18 @@ export function AdminBar({
   let body: ReactNode;
   let action: ReactNode = null;
   let tone: "danger" | undefined;
+  const shelf = info.readOnly || !mine ? null : approvalShelf(connection, send, ask, "sm");
   if (info.readOnly) {
     body = (
       <>
         <b>Read-only.</b> {need} This connection only reads.
       </>
     );
+  } else if (shelf) {
+    body = shelf.body;
+    action = shelf.action;
+    tone = shelf.tone;
   } else if (status === "requesting") body = "Asking the gateway…";
-  else if (status === "approved")
-    body = (
-      <>
-        <b>Approved.</b> Connecting again with the new access…
-      </>
-    );
-  else if (status === "pending")
-    body = (
-      <>
-        <b>Waiting for the gateway's owner.</b>
-        {upgrade.approveCommand
-          ? " Approve this request on the gateway's machine:"
-          : " The owner approves this request on the gateway's machine."}
-      </>
-    );
   else if (status === "rejected") {
     body = (
       <>
@@ -354,7 +346,7 @@ export function AdminBar({
       </button>
     );
   }
-  if (connection.status !== "connected" || info.readOnly) action = null;
+  if ((connection.status !== "connected" && !shelf?.offline) || info.readOnly) action = null;
   const pending = status === "pending";
   return (
     <section
@@ -380,12 +372,13 @@ export function AdminBar({
           This changes by itself as soon as the owner approves or denies the request, or it expires.
         </p>
       )}
-      {pending && upgrade.requestId && (
-        <div className="access-id">
-          <span className="mono">Request {upgrade.requestId.slice(0, 8)}</span>
-          <CopyValue value={upgrade.requestId} label="Copy request id" />
-          {upgrade.approveNote && <span>{upgrade.approveNote}</span>}
-        </div>
+      {pending && (
+        <WaitingRow
+          upgrade={upgrade}
+          copy={
+            upgrade.requestId && <CopyValue value={upgrade.requestId} label="Copy request id" />
+          }
+        />
       )}
     </section>
   );

@@ -6,12 +6,16 @@
 // dialog says yes.
 
 import {
+  APPROVAL_IDENTITY_CHANGED,
+  APPROVAL_IDENTITY_UNREAD,
+  APPROVAL_UNCONFIRMED,
   initialSetupState,
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_GONE,
   type ClawtrateClient,
   type ApprovalPlace,
   type ClawtrateState,
+  type ReadBack,
   type SetupFailure,
   type SetupHost,
   type SetupState,
@@ -19,6 +23,7 @@ import {
 import { fileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
+import { readBackHere } from "./read-back.ts";
 import type { Opened } from "./sandbox.ts";
 import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 
@@ -119,6 +124,37 @@ export class SetupController implements SetupHost {
     return profile === "default" || profile === "clawtrate"
       ? { route: "this-computer", profile }
       : null;
+  }
+
+  /**
+   * The read-back after an approval (§9) for the gateway this setup found at
+   * `url`: the identity, then the device list, with the program the look
+   * found, for its profile, at the address it verified. Null for any other
+   * address. Reads only.
+   */
+  async readBack(url: string): Promise<ReadBack | null> {
+    const found = this.found;
+    if (!found || found.url !== url) return null;
+    const unread = { ok: false, step: "identity", exitCode: null } as const;
+    let opened: Opened | SetupRefusedError;
+    try {
+      opened = await this.options.open();
+    } catch {
+      return unread;
+    }
+    if (opened instanceof SetupRefusedError) return unread;
+    try {
+      return await readBackHere({
+        run: opened.run,
+        program: found.program,
+        profileArgs: found.profile.args,
+        env: { ...opened.world.env, PATH: programPath(found.program), ...found.profile.env },
+        cwd: opened.world.cwd,
+        url: found.url,
+      });
+    } catch {
+      return unread;
+    }
   }
 
   private log(line: string): void {
@@ -529,13 +565,19 @@ export class SetupController implements SetupHost {
           kind:
             code === "SETUP_GRANT_REFUSED"
               ? "grant"
-              : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
-                ? "code-refused"
-                : code === "UNREACHABLE"
-                  ? "unreachable"
-                  : code === SETUP_ENDPOINT_CHANGED
-                    ? "changed"
-                    : "other",
+              : code === APPROVAL_UNCONFIRMED
+                ? "approval-unconfirmed"
+                : code === APPROVAL_IDENTITY_CHANGED
+                  ? "approval-identity"
+                  : code === APPROVAL_IDENTITY_UNREAD
+                    ? "approval-identity-unread"
+                    : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
+                      ? "code-refused"
+                      : code === "UNREACHABLE"
+                        ? "unreachable"
+                        : code === SETUP_ENDPOINT_CHANGED
+                          ? "changed"
+                          : "other",
           port,
         });
       }

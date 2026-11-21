@@ -7,6 +7,7 @@
 
 import {
   INTERACTIVE_SCOPES,
+  isApprovalDisconnect,
   scopeSatisfied,
   type AccountsState,
   type Bot,
@@ -68,6 +69,7 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
     return { title: failureTitle(error.code), message: error.message };
   }
   if (connection.status === "connected") return null;
+  if (isApprovalDisconnect(error.code)) return { title: "Disconnected", message: error.message };
   return {
     title: "Can't reach the gateway",
     message: [error.message, error.hint].filter(Boolean).join(" "),
@@ -401,8 +403,12 @@ export function Settings({
             Waiting for the gateway's owner to approve this device's new pairing. It changes by
             itself once they approve or reject it; until then this device keeps its earlier access.
           </p>
-          {upgrade.approveCommand && upgrade.approveNote && (
-            <p className="approve-note">{upgrade.approveNote}</p>
+          {upgrade.approveCommand && (upgrade.approveTitle || upgrade.approveNote) && (
+            <p className="approve-note">
+              {upgrade.approveTitle && <b>{upgrade.approveTitle}</b>}
+              {upgrade.approveTitle && upgrade.approveNote ? " " : ""}
+              {upgrade.approveNote}
+            </p>
           )}
           {upgrade.approveCommand && (
             <CommandLine command={upgrade.approveCommand} label="Copy approve command" />

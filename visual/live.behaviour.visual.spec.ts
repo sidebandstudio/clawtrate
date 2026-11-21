@@ -1435,16 +1435,19 @@ test.describe("access", () => {
     );
     await expect(page.getByTestId("composer-input")).toHaveCount(0);
     await bar.getByRole("button", { name: "Request access" }).click();
-    await expect(bar).toContainText("Waiting for the gateway's owner.");
+    await expect(bar).toContainText("Waiting for approval.");
     await expect(bar.locator(".command code")).toHaveText(
       "openclaw devices approve 7c41d09e-52b3-4e8a-9f10-3d6b2a7e9c41",
     );
     await expect(bar).toContainText("Request 7c41d09e");
-    // The gateway's answer is waited for continuously: no countdown, Check now or Cancel.
+    // The gateway's answer is waited for continuously: no countdown. Check now asks the host to
+    // look, and Stop waiting stops this device's wait; nothing offers to cancel the request (§9).
     await expect(bar.getByTestId("access-wait")).toHaveText(
       "This changes by itself as soon as the owner approves or denies the request, or it expires.",
     );
-    await expect(bar.getByRole("button", { name: /Check now|Cancel request/ })).toHaveCount(0);
+    await expect(bar.getByRole("button", { name: /Cancel request/ })).toHaveCount(0);
+    await expect(bar.getByRole("button", { name: "Check now" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Stop waiting" })).toBeVisible();
     await expect(bar.getByRole("button", { name: "Copy approve command" })).toBeVisible();
     await expect(bar.getByRole("button", { name: "Copy request id" })).toBeVisible();
     await expect(announcer(page)).toHaveText("Access requested");
@@ -1500,7 +1503,7 @@ test.describe("access", () => {
     expect(order).toBeTruthy();
     await note.getByRole("button", { name: "Request access" }).click();
     await expect(page.getByRole("region", { name: "Access" })).toContainText(
-      "Waiting for the gateway's owner.",
+      "Waiting for approval.",
     );
   });
 

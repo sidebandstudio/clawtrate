@@ -11,13 +11,20 @@
 // line carrying the request id. What that answer holds (a one-time code, for
 // CODE) is parsed in memory by the caller and never kept or logged here.
 // Stopping a gateway over SSH is not offered in this version.
+//
+// IDENTITY and LIST are section 9's REQUESTS read, one constant each for its
+// allowlisted operation: `gateway call gateway.identity.get` and `gateway call
+// device.pair.list`, both with `--expect-url` for the gateway's loopback port
+// there and `--json`. Both are reads through the gateway; neither changes it.
+// Their answer is one whole JSON document, parsed whole by the caller within
+// its bound, and OpenClaw's exit status is printed apart from it.
 
 import { randomUUID } from "node:crypto";
 
 import { CLEAR_OPENCLAW, PROGRAM_PLACES, PROGRAM_SUM, type ProgramPlace } from "./look.ts";
 import { MAX_LOOK_NOISE } from "./look.ts";
 
-export type ScriptKind = "code" | "start";
+export type ScriptKind = "code" | "start" | "identity" | "list";
 export type ScriptProfile = "default" | "clawtrate";
 
 /** What each script keeps of OpenClaw's answer, in bytes, before base64. */
@@ -25,12 +32,18 @@ export const SCRIPT_ANSWER_BYTES: Record<ScriptKind, number> = {
   // `qr --json`: a setup code, its URL and a few labels, well under 4 KiB.
   code: 16 * 1024,
   start: 4 * 1024,
+  // The gateway's device id and public key.
+  identity: 4 * 1024,
+  // Every pending and paired device, with token summaries and no credential.
+  list: 256 * 1024,
 };
 
 /** The fixed OpenClaw command of each script, after the profile's options. */
 const COMMANDS: Record<ScriptKind, string> = {
   code: 'qr --json --voice-node --url "ws://127.0.0.1:$port"',
   start: "gateway start",
+  identity: 'gateway call gateway.identity.get --expect-url "ws://127.0.0.1:$port" --json',
+  list: 'gateway call device.pair.list --expect-url "ws://127.0.0.1:$port" --json',
 };
 
 /** The part every script shares: the checks of its values, the watchdog, the program's place. */
@@ -95,6 +108,8 @@ line end ",\"id\":\"$request_id\""
 export const SCRIPT_BODIES: Record<ScriptKind, string> = {
   code: body("code"),
   start: body("start"),
+  identity: body("identity"),
+  list: body("list"),
 };
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

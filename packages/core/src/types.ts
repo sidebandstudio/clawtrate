@@ -33,6 +33,8 @@ export type PairingRequest = {
   approveCommand: string;
   /** Where and by whom the command is run, when that is not obvious. */
   approveNote: string | null;
+  /** The waiting line's head, naming where the request waits: "Waiting for approval on devbox." */
+  approveTitle?: string | null;
   requestedScopes: string[];
 };
 
@@ -50,11 +52,28 @@ export type ScopeUpgradeStatus =
   | "requesting"
   /** The gateway holds a pending request; its owner has to approve it. */
   | "pending"
-  /** Approved; the client reconnected with the new grant. */
+  /**
+   * Approved; the rotated token is staged in memory while the host reads back
+   * what the gateway granted and the client reconnects with it (setup §9).
+   */
+  | "confirming"
+  /** Approved and confirmed: the record and the reconnect showed exactly what was asked, and the token is saved. */
   | "approved"
   | "rejected"
   | "expired"
-  /** The request failed, or was approved without the scope it asked for. */
+  /** The record or the reconnect showed anything else, or couldn't be read: disconnected, no new token saved. */
+  | "unconfirmed"
+  /** The request isn't in the gateway's pending list, and the access isn't there. */
+  | "stale"
+  /** The gateway's pending request for this device isn't the one this client asked for. */
+  | "other-request"
+  /** The gateway's identity couldn't be read where the host looked. */
+  | "identity-unread"
+  /** The identity read where the host looked is a different gateway's. */
+  | "identity-changed"
+  /** The gateway's requests couldn't be read where the host looked. */
+  | "list-unread"
+  /** The request failed. */
   | "error";
 
 /** Stepping up from `operator.read` to `operator.write`, or to `operator.admin` (`scopes` says which). */
@@ -66,6 +85,14 @@ export type ScopeUpgradeState = {
   /** What the person approving runs, chosen by the host as for pairing. */
   approveCommand: string | null;
   approveNote: string | null;
+  /** The waiting line's head, naming where the request waits: "Waiting for approval on devbox." */
+  approveTitle?: string | null;
+  /**
+   * Set with `approved` when this client didn't see the approval as it
+   * happened: the request wasn't pending any more, and the reconnect
+   * confirmed exactly the asked access.
+   */
+  nowShown?: boolean;
   error: string | null;
 };
 

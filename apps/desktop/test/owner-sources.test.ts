@@ -118,6 +118,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/usage-engine.ts:sources>named":
     "one read: the runs the sending tasks' results name, dropped when the report is answered",
   // Values that go into the bounded state, captured only by an update that runs at once.
+  "packages/core/src/client.ts:<anonymous>>record.grantedScopes":
+    "a first token's record, the read scope it was granted, staged until it is confirmed or dropped",
+  "packages/core/src/client.ts:<anonymous>>record.heldScopes":
+    "a first token's record, exactly the read scope, staged until it is confirmed or dropped",
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",
   "packages/core/src/runs.ts:applyQuestionRequested>card.settledBy":

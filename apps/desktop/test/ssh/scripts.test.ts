@@ -94,7 +94,8 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     const started = parseScriptOutput("start", run(start.text).stdout, start.requestId);
     expect(started).toMatchObject({ ok: true, answer: { exit: 3 } });
     expect(calls()).toEqual(["gateway start"]);
-    expect(Object.keys(SCRIPT_BODIES)).toEqual(["code", "start"]);
+    // No STOP: the other scripts are the two reads of setup §9.
+    expect(Object.keys(SCRIPT_BODIES)).toEqual(["code", "start", "identity", "list"]);
   });
 
   it("runs only the program file the LOOK found, by its place and checksum: a file changed since, or another place, runs nothing", () => {

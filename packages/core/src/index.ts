@@ -4,6 +4,7 @@ export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
+export * from "./approval.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
 export * from "./actions.ts";
@@ -78,6 +79,9 @@ export {
   SETUP_PAIRING_GONE,
   ROUTE_IDENTITY_UNREAD,
   ROUTE_IDENTITY_CHANGED,
+  APPROVAL_UNCONFIRMED,
+  APPROVAL_IDENTITY_CHANGED,
+  APPROVAL_IDENTITY_UNREAD,
   ROUTE_KEY,
   validateGatewayUrl,
   type ClientOptions,

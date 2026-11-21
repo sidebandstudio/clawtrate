@@ -633,6 +633,7 @@ const pairing = object<PairingRequest>()({
   message: text(MAX_MESSAGE_LINE_CHARS),
   approveCommand: text(MAX_MESSAGE_LINE_CHARS),
   approveNote: text(MAX_MESSAGE_LINE_CHARS),
+  approveTitle: text(MAX_MESSAGE_LINE_CHARS),
   requestedScopes: list(MAX_SCOPES, NAME),
 });
 const connectionError = object<ConnectionError>()({
@@ -647,6 +648,8 @@ const upgrade = object<ScopeUpgradeState>()({
   requestId: ID,
   approveCommand: text(MAX_MESSAGE_LINE_CHARS),
   approveNote: text(MAX_MESSAGE_LINE_CHARS),
+  approveTitle: text(MAX_MESSAGE_LINE_CHARS),
+  nowShown: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const connection = object<ConnectionState>()({

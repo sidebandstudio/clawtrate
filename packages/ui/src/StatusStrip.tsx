@@ -1,4 +1,4 @@
-import type { ClawtrateState, Transcript } from "@clawtrate/core";
+import { isApprovalDisconnect, type ClawtrateState, type Transcript } from "@clawtrate/core";
 import { useEffect, useState } from "react";
 import { gatewayLabel } from "./format.ts";
 
@@ -94,6 +94,15 @@ export function stripFor(
         countdown: true,
       };
     case "error":
+      // The gateway answered; Clawtrate disconnected after an approval it couldn't confirm (§9).
+      if (isApprovalDisconnect(connection.error?.code))
+        return {
+          tone: "danger",
+          text: "Disconnected",
+          more: connection.error?.message ?? null,
+          action: "reconnect",
+          countdown: false,
+        };
       return {
         tone: "danger",
         text: `Can't reach ${gatewayLabel(connection.gatewayUrl)}`,

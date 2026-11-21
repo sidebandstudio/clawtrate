@@ -4,7 +4,10 @@
 
 import {
   admitApproval,
+  APPROVAL_WORDS,
   applyQuestionRequested,
+  approvalForPlace,
+  listUnreadWords,
   emptyActivity,
   INTERACTIVE_SCOPES,
   newRun,
@@ -30,6 +33,14 @@ export const LIVE_SCENES = [
   "access-error",
   "access-pinned",
   "access-granted",
+  "access-waiting-ssh",
+  "access-waiting-here",
+  "access-confirming",
+  "access-unconfirmed",
+  "access-stale",
+  "access-other-request",
+  "access-identity-changed",
+  "access-list-unread",
   "read-wait",
   "composer",
   "run-thinking",
@@ -353,6 +364,77 @@ export function liveScene(
             change: (state) => upgrade(interactive(state), { status: "approved" }),
           },
         ],
+      };
+    // Setup §9's waiting state and outcomes, in the words the host and the client give them.
+    case "access-waiting-ssh":
+    case "access-waiting-here": {
+      const words = approvalForPlace(
+        name === "access-waiting-ssh"
+          ? {
+              route: "ssh",
+              name: "devbox",
+              account: "you@devbox.example",
+              port: 22,
+              profile: "default",
+            }
+          : { route: "this-computer", profile: "clawtrate" },
+        REQUEST_ID,
+      );
+      return {
+        initial: upgrade(base, {
+          status: "pending",
+          requestId: REQUEST_ID,
+          approveCommand: words.command,
+          approveNote: words.note,
+          approveTitle: words.title,
+        }),
+        steps: [],
+      };
+    }
+    case "access-confirming":
+      return { initial: upgrade(base, { status: "confirming", requestId: REQUEST_ID }), steps: [] };
+    case "access-unconfirmed":
+    case "access-identity-changed": {
+      const outcome = name === "access-unconfirmed" ? "unconfirmed" : "identity-changed";
+      const state = upgrade(base, { status: outcome, requestId: REQUEST_ID, approveCommand: null });
+      return {
+        initial: {
+          ...state,
+          connection: {
+            ...state.connection,
+            status: "error",
+            error: {
+              code: "APPROVAL_UNCONFIRMED",
+              message:
+                outcome === "unconfirmed"
+                  ? `${APPROVAL_WORDS.unconfirmed.title} ${APPROVAL_WORDS.unconfirmed.detail}`
+                  : APPROVAL_WORDS.identityChanged,
+              hint: null,
+            },
+          },
+        },
+        steps: [],
+      };
+    }
+    case "access-stale":
+      return {
+        initial: upgrade(base, { status: "stale", requestId: REQUEST_ID, approveCommand: null }),
+        steps: [],
+      };
+    case "access-other-request":
+      return {
+        initial: upgrade(base, { status: "other-request", requestId: null, approveCommand: null }),
+        steps: [],
+      };
+    case "access-list-unread":
+      return {
+        initial: upgrade(base, {
+          status: "list-unread",
+          requestId: REQUEST_ID,
+          approveCommand: `openclaw devices approve ${REQUEST_ID}`,
+          error: listUnreadWords("devbox", 2),
+        }),
+        steps: [],
       };
     case "read-wait":
       return {

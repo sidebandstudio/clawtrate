@@ -7,6 +7,8 @@ import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.
 import {
   applyApprovalResolved,
   applyQuestionResolved,
+  approvalForPlace,
+  defaultApprovalInstructions,
   beginDecision,
   beginReadback,
   decisionRefusal,
@@ -85,6 +87,7 @@ export const SCENES = [
   "connect-error",
   "connecting",
   "pairing",
+  "pairing-ssh",
   "reconnecting",
   "reconnecting-unloaded",
   "offline",
@@ -158,7 +161,22 @@ function idle(): ClawtrateState {
   return { ...initialState, connection: { ...initialState.connection, deviceId: DEVICE_ID } };
 }
 
-function pairing(): ClawtrateState {
+function pairing(over: "address" | "ssh" = "address"): ClawtrateState {
+  const id = "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55";
+  // The words the host gives for where the request waits (setup.md §9).
+  const words =
+    over === "ssh"
+      ? approvalForPlace(
+          {
+            route: "ssh",
+            name: "devbox",
+            account: "you@devbox.example",
+            port: 22,
+            profile: "default",
+          },
+          id,
+        )
+      : defaultApprovalInstructions(GATEWAY_URL, id);
   return {
     ...initialState,
     connection: {
@@ -171,8 +189,9 @@ function pairing(): ClawtrateState {
         requestId: "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
         deviceId: DEVICE_ID,
         message: "pairing required",
-        approveCommand: "openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
-        approveNote: "The gateway's owner runs this on the gateway's machine.",
+        approveCommand: words.command,
+        approveNote: words.note,
+        approveTitle: words.title ?? null,
         requestedScopes: ["operator.read"],
       },
     },
@@ -279,6 +298,8 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       };
     case "pairing":
       return { initial: pairing(), steps: [] };
+    case "pairing-ssh":
+      return { initial: pairing("ssh"), steps: [] };
     case "reconnecting":
       return { initial: reconnecting(base), steps: [] };
     case "reconnecting-unloaded": {

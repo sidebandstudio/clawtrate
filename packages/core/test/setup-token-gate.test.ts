@@ -201,7 +201,9 @@ describe("the setup connection's token gate", () => {
             },
           },
         };
-      expect(auth?.bootstrapToken).toBe(CODE);
+      // The code once; then the token it brought, on the reconnect that confirms it (§9).
+      if (auth?.deviceToken === undefined) expect(auth?.bootstrapToken).toBe(CODE);
+      else expect(auth.deviceToken).toBe("device-token");
       return { ok: true, payload: helloOk(["operator.read"], "device-token") };
     };
     const storage = memoryStorage();
@@ -209,18 +211,23 @@ describe("the setup connection's token gate", () => {
     await client.start();
     await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
     await until(() => client.state.connection.status === "pairing");
-    // This device, the scopes it asked for and the pending-devices instruction: no request field.
+    // This device, the scopes it asked for, and the approve command for the request's
+    // validated id (§9): nothing else of the gateway's request.
     expect(client.state.connection.pairing).toMatchObject({
-      requestId: "",
+      requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
       deviceId: "device-1",
       requestedScopes: ["operator.read"],
-      approveCommand: "openclaw devices list",
+      approveCommand: "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
     });
     expect(storage.data.has(tokenKey(URL))).toBe(false);
     approved = true;
     await client.retryNow();
     await until(() => client.state.connection.status === "connected");
     expect(JSON.parse(storage.data.get(tokenKey(URL))!).heldScopes).toEqual(["operator.read"]);
+    // The redemption, then the reconnect with the staged token before it was kept.
+    const auths = gateway.connects.map((c) => (c as ConnectParams).auth ?? {});
+    expect(auths.at(-1)).toMatchObject({ deviceToken: "device-token" });
+    expect(auths.at(-2)).toMatchObject({ bootstrapToken: CODE });
     expect(everywhere(client, storage)).not.toContain(CODE);
     client.stop();
   });
@@ -603,10 +610,26 @@ describe("what a setup connection publishes", () => {
       }),
       (c) => c.state.connection.status === "pairing",
     );
+    // The request id only in the gateway's UUID shape, for the approve command (§9).
     expect(client.state.connection.pairing).toMatchObject({
-      requestId: "",
+      requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
       deviceId: "device-1",
       requestedScopes: ["operator.read"],
+    });
+  });
+
+  it("F-494: a setup pairing's request id of any other shape is never shown or put in a command", async () => {
+    const { client } = await echoed(
+      refusal({
+        code: "NOT_PAIRED",
+        message: "pairing",
+        details: { code: "PAIRING_REQUIRED", requestId: "req; rm -rf ~", deviceId: "device-1" },
+      }),
+      (c) => c.state.connection.status === "pairing",
+    );
+    expect(client.state.connection.pairing).toMatchObject({
+      requestId: "",
+      approveCommand: "openclaw devices list",
     });
   });
 

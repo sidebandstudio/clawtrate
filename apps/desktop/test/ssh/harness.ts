@@ -165,6 +165,8 @@ export function installStubOpenclaw(home: string): {
   setCode(profile: "default" | "clawtrate", json: unknown, exit?: number): void;
   setCodeScript(profile: "default" | "clawtrate", script: string): void;
   setStart(profile: "default" | "clawtrate", exit: number): void;
+  /** What `gateway call …` runs, as a script given the command's arguments. */
+  setCallScript(profile: "default" | "clawtrate", script: string): void;
   calls(): string[];
 } {
   const bin = join(home, ".openclaw", "bin");
@@ -188,6 +190,7 @@ export function installStubOpenclaw(home: string): {
       '    cat "$d/qr-$p.json"; exit "$(cat "$d/qr-exit-$p")" ;;',
       '  "$p gateway start") : > "$d/started-$p"; exit "$(cat "$d/start-exit-$p" 2>/dev/null || echo 0)" ;;',
       '  "$p gateway stop") : > "$d/stopped-$p"; exit 0 ;;',
+      '  "$p gateway call "*) if [ -f "$d/call-$p.sh" ]; then exec /bin/sh "$d/call-$p.sh" "$@"; fi; exit 2 ;;',
       "  *) exit 2 ;;",
       "esac",
       "",
@@ -207,6 +210,8 @@ export function installStubOpenclaw(home: string): {
     setCodeScript: (profile, script) =>
       writeFileSync(join(stub, `qr-${profile}.sh`), script, { mode: 0o700 }),
     setStart: (profile, exit) => writeFileSync(join(stub, `start-exit-${profile}`), String(exit)),
+    setCallScript: (profile, script) =>
+      writeFileSync(join(stub, `call-${profile}.sh`), script, { mode: 0o700 }),
     calls: () => {
       const path = join(stub, "calls");
       return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [];

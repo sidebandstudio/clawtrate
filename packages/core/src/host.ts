@@ -1,6 +1,8 @@
 // What a host process provides to the core. Core itself uses no DOM and no
 // Node APIs, so the same code runs in Electron's main process, plain Node and Expo.
 
+import type { ReadBack } from "./approval.ts";
+
 /**
  * Async key/value persistence. Values are strings; core stores JSON. `set` and
  * `delete` resolve only once the change is kept; a change that could not be kept
@@ -44,7 +46,14 @@ export type ClientIdentity = {
   platform: string;
 };
 
-export type ApprovalInstructions = { command: string; note: string | null };
+export type ApprovalInstructions = {
+  command: string;
+  note: string | null;
+  /** The waiting line's head, naming where the request waits (setup §9): "Waiting for approval on devbox." */
+  title?: string | null;
+  /** The computer the request waits on, as the words name it: "devbox", "this computer". */
+  where?: string | null;
+};
 
 export type ClawtrateHost = {
   createWebSocket: WebSocketFactory;
@@ -59,4 +68,12 @@ export type ClawtrateHost = {
    * gateway is the local development one; core falls back to the generic command.
    */
   approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
+  /**
+   * Where the host has a shell on the gateway's computer (this computer, an
+   * SSH route): read the gateway's identity and its device list there, at the
+   * verified loopback endpoint, through the gateway (setup §9). Undefined, or
+   * a null answer, where it has none (an address route): the reconnect's hello
+   * alone decides then. Reads only: it never changes the gateway.
+   */
+  readBack?: (gatewayUrl: string) => Promise<ReadBack | null>;
 };

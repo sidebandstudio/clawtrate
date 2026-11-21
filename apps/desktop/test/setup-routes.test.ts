@@ -782,7 +782,7 @@ describe("one stopped verdict, and the loopback endpoint the status proves", () 
 
 describe("the approve command for a route's account, SSH port and profile", () => {
   const ssh = (profile: "default" | "clawtrate") =>
-    ({ route: "ssh", account: "you@127.0.0.1", port: 2222, profile }) as const;
+    ({ route: "ssh", name: "devbox", account: "you@127.0.0.1", port: 2222, profile }) as const;
   const instructions = approvalInstructionsFor(null, (url) =>
     url === "ws://c0000000000000001.ssh.invalid"
       ? ssh("default")
@@ -790,7 +790,9 @@ describe("the approve command for a route's account, SSH port and profile", () =
         ? ssh("clawtrate")
         : url === "ws://127.0.0.1:18789"
           ? { route: "this-computer", profile: "default" }
-          : null,
+          : url === "ws://127.0.0.1:18790"
+            ? { route: "this-computer", profile: "clawtrate" }
+            : null,
   );
   const id = "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942";
 
@@ -798,23 +800,38 @@ describe("the approve command for a route's account, SSH port and profile", () =
     // An alias ("devbox") resolved elsewhere, on a port other than 22: the account and port as resolved.
     expect(instructions("ws://c0000000000000001.ssh.invalid", id)).toEqual({
       command: `openclaw devices approve ${id}`,
-      note: "On you@127.0.0.1 (SSH port 2222), approve this request for the default profile.",
+      title: "Waiting for approval on devbox.",
+      where: "devbox",
+      note: "On you@127.0.0.1 (SSH port 2222), run this for the default profile:",
     });
     expect(instructions("ws://c0000000000000002.ssh.invalid", id)).toEqual({
       command: `openclaw --profile clawtrate devices approve ${id}`,
-      note: "On you@127.0.0.1 (SSH port 2222), approve this request for the clawtrate profile.",
+      title: "Waiting for approval on devbox.",
+      where: "devbox",
+      note: "On you@127.0.0.1 (SSH port 2222), run this for Clawtrate's profile:",
     });
     expect(instructions("ws://127.0.0.1:18789", id)).toEqual({
       command: `openclaw devices approve ${id}`,
-      note: "On this computer, approve this request for the default profile:",
+      title: "Waiting for approval on this computer.",
+      where: "this computer",
+      note: "In Terminal on this computer, run this for the default profile:",
+    });
+    expect(instructions("ws://127.0.0.1:18790", id)).toEqual({
+      command: `openclaw --profile clawtrate devices approve ${id}`,
+      title: "Waiting for approval on this computer.",
+      where: "this computer",
+      note: "In Terminal on this computer, run this for Clawtrate's profile:",
     });
     expect(instructions("wss://gateway.example", id)).toEqual({
       command: `openclaw devices approve ${id}`,
-      note: "The gateway's owner runs this on the machine where the gateway runs.",
+      title: "Waiting for approval.",
+      note: "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile:",
     });
     // No request id: list them, and match this device before approving.
     expect(approvalForPlace(ssh("default"), "")).toEqual({
       command: "openclaw devices list",
+      title: "Waiting for approval on devbox.",
+      where: "devbox",
       note: "On you@127.0.0.1 (SSH port 2222), list pending devices for the default profile and match this device ID before you approve.",
     });
     // A request id of any other shape is never put into the command the person copies.

@@ -184,7 +184,13 @@ function PairingPanel({
         {name ?? gatewayLabel(connection.gatewayUrl)} has not seen this device before. Approve it
         once on the gateway's machine and {PRODUCT_NAME} connects by itself.
       </p>
-      {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
+      {(pairing.approveTitle || pairing.approveNote) && (
+        <p className="approve-note">
+          {pairing.approveTitle && <b>{pairing.approveTitle}</b>}
+          {pairing.approveTitle && pairing.approveNote ? " " : ""}
+          {pairing.approveNote}
+        </p>
+      )}
       <CommandLine command={pairing.approveCommand} label="Copy approve command" />
       <SetupSteps
         connection={connection}

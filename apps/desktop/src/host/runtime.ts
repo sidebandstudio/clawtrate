@@ -9,6 +9,7 @@ import {
   type ApprovalInstructions,
   type ApprovalPlace,
   type KeyValueStore,
+  type ReadBack,
   type BridgePolicy,
   type HostInfo,
   type WebSocketLike,
@@ -150,6 +151,8 @@ export async function startHostRuntime(options: {
   resume?: boolean;
   /** Where a gateway's owner approves a request, for setup's routes (`approvalInstructionsFor`). */
   approvalPlace?: (gatewayUrl: string) => ApprovalPlace | null;
+  /** The read-back after an approval (setup §9), for setup's routes; null for any other address. */
+  readBack?: (gatewayUrl: string) => Promise<ReadBack | null>;
   /**
    * A route's word on an address before every socket: true or false for an
    * SSH forward's local address (only the current one, while it is up), null
@@ -191,6 +194,7 @@ export async function startHostRuntime(options: {
       ),
       ...(options.wrapStorage ? { wrapStorage: options.wrapStorage } : {}),
       ...(options.routeSocket ? { routeSocket: options.routeSocket } : {}),
+      ...(options.readBack ? { readBack: options.readBack } : {}),
       log: (level, message) => {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },

@@ -208,41 +208,34 @@ describe("losing access is represented and recoverable (B1)", () => {
     client.stop();
   });
 
-  it("asks again for a scope a capped grant left out, rather than waiting forever", async () => {
+  it("a capped grant isn't kept: it disconnects and saves no new token, rather than holding part of it (setup §9)", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = (params) => {
       const { scopes, auth } = params as ConnectParams;
       return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "device-token") };
     };
-    let requests = 0;
-    const waits = [deferred<unknown>(), deferred<unknown>()];
-    gateway.handlers["device.scopes.requestUpgrade"] = () => ({
-      requestId: `up-${(requests += 1)}`,
-    });
-    gateway.handlers["device.scopes.waitUpgrade"] = () => waits[requests - 1]!.promise;
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
     gateway.handlers["question.list"] = () => ({ questions: [] });
     for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"]) {
       gateway.handlers[method] = () => [];
     }
     const { client, storage } = await openTask({ gateway, held: READ_SCOPES });
+    const saved = storage.data.get(tokenKey(URL_A));
     await client.requestAccess();
-    await until(() => requests === 1);
+    await until(() => client.state.connection.upgrade.status === "pending");
     // The owner's role policy caps the grant at read and write.
-    waits[0]!.resolve({
+    wait.resolve({
       status: "approved",
       requestId: "up-1",
       deviceToken: "rotated",
       scopes: ["operator.read", "operator.write"],
     });
-    await until(() => client.state.connection.canWrite);
-    expect(client.state.connection.requestedScopes).toEqual(["operator.read", "operator.write"]);
-    expect(client.state.connection.canAnswer).toBe(false);
-    expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).heldScopes).toEqual([
-      "operator.read",
-      "operator.write",
-    ]);
-    // Read access is kept throughout.
-    expect(client.state.connection.scopes).toContain("operator.read");
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.upgrade.status).toBe("unconfirmed");
+    expect(storage.data.get(tokenKey(URL_A))).toBe(saved);
+    expect(JSON.stringify(client.state)).not.toContain("rotated");
     client.stop();
   });
 });

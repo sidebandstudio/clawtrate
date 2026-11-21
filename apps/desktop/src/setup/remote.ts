@@ -26,6 +26,9 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  APPROVAL_IDENTITY_CHANGED,
+  APPROVAL_IDENTITY_UNREAD,
+  APPROVAL_UNCONFIRMED,
   initialSetupState,
   MAX_SSH_CHANNELS,
   MAX_SSH_REMEMBERED_IDS,
@@ -35,6 +38,7 @@ import {
   SETUP_PAIRING_GONE,
   type ApprovalPlace,
   type ClawtrateClient,
+  type ReadBack,
   type ClawtrateState,
   type RouteStatus,
   type SetupFailure,
@@ -53,6 +57,7 @@ import type { HostKeyCheck, Route, SshTransport } from "../main/ssh/transport.ts
 import { OPERATION_LIFETIME_MS, type Confirmation } from "./controller.ts";
 import { parseSetupCode } from "./parse.ts";
 import { sshRouteKey, type RouteStore, type SshRouteRecord } from "./routes.ts";
+import { parseDeviceList, parseIdentity } from "./read-back.ts";
 import { sshLook, type SshLook } from "./ssh-look.ts";
 
 export { sshRouteKey } from "./routes.ts";
@@ -325,8 +330,63 @@ export class RemoteSetup {
           ? this.pending.record
           : null;
     return record
-      ? { route: "ssh", account: record.account, port: record.sshPort, profile: record.profile }
+      ? {
+          route: "ssh",
+          name: record.name,
+          account: record.account,
+          port: record.sshPort,
+          profile: record.profile,
+        }
       : null;
+  }
+
+  /**
+   * The read-back after an approval (§9) for the gateway at `url`: through
+   * this route's own pinned SSH connection, a fresh LOOK for the program and
+   * its checksum, then IDENTITY and LIST, each a constant script for the
+   * route's profile and the gateway's port there. Null for an address that
+   * is no route's channel. Reads only.
+   */
+  async readBack(url: string): Promise<ReadBack | null> {
+    const channel = this.channels.get(url);
+    if (!channel) return null;
+    const held =
+      this.live?.channel === channel
+        ? { route: this.live.route, record: this.live.record }
+        : this.pending?.channel === channel
+          ? { route: this.route, record: this.pending.record }
+          : null;
+    if (!held) return null;
+    const unread = { ok: false, step: "identity", exitCode: null } as const;
+    const transport = this.transport();
+    if (!held.route || "refused" in transport) return unread;
+    const route = held.route;
+    const look = await transport.look(route);
+    if (!look.ok) return unread;
+    const facts = sshLook(look.facts);
+    if (!facts.program || !facts.programSum) return unread;
+    const values = {
+      profile: held.record.profile,
+      port: held.record.gatewayPort,
+      program: facts.program,
+      programSum: facts.programSum,
+    };
+    const read = async (kind: "identity" | "list") => {
+      const ran = await transport.runScript(route, kind, values);
+      // Nothing ran, or not the program the LOOK found: no exit code of OpenClaw's to name.
+      if (!ran.ok || !ran.answer || ran.program !== facts.program)
+        return { text: null, exitCode: null };
+      return ran.answer.exit === 0
+        ? { text: ran.answer.text, exitCode: 0 }
+        : { text: null, exitCode: ran.answer.exit };
+    };
+    const id = await read("identity");
+    const identity = id.text === null ? null : parseIdentity(id.text);
+    if (!identity) return { ok: false, step: "identity", exitCode: id.exitCode || null };
+    const listed = await read("list");
+    const list = listed.text === null ? null : parseDeviceList(listed.text);
+    if (!list) return { ok: false, step: "list", exitCode: listed.exitCode || null };
+    return { ok: true, identity, list };
   }
 
   // The look -------------------------------------------------------------------
@@ -1032,19 +1092,25 @@ export class RemoteSetup {
           failure: setupFailure(
             code === "SETUP_GRANT_REFUSED"
               ? "grant"
-              : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
-                ? "code-refused"
-                : code === "UNREACHABLE"
-                  ? "unreachable"
-                  : code === ROUTE_IDENTITY_CHANGED
-                    ? "identity"
-                    : code === ROUTE_IDENTITY_UNREAD
-                      ? "identity-unread"
-                      : code === SETUP_PAIRING_GONE
-                        ? "pairing-gone"
-                        : code === SETUP_ENDPOINT_CHANGED || code === "GATEWAY_NOT_ALLOWED"
-                          ? "changed"
-                          : "other",
+              : code === APPROVAL_UNCONFIRMED
+                ? "approval-unconfirmed"
+                : code === APPROVAL_IDENTITY_CHANGED
+                  ? "approval-identity"
+                  : code === APPROVAL_IDENTITY_UNREAD
+                    ? "approval-identity-unread"
+                    : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
+                      ? "code-refused"
+                      : code === "UNREACHABLE"
+                        ? "unreachable"
+                        : code === ROUTE_IDENTITY_CHANGED
+                          ? "identity"
+                          : code === ROUTE_IDENTITY_UNREAD
+                            ? "identity-unread"
+                            : code === SETUP_PAIRING_GONE
+                              ? "pairing-gone"
+                              : code === SETUP_ENDPOINT_CHANGED || code === "GATEWAY_NOT_ALLOWED"
+                                ? "changed"
+                                : "other",
           ),
         });
       }

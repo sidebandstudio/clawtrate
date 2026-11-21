@@ -98,6 +98,10 @@ export type BridgeCommand =
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
+  /** "Stop waiting" (setup §9): this device stops waiting; the gateway's request is left as it is. */
+  | { type: "stopWaiting" }
+  /** "Check now" (setup §9): the host reads the gateway's pending list for this request, where it can. */
+  | { type: "checkAccess" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -1060,6 +1064,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "connectDevGateway":
     case "suspend":
     case "retry":
+    case "stopWaiting":
+    case "checkAccess":
     case "setupLook":
     case "setupCancel":
     case "setupConnect":
@@ -1591,6 +1597,10 @@ class ViewerSession implements BridgeSession {
         return;
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "stopWaiting":
+        return client.stopWaiting();
+      case "checkAccess":
+        return client.checkAccess();
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":

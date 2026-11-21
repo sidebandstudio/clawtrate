@@ -124,6 +124,8 @@ export type NodeHostOptions = {
   client: ClientIdentity;
   log?: ClawtrateHost["log"];
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
+  /** The host's read-back on the gateway's computer after an approval (setup §9). */
+  readBack?: ClawtrateHost["readBack"];
   /** Wraps the file store: the desktop host keeps each route's device token in its route store. */
   wrapStorage?: (store: KeyValueStore) => KeyValueStore;
   /**
@@ -144,5 +146,6 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
+    ...(options.readBack ? { readBack: options.readBack } : {}),
   };
 }

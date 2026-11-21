@@ -14,7 +14,7 @@ import type {
   ShownHostKey,
   SshSetup,
 } from "@clawtrate/core";
-import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import { APPROVAL_WORDS, OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
@@ -620,6 +620,22 @@ const FAILURES: Record<
   "pairing-gone": {
     lead: "This device has no usable token for this route any more.",
     text: () => "Look again, then pair again.",
+    next: "look",
+    step: 2,
+  },
+  "approval-unconfirmed": {
+    lead: APPROVAL_WORDS.unconfirmed.title,
+    text: () => APPROVAL_WORDS.unconfirmed.detail,
+    next: "look",
+    step: 2,
+  },
+  "approval-identity": {
+    lead: APPROVAL_WORDS.identityChanged,
+    next: "look",
+    step: 2,
+  },
+  "approval-identity-unread": {
+    lead: APPROVAL_WORDS.identityUnread,
     next: "look",
     step: 2,
   },

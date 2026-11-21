@@ -142,12 +142,13 @@ describe("a setup reconnect with a saved pairing", () => {
 });
 
 describe("an upgrade is held to what it asked for", () => {
-  it("F-492: a pairing-only upgrade the gateway answers with write and approvals stores pairing and nothing more", async () => {
+  it("F-492: a pairing-only upgrade the gateway answers with write and approvals is unconfirmed and stores nothing", async () => {
     const fake = new AccountsGateway();
     const wait = deferred<unknown>();
     fake.gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
     fake.gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
     const { client, storage } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
+    const saved = storage.data.get(tokenKey(URL_A));
     await client.requestAccess("pairing");
     await until(() => client.state.connection.upgrade.status === "pending");
     expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([
@@ -155,12 +156,10 @@ describe("an upgrade is held to what it asked for", () => {
     ]);
     const wider = [READ_SCOPE, WRITE_SCOPE, "operator.approvals", PAIRING_SCOPE];
     wait.resolve({ status: "approved", requestId: "up-1", deviceToken: "rotated", scopes: wider });
-    await until(() => JSON.parse(storage.data.get(tokenKey(URL_A))!).token === "rotated");
-    const stored = JSON.parse(storage.data.get(tokenKey(URL_A))!);
-    expect(stored.heldScopes).toEqual([READ_SCOPE, PAIRING_SCOPE]);
-    expect(stored.grantedScopes).toEqual([READ_SCOPE, PAIRING_SCOPE]);
-    expect(stored.adminHeld).toBeUndefined();
-    await until(() => client.state.connection.status === "connected");
+    // A wider grant than asked: disconnected, the saved token as it was (setup §9).
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.upgrade.status).toBe("unconfirmed");
+    expect(storage.data.get(tokenKey(URL_A))).toBe(saved);
     expect(client.state.connection.canWrite).toBe(false);
     client.stop();
   });

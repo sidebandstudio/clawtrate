@@ -43,7 +43,7 @@ const COMMANDS: ReadonlyArray<readonly string[]> = [
   ["config", "get", "gateway.auth.mode", "--json"],
 ];
 const QR = ["qr", "--json", "--voice-node", "--url"];
-/** The one address a code may be made for: this computer's loopback, a valid port. */
+/** The one address a code may be made for, or read back at: this computer's loopback, a valid port. */
 const LOOPBACK_URL = /^ws:\/\/127\.0\.0\.1:([1-9][0-9]{3,4})$/;
 const ENV_KEYS = new Set([
   "HOME",
@@ -70,8 +70,23 @@ export function isLookCommand(args: readonly string[]): boolean {
   const rest = args[0] === "--profile" ? (profileName(args[1]) ? args.slice(2) : null) : args;
   if (rest === null) return false;
   if (COMMANDS.some((command) => same(rest, command))) return true;
+  // The read-back after an approval (§9): one of two reads, at the verified loopback address.
+  if (
+    rest.length === 6 &&
+    rest[0] === "gateway" &&
+    rest[1] === "call" &&
+    (rest[2] === "gateway.identity.get" || rest[2] === "device.pair.list") &&
+    rest[3] === "--expect-url" &&
+    rest[5] === "--json"
+  )
+    return loopback(rest[4]!);
   if (rest.length !== QR.length + 1 || !same(rest.slice(0, QR.length), QR)) return false;
-  const match = LOOPBACK_URL.exec(rest[QR.length]!);
+  return loopback(rest[QR.length]!);
+}
+
+/** This computer's loopback address on a valid port, and nothing else. */
+function loopback(url: string): boolean {
+  const match = LOOPBACK_URL.exec(url);
   return match !== null && Number(match[1]) <= 65535;
 }
 

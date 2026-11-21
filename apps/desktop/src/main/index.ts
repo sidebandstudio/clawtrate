@@ -441,6 +441,7 @@ async function main(): Promise<void> {
     dataDir,
     wrapStorage: (store) => routedStorage(store, routes),
     approvalPlace: (url) => router?.placeFor(url) ?? null,
+    readBack: async (url) => (router ? router.readBack(url) : null),
     routeAllows: (url) => remote?.allows(url) ?? null,
     // A route's channel is reached only on its forward's own local socket.
     routeSocket: (url) => remote?.socketFor(url) ?? null,
