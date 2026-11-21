@@ -308,15 +308,47 @@ function pendingSummary(list: unknown) {
   };
 }
 
-async function configAllow(admin: Conn, allow: string[] | null) {
-  const got = (await admin.request("config.get", {})) as { hash?: string };
+/** The instance's stored allowlist, and the hash to write against. */
+async function allowOf(admin: Conn) {
+  const got = (await admin.request("config.get", {})) as {
+    hash?: string;
+    config?: { gateway?: { nodes?: { commands?: { allow?: string[] } } } };
+  };
+  return { hash: got.hash, allow: got.config?.gateway?.nodes?.commands?.allow ?? [] };
+}
+
+/**
+ * Sets the allowlist to `allow`, then reads it back. The probe only ever holds
+ * its own invented commands there, so it refuses an instance whose allowlist
+ * has anything else, and it stops the experiment when the write is refused or
+ * the read-back differs, so no later result is reported against the wrong list.
+ */
+async function configAllow(admin: Conn, allow: string[]) {
+  const before = await allowOf(admin);
+  const foreign = before.allow.filter((c) => !PROBE_COMMANDS.includes(c));
+  if (foreign.length > 0) throw new Error(`the instance's allowlist has entries this probe didn't write (${foreign.length}); use a fresh instance`);
   const patch = { gateway: { nodes: { commands: { allow } } } };
   // Removing entries from an array needs replacePaths, the gateway's guard against an accidental removal.
-  return tryCall(admin, "config.patch", {
+  const result = await tryCall(admin, "config.patch", {
     raw: JSON.stringify(patch),
-    baseHash: got.hash,
+    baseHash: before.hash,
     replacePaths: ["gateway.nodes.commands.allow"],
   });
+  if (!result.ok) throw new Error(`config.patch refused, stopping this experiment: ${result.error}`);
+  const after = await allowOf(admin);
+  if (JSON.stringify([...after.allow].sort()) !== JSON.stringify([...allow].sort())) throw new Error("the allowlist read back differs from the one written; stopping this experiment");
+  return result;
+}
+
+/** Resolves once the stand-in node has received a request for `command`; a setup failure otherwise. */
+async function waitForInvoke(conn: Conn, command: string, ms = 5_000) {
+  const deadline = Date.now() + ms;
+  const seen = () => conn.events.some((f) => f.event === "node.invoke.request" && (f.payload as { command?: string }).command === command);
+  while (Date.now() < deadline) {
+    if (seen()) return;
+    await sleep(50);
+  }
+  throw new Error(`${conn.label}: the call never reached the node; stopping this stage`);
 }
 
 async function waitForPending(admin: Conn, nodeId: string, ms = 10_000) {
@@ -354,6 +386,7 @@ async function drop() {
   const admin = await operator("admin", ["admin", "pairing", "read", "write"]);
   say("admin hello:", admin.hello);
   const id = identity();
+  if ((await allowOf(admin)).allow.some((c) => PROBE_COMMANDS.includes(c))) throw new Error("this instance's allowlist already holds the probe's commands; run drop on a fresh instance");
   say("node declares", PROBE_COMMANDS, "with no allowlist entry");
   const first = await node("N-drop", id);
   say("node connect:", "conn" in first ? { hello: first.conn.hello } : first.refused);
@@ -416,7 +449,9 @@ async function tiers() {
     const r = await node(`N${i}`, id);
     say(`N${i} connects after the device approval:`, "conn" in r ? { hello: r.conn.hello } : r.refused);
     if ("conn" in r) nodes.push(r.conn);
-    surface.push((await waitForPending(admin, id.deviceId)) ?? "");
+    const pending = await waitForPending(admin, id.deviceId);
+    if (!pending) throw new Error(`N${i}: no pending command request appeared; stopping the tier comparison`);
+    surface.push(pending);
   }
   say("admin node.pair.list:", pendingSummary(await admin.request("node.pair.list", {})));
   say("another device at pairing, node.pair.list:", pendingSummary(await otherP.request("node.pair.list", {})));
@@ -425,6 +460,10 @@ async function tiers() {
   say("another device at pairing+write, reject N0:", await tryCall(otherPW, "node.pair.reject", { requestId: surface[0] }));
   await selfOp.close();
   const selfP = await operator("N1-as-operator", ["pairing"], ids[1]);
+  if (selfP.hello?.scopes?.includes("operator.write")) {
+    await selfP.close();
+    throw new Error("N1-as-operator: the pairing-only reconnect still holds operator.write; stopping this stage");
+  }
   say("N1's own device at pairing only, hello:", selfP.hello);
   say("N1's own device at pairing, node.pair.list:", pendingSummary(await selfP.request("node.pair.list", {})));
   say("N1's own device at pairing, approve N1:", await tryCall(selfP, "node.pair.approve", { requestId: surface[1] }));
@@ -559,7 +598,7 @@ async function revoke() {
   // 1. The allowlist entry is taken away while a late call waits.
   const a = await pairedNode(admin, "N-allow");
   const pending = tryCall(writer, "node.invoke", call(a.id.deviceId, "clawtrate.probe.slow", 8000));
-  await sleep(800);
+  await waitForInvoke(a.conn, "clawtrate.probe.slow");
   say("allowlist emptied while the call waits:", await configAllow(admin, []).then((r) => ({ ok: r.ok, error: r.error })));
   say("the waiting call ended:", await pending);
   await sleep(1500);
@@ -572,11 +611,15 @@ async function revoke() {
   // 2. The pairing is removed while a late call waits.
   const b = await pairedNode(admin, "N-remove");
   const self = await operator("self-pairing-write", ["pairing", "write"], b.id);
-  say("the node's own device removes it:", await tryCall(self, "node.pair.remove", { nodeId: b.id.deviceId }));
+  const bySelf = await tryCall(self, "node.pair.remove", { nodeId: b.id.deviceId });
+  say("the node's own device removes it:", bySelf);
   const other = await operator("other-pairing", ["pairing"]);
-  say("another device at pairing removes it:", await tryCall(other, "node.pair.remove", { nodeId: b.id.deviceId }));
+  const byOther = await tryCall(other, "node.pair.remove", { nodeId: b.id.deviceId });
+  say("another device at pairing removes it:", byOther);
+  // If either removal took effect, the admin case below would start from a removed node.
+  if (bySelf.ok || byOther.ok) throw new Error("a removal below admin took effect; stopping before the admin case");
   const waiting = tryCall(writer, "node.invoke", call(b.id.deviceId, "clawtrate.probe.slow", 8000));
-  await sleep(1000);
+  await waitForInvoke(b.conn, "clawtrate.probe.slow");
   say("admin removes it while the call waits:", await tryCall(admin, "node.pair.remove", { nodeId: b.id.deviceId }));
   say("the waiting call ended:", await waiting);
   say("node.list after:", await tryCall(admin, "node.list", {}).then((r) => (r.result as { nodes?: unknown[] })?.nodes?.length ?? r));
@@ -702,6 +745,18 @@ async function share() {
  * connection asks the gateway for a node-only setup code; the node connection
  * presents its bootstrap token. No shared token is sent by that device.
  */
+/** A node-only setup code from admin, at this gateway's address. A refusal stops the experiment with the gateway's words. */
+async function mintNodeCode(admin: Conn): Promise<string> {
+  const minted = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  if (!minted.ok) throw new Error(`setupCode refused: ${minted.error}`);
+  const code = (minted.result as { setupCode?: unknown }).setupCode;
+  if (typeof code !== "string") throw new Error("setupCode answered without a code");
+  const token = (JSON.parse(Buffer.from(code, "base64url").toString("utf8")) as { bootstrapToken?: unknown }).bootstrapToken;
+  if (typeof token !== "string" || token === "") throw new Error("the setup code holds no bootstrap token");
+  secrets.push(token);
+  return token;
+}
+
 async function roleCredential() {
   const admin = await operator("admin", ["admin", "pairing", "read", "write"]);
   say("allowlist:", (await configAllow(admin, PROBE_COMMANDS)).ok);
@@ -741,9 +796,7 @@ async function roleCredential() {
   const upgrade = "refused" in withCode ? requestIdOf(withCode) : undefined;
   if (upgrade) say("(a) admin approves X's role upgrade:", await tryCall(admin, "device.pair.approve", { requestId: upgrade }).then((r) => ({ ok: r.ok, error: r.error })));
   say("(a) X on the gateway:", devicesList().filter((d) => d.deviceId === short(id.deviceId)));
-  const second = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
-  const token2 = String(JSON.parse(Buffer.from(String((second.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
-  secrets.push(token2);
+  const token2 = await mintNodeCode(admin);
   const withSecond = await node("X-node", id, { bootstrap: token2 });
   say("(a) X as a node with a second code:", "conn" in withSecond ? { hello: withSecond.conn.hello } : { code: (withSecond.refused.details as Record<string, unknown>)?.code, reason: (withSecond.refused.details as Record<string, unknown>)?.reason });
   await sleep(800);
@@ -755,9 +808,7 @@ async function roleCredential() {
 
   // (b) A key of its own for the node: a device that is only a node.
   const n = identity();
-  const third = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
-  const token3 = String(JSON.parse(Buffer.from(String((third.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
-  secrets.push(token3);
+  const token3 = await mintNodeCode(admin);
   const fresh = await node("N-own-key", n, { bootstrap: token3 });
   say("(b) a node with its own key and the code:", "conn" in fresh ? { hello: fresh.conn.hello } : fresh.refused);
   await sleep(800);
@@ -772,9 +823,7 @@ async function roleCredential() {
   if ("conn" in nAgain) await nAgain.conn.close();
   // Stop and remove: the node's pairing is removed while it is stopped; then its saved token is tried.
   const mk = identity();
-  const fifth = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
-  const token5 = String(JSON.parse(Buffer.from(String((fifth.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
-  secrets.push(token5);
+  const token5 = await mintNodeCode(admin);
   const mFirst = await node("M-remove", mk, { bootstrap: token5 });
   if ("conn" in mFirst) await mFirst.conn.close();
   const mBack = await node("M-remove", mk, { shared: false });
@@ -792,16 +841,17 @@ async function roleCredential() {
   say("(b) reconnect after the revocation:", "conn" in nAfter ? { hello: nAfter.conn.hello } : { code: (nAfter.refused.details as Record<string, unknown>)?.code });
   if ("conn" in nAfter) await nAfter.conn.close();
   tokenStore.delete(`${n.deviceId}:node`);
-  const fourth = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
-  const token4 = String(JSON.parse(Buffer.from(String((fourth.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
-  secrets.push(token4);
+  const token4 = await mintNodeCode(admin);
   const recovered = await node("N-own-key", n, { bootstrap: token4 });
   say("(b) recovery with a new code:", "conn" in recovered ? { hello: recovered.conn.hello } : { code: (recovered.refused.details as Record<string, unknown>)?.code, reason: (recovered.refused.details as Record<string, unknown>)?.reason });
   if ("conn" in recovered) await recovered.conn.close();
   await op.close();
-  const opAgain = await operator("X-operator", ["read"], id);
-  say("X as an operator after the revocation:", opAgain.hello);
-  for (const c of [opAgain, writer, admin]) await c.close();
+  // X stands for this device's operator key, separate from the node key whose token was revoked
+  // (Clawtrate's model). Its saved operator token only: a refusal is reported, never re-paired.
+  const opAgain = await connectOnce({ label: "X-operator", id, role: "operator", scopes: ["operator.read"], shared: false });
+  say("this device's separate operator key, on its saved token, after the node key's revocation:", "conn" in opAgain ? opAgain.conn.hello : { code: (opAgain.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in opAgain) await opAgain.conn.close();
+  for (const c of [writer, admin]) await c.close();
 }
 
 /** Which connections hear about another device's node requests. */
@@ -864,7 +914,8 @@ async function local() {
 
 function devicesList() {
   const { status, out } = runOpenclaw(["devices", "list", "--json"]);
-  if (status !== 0) return { error: out.slice(0, 300) };
+  // Its output is not printed: it may name what the probe redacts elsewhere.
+  if (status !== 0) throw new Error(`openclaw devices list exited ${status}`);
   const parsed = parseJsonOutput<{ paired?: Record<string, unknown>[] }>(out);
   return (parsed.paired ?? []).map((d) => ({ deviceId: short(d.deviceId), displayName: d.displayName, roles: d.roles, scopes: d.scopes }));
 }
@@ -876,4 +927,5 @@ if (!experiment || !experiments[experiment]) {
 }
 await experiments[experiment]!();
 say("gateway devices:", devicesList());
-setTimeout(() => process.exit(0), 300);
+// Exit once everything written so far has reached stdout, even through a slow pipe.
+process.stdout.write("", () => process.exit(0));
