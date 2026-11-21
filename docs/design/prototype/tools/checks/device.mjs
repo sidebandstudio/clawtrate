@@ -690,6 +690,15 @@ for (const screen of ["share-msgfail", "share-taskonly", "share-task", "share-un
   check(`F-406 ${screen} without a recipient keeps an unsent draft`, (await p.inputValue("[data-draft]")) === "Keep this" && await p.locator("[data-draft-send]").isDisabled() && !(await text(p)).includes("undefined") && !(await text(p, "#device-live")));
   await p.close();
 }
+for (const [outcome, control] of [["share-unsure", "[data-check-again]"], ["share-sent", "[data-close]"], ["share-msgfail", "[data-open-task]"], ["share-taskonly", "[data-open-task]"], ["share-task", "[data-held]"]]) {
+  p = await open(`screen=${outcome}&to=marlow&nobots=1`, phone);
+  check(`F-406 ${outcome} keeps the submitted outcome after the bot list empties`, (await p.locator("#device-root").getAttribute("data-screen")) === outcome && (await p.locator(control).count()) === 1 && (await p.locator("[data-draft-send]").count()) === 0);
+  await p.close();
+}
+p = await open("screen=share&lost=1", phone);
+await p.locator("[data-share-send]").click();
+check("F-406 sending to the default bot records the original recipient for recovery", (await at(p, "share-unsure")) && (await param(p, "to")) === "juniper");
+await p.close();
 for (const screen of ["siri-confirm", "siri-sent"]) {
   p = await open(`screen=${screen}&nobots=1&msg=Keep%20these%20words`, phone);
   check(`F-246 ${screen} without a listed bot offers only the draft handoff`, (await p.locator("[data-siri-send]").count()) === 0 && (await text(p, ".d-sys")).includes("Choose a bot in Clawtrate"));
