@@ -220,6 +220,7 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
+import { validateGatewayUrl } from "./gateway-url.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -298,6 +299,8 @@ import {
 
 /** A read-only connection's scopes. Every connect asks for these until write access is approved. */
 export const REQUESTED_SCOPES = ["operator.read"] as const;
+/** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
+export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 /**
  * Client capabilities advertised in `connect`. `tool-events` is the only one
  * the live run view needs: without it the gateway sends no tool lifecycle
@@ -694,13 +697,7 @@ function isMissingScope(error: unknown): boolean {
   );
 }
 
-export function validateGatewayUrl(raw: string): string {
-  const url = new URL(raw.trim());
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error("The gateway URL must start with ws:// or wss://");
-  }
-  return url.toString().replace(/\/$/, "");
-}
+export { validateGatewayUrl };
 
 export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
   // Without a request id (a setup connection keeps none), the gateway's pending-devices list.
@@ -911,6 +908,10 @@ export class ClawtrateClient {
   private changedDuringBootstrap = false;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
+  /** The last change to the selected gateway; the next one starts once it has settled. */
+  private connectionChanges: Promise<void> = Promise.resolve();
+  /** A host stop cancels socket opens requested before it, including ones still saving settings. */
+  private stops = 0;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -1098,9 +1099,23 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
+  /** Written first: settings the host could not save are never the ones in use. */
   private async saveSettings(settings: ConnectionSettings): Promise<void> {
-    this.settings = settings;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+    this.settings = settings;
+  }
+
+  /**
+   * Run one change to the selected gateway and its saved settings after the
+   * previous one has settled, so each reads and writes what the last one left.
+   */
+  private changeConnection<T>(change: () => Promise<T>): Promise<T> {
+    const run = this.connectionChanges.then(change);
+    this.connectionChanges = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
   }
 
   /**
@@ -1110,6 +1125,7 @@ export class ClawtrateClient {
    * connection starts only when one is chosen.
    */
   async start(options: { resume?: boolean } = {}): Promise<void> {
+    const stops = this.stops;
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
@@ -1119,7 +1135,9 @@ export class ClawtrateClient {
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
-    this.settings = await this.savedSettings();
+    const settings = await this.savedSettings();
+    if (stops !== this.stops) return;
+    this.settings = settings;
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
       return;
@@ -1129,17 +1147,20 @@ export class ClawtrateClient {
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
-    const url = validateGatewayUrl(options.url);
-    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-    const token = options.token?.trim() || null;
-    if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
-    this.setupCode = null;
-    this.setupCheck = null;
-    this.setupIntent = null;
-    this.settings = { url, token };
-    this.pairingSeen = null;
-    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
-    await this.open();
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      const url = validateGatewayUrl(options.url);
+      if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      const token = options.token?.trim() || null;
+      const switched = this.settings?.url !== url;
+      await this.saveSettings({ url, token });
+      if (switched) this.abandonAccessRequest("Switched to another gateway.");
+      this.setupCode = null;
+      this.setupCheck = null;
+      this.setupIntent = null;
+      this.pairingSeen = null;
+      if (stops === this.stops) await this.open();
+    });
   }
 
   /**
@@ -1154,20 +1175,23 @@ export class ClawtrateClient {
     options: { url: string; bootstrapToken: string; expiresAtMs: number },
     setup: { check?: () => boolean } = {},
   ): Promise<void> {
-    const url = validateGatewayUrl(options.url);
-    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-    if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
-    if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
-    this.settings = { url, token: null };
-    this.pairingSeen = null;
-    this.setupCheck = setup.check ? { url, check: setup.check } : null;
-    this.setupIntent = { url, reuse: false };
-    this.setupCode = {
-      url,
-      bootstrapToken: options.bootstrapToken,
-      expiresAtMs: options.expiresAtMs,
-    };
-    await this.open();
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      const url = validateGatewayUrl(options.url);
+      if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
+      if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
+      this.settings = { url, token: null };
+      this.pairingSeen = null;
+      this.setupCheck = setup.check ? { url, check: setup.check } : null;
+      this.setupIntent = { url, reuse: false };
+      this.setupCode = {
+        url,
+        bootstrapToken: options.bootstrapToken,
+        expiresAtMs: options.expiresAtMs,
+      };
+      if (stops === this.stops) await this.open();
+    });
   }
 
   /**
@@ -1179,15 +1203,18 @@ export class ClawtrateClient {
    * `SETUP_PAIRING_GONE`.
    */
   async connectForSetup(url: string, setup: { check?: () => boolean } = {}): Promise<void> {
-    const target = validateGatewayUrl(url);
-    if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
-    if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
-    this.setupCode = null;
-    this.settings = { url: target, token: null };
-    this.pairingSeen = null;
-    this.setupCheck = setup.check ? { url: target, check: setup.check } : null;
-    this.setupIntent = { url: target, reuse: true };
-    await this.open();
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      const target = validateGatewayUrl(url);
+      if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
+      if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
+      this.setupCode = null;
+      this.settings = { url: target, token: null };
+      this.pairingSeen = null;
+      this.setupCheck = setup.check ? { url: target, check: setup.check } : null;
+      this.setupIntent = { url: target, reuse: true };
+      if (stops === this.stops) await this.open();
+    });
   }
 
   /** Whether this device has a saved pairing for the gateway at `url`: `new` without one. */
@@ -1207,24 +1234,35 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state }));
   }
 
-  /** Close the connection and forget the gateway. The device key and any device token remain. */
-  async disconnect(): Promise<void> {
-    this.abandonAccessRequest("Disconnected from the gateway.");
-    this.close();
-    this.setupCode = null;
-    this.setupCheck = null;
-    this.setupIntent = null;
-    this.settings = null;
-    this.pairingSeen = null;
-    this.rows = new Map();
-    this.raw.clear();
-    this.retained.clear();
-    this.forgetGatewayState();
-    await this.host.storage.delete(SETTINGS_KEY);
-    this.store.set({
-      ...initialState,
-      turnLimitMinutes: this.turnLimitMs / 60_000,
-      connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+  /**
+   * Close the connection and forget the gateway. The device key and any device
+   * token remain. With `gatewayUrl`, only that gateway is forgotten: the address
+   * the person saw, which another viewer may have changed since.
+   */
+  async disconnect(gatewayUrl?: string): Promise<void> {
+    return this.changeConnection(async () => {
+      if (!this.settings) return;
+      if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
+        throw new Error(GATEWAY_CHANGED_MESSAGE);
+      }
+      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
+      await this.host.storage.delete(SETTINGS_KEY);
+      this.abandonAccessRequest("Disconnected from the gateway.");
+      this.close();
+      this.setupCode = null;
+      this.setupCheck = null;
+      this.setupIntent = null;
+      this.settings = null;
+      this.pairingSeen = null;
+      this.rows = new Map();
+      this.raw.clear();
+      this.retained.clear();
+      this.forgetGatewayState();
+      this.store.set({
+        ...initialState,
+        turnLimitMinutes: this.turnLimitMs / 60_000,
+        connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+      });
     });
   }
 
@@ -1233,13 +1271,18 @@ export class ClawtrateClient {
    * reconnects at once, keeping what is already on screen.
    */
   async retryNow(): Promise<void> {
-    if (!this.settings) return;
-    if (this.protocol?.connected && this.state.connection.status === "connected") {
-      await this.bootstrap(this.generation, null);
-      return;
-    }
-    if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
-    await this.open();
+    const stops = this.stops;
+    // The reload runs outside the queue: it changes nothing saved.
+    const reload = await this.changeConnection(async () => {
+      if (!this.settings || stops !== this.stops) return null;
+      if (this.protocol?.connected && this.state.connection.status === "connected") {
+        return this.generation;
+      }
+      if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+      if (stops === this.stops) await this.open();
+      return null;
+    });
+    if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
 
   /**
@@ -1247,18 +1290,21 @@ export class ClawtrateClient {
    * pairing and what is on screen. `retryNow` reconnects.
    */
   async suspend(): Promise<void> {
-    if (!this.settings) return;
-    // Saved, so a restart does not reconnect by itself.
-    await this.saveSettings({ ...this.settings, suspended: true });
-    // The connection stops: writes waiting for access fail, as on any lost connection.
-    // Runs are kept as they are and reconciled with history after Reconnect.
-    this.abandonAccessRequest("Disconnected from the gateway.");
-    this.close();
-    this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+    return this.changeConnection(async () => {
+      if (!this.settings) return;
+      // Saved, so a restart does not reconnect by itself.
+      await this.saveSettings({ ...this.settings, suspended: true });
+      // The connection stops: writes waiting for access fail, as on any lost connection.
+      // Runs are kept as they are and reconciled with history after Reconnect.
+      this.abandonAccessRequest("Disconnected from the gateway.");
+      this.close();
+      this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+    });
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
   stop(): void {
+    this.stops += 1;
     this.close();
   }
 
@@ -5036,7 +5082,6 @@ export class ClawtrateClient {
 
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
-    const paired = stored !== null;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
@@ -5055,7 +5100,7 @@ export class ClawtrateClient {
         status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
-        paired,
+        // Not paired yet: only a hello says so, since a saved token may be one the gateway refuses.
         requestedScopes:
           stored && !this.options.readOnly && !this.isSetup(settings.url)
             ? [...stored.heldScopes]
@@ -5232,15 +5277,32 @@ export class ClawtrateClient {
             grantedScopes: [...staged.scopes],
             heldScopes: [...READ_SCOPES],
           });
-          if (generation !== this.generation) return;
-          await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
+          // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
+          await this.changeConnection(async () => {
+            const current = this.settings;
+            if (generation !== this.generation || current?.url !== settings.url) return;
+            await this.saveSettings(current);
+          });
           return;
         }
-        if (hello.auth.deviceToken && this.settings?.token) {
-          // Paired: drop the bootstrap secret, the device token replaces it.
-          this.settings = { ...this.settings, token: null };
-          await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
-        }
+        // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
+        await this.changeConnection(async () => {
+          // Only this connection may drop this gateway's bootstrap secret.
+          const current = this.settings;
+          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!current.token) return;
+          // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
+          const paired =
+            Boolean(hello.auth.deviceToken) ||
+            (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
+          if (!paired) return;
+          try {
+            await this.saveSettings({ ...current, token: null });
+          } catch {
+            // The settings keep the secret, so the next hello tries again; this one goes on.
+            this.log("warn", "Could not remove the shared gateway token from this device.");
+          }
+        });
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
@@ -5547,10 +5609,14 @@ export class ClawtrateClient {
       };
     }
 
-    if (code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH") {
+    const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
+    if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
-      // next attempt can pair again with a bootstrap token.
-      void tokenStore.clear(this.tokenParams(deviceId));
+      // next attempt can pair again with a bootstrap token. The gateway's refusal
+      // stays on screen whether or not the host could remove it.
+      void (async () => tokenStore.clear(this.tokenParams(deviceId)))().catch(() =>
+        this.log("warn", "Could not remove the rejected device token from this device."),
+      );
     }
 
     const pause = setup || shouldPauseGatewayReconnect({ details: error.details });
@@ -5558,6 +5624,7 @@ export class ClawtrateClient {
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
       error: { code, message, hint },
+      ...(refused ? { paired: false } : {}),
     });
     // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
     if (pause)
