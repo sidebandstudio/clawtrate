@@ -984,8 +984,8 @@
           `<div class="d-actions">${bot ? act("Send", sendTo, { variant: "primary", size: "md", attrs: "data-share-send data-keep-note" }) : `<button type="button" class="button" data-variant="primary" data-size="md" disabled data-share-send>Send</button>`}</div>` +
           proto(
             link("The reply will be lost", go("share", { lost: "1" }), { attrs: "data-keep-note" }),
-            link("The task is made, the message refused", go("share-msgfail"), { attrs: "data-keep-note" }),
-            link("Only the task is confirmed", go("share-taskonly"), { attrs: "data-keep-note" }),
+            bot && !why ? link("The task is made, the message refused", go("share-msgfail"), { attrs: "data-keep-note" }) : "",
+            bot && !why ? link("Only the task is confirmed", go("share-taskonly"), { attrs: "data-keep-note" }) : "",
             link("No gateway saved", go("share", { gw: "none" }), { attrs: "data-keep-note" }),
             link("The bot is no longer listed", go("share", { gone: "1" }), { attrs: "data-keep-note" }),
           ),
@@ -995,7 +995,7 @@
 
   // The returned task, with the exact first message and the supported items held there for retry, by the composer's rules.
   function heldTask(held) {
-    const bot = toBot() || "juniper";
+    const bot = toBot();
     return (
       `<div class="d-chat" data-task="${TASK_ID}">` +
       `<header class="d-chat-head"><span class="avatar" data-bot="${bot}"></span><b>${BOTS[bot]}</b><span>Task ${TASK_ID}</span></header>` +
@@ -1130,15 +1130,15 @@
         )
       );
     },
-    "siri-list": () => other() + sys("Clawtrate", `<p>You have four bots: Juniper, Marlow, Otto and Pip.</p><ul><li>Juniper (the primary bot)</li><li>Marlow</li><li>Otto</li><li>Pip</li></ul>`, closeSys()),
+    "siri-list": () => other() + sys("Clawtrate", noBots ? `<p>No bots are listed.</p>` : `<p>You have four bots: Juniper, Marlow, Otto and Pip.</p><ul><li>Juniper (the primary bot)</li><li>Marlow</li><li>Otto</li><li>Pip</li></ul>`, closeSys()),
     "siri-list-fail": () => other() + sys("Clawtrate", `<p>Clawtrate couldn't reach the gateway.</p>`, closeSys()),
     "siri-confirm": () =>
       other() +
       sys(
-        `Send to ${BOTS[toBot()]}?`,
+        listedBot() ? `Send to ${BOTS[listedBot()]}?` : "Choose a bot in Clawtrate",
         `<blockquote data-exact>${esc(msg())}</blockquote>`,
         act("Cancel", go("siri-cancelled"), { size: "md", attrs: "data-cancel" }) + act("Open in Clawtrate to send it", go("share-draft", { from: "siri" }), { variant: "primary", size: "md", attrs: "data-siri-handoff" }),
-        proto(link("Once the confirmation is proven on a device: Send", !canSend || down ? go("siri-fail") : go("siri-sent", { said: `Sent to ${BOTS[toBot()]}` }), { attrs: "data-siri-send" })),
+        listedBot() ? proto(link("Once the confirmation is proven on a device: Send", !canSend || down ? go("siri-fail") : go("siri-sent", { said: `Sent to ${BOTS[toBot()]}` }), { attrs: "data-siri-send" })) : "",
       ),
     "siri-handoff": () => SCREENS["share-draft"](),
     // Not supported states until the confirmation is proven on a device: drawn for the build after that proof.
@@ -1152,7 +1152,11 @@
   // Mount -----------------------------------------------------------------------
 
   const root = document.getElementById("device-root");
-  const id = SCREENS[screenId] ? screenId : "mac-off";
+  let id = Object.hasOwn(SCREENS, screenId) ? screenId : "mac-off";
+  if (!listedBot()) {
+    if (["share-sent", "share-msgfail", "share-taskonly", "share-task", "share-unsure"].includes(id)) id = "share-draft";
+    if (id === "siri-sent") id = "siri-confirm";
+  }
   root.dataset.screen = id;
   if (phoneScreen && !params.get("width")) {
     CT.settings.width = "phone";
@@ -1163,7 +1167,8 @@
   CT.hydrate(root);
 
   const live = document.getElementById("device-live");
-  if (params.get("said")) setTimeout(() => (live.textContent = params.get("said")), 50);
+  const said = id === screenId ? params.get("said") : null;
+  if (said) setTimeout(() => (live.textContent = said), 50);
 
   // A modal (dialog, host dialog, share sheet, system panel): focus its title, make the rest inert, keep Tab inside.
   const modal = root.querySelector("[data-host-scrim], [data-d-dialog], [data-d-modal]");
@@ -1184,7 +1189,7 @@
         first.focus();
       }
     });
-  } else if (params.get("said")) root.querySelector("[data-d-title]")?.focus();
+  } else if (said) root.querySelector("[data-d-title]")?.focus();
 
   // The note and the chosen bot go with the person from one state of the share sheet to the next.
   const withNote = (url) => {

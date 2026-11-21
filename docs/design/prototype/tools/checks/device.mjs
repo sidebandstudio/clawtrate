@@ -685,6 +685,18 @@ for (const tier of ["read", "pairing"]) {
   check(`F-406 ${tier} without write: keep the note, items and recipient in an unsent draft`, (await p.inputValue("[data-draft]")) === "Keep the route." && (await text(p, ".d-chat-head")).includes("Marlow") && (await p.locator(".d-chips li").count()) === 2 && await p.locator("[data-draft-send]").isDisabled());
   await p.close();
 }
+for (const screen of ["share-msgfail", "share-taskonly", "share-task", "share-unsure", "share-sent"]) {
+  p = await open(`screen=${screen}&nodefault=1&note=Keep%20this&said=Sent`, phone);
+  check(`F-406 ${screen} without a recipient keeps an unsent draft`, (await p.inputValue("[data-draft]")) === "Keep this" && await p.locator("[data-draft-send]").isDisabled() && !(await text(p)).includes("undefined") && !(await text(p, "#device-live")));
+  await p.close();
+}
+for (const screen of ["siri-confirm", "siri-sent"]) {
+  p = await open(`screen=${screen}&nobots=1&msg=Keep%20these%20words`, phone);
+  check(`F-246 ${screen} without a listed bot offers only the draft handoff`, (await p.locator("[data-siri-send]").count()) === 0 && (await text(p, ".d-sys")).includes("Choose a bot in Clawtrate"));
+  await p.locator("[data-siri-handoff]").click();
+  check(`F-246 ${screen} keeps the original text until a bot is listed`, (await p.inputValue("[data-draft]")) === "Keep these words" && await p.locator("[data-draft-send]").isDisabled());
+  await p.close();
+}
 p = await open("screen=share&nodefault=1", phone);
 check("defaultId not among the listed bots: To starts empty, asks for a listed bot, and Send is unavailable", (await text(p, "[data-to-row]")).includes("Choose a listed bot") && (await p.locator("[data-share-send][disabled]").count()) === 1 && !(await text(p)).includes("The primary bot"));
 await p.close();
