@@ -929,7 +929,10 @@ describe("the programs setup starts", () => {
     const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const quit = main.slice(main.indexOf('app.on("before-quit"'));
     expect(quit).toContain("event.preventDefault();");
-    expect(quit.indexOf("programs.stopAllAndWait()")).toBeLessThan(quit.indexOf("app.quit();"));
+    const wait = quit.indexOf("programs.stopAllAndWait()");
+    const resumeQuit = quit.indexOf("app.quit();");
+    expect(wait).toBeGreaterThanOrEqual(0);
+    expect(resumeQuit).toBeGreaterThan(wait);
   }, 20_000);
 
   it("the host's runner refuses anything but the look's commands before it starts", async () => {

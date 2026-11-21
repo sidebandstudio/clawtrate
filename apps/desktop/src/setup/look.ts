@@ -4,7 +4,8 @@
 // limit; every program runs through `RunProgram`, never a shell, in the
 // world's own working folder. A sandboxed world never runs the deep status.
 
-import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { basename, dirname, join } from "node:path";
 import {
@@ -41,6 +42,7 @@ export const LIMITS = {
 
 /** The design's limit on the look's own checks of files (§4). */
 export const FILE_CHECK_MS = 2_000;
+const MAX_MANIFEST_BYTES = 64 * 1024;
 
 /** The steps the person sees: "Finding OpenClaw", "Checking its version", "Asking the gateway". */
 export const LOOK_STEPS = 3;
@@ -102,15 +104,20 @@ const cantTell = (reason: CantTellReason, version: string | null = null): SetupL
 class FileCheckTimeout extends Error {}
 
 /** Every file check of one look, together, within `FILE_CHECK_MS`. */
-function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   const left = Math.max(0, deadline - Date.now());
-  return Promise.race([
-    work,
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => reject(new FileCheckTimeout()), left);
-      timer.unref?.();
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new FileCheckTimeout()), left);
+    timer.unref?.();
+  });
+  try {
+    const result = await Promise.race([work, timeout]);
+    if (Date.now() >= deadline) throw new FileCheckTimeout();
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -132,14 +139,27 @@ async function installedVersion(program: string): Promise<string | null> {
     const launcher = await realpath(program);
     if (basename(launcher) !== "openclaw.mjs") return null;
     const manifest = join(dirname(launcher), "package.json");
-    const info = await stat(manifest);
-    if (!info.isFile() || info.size > 64 * 1024) return null;
-    const parsed = JSON.parse(await readFile(manifest, "utf8")) as {
-      name?: unknown;
-      version?: unknown;
-    };
-    if (parsed.name !== "openclaw" || typeof parsed.version !== "string") return null;
-    return parseBareVersion(parsed.version) ? parsed.version : null;
+    const file = await open(manifest, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.size > MAX_MANIFEST_BYTES) return null;
+      const bytes = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+      let size = 0;
+      while (size < bytes.length) {
+        const { bytesRead } = await file.read(bytes, size, bytes.length - size);
+        if (bytesRead === 0) break;
+        size += bytesRead;
+      }
+      if (size > MAX_MANIFEST_BYTES) return null;
+      const parsed = JSON.parse(bytes.toString("utf8", 0, size)) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (parsed.name !== "openclaw" || typeof parsed.version !== "string") return null;
+      return parseBareVersion(parsed.version) ? parsed.version : null;
+    } finally {
+      await file.close();
+    }
   } catch {
     return null;
   }
@@ -295,13 +315,11 @@ export async function lookHere(
   if (cancelled()) return null;
   // The program's identity before anything runs it, under the file deadline: what Connect checks
   // again is the file whose answers these are.
-  const identityNow = () =>
-    world.installed
-      ? Promise.resolve("stand-in")
-      : withDeadline(fileIdentity(program), Date.now() + FILE_CHECK_MS);
+  const identityNow = (deadline: number) =>
+    world.installed ? Promise.resolve("stand-in") : withDeadline(fileIdentity(program), deadline);
   let programIdentity: string | null;
   try {
-    programIdentity = await identityNow();
+    programIdentity = await identityNow(files);
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
     throw error;
@@ -314,10 +332,7 @@ export async function lookHere(
   if (!world.installed) {
     let verdict: { verified: boolean; version: string | null };
     try {
-      verdict = await withDeadline(
-        (world.readOnly ?? readOnlyProgram)(program),
-        Date.now() + FILE_CHECK_MS,
-      );
+      verdict = await withDeadline((world.readOnly ?? readOnlyProgram)(program), files);
     } catch (error) {
       if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
       throw error;
@@ -390,7 +405,7 @@ export async function lookHere(
   const identify = options.identify ?? processIdentity;
   // The same file still, or nothing found here is offered.
   try {
-    if ((await identityNow()) !== programIdentity) programIdentity = null;
+    if ((await identityNow(Date.now() + FILE_CHECK_MS)) !== programIdentity) programIdentity = null;
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
     throw error;
