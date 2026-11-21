@@ -27,36 +27,59 @@ export function viewEndLine(bot: string, end: ViewEnd, error: string | null): st
     case "tab-closed":
       return "This tab was closed.";
     case "browser-gone":
-      return `The view ended. ${bot}'s browser stopped answering.`;
+      return `The view ended. The connection to ${bot}'s browser is unavailable.`;
     case "dropped":
       return "The view ended when the connection dropped.";
     case "failed":
       return error ? `Couldn't open the view. ${error}` : "Couldn't open the view.";
     case "gateway-ended":
     case "stopped":
-      return "The view ended. The gateway stopped sending it.";
+      return "The view ended.";
   }
 }
 
 export const noPluginTitle = "Watching isn't set up on this gateway";
-export const noPluginBody = (bot: string) =>
-  `To watch ${bot}'s browser here, the gateway's owner installs Clawtrate's computer plugin and gives ${bot} a browser of its own.`;
-export const noPluginShared = (bot: string) =>
-  `Without it, nothing here gives ${bot} a browser of its own. By default, bots that use the browser share one profile, with its sign-ins.`;
-export const unconfiguredTitle = (bot: string) => `${bot} has no browser of its own yet.`;
+export const noPluginBody = (_bot: string) =>
+  "Watching is available on a Clawtrate development gateway configured for this bot.";
+/** General behavior, not a reading of this gateway's own profiles. */
+export const noPluginShared = (_bot: string) =>
+  "On a gateway without it, bots that use the browser may share one default profile, with its sign-ins.";
+export const unconfiguredTitle = (bot: string) =>
+  `Watching isn't set up for ${bot} on this gateway.`;
 export const unconfiguredBody = (bot: string) =>
-  `The gateway's owner adds ${bot} to the computer plugin's list of bots. Until then ${bot}'s browser can't be watched here.`;
-export const unconfiguredShared = (bot: string) =>
-  `Nothing here gives ${bot} a browser of its own. By default, bots that use the browser share one profile, with its sign-ins.`;
+  `${bot} isn't one of the bots the computer plugin on this gateway gives a browser of its own.`;
+export const unconfiguredShared = (_bot: string) =>
+  "Bots that use the browser may share one default profile, with its sign-ins.";
 export const notAllowedTitle = (bot: string) => `${bot} can't use a browser in this task.`;
 export const notAllowedBody =
   "The gateway's tool policy for this task doesn't allow the browser, so there is nothing to watch here.";
+/**
+ * Where an exec approval asked to run its command: a node by name, or the host it named. The
+ * gateway's machine only when the approval named the gateway; without a host, it isn't known.
+ */
+export function approvalTargetLine(host: string | null, nodeId: string | null): string {
+  if (nodeId) return nodeId;
+  switch (host) {
+    case "node":
+      return "a node";
+    case "sandbox":
+      return "a sandbox";
+    case "gateway":
+      return "the gateway's machine";
+    default:
+      return "Machine not reported.";
+  }
+}
 export const askFailedLine = (bot: string) => `Couldn't ask the computer plugin about ${bot}.`;
 export const readOnlyLine = "Watching needs a connection that can send. This device is read-only.";
 export const unusedTitle = "No screen to show";
 export const unusedBody = (bot: string) => `When ${bot} uses its browser, you can watch it here.`;
 export const noTabsLine = (bot: string) =>
   `${bot}'s browser has no tabs open. If ${bot} opens one, it appears here.`;
+/** The plugin couldn't look (its list timed out or failed): not the same as no tabs. */
+export const tabsUnknownLine = (bot: string) => `Couldn't check for tabs in ${bot}'s browser.`;
+/** The full view has no view open, and none opening: nothing is shown. */
+export const noViewLine = "No view open";
 
 export const elsewhereLine = (bot: string) =>
   `Someone on another device has control of ${bot}'s browser.`;
@@ -68,9 +91,11 @@ export const takingElsewhereLine = (bot: string) =>
   `Someone on another device is asking for control of ${bot}'s browser.`;
 export const takingOtherWindowLine = (bot: string) =>
   `Another window of this app is asking for control of ${bot}'s browser.`;
+/** A take refused as held, before a read tells who holds the tab and how far. */
+export const requestHeldLine = "That tab already has a control request.";
 
-export const waitingLine = (bot: string) =>
-  `Waiting for ${bot} to finish what it's doing in the browser…`;
+/** A take on its way: no reason is known until the plugin answers. */
+export const waitingLine = (_bot: string) => "Waiting for the gateway to confirm control…";
 
 /** A take the plugin answered `busy`, by its reason; null when it gave none this app knows. */
 export function busyLine(bot: string, reason: BusyReason | null): string {
@@ -82,29 +107,29 @@ export function busyLine(bot: string, reason: BusyReason | null): string {
     case "browser-not-watched":
       return `Can't see whether ${bot}'s browser has settled, so control wasn't given. Try again in a moment.`;
     case "browser-not-quiet":
+      return `A page in ${bot}'s browser is still loading.`;
     case "download-in-progress":
-      return `Something ${bot} started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.`;
+      return `A download in ${bot}'s browser is still in progress.`;
     default:
       return `The gateway didn't give control of ${bot}'s browser. Try again in a moment.`;
   }
 }
 
-export const stuckLine = (bot: string) =>
-  `${bot}'s browser has been busy for a while. A call that never finished can keep control from being handed over. If stopping doesn't free it, the gateway's owner can restart the gateway.`;
+export const stuckLine = (_bot: string) => "The last three requests didn't give you control.";
 export const stopConfirmLine = (bot: string) =>
-  `Stop ${bot}'s runs in this task? Steps already done stay done. ${bot}'s other tasks and other bots keep going.`;
-export const stoppedLine = (bot: string) =>
-  `Stopped ${bot}'s runs in this task. Its other tasks and other bots keep going.`;
+  `Stop ${bot}'s runs in this task? Steps already done stay done. The request affects only this task.`;
+export const stoppedLine = (bot: string) => `Stopped ${bot}'s runs in this task.`;
 /** Asked, and not yet ended by the runs themselves (`stopProgress`). */
 export const stoppingLine = (bot: string) => `Stopping ${bot}'s runs in this task…`;
 export const endedBeforeStopLine = (bot: string) =>
-  `${bot}'s runs in this task ended before the stop took effect.`;
+  `${bot}'s runs ended. A stop wasn't confirmed for every run.`;
 export const stopRefusedLine = (bot: string, error: string) =>
   `Couldn't stop ${bot}'s runs in this task. ${error}`;
-export const nothingToStopLine = (bot: string) =>
-  `Nothing of ${bot}'s was running in this task, so nothing was stopped.`;
-export const stopAcceptedLine = (bot: string) =>
-  `The gateway took the stop for this task. It shows here once ${bot}'s run ends.`;
+export const nothingToStopLine = (_bot: string) =>
+  "The gateway reported no runs stopped in this task.";
+/** The abort's answer gave no `aborted` at all. */
+export const stopUnconfirmedLine = "The gateway didn't confirm the stop.";
+export const stopAcceptedLine = (_bot: string) => "The gateway accepted the stop request.";
 
 export const controlEndedLine = (cause: "expired" | "revoked" | null) =>
   cause === "expired"
@@ -122,14 +147,14 @@ export const unverifiedLine = (bot: string) =>
 export const answerNotSentLine =
   "Your answer wasn't sent. Answer in the chat once control is given back.";
 export const answeringLine = "Sending your answer…";
-export const outOfSightLine = (bot: string, renewWithinMs: number | null) =>
-  `This device may still have control of ${bot}'s browser. Giving it back wasn't confirmed; it ends by itself within about ${Math.max(1, Math.round((renewWithinMs ?? 20_000) / 1000))} seconds.`;
+export const outOfSightLine = (bot: string, _renewWithinMs: number | null) =>
+  `This device may still have control of ${bot}'s browser. Giving it back wasn't confirmed. The gateway will let it expire if it isn't renewed.`;
 export const droppedLine =
   "The connection dropped. Input has stopped. The gateway ends control when it observes this connection close; check its state after reconnecting.";
 export const checkingLine = (bot: string) => `Checking ${bot}'s question and browser…`;
 
 const closedWords: Record<ClosedCode, string> = {
-  answered: "was answered on another device",
+  answered: "was answered",
   dismissed: "was dismissed",
   cancelled: "was cancelled",
   expired: "expired",
@@ -154,9 +179,11 @@ export function outcomeLine(bot: string, outcome: ComputerOutcome): string {
     case "answered":
       return `Answer sent. ${bot} can carry on.`;
     case "answer-failed":
-      return `Couldn't send your answer. Control is back with ${bot}; answer in the chat.`;
+      return "This device gave back control. The gateway didn't confirm your answer. Check the question in chat.";
     case "already-answered":
-      return `${bot}'s question was already answered on another device.`;
+      return `${bot}'s question was already answered.`;
+    case "question-unknown":
+      return "Couldn't confirm the question is still pending. Your answer wasn't sent.";
     case "already-dismissed":
       return `${bot}'s question was dismissed.`;
     case "already-cancelled":

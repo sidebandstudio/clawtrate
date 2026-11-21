@@ -1,6 +1,7 @@
 import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
+import { cardDomId } from "./cards/placement.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
@@ -433,22 +434,30 @@ export function Shell({
     },
     [drawerOpen, setPanel, taskKey],
   );
-  const showQuestion = useCallback(() => {
-    const reveal = () => {
-      const cards = document.querySelectorAll<HTMLElement>(
-        '.transcript [data-testid="question-card"]',
-      );
-      const card = cards[cards.length - 1];
-      if (!card) return;
-      card.scrollIntoView({ block: "center" });
-      (card.querySelector<HTMLElement>("button, input") ?? card).focus({ preventScroll: true });
-    };
-    if (drawerOpen) {
-      keepFocus.current = true;
-      setPanel(false);
-      requestAnimationFrame(() => requestAnimationFrame(reveal));
-    } else requestAnimationFrame(reveal);
-  }, [drawerOpen, setPanel]);
+  /** Bring a question's card into view and focus it: that question's own, when it is named. */
+  const showQuestion = useCallback(
+    (questionId?: string) => {
+      const reveal = () => {
+        const cards = document.querySelectorAll<HTMLElement>(
+          '.transcript [data-testid="question-card"]',
+        );
+        const card = questionId
+          ? document.querySelector<HTMLElement>(
+              `.transcript #${cardDomId({ kind: "question", id: questionId })}`,
+            )
+          : cards[cards.length - 1];
+        if (!card) return;
+        card.scrollIntoView({ block: "center" });
+        (card.querySelector<HTMLElement>("button, input") ?? card).focus({ preventScroll: true });
+      };
+      if (drawerOpen) {
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else requestAnimationFrame(reveal);
+    },
+    [drawerOpen, setPanel],
+  );
   const showComputer = useCallback(() => {
     setPanel(true);
     setWorkTab("computer");

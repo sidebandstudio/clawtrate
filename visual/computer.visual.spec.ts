@@ -34,7 +34,9 @@ const SCENES: Scene[] = [
     rows: "F-141",
     query: `${COMPUTER}&computer=unconfigured`,
     ready: (page) =>
-      expect(panel(page).getByText("Juniper has no browser of its own yet.")).toBeVisible(),
+      expect(
+        panel(page).getByText("Watching isn't set up for Juniper on this gateway."),
+      ).toBeVisible(),
   },
   {
     name: "computer-unused",
@@ -97,9 +99,7 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await openFull(page);
       await take(page);
-      await expect(controlBar(page)).toContainText(
-        "Waiting for Juniper to finish what it's doing in the browser…",
-      );
+      await expect(controlBar(page)).toContainText("Waiting for the gateway to confirm control…");
     },
   },
   {
@@ -139,9 +139,7 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await openFull(page);
       await take(page);
-      await expect(controlBar(page)).toContainText(
-        "Something Juniper started in this browser hasn't finished yet",
-      );
+      await expect(controlBar(page)).toContainText("A page in Juniper's browser is still loading.");
     },
   },
   {
@@ -152,7 +150,7 @@ const SCENES: Scene[] = [
       await openFull(page);
       await take(page);
       await expect(controlBar(page)).toContainText(
-        "Someone on another device has control of Juniper's browser.",
+        "Someone on another device is asking for control of Juniper's browser.",
       );
     },
   },
@@ -190,9 +188,7 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await tileReady(page);
       await panel(page).getByRole("button", { name: "Watch Juniper's browser" }).click();
-      await expect(
-        panel(page).getByText("The view ended. The gateway stopped sending it."),
-      ).toBeVisible();
+      await expect(panel(page).getByText("The view ended.", { exact: true })).toBeVisible();
     },
   },
   {

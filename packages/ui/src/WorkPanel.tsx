@@ -86,7 +86,7 @@ export function WorkPanel({
   connection: ConnectionState;
   interactive: boolean;
   onShowStep: (stepId: string) => void;
-  onShowQuestion: () => void;
+  onShowQuestion: (questionId?: string) => void;
   onRequestAccess: (() => void) | null;
   /** Settings, on Machines: where a node's settings are. */
   onOpenMachines?: (() => void) | undefined;
@@ -216,6 +216,7 @@ export function WorkPanel({
               key={task.key}
               bridge={bridge}
               bot={bot}
+              bots={bots}
               taskKey={task.key}
               transcript={transcript}
               computer={computer}

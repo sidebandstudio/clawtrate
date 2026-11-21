@@ -573,24 +573,146 @@ describe("taking control (F-142, F-144, section 18)", () => {
   });
 
   it("F-142: someone else holding the tab is a conflict, not control", async () => {
+    let lease: unknown = null;
     const h = harness({
+      "clawtrate-computer.tabs": () => tabsAnswer(lease),
       "clawtrate-computer.control.take": () => {
         throw refused("UNAVAILABLE", "control_held");
       },
     });
     await live(h);
+    lease = { state: "granted", mine: false };
+    await h.views.take(h.viewer);
+    await flush();
+    expect(h.pane().control.status).toBe("conflict");
+    expect(h.pane().tabs[0]!.lease).toEqual({ state: "granted", holder: "elsewhere" });
+  });
+
+  it("F-142: a refused take names no holder until a read made after it does: another device still asking is asking, not in control, and the line clears once that request ends", async () => {
+    let lease: unknown = null;
+    let read!: () => void;
+    const h = harness({
+      "clawtrate-computer.tabs": () =>
+        new Promise((resolve) => (read = () => resolve(tabsAnswer(lease)))),
+      "clawtrate-computer.control.take": () => {
+        throw refused("UNAVAILABLE", "control_held");
+      },
+    });
+    h.views.hello(["clawtrate-computer.tabs"]);
+    h.views.show(h.viewer, KEY);
+    read();
+    await flush();
+    await h.views.watch(h.viewer);
+    h.streams.at(-1)!.frame();
+    // A read from before the refusal still says nothing holds the tab.
+    void h.views.readTabs(h.viewer);
+    const old = read;
+    lease = { state: "draining", mine: false };
     await h.views.take(h.viewer);
     expect(h.pane().control.status).toBe("conflict");
+    // The old read answers first: it can't say who has the tab now.
+    old();
+    await flush();
+    expect(h.pane().control.status).toBe("conflict");
+    expect(h.pane().tabs[0]!.lease).toBeNull();
+    // The read made after the refusal: another device is asking, and nobody has control yet.
+    read();
+    await flush();
+    expect(h.pane().control.status).toBe("conflict");
+    expect(h.pane().tabs[0]!.lease).toEqual({ state: "draining", holder: "elsewhere" });
+    // That request ends: the next read finds nothing on the tab, and the refusal's line goes.
+    lease = null;
+    h.views.controlEvent({
+      agentId: "pip",
+      profile: "bot-pip",
+      targetId: TAB,
+      holder: "bot",
+      state: "busy",
+      generation: GEN2,
+    });
+    read();
+    await flush();
+    expect(h.pane().control.status).toBe("none");
+  });
+
+  it("F-142: a draining event belongs to a take only once a read says the tab's request is this connection's, and to no take when another viewer of this app waits for the same tab", async () => {
+    let lease: unknown = null;
+    const grants: Array<(value: unknown) => void> = [];
+    const grant = (value: unknown) => grants.splice(0).forEach((resolve) => resolve(value));
+    const h = harness({
+      "clawtrate-computer.tabs": () => tabsAnswer(lease),
+      "clawtrate-computer.control.take": () => new Promise((resolve) => grants.push(resolve)),
+    });
+    await live(h);
+    const taking = h.views.take(h.viewer);
+    await flush();
+    // Another device's request, broadcast to every reader: the read says it isn't this one's.
+    lease = { state: "draining", mine: false };
+    h.views.controlEvent({
+      agentId: "pip",
+      profile: "bot-pip",
+      targetId: TAB,
+      holder: "user",
+      state: "draining",
+      generation: GEN2,
+    });
+    await flush();
+    h.views.cancelTake(h.viewer);
+    await flush();
+    expect(h.calls("clawtrate-computer.control.release")).toEqual([]);
+    grant({
+      state: "busy",
+      reason: "the bot is still acting in this browser",
+      cause: "bot-still-acting",
+      runningCalls: 1,
+      generation: GEN,
+    });
+    await taking;
+
+    // Two viewers of this app wait for the same tab: the event can be either's, so neither takes it.
+    const second = h.views.newViewer();
+    h.views.show(second, KEY);
+    await flush();
+    await h.views.watch(second);
+    lease = null;
+    const first = h.views.take(h.viewer);
+    const other = h.views.take(second);
+    await flush();
+    lease = { state: "draining", mine: true };
+    h.views.controlEvent({
+      agentId: "pip",
+      profile: "bot-pip",
+      targetId: TAB,
+      holder: "user",
+      state: "draining",
+      generation: GEN,
+    });
+    await flush();
+    h.views.cancelTake(second);
+    await flush();
+    expect(h.calls("clawtrate-computer.control.release")).toEqual([]);
+    grant({
+      state: "busy",
+      reason: "the bot is still acting in this browser",
+      cause: "bot-still-acting",
+      runningCalls: 1,
+      generation: GEN,
+    });
+    await Promise.all([first, other]);
   });
 
   it("F-142: Cancel withdraws the take with the draining event's generation, and a grant that wins the race is given back at once with no input", async () => {
     let grant!: (value: unknown) => void;
+    let lease: unknown = null;
     const h = harness({
+      "clawtrate-computer.tabs": () => tabsAnswer(lease),
       "clawtrate-computer.control.take": () => new Promise((resolve) => (grant = resolve)),
     });
     await live(h);
     const taking = h.views.take(h.viewer);
     await flush();
+    // This connection's request: the read after the event lists it as its own.
+    lease = { state: "draining", mine: true };
     h.views.controlEvent({
       agentId: "pip",
       profile: "bot-pip",
@@ -872,7 +994,7 @@ describe("handing back (F-145, section 18)", () => {
     await granted(h);
     h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
     h.env.question = question({ status: "answered" });
-    h.views.questionClosed(KEY, "answered");
+    h.views.questionClosed(KEY, "ask_1", "answered");
     expect(h.pane().control).toMatchObject({
       status: "releasing",
       answerQueued: false,
@@ -886,7 +1008,9 @@ describe("handing back (F-145, section 18)", () => {
     const r = harness();
     r.env.question = question();
     await granted(r);
-    r.views.questionClosed(KEY, "run-ended");
+    // The client says so once the task's state has the question closed.
+    r.env.question = question({ status: "cancelled" });
+    r.views.questionClosed(KEY, "ask_1", "run-ended");
     expect(r.pane().control).toMatchObject({ status: "granted", questionGone: "run-ended" });
   });
 
@@ -1261,5 +1385,274 @@ describe("an answer belongs to its own pane and hand-back (F-145, section 18)", 
     failAnswer(new Error("refused"));
     await flush();
     expect(h.pane().control).toMatchObject({ status: "none", outcome: null });
+  });
+});
+
+describe("closing edits: tab choice, competing takes, confirmation in time, hand-back and refusals", () => {
+  it("choosing another tab while Computer stays shown ends the old view and opens one on the new tab, and a take there goes to the new tab", async () => {
+    const h = harness({
+      "clawtrate-computer.tabs": () =>
+        tabsAnswer(null, [
+          { targetId: OTHER, url: "http://127.0.0.1:1/b", title: "B", lease: null },
+        ]),
+      "clawtrate-computer.view.open": (p) => ({
+        streamId: `stream-${String(p.targetId).slice(-1)}`,
+        wsPath: `/clawtrate-computer/stream?ticket=${TICKET}`,
+        expiresAtMs: Date.now() + 60_000,
+        renewWithinMs: 20_000,
+        targetId: p.targetId,
+      }),
+    });
+    await live(h);
+    h.views.choose(h.viewer, OTHER);
+    await flush();
+    expect(h.calls("clawtrate-computer.view.open").map((p) => p.targetId)).toEqual([TAB, OTHER]);
+    expect(h.pane().view).toMatchObject({ targetId: OTHER });
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take")).toEqual([
+      { sessionKey: KEY, targetId: OTHER },
+    ]);
+    expect(h.pane().control).toMatchObject({ status: "granted", targetId: OTHER });
+
+    // An ended view of the old tab is not shown for the new one: no view is open there.
+    const e = harness({
+      "clawtrate-computer.tabs": () =>
+        tabsAnswer(null, [
+          { targetId: OTHER, url: "http://127.0.0.1:1/b", title: "B", lease: null },
+        ]),
+    });
+    await live(e);
+    e.streams.at(-1)!.end(4006);
+    expect(e.pane().view?.status).toBe("ended");
+    e.views.choose(e.viewer, OTHER);
+    expect(e.pane()).toMatchObject({ shown: OTHER, view: null });
+  });
+
+  it("with the six-second development lease and no expiry event, a renewal confirmed after its own deadline doesn't give control back: input stays stopped", async () => {
+    vi.useFakeTimers();
+    let answer!: (value: unknown) => void;
+    let renewals = 0;
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) => {
+        renewals += 1;
+        // The renewal sent at 1.5 s is answered, positively, only at 6.4 s.
+        if (renewals === 1 && p.generation === GEN)
+          return new Promise((resolve) => (answer = resolve));
+        return new Promise(() => {});
+      },
+      "clawtrate-computer.control.take": (p) => ({
+        state: "granted",
+        generation: GEN,
+        renewWithinMs: 6_000,
+        targetId: p.targetId,
+        guarantee: [],
+      }),
+    });
+    await live(h);
+    // The view's renewals are the stream's own: this check is about the lease.
+    h.views.stopWatching(h.viewer);
+    await h.views.take(h.viewer);
+    expect(h.pane().control.status).toBe("granted");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(renewals).toBe(1);
+    // 0.75 of 6 s after the grant was asked for: input has stopped.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(h.pane().control.status).toBe("unverified");
+    await vi.advanceTimersByTimeAsync(1_900);
+    answer({ ok: true, renewWithinMs: 6_000, streamRenewed: false, leaseRenewed: true });
+    await vi.advanceTimersByTimeAsync(1_200);
+    // 7.6 s: the plugin's deadline (7.5 s) has passed; nothing here says control is held.
+    expect(h.pane().control.status).toBe("unverified");
+    expect(h.views.input(h.viewer, { kind: "text", text: "late" })).toBe(false);
+  });
+
+  it("a grant that took longer than its confirmation can count isn't control until a renewal sent after it confirms it", async () => {
+    vi.useFakeTimers();
+    let renewed!: (value: unknown) => void;
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) =>
+        p.generation === GEN
+          ? new Promise((resolve) => (renewed = resolve))
+          : { ok: true, renewWithinMs: 20_000, streamRenewed: true, leaseRenewed: false },
+      "clawtrate-computer.control.take": (p) =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                state: "granted",
+                generation: GEN,
+                renewWithinMs: 6_000,
+                targetId: p.targetId,
+                guarantee: [],
+              }),
+            5_000,
+          ),
+        ),
+    });
+    await live(h);
+    const taking = h.views.take(h.viewer);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await taking;
+    // 5 s since the take was sent: past 0.75 of the 6 s lease, so no control yet.
+    expect(h.pane().control.status).toBe("unverified");
+    expect(h.views.input(h.viewer, { kind: "text", text: "x" })).toBe(false);
+    // The renewal sent at once confirms it.
+    expect(h.calls("clawtrate-computer.view.renew").some((p) => p.generation === GEN)).toBe(true);
+    renewed({ ok: true, renewWithinMs: 6_000, streamRenewed: true, leaseRenewed: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control).toMatchObject({ status: "granted", stillHeld: false });
+  });
+
+  it("Stop watching gives back control that isn't confirmed (unverified or unconfirmed) and renews nothing after", async () => {
+    vi.useFakeTimers();
+    let renewOk = true;
+    let releaseOk = false;
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) => {
+        if (!renewOk) throw refused("UNAVAILABLE", "busy");
+        return {
+          ok: true,
+          renewWithinMs: 6_000,
+          streamRenewed: p.streamId === "stream-1",
+          leaseRenewed: p.generation === GEN,
+        };
+      },
+      "clawtrate-computer.control.release": (p) => {
+        if (!releaseOk) throw refused("FORBIDDEN", "not_holder");
+        return { state: "released", generation: p.generation, targetId: p.targetId };
+      },
+      "clawtrate-computer.control.take": (p) => ({
+        state: "granted",
+        generation: GEN,
+        renewWithinMs: 6_000,
+        targetId: p.targetId,
+        guarantee: [],
+      }),
+    });
+    await granted(h);
+    renewOk = false;
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.pane().control.status).toBe("unverified");
+    h.views.stopWatching(h.viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.calls("clawtrate-computer.control.release")).toHaveLength(1);
+    expect(h.pane().control.status).toBe("unconfirmed");
+    const renewed = h.calls("clawtrate-computer.view.renew").length;
+    // Unconfirmed: Stop watching asks again, and still nothing renews it.
+    releaseOk = true;
+    h.views.stopWatching(h.viewer);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.calls("clawtrate-computer.control.release")).toHaveLength(2);
+    expect(h.pane().control.status).toBe("none");
+    expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewed);
+  });
+
+  it("F-145: a release answer for another lease confirms nothing, and the queued answer isn't sent", async () => {
+    const h = harness({
+      "clawtrate-computer.control.release": (p) => ({
+        state: "released",
+        generation: GEN2,
+        targetId: p.targetId,
+      }),
+    });
+    h.env.question = question();
+    await granted(h);
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    await flush();
+    expect(h.answered).toEqual([]);
+    expect(h.pane().control).toMatchObject({ status: "unconfirmed", outcome: "answer-not-sent" });
+  });
+
+  it("F-145: another question of the task closing keeps the queued answer; a question whose state can't be read is not answered", async () => {
+    let done!: (value: unknown) => void;
+    const h = harness({
+      "clawtrate-computer.control.release": () => new Promise((resolve) => (done = resolve)),
+    });
+    h.env.question = question();
+    await granted(h);
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    h.views.questionClosed(KEY, "ask_other", "answered");
+    expect(h.pane().control).toMatchObject({
+      status: "releasing",
+      answerQueued: true,
+      outcome: null,
+    });
+    // The question's state is gone from the task: the answer isn't sent.
+    h.env.question = null;
+    done({ state: "released", generation: GEN, targetId: TAB });
+    await flush();
+    expect(h.answered).toEqual([]);
+    expect(h.pane().control.outcome).toBe("question-unknown");
+    expect(words.outcomeLine("Pip", "question-unknown")).toBe(
+      "Couldn't confirm the question is still pending. Your answer wasn't sent.",
+    );
+    expect(words.outcomeLine("Pip", "already-answered")).toBe(
+      "Pip's question was already answered.",
+    );
+    expect(words.outcomeLine("Pip", "answer-failed")).toBe(
+      "This device gave back control. The gateway didn't confirm your answer. Check the question in chat.",
+    );
+  });
+
+  it("only known refusal causes count toward the three in a row; an unknown cause starts the count again", async () => {
+    let cause: string | null = "browser-not-quiet";
+    const h = harness({
+      "clawtrate-computer.control.take": () => ({
+        state: "busy",
+        reason: "a sentence",
+        ...(cause ? { cause } : {}),
+        runningCalls: 0,
+        generation: GEN,
+      }),
+    });
+    await live(h);
+    cause = "something-new";
+    for (let i = 0; i < 3; i++) await h.views.take(h.viewer);
+    expect(h.pane().control).toMatchObject({ busyReason: null, busyCount: 0 });
+    cause = "browser-not-quiet";
+    for (let i = 0; i < 3; i++) await h.views.take(h.viewer);
+    expect(h.pane().control).toMatchObject({ busyReason: "browser-not-quiet", busyCount: 3 });
+    expect(words.busyLine("Pip", "browser-not-quiet")).toBe(
+      "A page in Pip's browser is still loading.",
+    );
+    expect(words.busyLine("Pip", "download-in-progress")).toBe(
+      "A download in Pip's browser is still in progress.",
+    );
+    expect(words.waitingLine("Pip")).toBe("Waiting for the gateway to confirm control…");
+  });
+
+  it("a tab list the plugin couldn't read is not an empty browser", async () => {
+    let reason = "discovery_timeout";
+    const h = harness({
+      "clawtrate-computer.tabs": () => ({
+        agentId: "pip",
+        profile: "bot-pip",
+        browser: "not-running",
+        reason,
+        tabs: [],
+      }),
+    });
+    await ready(h);
+    expect(h.pane()).toMatchObject({ browser: "unknown", tabs: [] });
+    reason = "browser_unavailable";
+    await h.views.readTabs(h.viewer);
+    expect(h.pane()).toMatchObject({ browser: "not-running", tabs: [] });
+  });
+
+  it("an exec approval's target is the gateway's machine only when it named the gateway", () => {
+    expect(words.approvalTargetLine("gateway", null)).toBe("the gateway's machine");
+    expect(words.approvalTargetLine(null, null)).toBe("Machine not reported.");
+    expect(words.approvalTargetLine("node", "media-box")).toBe("media-box");
+    expect(words.approvalTargetLine("node", null)).toBe("a node");
+  });
+
+  it("a stop whose answer doesn't say whether it aborted anything is unconfirmed, not 'nothing stopped'", () => {
+    const stop = { sending: false, runIds: [], aborted: null, error: null };
+    expect(stopProgress(stop, [])).toEqual({ kind: "unconfirmed" });
+    expect(stopProgress({ ...stop, aborted: false }, [])).toEqual({ kind: "nothing" });
+    expect(words.nothingToStopLine("Pip")).toBe(
+      "The gateway reported no runs stopped in this task.",
+    );
+    expect(words.stopUnconfirmedLine).toBe("The gateway didn't confirm the stop.");
   });
 });

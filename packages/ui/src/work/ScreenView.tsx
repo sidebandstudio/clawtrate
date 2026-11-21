@@ -93,6 +93,8 @@ export function ScreenView(props: ScreenViewProps) {
     hintTimer.current = setTimeout(() => setHint(null), 3000);
   };
   const live = view?.status === "live";
+  /** A view is open or opening: only then is anything being watched. */
+  const watching = view !== null && view.status !== "ended";
 
   // The rest of the app is inert while the full view is open; focus starts on its first control.
   useLayoutEffect(() => {
@@ -155,11 +157,23 @@ export function ScreenView(props: ScreenViewProps) {
     y: 0,
     timer: null,
   });
+  /** A scroll not yet sent is dropped once the picture loses focus or control ends. */
+  const dropWheel = () => {
+    const w = wheel.current;
+    if (w.timer !== null) window.clearTimeout(w.timer);
+    w.timer = null;
+    w.dx = 0;
+    w.dy = 0;
+  };
+  useEffect(() => {
+    if (!granted) dropWheel();
+  }, [granted]);
   useEffect(() => {
     const element = frameRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
-      if (!granted) return;
+      // As keys and clicks: only while in control and the picture has focus.
+      if (!inputAllowed()) return;
       event.preventDefault();
       const point = pagePoint(event.clientX, event.clientY);
       const w = wheel.current;
@@ -175,12 +189,17 @@ export function ScreenView(props: ScreenViewProps) {
         const { dx, dy, x, y } = w;
         w.dx = 0;
         w.dy = 0;
+        if (!inputAllowed()) return;
         if (dy !== 0 || dx !== 0)
           props.onInput({ kind: "scroll", x, y, deltaX: Math.round(dx), deltaY: Math.round(dy) });
       }, 80);
     };
     element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
+    element.addEventListener("blur", dropWheel);
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("blur", dropWheel);
+    };
   });
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -305,10 +324,18 @@ export function ScreenView(props: ScreenViewProps) {
                 Watch again
               </button>
             </>
-          ) : (
+          ) : view ? (
             <>
               {glyph("working")}
               <p>{words.connectingLine(name)}</p>
+            </>
+          ) : (
+            // No stream open, none opening: nothing is being watched.
+            <>
+              <p role="status">{words.noViewLine}</p>
+              <button type="button" className="screen-watch" onClick={props.onWatch}>
+                Watch
+              </button>
             </>
           )}
         </div>
@@ -340,7 +367,7 @@ export function ScreenView(props: ScreenViewProps) {
             {title}
             {url ? ` · ${domainOf(url)}` : ""}
           </span>
-          {!holding && <span className="screen-mode">Watching</span>}
+          {!holding && watching && <span className="screen-mode">Watching</span>}
         </div>
         {!holding && (
           <button
@@ -458,9 +485,26 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
         "alert",
       );
       break;
-    case "conflict":
-      body = bar(undefined, <span>{words.elsewhereLine(name)}</span>);
+    case "conflict": {
+      // Who has the tab, and how far, only from a read made after the refusal (the engine keeps
+      // the tab's lease empty until then): asking is never said to be control.
+      const held = pane.tabs.find((each) => each.targetId === control.targetId)?.lease;
+      body = bar(
+        undefined,
+        <span>
+          {!held || held.holder === "this-viewer"
+            ? words.requestHeldLine
+            : held.holder === "elsewhere"
+              ? held.state === "draining"
+                ? words.takingElsewhereLine(name)
+                : words.elsewhereLine(name)
+              : held.state === "draining"
+                ? words.takingOtherWindowLine(name)
+                : words.otherWindowLine(name)}
+        </span>,
+      );
       break;
+    }
     case "ended":
       body = bar(
         undefined,
@@ -680,7 +724,13 @@ function PhoneLayout(
         <div className="viewer-title">
           <strong aria-label={`${name}'s browser`}>{name}</strong>
           <span className="screen-mode">
-            {granted ? "You have control" : props.holding ? "Control" : "Watching"}
+            {granted
+              ? "You have control"
+              : props.holding
+                ? "Control"
+                : props.pane.view && props.pane.view.status !== "ended"
+                  ? "Watching"
+                  : words.noViewLine}
           </span>
         </div>
         {pane.tabs.length > 1 && (

@@ -68,6 +68,8 @@ function useShown(visible: boolean): boolean {
 export type ComputerTabProps = {
   bridge: ClawtrateBridge;
   bot: Bot;
+  /** Every bot, for control kept on another bot's browser after switching (`outOfSight`). */
+  bots?: readonly Bot[];
   taskKey: string;
   transcript: Transcript | undefined;
   computer: ComputerState | undefined;
@@ -77,7 +79,8 @@ export type ComputerTabProps = {
   visible: boolean;
   announce: (text: string) => void;
   onShowInChat: (stepId: string) => void;
-  onShowQuestion: () => void;
+  /** Bring that question's card into view in the chat. */
+  onShowQuestion: (questionId?: string) => void;
   /** Absent on a host pinned to the read tier: it never asks for more access. */
   onRequestAccess: (() => void) | null;
   /** Settings, on Machines, where a node's settings are; absent where there is no Settings. */
@@ -195,12 +198,22 @@ export function ComputerTab(props: ComputerTabProps) {
     send({ type: "computerWatch" });
   };
 
-  const held = heldLine(name, pane, full);
+  // Control kept on another bot's browser names that browser, not this task's bot.
+  const heldName =
+    (control?.botId && props.bots?.find((each) => each.id === control.botId)?.name) || name;
+  const held = heldLine(heldName, pane, full);
   // What "Stop <Bot> in this task" did, read from the runs it named: Stopped only from their end.
   const stopped = stopProgress(pane?.stop ?? null, transcript?.runs ?? []);
   const status = control?.status ?? "none";
+  // Take control is offered only while the shown tab can be asked for: no request or control
+  // of someone else's on it, and nothing of this viewer's under way.
+  const shownLease = pane?.tabs.find((each) => each.targetId === pane.shown)?.lease ?? null;
+  const canAsk =
+    !(shownLease && shownLease.holder !== "this-viewer") &&
+    ["none", "ended", "busy", "unsettled"].includes(status);
   const banner =
     question &&
+    pane?.key === taskKey &&
     pane?.availability === "ready" &&
     pane.tabs.length > 0 &&
     interactive &&
@@ -218,7 +231,7 @@ export function ComputerTab(props: ComputerTabProps) {
           <strong>{words.waitingBanner(name, released)}</strong>
           <p>{question.questions[0]?.question ?? question.questions[0]?.header}</p>
           <div className="computer-banner-actions">
-            {status !== "granted" && (
+            {canAsk && (
               <button
                 type="button"
                 className="button"
@@ -230,7 +243,12 @@ export function ComputerTab(props: ComputerTabProps) {
                 Take control
               </button>
             )}
-            <button type="button" className="button" data-size="sm" onClick={props.onShowQuestion}>
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => props.onShowQuestion(question.id)}
+            >
               Show the question
             </button>
           </div>
@@ -238,9 +256,18 @@ export function ComputerTab(props: ComputerTabProps) {
       </div>
     ) : null;
 
+  // Three refusals in a row for the same known cause; Stop only while a run of the task goes on.
+  const running = (transcript?.runs ?? []).some(
+    (run) => run.state === "running" || run.state === "waiting",
+  );
   const stuck =
     pane && control && control.busyCount >= 3 && interactive ? (
-      <StuckLine name={name} progress={stopped} onStop={() => send({ type: "computerStopTask" })} />
+      <StuckLine
+        name={name}
+        progress={stopped}
+        canStop={running}
+        onStop={() => send({ type: "computerStopTask" })}
+      />
     ) : null;
 
   return (
@@ -327,7 +354,7 @@ export function ComputerTab(props: ComputerTabProps) {
           onChoose={(targetId) => send({ type: "computerChoose", targetId })}
           onShowQuestion={() => {
             setFull(false);
-            props.onShowQuestion();
+            props.onShowQuestion(question?.id);
           }}
           onInput={(input) => void bridge.invoke({ type: "computerInput", input }).catch(() => {})}
         />
@@ -387,10 +414,13 @@ function ReleaseAgain() {
 function StuckLine({
   name,
   progress,
+  canStop,
   onStop,
 }: {
   name: string;
   progress: ReturnType<typeof stopProgress>;
+  /** A run of the task is in progress: only then is there something to stop. */
+  canStop: boolean;
   onStop: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -410,7 +440,9 @@ function StuckLine({
             ? words.stopAcceptedLine(name)
             : progress.kind === "nothing"
               ? words.nothingToStopLine(name)
-              : null;
+              : progress.kind === "unconfirmed"
+                ? words.stopUnconfirmedLine
+                : null;
   if (said)
     return (
       <p
@@ -429,15 +461,17 @@ function StuckLine({
       <p className="files-alert" role="alert" data-testid="computer-stuck">
         {progress.kind === "refused" && <>{words.stopRefusedLine(name, progress.error)} </>}
         {words.stuckLine(name)}
-        <button
-          ref={openerRef}
-          type="button"
-          className="button"
-          data-size="sm"
-          onClick={() => setConfirming(true)}
-        >
-          Stop {name} in this task
-        </button>
+        {canStop && (
+          <button
+            ref={openerRef}
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => setConfirming(true)}
+          >
+            Stop {name} in this task
+          </button>
+        )}
       </p>
       {confirming && (
         <div
@@ -446,8 +480,8 @@ function StuckLine({
           aria-label={`Stop ${name} in this task?`}
         >
           <p>
-            <strong>Stop {name}'s runs in this task?</strong> Steps already done stay done. {name}'s
-            other tasks and other bots keep going.
+            <strong>Stop {name}'s runs in this task?</strong> Steps already done stay done. The
+            request affects only this task.
           </p>
           <div className="stop-actions">
             <button
@@ -509,31 +543,6 @@ type ScreenProps = {
   onRequestAccess: (() => void) | null;
 };
 
-/** "What the plugin adds": the plugin's page is not published yet, so its summary opens here. */
-function PluginNote() {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        className="link-button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        What the plugin adds
-      </button>
-      {open && (
-        <p className="computer-plugin-note">
-          Clawtrate's computer plugin gives each bot the gateway's owner chooses a browser of its
-          own on the gateway's machine, lets the people who can use that bot watch it live, and lets
-          one of them take control of a tab and hand it back. It needs no admin access for this
-          device.
-        </p>
-      )}
-    </>
-  );
-}
-
 function Empty({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <div className="work-empty computer-empty">
@@ -580,7 +589,6 @@ function ScreenSection(props: ScreenProps) {
       <div data-testid="computer-noplugin">
         <Empty icon={<PluginIcon />} title={words.noPluginTitle}>
           <p>{words.noPluginBody(name)}</p>
-          <PluginNote />
         </Empty>
         <p className="computer-shared">{words.noPluginShared(name)}</p>
       </div>
@@ -652,6 +660,15 @@ function ScreenSection(props: ScreenProps) {
       <div className="screen computer-dark" data-state="checking" aria-busy="true">
         <div className="screen-blank">{glyph("working")}</div>
       </div>
+    );
+  if (pane.tabs.length === 0 && pane.browser === "unknown")
+    return (
+      <p className="files-alert" role="alert" data-testid="computer-tabs-unknown">
+        {words.tabsUnknownLine(name)}
+        <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
+          Retry
+        </button>
+      </p>
     );
   if (pane.tabs.length === 0)
     return (
@@ -993,12 +1010,7 @@ function MachineSection({
           <dd>
             {target ? (
               <>
-                {target.nodeId ??
-                  (target.host === "node"
-                    ? "a node"
-                    : target.host === "sandbox"
-                      ? "a sandbox"
-                      : "the gateway's machine")}
+                {words.approvalTargetLine(target.host, target.nodeId)}
                 <span className="machine-sub">
                   Requested {target.requestedAt ? clockTime(target.requestedAt) : "earlier"} ·{" "}
                   {target.status === "pending" ? "waiting for you" : target.status}

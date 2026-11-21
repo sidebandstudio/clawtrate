@@ -56,7 +56,10 @@ export const MAX_STOPPED_RUNS = 8;
 export type StopAnswer = {
   /** The runs it asked the gateway to stop. */
   runIds: string[];
-  /** With no run to name, `chat.abort` for the task: whether it aborted anything; null otherwise. */
+  /**
+   * With no run to name, `chat.abort` for the task: whether it aborted anything, or null when its
+   * answer didn't say; null too when runs were named.
+   */
   aborted: boolean | null;
 };
 
@@ -79,12 +82,15 @@ export function stopProgress(
   runs: readonly Pick<Run, "id" | "state" | "stopError">[],
 ):
   | { kind: "none" }
-  | { kind: "sending" | "stopping" | "stopped" | "ended" | "nothing" | "accepted" }
+  | { kind: "sending" | "stopping" | "stopped" | "ended" | "nothing" | "accepted" | "unconfirmed" }
   | { kind: "refused"; error: string } {
   if (!stop) return { kind: "none" };
   if (stop.sending) return { kind: "sending" };
   if (stop.error) return { kind: "refused", error: stop.error };
-  if (stop.runIds.length === 0) return { kind: stop.aborted === true ? "accepted" : "nothing" };
+  if (stop.runIds.length === 0)
+    return {
+      kind: stop.aborted === true ? "accepted" : stop.aborted === false ? "nothing" : "unconfirmed",
+    };
   const named = stop.runIds.map((id) => runs.find((run) => run.id === id));
   const refused = named.find((run) => run && !isTerminal(run.state) && run.stopError);
   if (refused) return { kind: "refused", error: refused.stopError! };
@@ -195,6 +201,8 @@ export type ComputerOutcome =
   | "already-cancelled"
   | "already-expired"
   | "answer-not-sent"
+  /** Whether the question was still pending couldn't be read: the answer wasn't sent. */
+  | "question-unknown"
   | "dropped-answered"
   | "dropped-dismissed"
   | "dropped-cancelled"
@@ -267,7 +275,11 @@ export type ComputerPane = {
   availability: ComputerAvailability;
   /** The plugin's refusal, for `error`. */
   error: string | null;
-  browser: "running" | "not-running" | null;
+  /**
+   * `unknown` when the plugin couldn't look (its list timed out or failed): not the same as a
+   * browser with no tabs.
+   */
+  browser: "running" | "not-running" | "unknown" | null;
   tabs: ComputerTab[];
   tabsOmitted: number;
   /** When the tab list was read. */
@@ -513,6 +525,11 @@ type LiveLease = {
   answer: { questionId: string; itemId: string; option: number } | null;
   /** Ends "You have control" when no renewal has confirmed the lease for a while (`armCutoff`). */
   cutoff: Timer | null;
+  /**
+   * When the request that last confirmed the lease was sent (this host's clock): a confirmation
+   * from an earlier request is superseded, and changes nothing.
+   */
+  confirmedFrom: number;
 };
 
 type LiveTake = {
@@ -520,8 +537,18 @@ type LiveTake = {
   key: string;
   botId: string;
   targetId: string;
-  /** From the `draining` event: what a withdrawal releases. */
+  /**
+   * What a withdrawal releases: a `draining` event's generation, once a tab read made after it
+   * says this connection's request is the tab's (`mine`) and no other take of this app waits
+   * for the same tab. The event goes to every reader, so alone it proves nothing.
+   */
   generation: string | null;
+  /** A `draining` event's generation not yet tied to this take. */
+  candidate: string | null;
+  /** The first tab read made after that event: only it, or a later one, can tie it. */
+  candidateAfter: number;
+  /** When the take was sent: a grant is confirmed from then on, at most (`confirm`). */
+  sentAt: number;
   abandoned: boolean;
 };
 
@@ -537,6 +564,11 @@ type Live = {
   shown: boolean;
   /** The answer on its way after a confirmed release, by its number; its result is its own. */
   answering: number | null;
+  /**
+   * After a take was refused as held (`conflict`): the first tab read that tells who holds the
+   * tab now. Earlier reads say nothing of it.
+   */
+  conflictAfter: number;
 };
 
 export type ComputerFrame = {
@@ -649,8 +681,10 @@ export class ComputerViews {
       record.agentId === take.botId &&
       record.targetId === take.targetId
     ) {
-      take.generation = record.generation;
-      if (take.abandoned) this.withdraw(take);
+      // Every reader gets the event, another device's take as much as this one's: the
+      // generation is this take's only once a read made after it says so (`readTabs`).
+      take.candidate = record.generation;
+      take.candidateAfter = live.tabsAsked + 1;
     }
     const lease = live.lease;
     if (lease && record.generation === lease.generation) {
@@ -699,6 +733,7 @@ export class ComputerViews {
       tabsAsked: 0,
       shown: true,
       answering: null,
+      conflictAfter: 0,
     };
     live.shown = true;
     this.lives.set(viewer, live);
@@ -738,6 +773,15 @@ export class ComputerViews {
     if (!live) return;
     // Nothing starts a view or a take again until the tab is shown again.
     live.shown = false;
+    this.closeTarget(live);
+  }
+
+  /**
+   * Done with the tab this viewer was on: a waiting take is withdrawn, control is given back
+   * first, and its view ends. A hand-back that is not confirmed stays on that tab (`outOfSight`).
+   */
+  private closeTarget(live: Live): void {
+    const viewer = live.viewer;
     this.abandonTake(live);
     const pane = this.pane(viewer);
     if (live.lease && (pane?.control.status === "granted" || pane?.control.status === "unverified"))
@@ -811,6 +855,14 @@ export class ComputerViews {
     }
     if (asked !== live.tabsAsked || this.pane(viewer)?.key !== key) return;
     const raw = Array.isArray(answer?.tabs) ? answer.tabs : [];
+    // `not-running` with a reason other than the browser not running: the plugin couldn't look.
+    const reason = str(answer?.reason);
+    const browser =
+      answer?.browser === "running"
+        ? ("running" as const)
+        : reason && reason !== "browser_unavailable"
+          ? ("unknown" as const)
+          : ("not-running" as const);
     const tabs: ComputerTab[] = [];
     for (const each of raw) {
       const t = asRecord(each);
@@ -836,6 +888,11 @@ export class ComputerViews {
       });
     }
     const kept = tabs.slice(0, MAX_COMPUTER_TABS);
+    const before = this.pane(viewer)?.control;
+    // After a refused take, only a read made since tells who holds the tab and how far.
+    if (before?.status === "conflict" && asked < live.conflictAfter) {
+      for (const tab of kept) if (tab.targetId === before.targetId) tab.lease = null;
+    }
     this.patch(viewer, (p) => {
       const shown =
         p.shown && kept.some((tab) => tab.targetId === p.shown)
@@ -849,7 +906,7 @@ export class ComputerViews {
         ...p,
         availability: "ready",
         error: null,
-        browser: answer?.browser === "running" ? "running" : "not-running",
+        browser,
         tabs: kept,
         tabsOmitted: tabs.length - kept.length,
         checkedAt: this.ctx.now(),
@@ -858,6 +915,41 @@ export class ComputerViews {
       };
     });
     this.afterTabs(live);
+    // The tab's request or control ended since the take was refused: nothing holds it now.
+    const now = this.pane(viewer)?.control;
+    if (now?.status === "conflict" && asked >= live.conflictAfter) {
+      if (!kept.find((tab) => tab.targetId === now.targetId)?.lease)
+        this.patchControl(viewer, { status: "none" });
+    }
+    this.tieTake(live, asked, kept);
+  }
+
+  /**
+   * A take's `draining` generation is its own once a read made after the event lists this
+   * connection's request on the tab and no other viewer of this app waits for the same tab;
+   * another device's request on the tab drops it. Only then can a withdrawal use it.
+   */
+  private tieTake(live: Live, asked: number, tabs: ComputerTab[]): void {
+    const take = live.take;
+    if (!take || !take.candidate || asked < take.candidateAfter) return;
+    const lease = tabs.find((tab) => tab.targetId === take.targetId)?.lease;
+    if (!lease) return;
+    if (lease.holder === "elsewhere") {
+      take.candidate = null;
+      return;
+    }
+    const shared = [...this.lives.values()].some(
+      (other) =>
+        other !== live &&
+        other.take !== null &&
+        !other.take.abandoned &&
+        other.take.botId === take.botId &&
+        other.take.targetId === take.targetId,
+    );
+    if (lease.state !== "draining" || shared) return;
+    take.generation = take.candidate;
+    take.candidate = null;
+    if (take.abandoned) this.withdraw(take);
   }
 
   /** After a reconnect, leases are read before anything is offered again. */
@@ -876,11 +968,25 @@ export class ComputerViews {
 
   /** Show another tab of the bot's browser in the tile: the view of the old one ends first. */
   choose(viewer: string, targetId: string): void {
+    const live = this.lives.get(viewer);
     const pane = this.pane(viewer);
-    if (!pane || !pane.tabs.some((tab) => tab.targetId === targetId)) return;
+    if (!live || !pane || !pane.tabs.some((tab) => tab.targetId === targetId)) return;
     const watching = pane.view && pane.view.status !== "ended";
-    if (pane.view && pane.view.targetId !== targetId) this.leave(viewer);
-    this.patch(viewer, (p) => ({ ...p, shown: targetId }));
+    // The old tab's view, take and control end; the Computer tab stays shown, so the new tab
+    // can be watched and taken at once.
+    if (
+      (pane.view && pane.view.targetId !== targetId) ||
+      (live.lease && live.lease.targetId !== targetId) ||
+      (live.take && live.take.targetId !== targetId)
+    )
+      this.closeTarget(live);
+    // An ended view of the old tab says nothing of the new one: no view is open there.
+    if (live.view && live.view.targetId !== targetId) live.view = null;
+    this.patch(viewer, (p) => ({
+      ...p,
+      shown: targetId,
+      view: p.view && p.view.targetId !== targetId ? null : p.view,
+    }));
     if (watching) void this.watch(viewer);
   }
 
@@ -1041,8 +1147,11 @@ export class ComputerViews {
     const live = this.lives.get(viewer);
     if (!live) return;
     const pane = this.pane(viewer);
-    if (pane?.control.status === "draining") this.abandonTake(live);
-    if (live.lease && pane?.control.status === "granted") this.release(viewer, { leaving: true });
+    const status = pane?.control.status;
+    if (status === "draining") this.abandonTake(live);
+    // Anything this viewer may hold goes back, and nothing renews it any more.
+    if (live.lease && (status === "granted" || status === "unverified" || status === "unconfirmed"))
+      this.release(viewer, { leaving: true });
     this.endView(live, "stopped", null);
     this.reschedule(live);
   }
@@ -1157,6 +1266,7 @@ export class ComputerViews {
     const useView = view && view.targetId === targetId ? view : null;
     // The next renewal is timed from this one's start, so a slow answer never stretches the cadence.
     this.reschedule(live);
+    const sentAt = this.ctx.now();
     try {
       const answer = asRecord(
         await deadline(
@@ -1179,14 +1289,13 @@ export class ComputerViews {
       // "You have control" holds only while each renewal confirms the lease.
       const status = this.pane(live.viewer)?.control.status;
       if (lease && live.lease === lease && (status === "granted" || status === "unverified")) {
+        const held = lease.confirmedFrom > 0;
         if (answer?.leaseRenewed !== true) this.leaseEnded(live, null);
-        else {
-          this.armCutoff(live, lease);
-          if (status === "unverified") {
-            this.patchControl(live.viewer, { status: "granted", stillHeld: true });
-            this.reschedule(live);
-          }
+        else if (this.confirm(live, lease, sentAt) && status === "unverified") {
+          this.patchControl(live.viewer, { status: "granted", stillHeld: held });
+          this.reschedule(live);
         }
+        // A confirmation that came too late, or that a later one already gave, changes nothing.
       }
     } catch (error) {
       const why = refusal(error);
@@ -1202,19 +1311,24 @@ export class ComputerViews {
   }
 
   /**
-   * The local cutoff: when no renewal has confirmed the lease for `CONFIRM_WITHIN` of its
-   * deadline, input stops and the bar says control isn't confirmed, before the gateway's own
-   * expiry (or its event) could arrive.
+   * A confirmation of the lease (a grant, a renewal or a check) by a request sent at `sentAt`.
+   * The gateway's deadline runs from when it handled that request, which is no earlier than when
+   * it was sent: so here control counts as confirmed until `CONFIRM_WITHIN` of the deadline after
+   * the request was sent. Then input stops and the bar says control isn't confirmed, before the
+   * gateway's own expiry (or its event) could arrive. A confirmation that arrives after that,
+   * or from a request older than one that already confirmed it, changes nothing: false.
    */
-  private armCutoff(live: Live, lease: LiveLease): void {
+  private confirm(live: Live, lease: LiveLease, sentAt: number): boolean {
+    if (sentAt < lease.confirmedFrom) return false;
+    const left = sentAt + Math.floor(lease.renewWithinMs * CONFIRM_WITHIN) - this.ctx.now();
+    if (left <= 0) return false;
+    lease.confirmedFrom = sentAt;
     if (lease.cutoff) clearTimeout(lease.cutoff);
-    lease.cutoff = setTimeout(
-      () => {
-        lease.cutoff = null;
-        if (live.lease === lease) this.unverified(live, lease);
-      },
-      Math.floor(lease.renewWithinMs * CONFIRM_WITHIN),
-    );
+    lease.cutoff = setTimeout(() => {
+      lease.cutoff = null;
+      if (live.lease === lease) this.unverified(live, lease);
+    }, left);
+    return true;
   }
 
   /** Control is not confirmed: input stops now; renewals go on, and Check reads it. */
@@ -1241,6 +1355,9 @@ export class ComputerViews {
       botId: pane.botId,
       targetId: pane.shown,
       generation: null,
+      candidate: null,
+      candidateAfter: 0,
+      sentAt: this.ctx.now(),
       abandoned: false,
     };
     live.take = take;
@@ -1266,8 +1383,19 @@ export class ComputerViews {
       if (live.take === take) live.take = null;
       if (take.abandoned || this.pane(viewer)?.control.status !== "draining") return;
       const why = refusal(error);
-      if (why.reason === "control_held") this.patchControl(viewer, { status: "conflict" });
-      else if (why.reason === "control_request_ended")
+      if (why.reason === "control_held") {
+        // Someone has, or is asking for, control of the tab: who, and how far, only a read
+        // made from now on can tell. Until then the bar says the tab has a request.
+        live.conflictAfter = live.tabsAsked + 1;
+        this.patch(viewer, (p) => ({
+          ...p,
+          control: { ...p.control, status: "conflict" },
+          tabs: p.tabs.map((tab) =>
+            tab.targetId === take.targetId ? { ...tab, lease: null } : tab,
+          ),
+        }));
+        void this.readTabs(viewer);
+      } else if (why.reason === "control_request_ended")
         this.patchControl(viewer, { status: "none" });
       else if (why.reason === "tab_not_in_bots_browser") {
         this.patchControl(viewer, { status: "none" });
@@ -1302,15 +1430,19 @@ export class ComputerViews {
         sending: false,
         answer: null,
         cutoff: null,
+        confirmedFrom: 0,
       };
-      this.armCutoff(live, live.lease);
+      // Counted from when the take was sent: a grant that took longer than that allows is not
+      // control yet; a renewal sent now confirms it, or doesn't.
+      const counted = this.confirm(live, live.lease, take.sentAt);
       this.patchControl(viewer, {
-        status: "granted",
+        status: counted ? "granted" : "unverified",
         busyReason: null,
         busyCount: 0,
         renewWithinMs: live.lease.renewWithinMs,
       });
-      this.reschedule(live);
+      if (counted) this.reschedule(live);
+      else void this.renew(live);
       void this.readTabs(viewer);
       return;
     }
@@ -1320,7 +1452,8 @@ export class ComputerViews {
     const code = str(answer?.cause) ?? str(answer?.reason);
     const known = BUSY_REASONS.find((each) => each === code) ?? null;
     const previous = this.pane(viewer)?.control;
-    const count = previous?.busyReason === known ? previous.busyCount + 1 : 1;
+    // Only known causes count, and only the same one in a row.
+    const count = known === null ? 0 : previous?.busyReason === known ? previous.busyCount + 1 : 1;
     this.patchControl(viewer, {
       status: known === "bot-still-acting" ? "busy" : "unsettled",
       busyReason: known,
@@ -1451,27 +1584,42 @@ export class ComputerViews {
     });
     if (live.renewTimer) clearTimeout(live.renewTimer);
     live.renewTimer = null;
+    const notConfirmed = () => {
+      if (live.lease !== lease || lease.sequence !== sequence) return;
+      // A refusal does not prove the device still holds control: ownership is not confirmed.
+      const queued = lease.answer !== null;
+      lease.answer = null;
+      this.patchControl(viewer, {
+        status: "unconfirmed",
+        answerQueued: false,
+        outcome: queued ? "answer-not-sent" : (this.pane(viewer)?.control.outcome ?? null),
+      });
+      this.reschedule(live);
+    };
     void (async () => {
+      let reply: RawRecord | null;
       try {
-        await deadline(
-          this.ctx.request("clawtrate-computer.control.release", {
-            sessionKey: lease.key,
-            targetId: lease.targetId,
-            generation: lease.generation,
-          }),
-          RELEASE_DEADLINE_MS,
+        reply = asRecord(
+          await deadline(
+            this.ctx.request("clawtrate-computer.control.release", {
+              sessionKey: lease.key,
+              targetId: lease.targetId,
+              generation: lease.generation,
+            }),
+            RELEASE_DEADLINE_MS,
+          ),
         );
       } catch {
-        if (live.lease !== lease || lease.sequence !== sequence) return;
-        // A refusal does not prove the device still holds control: ownership is not confirmed.
-        const queued = lease.answer !== null;
-        lease.answer = null;
-        this.patchControl(viewer, {
-          status: "unconfirmed",
-          answerQueued: false,
-          outcome: queued ? "answer-not-sent" : (this.pane(viewer)?.control.outcome ?? null),
-        });
-        this.reschedule(live);
+        notConfirmed();
+        return;
+      }
+      // Only the plugin's answer for this very lease confirms it.
+      if (
+        reply?.state !== "released" ||
+        reply.generation !== lease.generation ||
+        reply.targetId !== lease.targetId
+      ) {
+        notConfirmed();
         return;
       }
       this.confirmed(live, sequence);
@@ -1498,7 +1646,10 @@ export class ComputerViews {
     }
     const status = this.ctx.questionStatus(lease.key, answer.questionId);
     if (status !== "pending") {
-      this.patchControl(live.viewer, { ...noControl, outcome: alreadyOutcome(status) });
+      this.patchControl(live.viewer, {
+        ...noControl,
+        outcome: status === null ? "question-unknown" : alreadyOutcome(status),
+      });
       return;
     }
     this.patchControl(live.viewer, { ...noControl, status: "answering" });
@@ -1542,6 +1693,7 @@ export class ComputerViews {
     const lease = live?.lease;
     const checked = this.pane(viewer)?.control.status;
     if (!live || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
+    const sentAt = this.ctx.now();
     try {
       const answer = asRecord(
         await deadline(
@@ -1555,7 +1707,8 @@ export class ComputerViews {
       );
       if (live.lease !== lease || this.pane(viewer)?.control.status !== checked) return;
       if (answer?.leaseRenewed === true) {
-        this.armCutoff(live, lease);
+        // Too late to count, or already confirmed by a later request: the line stays as it is.
+        if (!this.confirm(live, lease, sentAt)) return;
         this.patchControl(viewer, { status: "granted", stillHeld: true, outOfSight: false });
         this.reschedule(live);
       } else this.leaseEnded(live, null);
@@ -1605,19 +1758,24 @@ export class ComputerViews {
 
   // The question behind the control ---------------------------------------------------------
 
-  /** A question of a task closed, or its run ended: a queued answer is removed, the release goes on. */
-  questionClosed(key: string, code: ClosedCode): void {
+  /**
+   * A question of a task closed, or its run ended: an answer queued for that very question is
+   * removed, and the release goes on. Another question closing changes nothing of it.
+   */
+  questionClosed(key: string, questionId: string, code: ClosedCode): void {
     for (const live of this.lives.values()) {
       const pane = this.pane(live.viewer);
       const lease = live.lease;
       if (!pane || !lease || lease.key !== key) continue;
       if (lease.answer) {
+        if (lease.answer.questionId !== questionId) continue;
         lease.answer = null;
         this.patchControl(live.viewer, {
           answerQueued: false,
           outcome: `dropped-${code}` as ComputerOutcome,
         });
-      } else if (pane.control.status === "granted") {
+      } else if (pane.control.status === "granted" && !this.ctx.pendingQuestion(key)) {
+        // The bar shows the task's pending question: gone only once no question waits.
         this.patchControl(live.viewer, { questionGone: code });
       }
     }

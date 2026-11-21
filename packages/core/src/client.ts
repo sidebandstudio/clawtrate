@@ -6185,7 +6185,7 @@ export class ClawtrateClient {
               : status === "cancelled"
                 ? "dismissed"
                 : "cancelled";
-      this.computer.questionClosed(transcript.sessionKey, code);
+      this.computer.questionClosed(transcript.sessionKey, id, code);
     }
   }
 
@@ -6197,8 +6197,8 @@ export class ClawtrateClient {
     if (runs.length === 0) {
       await this.ensureScope(WRITE_SCOPE, null);
       const result = asRecord(await this.request("chat.abort", { sessionKey: key }));
-      // `aborted: false`, or no answer that says so, is no stop.
-      return { runIds: [], aborted: result?.aborted === true };
+      // As the gateway said it: `aborted` true or false, or null when its answer didn't say.
+      return { runIds: [], aborted: typeof result?.aborted === "boolean" ? result.aborted : null };
     }
     // Each as the conversation's Stop: stopping until the run's end, back to running with the
     // gateway's refusal (`revertStop`).

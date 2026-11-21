@@ -5,7 +5,8 @@
 //
 //   &computer=noplugin|unconfigured|unused|closed|ended|tabclosed|browsergone|
 //             draining|control|busy|unsettled|conflict|stuck|active|elsewhere|
-//             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching
+//             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching|
+//             conflict-window|conflict-ends|tabsunknown|laterquestion
 //   &firstwatch=1     the one-time note before the first watch
 //   &takerace=grant   a grant that arrives after the take was cancelled
 //   &access=read      a read-only connection
@@ -41,6 +42,8 @@ export const COMPUTER_STATES = [
   "busy",
   "unsettled",
   "conflict",
+  "conflict-window",
+  "conflict-ends",
   "stuck",
   "stuck-refused",
   "active",
@@ -53,6 +56,8 @@ export const COMPUTER_STATES = [
   "nodeunknown",
   "machinefail",
   "desktop",
+  "tabsunknown",
+  "laterquestion",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
 
@@ -210,6 +215,29 @@ export function withComputerRuns(
         : []),
     ];
     const asking = active ? [] : [question(now, run.id, params.mode === "complexquestion")];
+    // A question asked after the pending one and already answered: its card comes later.
+    if (params.mode === "laterquestion")
+      asking.push({
+        ...question(now, run.id, false),
+        id: "ask_holds_checked",
+        status: "answered",
+        createdAt: now - 20_000,
+        answers: { q1: ["Skip"] },
+        questions: [
+          {
+            id: "q1",
+            header: "Holds",
+            question: "Check the holds page too?",
+            options: [
+              { index: 0, label: "Yes", description: null, value: null },
+              { index: 1, label: "Skip", description: null, value: null },
+            ],
+            optionsOmitted: 0,
+            multiSelect: false,
+            allowsOther: false,
+          },
+        ],
+      });
     out[COMPUTER_TASK] = {
       ...research,
       runs: [...research.runs, run],
@@ -362,6 +390,8 @@ export function computerFixture(
   let shownTab = 0;
   let prepared = false;
   let machineReads = 0;
+  /** `conflict-ends`: the other request on the tab ends a moment after the take is refused. */
+  let conflictEnded = false;
   const sockets = new Set<FakeStream>();
   const generation = { current: "" };
 
@@ -465,6 +495,15 @@ export function computerFixture(
           });
         if (mode === "closed")
           return { agentId: "main", profile: "bot-juniper", browser: "running", tabs: [] };
+        // The plugin's list timed out: it couldn't look.
+        if (mode === "tabsunknown")
+          return {
+            agentId: "main",
+            profile: "bot-juniper",
+            browser: "not-running",
+            reason: "discovery_timeout",
+            tabs: [],
+          };
         return {
           agentId: "main",
           profile: "bot-juniper",
@@ -476,9 +515,16 @@ export function computerFixture(
                 ? { state: "granted", mine: false }
                 : mode === "elsewhere-taking" && i === 0
                   ? { state: "draining", mine: false }
-                  : generation.current && i === shownTab
-                    ? { state: "granted", mine: true }
-                    : null,
+                  : (mode === "conflict" ||
+                        mode === "conflict-window" ||
+                        mode === "conflict-ends") &&
+                      i === shownTab &&
+                      takes > 0 &&
+                      !conflictEnded
+                    ? { state: "draining", mine: mode === "conflict-window" }
+                    : generation.current && i === shownTab
+                      ? { state: "granted", mine: true }
+                      : null,
           })),
         };
       }
@@ -500,7 +546,16 @@ export function computerFixture(
           leaseRenewed: generation.current !== "" && p.generation === generation.current,
         };
       case "clawtrate-computer.control.take": {
-        if (mode === "conflict") throw refuse("UNAVAILABLE", "control_held");
+        if (mode === "conflict" || mode === "conflict-window" || mode === "conflict-ends") {
+          // Another request is draining on the tab; in `conflict-ends` it ends after a moment.
+          takes += 1;
+          if (mode === "conflict-ends")
+            setTimeout(() => {
+              conflictEnded = true;
+              event("busy", "c".repeat(32), "bot-still-acting");
+            }, 1500);
+          throw refuse("UNAVAILABLE", "control_held");
+        }
         takes += 1;
         const gen = GEN(takes);
         event("draining", gen);
