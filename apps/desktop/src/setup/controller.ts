@@ -572,7 +572,9 @@ export class SetupController implements SetupHost {
         );
         return;
       }
-      if (connection.gatewayUrl !== url) return;
+      // Only this selection's own connection speaks for this attempt: another choice of the
+      // same address, or one refused meanwhile, says nothing about it.
+      if (connection.gatewayUrl !== url || !this.options.client.isSelected(selection)) return;
       seen = true;
       if (connection.status === "connected") {
         // Ready only for this selection's own read: one left from an earlier selection of the

@@ -307,6 +307,25 @@ describe("which selection setup's cleanup and readiness belong to", () => {
     });
   });
 
+  it("F-492: a replacement that was refused leaves setup's connection its own, and Back closes it", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(SCOPES, TOKEN) });
+    const bots = deferred<object>();
+    gateway.handlers["agents.list"] = () => bots.promise;
+    const client = makeClient(gateway);
+    await withLocalSetup(client, async (setup) => {
+      await setup.connect();
+      await until(() => gateway.calls("agents.list").length > 0);
+      // Another choice of gateway that is refused before it is saved.
+      await expect(client.connect({ url: "not a gateway address" })).rejects.toThrow();
+      expect(setup.current.phase).toBe("connecting");
+      setup.cancel();
+      await until(() => client.state.connection.status === "idle");
+      expect(gateway.sockets.every((socket) => socket.readyState === 3)).toBe(true);
+      await until(() => setup.current.phase === "found");
+    });
+  });
+
   it("F-492: a read of bots left from an earlier selection of the same address doesn't complete setup", async () => {
     const gateway = new FakeGateway();
     // The earlier selection is Advanced's, with no device token; setup's own pairs.

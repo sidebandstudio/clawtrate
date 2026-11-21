@@ -1246,12 +1246,14 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
-      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
       await this.saveSettings({ url, token });
+      // The selection changes only once this choice was valid and saved: a refused one leaves
+      // the connection that stays open its own.
+      this.selectionApplied = selection;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.setupCheck = null;
@@ -1276,10 +1278,10 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
-      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
+      this.selectionApplied = selection;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
       this.settings = { url, token: null };
       this.pairingSeen = null;
@@ -1306,9 +1308,9 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
-      this.selectionApplied = selection;
       const target = validateGatewayUrl(url);
       if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
+      this.selectionApplied = selection;
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.settings = { url: target, token: null };
@@ -1325,6 +1327,11 @@ export class ClawtrateClient {
    */
   nextSelection(): number {
     return this.selectionAsked + 1;
+  }
+
+  /** Whether `selection` is the gateway chosen now. */
+  isSelected(selection: number): boolean {
+    return this.selectionApplied === selection;
   }
 
   /** Whether `selection` is the gateway chosen now, and its bots and tasks were read in full. */
