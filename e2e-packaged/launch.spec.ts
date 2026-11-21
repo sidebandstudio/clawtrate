@@ -4,6 +4,7 @@
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   closeSync,
   existsSync,
@@ -18,6 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,7 +39,7 @@ import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { appEnv, debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
-import { dictionaryRequests } from "./net-log.ts";
+import { dictionaryRequests, isDictionary, requestsSoFar } from "./net-log.ts";
 import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
   askToClose,
@@ -511,8 +513,7 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
   // of the app with Faroese as its spelling language takes that path as it
   // starts. Its network log, complete once it has quit, shows every request:
   // on Windows the dictionary must be asked of the app's own folder, never of
-  // a host. macOS checks every language with the system's checker, so nothing
-  // asks for one.
+  // a host. macOS builds no Hunspell fallback, so nothing asks for one.
   test.setTimeout(120_000);
   // A new folder each time: one that already holds a dictionary never asks for it.
   const data = join(mkdtempSync(join(dirname(USER_DATA), "spelling-")), "data");
@@ -522,32 +523,64 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     join(data, "Preferences"),
     JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
   );
-  const copy = spawn(
-    packagedExecutable(APP),
-    [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`],
-    { env: appEnv(), stdio: "ignore" },
-  );
+  const args = [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`];
+  const copy = spawn(packagedExecutable(APP), args, { env: appEnv(), stdio: "ignore" });
   // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
   const exited = new Promise((resolve) => {
     copy.once("exit", resolve);
     copy.once("error", resolve);
   });
+  // Pictures for the copy's page to ask for, from a port on this machine that refuses them.
+  const pictures = createServer((socket) => socket.destroy());
+  const soFar = () => {
+    try {
+      return requestsSoFar(readFileSync(netLog, "utf8"));
+    } catch (error) {
+      // Chromium may not have created the file yet, or may hold it on Windows.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EBUSY") throw error;
+      return [];
+    }
+  };
   let view: Browser | undefined;
   try {
+    await once(pictures.listen(0, "127.0.0.1"), "listening");
+    const picturesAt = `https://127.0.0.1:${(pictures.address() as AddressInfo).port}/`;
     view = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(data, copy)}`);
     await expect
       .poll(() => view!.contexts().flatMap((context) => context.pages()).length)
       .toBeGreaterThan(0);
     const shown = view.contexts().flatMap((context) => context.pages())[0]!;
     await expect(shown.getByPlaceholder("Gateway address")).toBeVisible();
-    if (WINDOWS) {
-      // Chromium makes this folder just before it asks for the dictionary.
-      await expect
-        .poll(() => existsSync(join(data, "Dictionaries")), { timeout: 30_000 })
-        .toBe(true);
-      // Windows refuses the close message until the window is shown.
+    // Closed too soon, the copy could quit before it asks for the dictionary,
+    // so wait until the log on disk shows the request. Chromium writes events
+    // only once 15 are waiting, and an idle app logs none, so a request can
+    // sit unwritten until the app quits. Each picture the page asks for logs
+    // more than 15, and events are written in order, so asking for pictures
+    // until one shows brings every earlier event to disk. On macOS, which asks
+    // for no dictionary, that a picture shows checks this wait works.
+    let picture = 0;
+    await expect
+      .poll(
+        async () => {
+          await shown.evaluate((url) => {
+            new Image().src = url;
+          }, `${picturesAt}${picture++}.png`);
+          const asked = soFar();
+          return (
+            asked.some((url) => url.startsWith(picturesAt)) &&
+            (!WINDOWS || asked.some(isDictionary))
+          );
+        },
+        {
+          timeout: 30_000,
+          message: `the log on disk shows a picture's request${WINDOWS ? " and the dictionary's" : ""}`,
+        },
+      )
+      .toBe(true);
+    // Windows refuses the close message until the window is shown.
+    if (WINDOWS)
       await expect.poll(() => mainWindowTitle(copy.pid!), { timeout: 20_000 }).toBe("Clawtrate");
-    }
     const quit = await quitWithin(
       () => {
         if (WINDOWS) expect(askToClose(copy.pid!), "asking the copy to close").toBeNull();
@@ -560,6 +593,7 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     expect(quit, "the copy quits within 15 seconds").toBe(true);
     expect(copy.exitCode, "the copy's exit code").toBe(0);
   } finally {
+    pictures.close();
     // Whatever is left is ended by PID: nothing outlives the test.
     if (copy.exitCode === null && copy.signalCode === null) {
       if (WINDOWS) forceEnd(copy.pid!);

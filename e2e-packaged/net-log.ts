@@ -21,3 +21,19 @@ function addresses(events: Events): string[] {
 export function dictionaryRequests(log: string): string[] {
   return addresses((JSON.parse(log) as { events: Events }).events).filter(isDictionary);
 }
+
+/**
+ * Every address in the events a running app's log holds so far. Chromium
+ * writes one event per line, in the order they happen, and the last line may
+ * be cut short mid-write.
+ */
+export function requestsSoFar(log: string): string[] {
+  const events = log.split("\n").flatMap((line) => {
+    try {
+      return [JSON.parse(line.trimEnd().replace(/,$/, "")) as Events[number]];
+    } catch {
+      return [];
+    }
+  });
+  return addresses(events);
+}

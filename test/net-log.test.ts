@@ -1,6 +1,6 @@
 // The launch check's reading of the packaged app's network log (e2e-packaged/net-log.ts).
 import { describe, expect, it } from "vitest";
-import { dictionaryRequests } from "../e2e-packaged/net-log.ts";
+import { dictionaryRequests, requestsSoFar } from "../e2e-packaged/net-log.ts";
 
 const log = (events: unknown[]) => JSON.stringify({ constants: {}, events, polledData: {} });
 const REMOTE = "https://redirector.gvt1.com/edgedl/chrome/dict/fo-fo-3-0.bdic";
@@ -39,5 +39,21 @@ describe("the dictionaries a network log shows requests for", () => {
     expect(() =>
       dictionaryRequests(`{"constants":{},"events":[{"type":2,"params":{"url":"${REMOTE}"`),
     ).toThrow();
+  });
+});
+
+describe("the addresses a running app's log holds so far", () => {
+  it("reads each whole event line and skips the header and a line cut short", () => {
+    const partial =
+      `{"constants":{"logFormatVersion":1},\n"events": [\n` +
+      `{"type":2,"params":{"url":"${OWN}","priority":"IDLE"}},\n` +
+      `{"type":2,"params":{"url":"${PICTURE}"}},\n` +
+      `{"type":3,"params":{"url":"${REMOTE}"`;
+    expect(requestsSoFar(partial)).toEqual([OWN, PICTURE]);
+  });
+
+  it("finds none before Chromium has written an event", () => {
+    expect(requestsSoFar(`{"constants":{"logFormatVersion":1},\n"events": [\n`)).toEqual([]);
+    expect(requestsSoFar("")).toEqual([]);
   });
 });
