@@ -3,7 +3,7 @@
 // everything in memory, and never opens a socket or makes a request.
 
 import { holdableTimers } from "./timers.ts";
-import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
+import { fixtureRoutines, routineCommands, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
   applyQuestionResolved,
@@ -499,8 +499,9 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered; admin or device access granted) until `release`: a test that must
-   * see a state lasting only until the answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin or device access granted; a machine setting read or saved)
+   * until `release`: a test that must see a state lasting only until the answer comes holds it,
+   * looks, then lets the answer through.
    * An answer asked for while held comes on release without waiting for a page timer, which a
    * loaded machine can leave unfired for longer than a check waits.
    */
@@ -578,6 +579,7 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
     const checkIn = checkInCommand(command, () => state, set);
@@ -595,7 +597,7 @@ export function createFixtureBridge(
         throw new Error("Changing memory requires admin access.");
       return memory(command);
     }
-    const routine = routineCommand(command, () => state, now, routineParams, set);
+    const routine = routineCommand(command, () => state, set);
     if (routine) {
       sent.push(command);
       return routine;
