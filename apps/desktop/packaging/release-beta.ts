@@ -673,7 +673,7 @@ export function takeReleaseLock(dir: string): () => void {
     } catch {
       continue;
     }
-    let holder: { pid?: unknown; start?: unknown } | null = null;
+    let holder: { pid?: unknown; start?: unknown } | null;
     try {
       holder = JSON.parse(held) as { pid?: unknown; start?: unknown };
     } catch {
