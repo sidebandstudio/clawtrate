@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DIGEST,
   fixtureRoutines,
+  releaseRoutineReads,
   routineCommands,
   type RoutineParams,
 } from "../src/fixture/routines.ts";
@@ -380,5 +381,58 @@ describe("the fixture's routine host", () => {
       runningAt: null,
     });
     expect(await ask({ type: "readRoutineRuns", id: routine.id } as BridgeCommand)).toEqual([]);
+  });
+
+  it("a history read held while its routine is removed and made again answers for the new one", async () => {
+    vi.useFakeTimers();
+    const key = "draft-held";
+    const id = `routine-${key}`;
+    const { ask, send } = host({ hold: id });
+    const create = (name: string) =>
+      ask({
+        type: "createRoutine",
+        input: { ...fields(name), botId: "otto" },
+        key,
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    await create("First");
+    await ask({ type: "runRoutineNow", id } as BridgeCommand);
+    const read = send<RoutineRun[]>({ type: "readRoutineRuns", id } as BridgeCommand);
+    await ask({ type: "removeRoutine", id } as BridgeCommand);
+    await create("Second");
+    releaseRoutineReads();
+    await vi.runAllTimersAsync();
+    expect(await read).toEqual([]);
+  });
+
+  it("two edits out at once to different fields both stand, as the gateway's patches do", async () => {
+    vi.useFakeTimers();
+    const { send, routines } = host();
+    const digest = routines().find((each) => each.id === DIGEST)!;
+    const original: RoutineFields = {
+      name: digest.name,
+      text: digest.text,
+      schedule: digest.schedule,
+      target: digest.target,
+      delivery: digest.delivery,
+    };
+    const update = (edit: RoutineFields) =>
+      send({
+        type: "updateRoutine",
+        id: DIGEST,
+        original,
+        edit,
+        expected: { ...original, updatedAt: digest.updatedAt },
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    const renamed = update({ ...original, name: "Morning digest, short" });
+    const retexted = update({ ...original, text: "Summarise only what changed." });
+    await vi.runAllTimersAsync();
+    expect(await renamed).toMatchObject({ status: "saved" });
+    expect(await retexted).toMatchObject({ status: "saved" });
+    expect(routines().find((each) => each.id === DIGEST)).toMatchObject({
+      name: "Morning digest, short",
+      text: "Summarise only what changed.",
+    });
   });
 });

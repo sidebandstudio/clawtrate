@@ -22,7 +22,7 @@
 
 // The module, not the package: the package brings the DOM, which the node-typed tests lack.
 import { zonedTime } from "../../../../packages/ui/src/routines/schedule.ts";
-import { savedAs } from "@clawtrate/core";
+import { changedFields, savedAs } from "@clawtrate/core";
 import type {
   BridgeCommand,
   ClawtrateState,
@@ -462,9 +462,10 @@ function conversation(ran: RoutineRun | undefined, text: string | undefined): Ru
   };
 }
 
-const applied = (routine: Routine, fields: RoutineFields): Routine => ({
+// As `cron.update`'s patch: only the fields edited from the original, so another edit stays.
+const applied = (routine: Routine, original: RoutineFields, edit: RoutineFields): Routine => ({
   ...routine,
-  ...fields,
+  ...Object.fromEntries(changedFields(original, edit).map((key) => [key, edit[key]])),
   updatedAt: Date.now(),
 });
 
@@ -627,7 +628,7 @@ export function routineCommands(now: number, params: RoutineParams) {
               "invalid cron.update params: CronDate: Failed to convert date to timezone 'Mars/Base'. Please provide a valid IANA timezone.",
           }));
         if (end === "noanswer") {
-          replace(applied(routine, command.edit));
+          replace(applied(routine, command.original, command.edit));
           return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
         }
         return later(400, () => {
@@ -635,7 +636,7 @@ export function routineCommands(now: number, params: RoutineParams) {
           const current = kept(command.id);
           if (!current) return { status: "deleted" };
           // Only the edited fields: a run that ended while the edit was out stays ended.
-          const next = applied(current, command.edit);
+          const next = applied(current, command.original, command.edit);
           replace(next);
           return { status: "saved", routine: next };
         });
@@ -722,8 +723,11 @@ export function routineCommands(now: number, params: RoutineParams) {
           omitted: params.botOmitted ?? 0,
         }));
       case "readRoutineRuns": {
-        const routine = find(command.id);
-        return answer(command.id, () => (routine ? runsOf(routine).slice(0, 20) : []));
+        // The routine as it is when a held read resumes: one removed and made again since is another.
+        return answer(command.id, () => {
+          const routine = find(command.id);
+          return routine ? runsOf(routine).slice(0, 20) : [];
+        });
       }
       case "readCalendarRuns":
         if (params.calendar === "fail")
