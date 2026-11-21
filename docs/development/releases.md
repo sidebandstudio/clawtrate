@@ -43,15 +43,32 @@ Only Apple's notary service receives anything. A failed run first puts your sear
 
 A normal exit, an error, Ctrl-C and `kill` (SIGTERM) put your keychain search list back and, once it reads back as it was, remove the signing folder and give up the lock. Ctrl-C and `kill` first stop the build and everything it started, a stalled notarization included, and wait for all of it to end. A run killed outright (`kill -9`, a crash or a power cut) leaves its `$TMPDIR/clawtrate-signing-XXXXXX` folder. Killed while `security` imports the certificate, it can still hold the certificate's file, and killed while `notarytool` stores the key, the key's file (`notary.p8`), both readable by your user. At any later point it holds the keychain, whose password died with the run but which stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps. It also holds the verified copies of the zips, and `search-list.json`, your keychain search list from before the build. Killed during the build, the run also leaves the keychain first on your search list.
 
-The next `pnpm release:beta` takes over the lock of a run that has ended, then removes, before anything else, each such folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. Before removing a folder, it puts back the search list recorded in it, only while that folder's keychain is still on the list, and says which it did. A folder with no `pid` may be a run that is just starting, so it is left alone and named. To remove one yourself, check its run first:
+The next `pnpm release:beta` takes over the lock of a run that has ended, then removes, before anything else, each such folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. Before removing a folder, it puts back the search list recorded in it, only while that folder's keychain is still on the list, and says which it did. A folder with no `pid` may be a run that is just starting, so it is left alone and named. The same goes for a lock that names no run. A run whose restore could not be verified keeps its folder and the lock on purpose, and printed the command that restores the list.
+
+To clean up yourself, check the list and restore it before you remove the folder: once the folder is gone, so is `search-list.json`, the only record of your list from before the build. Check the run first, then:
 
 ```sh
 cat "$TMPDIR"/clawtrate-signing-XXXXXX/pid     # the run's process id
 ps -p <that pid>                               # no row: the run has ended
-rm -rf "$TMPDIR"/clawtrate-signing-XXXXXX      # that folder only
+/usr/bin/security list-keychains -d user       # is that folder's release.keychain-db on the list?
 ```
 
-If you remove a folder yourself, first compare `security list-keychains -d user` with its `search-list.json`, and if the folder's `release.keychain-db` is still on the list, set the recorded list back with `security list-keychains -d user -s` followed by each recorded path, quoted, in order. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
+If the folder's `release.keychain-db` is on the list, set the recorded list back. This passes each recorded path as its own argument, so a path with spaces stays whole:
+
+```sh
+/usr/bin/python3 -I -c 'import json, subprocess, sys; subprocess.run(["/usr/bin/security", "list-keychains", "-d", "user", "-s", *json.load(open(sys.argv[1]))], check=True)' "$TMPDIR"/clawtrate-signing-XXXXXX/search-list.json
+/usr/bin/security list-keychains -d user       # now the recorded list, in order
+```
+
+Only then remove that folder, and the lock if it names the same ended run:
+
+```sh
+rm -rf "$TMPDIR"/clawtrate-signing-XXXXXX      # that folder only
+cat "$TMPDIR"/clawtrate-release.lock           # its pid is the ended run's?
+rm "$TMPDIR"/clawtrate-release.lock            # then remove it
+```
+
+A failed run's `apps/desktop/dist` or version folder that it could not remove carries its marker, `.clawtrate-release-run`; one without it was not that run's, and the script leaves it and names it. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
 
 ### Check it before publishing
 
