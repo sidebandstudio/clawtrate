@@ -231,6 +231,8 @@ export class IKHandshake {
   #remoteStatic: Uint8Array | null;
   #remoteEphemeral: Uint8Array | null = null;
   #step: Step;
+  /** True while a step runs, so a callback (the random source) cannot start another. */
+  #busy = false;
   #keys: TransportKeys | null = null;
 
   constructor(options: IKHandshakeOptions) {
@@ -306,18 +308,23 @@ export class IKHandshake {
   }
 
   #run<T>(step: Step, next: Step, body: () => T): T {
-    if (this.#step !== step) {
+    if (this.#step !== step || this.#busy) {
       this.dispose();
       this.#step = "failed";
       return fail("unexpected", `This handshake cannot take step ${step} now.`);
     }
+    this.#busy = true;
     try {
       const result = body();
+      // A callback inside the step (the random source) that ended the handshake ended it.
+      if (this.#step !== step) fail("failed", "The handshake ended while its step ran.");
       this.#step = next;
       return result;
     } catch (error) {
       this.dispose();
       throw error;
+    } finally {
+      this.#busy = false;
     }
   }
 
@@ -330,7 +337,16 @@ export class IKHandshake {
 
   #newEphemeral(): Uint8Array {
     const seed = this.#random(KEY_BYTES);
-    this.#ephemeral = keyPairFromSecret(seed);
+    // A random source that disposed of the handshake ended it; install nothing.
+    if (this.#step === "failed") fail("failed", "The handshake ended while its random source ran.");
+    if (!(seed instanceof Uint8Array)) fail("bad_key", "The random source returned no bytes.");
+    // Copied natively, so no iterator of the returned array runs; the copy is wiped after.
+    const owned = new Uint8Array(seed);
+    try {
+      this.#ephemeral = keyPairFromSecret(owned);
+    } finally {
+      owned.fill(0);
+    }
     if (this.#random === secureRandomBytes) seed.fill(0);
     this.#symmetric.mixHash(this.#ephemeral.publicKey);
     return this.#ephemeral.publicKey;
