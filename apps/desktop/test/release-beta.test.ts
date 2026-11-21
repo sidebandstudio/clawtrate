@@ -222,8 +222,8 @@ interface Call {
  * path with spaces shows that nothing splits it.
  */
 const SEARCH_LIST = [
-  "/Users/someone/Library/Keychains/login.keychain-db",
-  "/Users/someone/Library/Keychains/Work Keys.keychain-db",
+  "/Volumes/Keys/login.keychain-db",
+  "/Volumes/Keys/Work Keys.keychain-db",
 ];
 
 /** `security list-keychains -d user` against `list`, which `-s` replaces. */
