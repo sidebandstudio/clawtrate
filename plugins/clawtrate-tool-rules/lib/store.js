@@ -28,10 +28,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
-  utimesSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -56,6 +56,12 @@ export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_DECISIONS = 50_000;
 /** The largest decision record read at start; 50,000 records are well under it. */
 export const MAX_DECISIONS_BYTES = 64 * 1024 * 1024;
+/**
+ * The name of a decision record set aside as oversized: when it was set aside,
+ * in ms, then a random part, so no two share a name. One an earlier version
+ * set aside has neither.
+ */
+const SET_ASIDE = /^decisions\.jsonl\.oversize(?:-(\d{1,15})-[0-9a-f]{12})?$/;
 
 /** A call id as the gateway's audit log writes it, so the two can be joined. */
 export const hashCallId = (toolCallId) =>
@@ -399,8 +405,6 @@ export class DecisionLog {
   constructor(dir, { now = Date.now, retentionMs = RETENTION_MS, max = MAX_DECISIONS } = {}) {
     this.dir = dir;
     this.path = join(dir, DECISIONS_FILE);
-    /** Where a record too large to read at start is set aside, for thirty days. */
-    this.oversizePath = `${this.path}.oversize`;
     this.now = now;
     this.retentionMs = retentionMs;
     this.max = max;
@@ -423,8 +427,6 @@ export class DecisionLog {
      * or replaced.
      */
     this.fingerprint = "none";
-    /** When the record set aside as oversized was set aside, until that is recorded on it. */
-    this.asideUnstampedAt = null;
     this.problem = null;
     this.#load();
   }
@@ -437,7 +439,6 @@ export class DecisionLog {
    */
   #load() {
     let text = "";
-    let aside = null;
     let fingerprint = "none";
     try {
       let oversized = null;
@@ -455,7 +456,7 @@ export class DecisionLog {
       }
       // A file past the cap is not read into memory: it is set aside.
       if (oversized !== null) {
-        aside = this.#setAside(oversized);
+        const aside = this.#setAside(oversized);
         // Replaced since it was looked at: left in place, and what is there now is read.
         if (aside === CHANGED) return this.#load();
         // Not moved: what memory holds stays as it is, nothing is written.
@@ -484,9 +485,9 @@ export class DecisionLog {
       // In time order, the order within a millisecond kept.
       this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
     };
-    // One way on for a record read, a missing one and one just set aside; a
-    // stale read error goes with the read that succeeded.
-    this.problem = aside;
+    // One way on for a record read, a missing one and one just set aside, which
+    // `listSetAside` says; a stale read error goes with the read that succeeded.
+    this.problem = null;
     this.loaded = true;
     this.fingerprint = fingerprint;
     // Counted again from the file as read.
@@ -539,37 +540,24 @@ export class DecisionLog {
   }
 
   /**
-   * Set the record past the byte cap aside, unread: the problem to say, null
-   * when it could not be moved (then nothing is written), or `CHANGED` when
-   * the file there is no longer the one looked at (`expected`, by `statKey`),
-   * which is then left in place. The check comes before the rename, which
-   * cannot compare and swap.
+   * Set the record past the byte cap aside, unread, under a name of its own:
+   * true when it was moved, null when it could not be (then nothing is
+   * written), or `CHANGED` when the file there is no longer the one looked at
+   * (`expected`, by `statKey`), which is then left in place. The check comes
+   * before the rename, which cannot compare and swap.
    */
   #setAside(expected) {
+    // When it was set aside is in its name, which its removal counts from.
+    const name = `${DECISIONS_FILE}.oversize-${this.now()}-${randomBytes(6).toString("hex")}`;
     try {
       if (statKey(statOrNull(this.path)) !== expected) return CHANGED;
-      renameSync(this.path, this.oversizePath);
+      renameSync(this.path, join(this.dir, name));
     } catch (error) {
       this.loaded = false;
       this.problem = `the decision record is larger than ${MAX_DECISIONS_BYTES} bytes and could not be set aside (${error.code ?? "error"}); nothing is written until it is`;
       return null;
     }
-    // Set aside: stamped with when, which its removal counts from.
-    this.asideUnstampedAt = this.now();
-    const said = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize`;
-    try {
-      this.#stampAside();
-      return said;
-    } catch (error) {
-      return `${said}, but when could not be recorded on it (${error.code ?? "error"}); its removal waits until it is`;
-    }
-  }
-
-  #stampAside() {
-    if (this.asideUnstampedAt === null) return;
-    const at = this.asideUnstampedAt / 1000;
-    utimesSync(this.oversizePath, at, at);
-    this.asideUnstampedAt = null;
+    return true;
   }
 
   /**
@@ -769,15 +757,46 @@ export class DecisionLog {
     }
   }
 
-  /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
+  /** Remove each record set aside as oversized that was set aside before `cutoff`. */
   #pruneOversize(cutoff) {
-    try {
-      // A stamp that failed is tried again first: the file's own time is not when it was set aside.
-      this.#stampAside();
-      if (statSync(this.oversizePath).mtimeMs < cutoff) rmSync(this.oversizePath, { force: true });
-    } catch {
-      // None set aside, or it cannot be looked at: the next prune looks again.
+    for (const { file, setAsideAt } of this.listSetAside() ?? []) {
+      if (setAsideAt === null || setAsideAt >= cutoff) continue;
+      try {
+        rmSync(join(this.dir, file), { force: true });
+      } catch {
+        // Not removed now: the next prune tries again.
+      }
     }
+  }
+
+  /**
+   * The records set aside as oversized that are still beside this one, oldest
+   * first: each file's name, and when it was set aside, from its name. For one
+   * an earlier version set aside, that is its last modification, or null when
+   * it cannot be looked at. Null when the folder cannot be read.
+   */
+  listSetAside() {
+    let names;
+    try {
+      names = readdirSync(this.dir);
+    } catch (error) {
+      return error?.code === "ENOENT" ? [] : null;
+    }
+    const found = [];
+    for (const file of names) {
+      const match = SET_ASIDE.exec(file);
+      if (!match) continue;
+      let setAsideAt = match[1] === undefined ? null : Number(match[1]);
+      if (setAsideAt === null) {
+        try {
+          setAsideAt = statSync(join(this.dir, file)).mtimeMs;
+        } catch (error) {
+          if (error?.code === "ENOENT") continue;
+        }
+      }
+      found.push({ file, setAsideAt });
+    }
+    return found.sort((a, b) => (a.setAsideAt ?? 0) - (b.setAsideAt ?? 0));
   }
 
   /** Add a record; returns its id. */

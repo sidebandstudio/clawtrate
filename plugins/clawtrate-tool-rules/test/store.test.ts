@@ -9,6 +9,8 @@ import {
   renameSync,
   rmSync,
   statSync,
+  truncateSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -24,6 +26,8 @@ const folder = () => {
   cleanups.push(done);
   return join(dir, "clawtrate-tool-rules");
 };
+/** A decision record set aside as oversized: when, then a random part. */
+const SET_ASIDE = /^decisions\.jsonl\.oversize-\d+-[0-9a-f]{12}$/;
 const scope = () =>
   nextScope(
     "otto",
@@ -205,9 +209,10 @@ describe("the decision record's own bounds", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "decisions.jsonl"), Buffer.alloc(64 * 1024 * 1024 + 1, 10));
     const log = new DecisionLog(dir, { now: () => 1 });
-    expect(log.problem).toMatch(/set aside as decisions\.jsonl\.oversize/);
+    expect(log.problem).toBeNull();
     expect(log.list({ limit: 5 }).records).toEqual([]);
-    expect(readdirSync(dir).sort()).toEqual(["decisions.jsonl.oversize"]);
+    expect(readdirSync(dir)).toEqual([expect.stringMatching(SET_ASIDE)]);
+    expect(log.listSetAside()).toEqual([{ file: readdirSync(dir)[0], setAsideAt: 1 }]);
   });
 
   it("past its cap, does not rewrite the whole file for each new record", () => {
@@ -317,22 +322,109 @@ describe("a decision record whose last line is torn", () => {
 });
 
 describe("a decision record set aside as oversized", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+  const day = 86_400_000;
+  /** The record in `dir` grown past the byte cap. */
+  const oversize = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "decisions.jsonl"), "", { flag: "a" });
+    truncateSync(join(dir, "decisions.jsonl"), 64 * 1024 * 1024 + 1);
+  };
+  const setAside = (dir: string) => readdirSync(dir).filter((name) => name.includes("oversize"));
+
   it("is removed thirty days after it was set aside, and not before", () => {
     const dir = folder();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "decisions.jsonl"), Buffer.alloc(64 * 1024 * 1024 + 1, 10));
-    const day = 86_400_000;
+    oversize(dir);
     let now = 1_000 * day;
     const log = new DecisionLog(dir, { now: () => now });
-    const aside = join(dir, "decisions.jsonl.oversize");
-    expect(readdirSync(dir)).toContain("decisions.jsonl.oversize");
+    const [aside] = setAside(dir);
+    expect(aside).toMatch(SET_ASIDE);
     now += 29 * day;
     log.prune();
-    expect(readdirSync(dir)).toContain("decisions.jsonl.oversize");
+    expect(setAside(dir)).toEqual([aside]);
     now += 2 * day;
     log.prune();
-    expect(readdirSync(dir)).not.toContain("decisions.jsonl.oversize");
-    expect(() => statSync(aside)).toThrow();
+    expect(setAside(dir)).toEqual([]);
+    expect(() => statSync(join(dir, aside!))).toThrow();
+  });
+
+  it("is said apart from the writes, through later writes and a restart, until it is removed", () => {
+    const dir = folder();
+    oversize(dir);
+    let now = 1_000 * day;
+    const log = new DecisionLog(dir, { now: () => now });
+    const said = [{ file: expect.stringMatching(SET_ASIDE), setAsideAt: 1_000 * day }];
+    expect(log.listSetAside()).toEqual(said);
+    log.add(fields);
+    expect(log.problem).toBeNull();
+    expect(log.listSetAside()).toEqual(said);
+    now += day;
+    const restarted = new DecisionLog(dir, { now: () => now });
+    restarted.add(fields);
+    expect(restarted.problem).toBeNull();
+    expect(restarted.listSetAside()).toEqual(said);
+    // Deleted by hand: no longer said.
+    rmSync(join(dir, restarted.listSetAside()![0]!.file));
+    expect(restarted.listSetAside()).toEqual([]);
+  });
+
+  it("counts its thirty days from the time in its name across a restart, whatever its file's times", () => {
+    const dir = folder();
+    oversize(dir);
+    let now = 1_000 * day;
+    new DecisionLog(dir, { now: () => now }).add(fields);
+    const [aside] = setAside(dir);
+    // As a time that could not be recorded on it, or a copy, would leave it.
+    const old = (now - 60 * day) / 1000;
+    utimesSync(join(dir, aside!), old, old);
+    now += day;
+    const restarted = new DecisionLog(dir, { now: () => now });
+    restarted.prune();
+    expect(setAside(dir)).toEqual([aside]);
+    now = 1_031 * day;
+    restarted.prune();
+    expect(setAside(dir)).toEqual([]);
+  });
+
+  it("keeps each record set aside under a name of its own, each removed at its own time", () => {
+    const dir = folder();
+    oversize(dir);
+    let now = 1_000 * day;
+    new DecisionLog(dir, { now: () => now }).add(fields);
+    now += 10 * day;
+    // The new record grows past the cap too, and is set aside at the next start.
+    oversize(dir);
+    const log = new DecisionLog(dir, { now: () => now });
+    expect(setAside(dir)).toHaveLength(2);
+    expect(log.listSetAside()?.map((aside) => aside.setAsideAt)).toEqual([
+      1_000 * day,
+      1_010 * day,
+    ]);
+    for (const aside of setAside(dir)) {
+      expect(statSync(join(dir, aside)).size).toBe(64 * 1024 * 1024 + 1);
+    }
+    now = 1_031 * day;
+    log.prune();
+    expect(log.listSetAside()?.map((aside) => aside.setAsideAt)).toEqual([1_010 * day]);
+    now = 1_041 * day;
+    log.prune();
+    expect(setAside(dir)).toEqual([]);
+    expect(log.listSetAside()).toEqual([]);
+  });
+
+  it("reads one an earlier version set aside, by its last modification", () => {
+    const dir = folder();
+    mkdirSync(dir, { recursive: true });
+    const legacy = join(dir, "decisions.jsonl.oversize");
+    writeFileSync(legacy, "");
+    let now = 1_000 * day;
+    const at = now - 29 * day;
+    utimesSync(legacy, at / 1000, at / 1000);
+    const log = new DecisionLog(dir, { now: () => now });
+    expect(log.listSetAside()).toEqual([{ file: "decisions.jsonl.oversize", setAsideAt: at }]);
+    now += 2 * day;
+    log.prune();
+    expect(setAside(dir)).toEqual([]);
   });
 });
 
