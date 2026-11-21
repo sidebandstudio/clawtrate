@@ -915,16 +915,19 @@ h3 {
   letter-spacing: -0.01em;
   max-width: 24em;
 }
-.faq-a:not([hidden]) p {
+[data-interactive] .faq-a:not([hidden]) p {
   animation: arrive 260ms var(--ease) both;
 }
-/* Without the script, each answer shows under its question. */
-:root:not(.js) .faq-q,
-:root:not(.js) .faq-q li {
+/* The static FAQ shows each answer under its heading. */
+[data-faq]:not([data-interactive]) .faq-q,
+[data-faq]:not([data-interactive]) li {
   display: block;
 }
-:root:not(.js) .faq-a {
-  display: block;
+.faq-q h3 {
+  margin: 12px 0 8px;
+  font-size: var(--t-b);
+}
+[data-faq]:not([data-interactive]) .faq-a {
   margin: 4px 0 12px;
 }
 

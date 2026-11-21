@@ -2,7 +2,7 @@
 # Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet.
 # Download it whole, then run it:
 #
-#   sh -c 'f=$(mktemp) && trap "rm -f \"$f\"" EXIT && c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
+#   sh -c 'f=$(mktemp) && trap "rm -f \"$f\"" EXIT && c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
 #
 # It reads the Beta feed, takes the build for this Mac's processor, and checks
 # the download's SHA-256, the archive's layout, the app's bundle id, version and

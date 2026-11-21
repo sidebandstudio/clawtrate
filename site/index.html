@@ -87,7 +87,7 @@
             <div class="cmd-box">
               <pre
                 aria-labelledby="cmd-hero-label"
-              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
               <button class="copy" type="button" data-copy>Copy</button>
             </div>
             <p class="cmd-note">
@@ -441,9 +441,7 @@
         <div class="faq-grid rise" data-faq>
           <ul class="faq-q" role="list">
             <li>
-              <button type="button" aria-expanded="true" aria-controls="a1" id="q1">
-                Is it free?
-              </button>
+              <h3 id="q1">Is it free?</h3>
               <div class="faq-a" id="a1" role="region" aria-labelledby="q1">
                 <p>
                   Yes. It is open source under the MIT license. You bring your own OpenClaw gateway
@@ -452,10 +450,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a2" id="q2">
-                What do I need?
-              </button>
-              <div class="faq-a" id="a2" role="region" aria-labelledby="q2" hidden>
+              <h3 id="q2">What do I need?</h3>
+              <div class="faq-a" id="a2" role="region" aria-labelledby="q2">
                 <p>
                   You'll need a supported Mac and an OpenClaw gateway it can reach. You can install
                   OpenClaw separately.
@@ -463,10 +459,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a3" id="q3">
-                Can I verify the Mac download?
-              </button>
-              <div class="faq-a" id="a3" role="region" aria-labelledby="q3" hidden>
+              <h3 id="q3">Can I verify the Mac download?</h3>
+              <div class="faq-a" id="a3" role="region" aria-labelledby="q3">
                 <p>
                   The Mac beta is Developer ID signed and Apple-notarized. The Terminal installer
                   checks the download and the app's signature before it installs. It is for a first
@@ -475,10 +469,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a4" id="q4">
-                Which sign-in details does Clawtrate keep?
-              </button>
-              <div class="faq-a" id="a4" role="region" aria-labelledby="q4" hidden>
+              <h3 id="q4">Which sign-in details does Clawtrate keep?</h3>
+              <div class="faq-a" id="a4" role="region" aria-labelledby="q4">
                 <p>
                   Clawtrate keeps your gateway's address and its own device key. It keeps the setup
                   token until the gateway issues a device token, then uses the device token to
@@ -488,10 +480,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a5" id="q5">
-                What about Windows and iPhone?
-              </button>
-              <div class="faq-a" id="a5" role="region" aria-labelledby="q5" hidden>
+              <h3 id="q5">What about Windows and iPhone?</h3>
+              <div class="faq-a" id="a5" role="region" aria-labelledby="q5">
                 <p>
                   The desktop app builds for Windows. The first public beta is for Mac. The iPhone
                   app is in development.
@@ -499,10 +489,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a6" id="q6">
-                How does it update?
-              </button>
-              <div class="faq-a" id="a6" role="region" aria-labelledby="q6" hidden>
+              <h3 id="q6">How does it update?</h3>
+              <div class="faq-a" id="a6" role="region" aria-labelledby="q6">
                 <!--
                   Written for a first signed build that includes #202 and #204. If it does not, use:
                   "Check for Beta updates in Settings. Install a newer build from its Mac download."
@@ -514,10 +502,8 @@
               </div>
             </li>
             <li>
-              <button type="button" aria-expanded="false" aria-controls="a7" id="q7">
-                Is it part of OpenClaw?
-              </button>
-              <div class="faq-a" id="a7" role="region" aria-labelledby="q7" hidden>
+              <h3 id="q7">Is it part of OpenClaw?</h3>
+              <div class="faq-a" id="a7" role="region" aria-labelledby="q7">
                 <p>
                   No. OpenClaw runs your bots; Clawtrate is an independent client, not affiliated
                   with OpenClaw or xAI.
@@ -551,7 +537,7 @@
             <div class="cmd-box cmd-close">
               <pre
                 aria-labelledby="cmd-close-label"
-              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
               <button class="copy" type="button" data-copy>Copy</button>
             </div>
             <p class="oss">

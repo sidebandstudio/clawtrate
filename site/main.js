@@ -95,7 +95,15 @@
   // Questions: one open at a time, chosen by click or arrow keys. On phones a
   // second click closes it.
   const faq = document.querySelector("[data-faq]");
-  const questions = [...faq.querySelectorAll("button[aria-controls]")];
+  const questions = [...faq.querySelectorAll(".faq-q h3")].map((heading) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = heading.id;
+    button.textContent = heading.textContent;
+    button.setAttribute("aria-controls", heading.nextElementSibling.id);
+    heading.replaceWith(button);
+    return button;
+  });
   const wide = window.matchMedia("(min-width: 761px)");
   const answerOf = (button) => document.getElementById(button.getAttribute("aria-controls"));
   function open(button) {
@@ -121,6 +129,9 @@
       if (wide.matches) open(next);
     });
   });
+
+  open(questions[0]);
+  faq.dataset.interactive = "";
 
   // Entrances: the parts that arrive together rise in turn, once.
   const parts = [...document.querySelectorAll(".rise")];
