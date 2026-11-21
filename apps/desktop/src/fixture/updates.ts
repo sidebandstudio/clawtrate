@@ -80,7 +80,8 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           readAt: "2026-11-16T22:41:00Z",
         }
       : null,
-    install: { kind: "unavailable-in-this-build" },
+    lastAttempt: null,
+    install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
   };
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
   function publish(patch: Partial<DesktopUpdateSnapshot>) {
@@ -89,6 +90,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   }
   const reply = (outcome: DesktopUpdateOutcome) => ({ outcome, snapshot });
   return {
+    restart: async () => reply("invalid"),
     get: async () => snapshot,
     subscribe(listener) {
       listeners.add(listener);
