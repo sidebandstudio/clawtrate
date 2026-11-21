@@ -4,8 +4,10 @@
 // runner stands in for `openclaw`, and the core's fake gateway for the gateway.
 
 import { ClawtrateClient, type ClawtrateState } from "@clawtrate/core";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -745,6 +747,88 @@ describe("the programs setup starts", () => {
     expect(stubborn.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
     expect(runner.running()).toEqual([]);
+  }, 20_000);
+
+  /** Whether a process is gone, by its PID: the system says there is none. */
+  const gone = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  it("F-492: a program's time limit stops the workers it started too, by their group, and only those", async () => {
+    const runner = loose();
+    const pidFile = join(dir, "worker.pid");
+    // A program that starts a worker, as OpenClaw's launcher can, and outlasts its time limit.
+    const outsider = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    try {
+      const result = await runner.run({
+        ...base,
+        program: "/bin/sh",
+        args: ["-c", `sleep 30 & echo $! > '${pidFile}'; sleep 30`],
+        timeoutMs: 300,
+        maxBytes: 4096,
+      });
+      expect(result.timedOut).toBe(true);
+      const worker = Number(readFileSync(pidFile, "utf8"));
+      await until(() => gone(worker), 5000);
+      expect(runner.running()).toEqual([]);
+      expect(runner.groupsLeft()).toBe(0);
+      // A process setup didn't start is never touched.
+      expect(gone(outsider.pid!)).toBe(false);
+    } finally {
+      outsider.kill();
+    }
+  }, 20_000);
+
+  it("F-492: an output a worker kept open past the program's end is refused, not parsed", async () => {
+    const runner = loose();
+    const result = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `printf '{"gateway":'; sleep 3 &`],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    expect(result).toMatchObject({ exitCode: 0, cut: true, stdout: "" });
+    await runner.stopAllAndWait();
+    expect(runner.groupsLeft()).toBe(0);
+    // A whole output, ended with the program, is kept as it is.
+    const whole = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `printf '{}'`],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    expect(whole).toMatchObject({ exitCode: 0, stdout: "{}" });
+    expect(whole.cut).toBeUndefined();
+  }, 20_000);
+
+  it("F-492: quitting waits until setup's programs and their workers are gone, a stubborn one killed after the grace", async () => {
+    const runner = loose();
+    const pidFile = join(dir, "stubborn-worker.pid");
+    void runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `trap '' TERM; sleep 30 & echo $! > '${pidFile}'; while :; do sleep 1; done`],
+      timeoutMs: 60_000,
+      maxBytes: 4096,
+    });
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "");
+    const worker = Number(readFileSync(pidFile, "utf8"));
+    const leader = runner.running()[0]!;
+    await runner.stopAllAndWait();
+    expect(gone(worker)).toBe(true);
+    expect(gone(leader)).toBe(true);
+    // The desktop app quits only after that wait.
+    const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const quit = main.slice(main.indexOf('app.on("before-quit"'));
+    expect(quit).toContain("event.preventDefault();");
+    expect(quit.indexOf("programs.stopAllAndWait()")).toBeLessThan(quit.indexOf("app.quit();"));
   }, 20_000);
 
   it("the host's runner refuses anything but the look's commands before it starts", async () => {
