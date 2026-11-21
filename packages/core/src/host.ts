@@ -1,7 +1,11 @@
 // What a host process provides to the core. Core itself uses no DOM and no
 // Node APIs, so the same code runs in Electron's main process, plain Node and Expo.
 
-/** Async key/value persistence. Values are strings; core stores JSON. */
+/**
+ * Async key/value persistence. Values are strings; core stores JSON. `set` and
+ * `delete` resolve only once the change is kept; a change that could not be kept
+ * rejects, and `get` goes on returning what was kept before.
+ */
 export type KeyValueStore = {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;

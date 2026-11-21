@@ -2,6 +2,7 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
@@ -58,7 +59,8 @@ export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
   /** Connect to the local development gateway. The host supplies its token. */
   | { type: "connectDevGateway" }
-  | { type: "disconnect" }
+  /** Forget the gateway at this address, the one the viewer shows; refused if another is selected. */
+  | { type: "disconnect"; gatewayUrl: string }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
   | { type: "retry" }
@@ -719,7 +721,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
   const command = value as Record<string, unknown>;
   switch (command.type) {
     case "connect": {
-      if (typeof command.url !== "string" || command.url.length > 2048)
+      if (typeof command.url !== "string" || command.url.length > MAX_GATEWAY_URL_CHARS)
         throw new Error("invalid url");
       const token = command.token;
       if (
@@ -868,8 +870,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : id(command.effort, "effort"),
       };
-    case "connectDevGateway":
     case "disconnect":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "connectDevGateway":
     case "suspend":
     case "retry":
       return { type: command.type };
@@ -1388,7 +1396,7 @@ class ViewerSession implements BridgeSession {
         }
         return client.connect(policy.devGateway);
       case "disconnect":
-        return client.disconnect();
+        return client.disconnect(command.gatewayUrl);
       case "suspend":
         return client.suspend();
       case "retry":

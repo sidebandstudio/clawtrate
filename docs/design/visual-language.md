@@ -487,10 +487,10 @@ One centred column, 360 px wide, on the bare stage. No card, no border, no shado
 **Connect** (`connect.html`):
 
 - The mark, the name (28/600), the slogan (15, muted).
-- Two pill fields, 48 px, `--bg-inset`, placeholders as labels: "Gateway address" and "Token, for the first pairing only". Each has a visually hidden label.
+- Two pill fields, 48 px, `--bg-inset`, placeholders as labels: "Gateway address" and "Gateway token, for pairing". Each has a visually hidden label.
 - A primary button, full width: "Connect". While connecting it reads "Connecting…" and is disabled: `--bg-bubble` with `--text-faint`, never a faded primary.
 - Under it a quiet button: "Use the development gateway", shown only when that gateway is present.
-- One hint (13, faint): "Clawtrate works with an OpenClaw gateway you already run. It asks for read access only, and the token is used once."
+- One hint (13, faint): "Clawtrate works with an OpenClaw gateway you already run. It asks for read access only."
 - A failure appears between the fields and the buttons on `--danger-soft`: a medium-weight title ("Could not connect", or "Enter the gateway's address") and one sentence with the reason and what to check.
 
 **Pairing** (`pairing.html`):

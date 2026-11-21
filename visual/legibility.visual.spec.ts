@@ -283,7 +283,7 @@ test("the audit reads field values and placeholders, and catches a small, faint 
   const fields = (await page.evaluate(audit)).filter((f) => f.text.startsWith("["));
   expect(fields.map((f) => f.text)).toEqual([
     "[value] ws://127.0.0.1:19001",
-    "[placeholder] Token, for the first pairing only",
+    "[placeholder] Gateway token, for pairing",
   ]);
   expect(fields.every((f) => f.size >= 12 && f.ratio >= 4.5)).toBe(true);
 
