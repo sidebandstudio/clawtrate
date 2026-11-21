@@ -119,6 +119,27 @@ export function messageOf(transcript: Transcript, messageId: string): MessageRef
   return null;
 }
 
+/** How far a bar's buttons reach past its edge where their touch areas are larger than drawn. */
+function reachPast(toolbar: HTMLElement): number {
+  const bar = toolbar.getBoundingClientRect();
+  let reach = 0;
+  for (const button of toolbar.querySelectorAll<HTMLElement>(":scope > button")) {
+    const box = button.getBoundingClientRect();
+    // A button with no touch area of its own has an "auto" one, and reaches no further than drawn.
+    const area = getComputedStyle(button, "::after");
+    const x = Math.max(0, Number.parseFloat(area.width) - box.width) / 2 || 0;
+    const y = Math.max(0, Number.parseFloat(area.height) - box.height) / 2 || 0;
+    reach = Math.max(
+      reach,
+      bar.left - box.left + x,
+      box.right + x - bar.right,
+      bar.top - box.top + y,
+      box.bottom + y - bar.bottom,
+    );
+  }
+  return reach;
+}
+
 /**
  * React, reply and more, shown beside a message while it is hovered, while focus is in
  * them, or after a touch and hold. One tab stop: Left and Right move between them.
@@ -155,22 +176,47 @@ export function MessageActions({
     const turnBox = turn.getBoundingClientRect();
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
+    const height = toolbar.offsetHeight;
+    // Room counts the touch areas the buttons reach past the bar, within what shows of the
+    // transcript: below the band kept clear for the header and the strip, which lie over it.
+    const reach = reachPast(toolbar);
+    const scroller = turn.closest<HTMLElement>(".transcript");
+    const view = scroller?.getBoundingClientRect();
+    const band = scroller
+      ? Number.parseFloat(getComputedStyle(scroller.firstElementChild ?? scroller).paddingTop) || 0
+      : 0;
+    const first = view ? view.top + band + reach - turnBox.top : -Infinity;
+    const last = view ? view.bottom - reach - height - turnBox.top : Infinity;
+    const fits = (top: number) => top >= first && top <= last;
     const left =
       role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
-    // Within the column: where there is no room beside it, it sits above the bubble's outer corner.
     const max = turnBox.width - width;
-    const room = left >= 0 && left <= max;
     const top = box.top - turnBox.top;
-    if (room) setPlace({ top, left });
-    else
-      setPlace({
-        top: top - toolbar.offsetHeight - 4,
-        left:
-          role === "user"
-            ? box.left - turnBox.left
-            : Math.min(max, box.right - turnBox.left - width),
-      });
+    if (left >= 0 && left <= max && fits(top)) return setPlace({ top, left });
+    // Within the column: where there is no room beside it, it sits at the bubble's outer corner,
+    // above it, else below it, else inside it at the top of what shows of it.
+    const corner = role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width;
+    const above = top - height - 4;
+    const below = box.bottom - turnBox.top + 4;
+    setPlace({
+      top: fits(above) ? above : fits(below) ? below : Math.min(last, Math.max(first, top)),
+      left: Math.max(0, Math.min(max, corner)),
+    });
   }, [turnRef, role]);
+
+  // A bar whose width changes while it shows, as write access comes or goes, or whose column
+  // changes width, is placed again. It shows while the stylesheet lets it take the pointer.
+  useEffect(() => {
+    const turn = turnRef.current;
+    const toolbar = bar.current;
+    if (!turn || !toolbar) return;
+    const observer = new ResizeObserver(() => {
+      if (getComputedStyle(toolbar).pointerEvents !== "none") measure();
+    });
+    observer.observe(toolbar);
+    observer.observe(turn);
+    return () => observer.disconnect();
+  }, [turnRef, measure]);
 
   // After the commit: the turn's own ref is set only once its children's layout effects ran.
   useEffect(() => {

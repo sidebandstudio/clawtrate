@@ -1509,6 +1509,11 @@ button.reaction {
   position: relative;
 }
 
+/* Far enough apart that each button's 44 px area is its own, with 2 px between them. */
+[data-input="touch"] .msg-actions {
+  gap: 18px;
+}
+
 [data-input="touch"] .msg-actions .icon-button::after,
 [data-input="touch"] .reaction::after,
 [data-input="touch"] .reply-quote::after,

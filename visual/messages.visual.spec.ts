@@ -52,6 +52,40 @@ const names = (locator: Locator) =>
 const shown = (locator: Locator) =>
   locator.evaluate((el) => Number(getComputedStyle(el).opacity) === 1);
 
+/**
+ * The points of a control's 44 px touch area, across it from its centre, where a touch does not
+ * reach the control, each with what it reaches instead: a neighbour lying over part of the area
+ * fails, and so does the header drawn over it.
+ */
+const unreached = (control: Locator) =>
+  control.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const across = [-21.5, -11, 0, 11, 21.5];
+    return across.flatMap((dy) =>
+      across.flatMap((dx) => {
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2 + dx,
+          box.top + box.height / 2 + dy,
+        );
+        if (el.contains(hit)) return [];
+        const other = hit?.closest("[aria-label]")?.getAttribute("aria-label") ?? hit?.tagName;
+        return [`${dx},${dy}: ${other ?? "nothing"}`];
+      }),
+    );
+  });
+
+/** Touch and hold a message's last bubble until its actions open, then lift. */
+async function holdOn(message: Locator): Promise<void> {
+  const bubble = message.locator(".msg > .bubble").last();
+  const box = (await bubble.boundingBox())!;
+  const at = { pointerType: "touch", clientX: box.x + 30, clientY: box.y + 20 };
+  await bubble.dispatchEvent("pointerdown", at);
+  await expect(message.getByTestId("message-actions")).toHaveAttribute("data-open", "true", {
+    timeout: 3000,
+  });
+  await bubble.dispatchEvent("pointerup", at);
+}
+
 test.describe("message actions", () => {
   test.use(contextFor(WIDE, "light"));
 
@@ -597,39 +631,92 @@ test.describe("message actions on a phone", () => {
     await page.waitForTimeout(900);
     await expect(actions).not.toHaveAttribute("data-open", "true");
   });
-
-  test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area", async ({
-    page,
-  }) => {
-    await open(page);
-    const turn = answer(page);
-    await turn.scrollIntoViewIfNeeded();
-    const bubble = turn.locator(".msg > .bubble").last();
-    const box = (await bubble.boundingBox())!;
-    const actions = turn.getByTestId("message-actions");
-    const x = box.x + 30;
-    const y = box.y + 20;
-    await page.touchscreen.tap(x, y);
-    expect(await shown(actions)).toBe(false);
-    // Held: a pointer down that lasts past the long press.
-    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", clientX: x, clientY: y });
-    await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
-    await bubble.dispatchEvent("pointerup", { pointerType: "touch", clientX: x, clientY: y });
-    await expect.poll(() => shown(actions)).toBe(true);
-    for (const button of await actions.getByRole("button").all()) {
-      const size = await button.evaluate((el) => {
-        const after = getComputedStyle(el, "::after");
-        return [parseFloat(after.width), parseFloat(after.height)];
-      });
-      expect(size[0]).toBeGreaterThanOrEqual(44);
-      expect(size[1]).toBeGreaterThanOrEqual(44);
-    }
-    // Within the screen.
-    const bar = (await actions.boundingBox())!;
-    expect(bar.x).toBeGreaterThanOrEqual(0);
-    expect(bar.x + bar.width).toBeLessThanOrEqual(PHONE.width);
-  });
 });
+
+/** Otto's progress bubble, a row of its own with no room beside it for the bar on a phone. */
+const progress = (page: Page) =>
+  page.getByTestId("message").filter({ hasText: "I'll write that down so I don't forget." });
+
+for (const width of [320, 390]) {
+  test.describe(`touch areas on a ${width}px phone`, () => {
+    test.use(contextFor({ ...PHONE, width }, "light"));
+
+    test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area of its own", async ({
+      page,
+    }) => {
+      await open(page);
+      const turn = answer(page);
+      await turn.scrollIntoViewIfNeeded();
+      const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+      const actions = turn.getByTestId("message-actions");
+      await page.touchscreen.tap(box.x + 30, box.y + 20);
+      expect(await shown(actions)).toBe(false);
+      await holdOn(turn);
+      await expect.poll(() => shown(actions)).toBe(true);
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      // Within the screen.
+      const bar = (await actions.boundingBox())!;
+      expect(bar.x).toBeGreaterThanOrEqual(0);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(width);
+    });
+
+    test("F-066: a held message just under the header, with no room beside it or above it, shows its actions under it, each with its 44 px hit area", async ({
+      page,
+    }) => {
+      await open(page);
+      const message = progress(page);
+      const bubble = message.locator(".msg > .bubble");
+      // Its top 10 px under the header: above it, the bar would lie under the header.
+      const header = (await page.locator(".conversation-header").boundingBox())!;
+      await bubble.evaluate(
+        (el, top) => {
+          el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+        },
+        header.y + header.height + 10,
+      );
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      const bar = (await actions.boundingBox())!;
+      const box = (await bubble.boundingBox())!;
+      expect(bar.y).toBeGreaterThanOrEqual(box.y + box.height);
+    });
+
+    test("F-066: when write access comes back while a held message's actions show, the wider bar moves so each button keeps its 44 px hit area", async ({
+      page,
+    }) => {
+      await open(page, "message-actions-read");
+      const message = progress(page);
+      await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      await expect(actions.getByRole("button")).toHaveCount(1);
+      await page.evaluate(() => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: {
+              setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+            };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => ({
+          ...state,
+          connection: { ...(state.connection as object), canWrite: true },
+        }));
+      });
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all())
+        await expect.poll(() => unreached(button)).toEqual([]);
+    });
+  });
+}
 
 for (const size of SIZES) {
   for (const theme of THEMES) {
