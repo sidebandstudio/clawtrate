@@ -5454,7 +5454,35 @@ export class ClawtrateClient {
         userAgent: `clawtrate/${this.host.client.version}`,
       }),
       onConnectHello: async (hello, context) => {
-        await lifecycle.acceptHello(hello, context.plan);
+        // Still the protocol's current socket: one replaced since, on this same address and
+        // connection, stages, writes and saves nothing, after any of these waits.
+        const live = () => {
+          try {
+            context.assertCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        // The lifecycle's acceptHello (a read of the saved record, then a store of the hello's
+        // token), with this socket's liveness asked before the store and before its write.
+        const issued = hello.auth?.deviceToken?.trim();
+        if (issued && context.plan.identity) {
+          const role = hello.auth?.role ?? context.plan.role;
+          const ids = { clientId: context.plan.clientId, deviceId: context.plan.identity.deviceId };
+          const stored = await tokenStore.load({ ...ids, role });
+          if (!live()) return;
+          await tokenStore.save(
+            {
+              ...ids,
+              role,
+              token: issued,
+              scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
+            },
+            live,
+          );
+        }
+        if (!live()) return;
         // Only this connection may drop this gateway's bootstrap secret.
         if (generation !== this.generation || this.settings?.url !== settings.url) return;
         const gate = this.tokenGate;
@@ -5478,7 +5506,8 @@ export class ClawtrateClient {
           this.heldToken = staged.token;
           // A record saved meanwhile keeps what it holds, as a replacement token does.
           const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
-          if (generation !== this.generation || this.settings?.url !== settings.url) return;
+          if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+            return;
           await this.writeToken(settings.url, staged.deviceId, staged.role, {
             token: staged.token,
             grantedScopes: [...staged.scopes],
@@ -5489,7 +5518,7 @@ export class ClawtrateClient {
           // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
           await this.changeConnection(async () => {
             const current = this.settings;
-            if (generation !== this.generation || current?.url !== settings.url) return;
+            if (!live() || generation !== this.generation || current?.url !== settings.url) return;
             await this.saveSettings(current);
           });
           return;
@@ -5500,7 +5529,7 @@ export class ClawtrateClient {
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
           const current = this.settings;
-          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!live() || generation !== this.generation || current?.url !== settings.url) return;
           if (reuse) {
             if (this.setupEndpointFails(settings.url, generation)) {
               this.close();
@@ -5514,7 +5543,7 @@ export class ClawtrateClient {
           const paired =
             Boolean(hello.auth.deviceToken) ||
             (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
-          if (!paired) return;
+          if (!paired || !live()) return;
           try {
             await this.saveSettings({ ...current, token: null });
           } catch {
@@ -7145,9 +7174,44 @@ export class ClawtrateClient {
    * and a write is dropped once that connection is no longer current, checked
    * after every wait, so a late write can never land after a switch.
    */
-  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
+  private connectionTokenStore(
+    url: string,
+    generation: number,
+  ): GatewayBrowserDeviceTokenStore & {
+    /** `store`, for one socket's hello: nothing is staged or written once that socket is retired. */
+    save: (
+      params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
+      live: () => boolean,
+    ) => Promise<void>;
+  } {
     const current = () => generation === this.generation && this.settings?.url === url;
+    const save = async (
+      { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
+      live: () => boolean,
+    ) => {
+      if (!current() || !live()) return;
+      // A setup connection's first token waits in memory for its grant to be checked.
+      const gate = this.tokenGate;
+      if (gate?.generation === generation && gate.url === url) {
+        gate.staged = { deviceId, role, token, scopes: [...scopes] };
+        return;
+      }
+      // A replacement token is this socket's credential now: taken out of gateway text too.
+      this.heldToken = token;
+      const existing = await this.loadToken(url, deviceId, role);
+      if (!current() || !live()) return;
+      const held = existing?.heldScopes ?? [...READ_SCOPES];
+      await this.writeToken(url, deviceId, role, {
+        token,
+        // A replacement token is held to what this client asks for, whatever it was granted.
+        grantedScopes: scopes.filter((scope) => held.includes(scope)),
+        heldScopes: held,
+        ...(existing?.adminHeld ? { adminHeld: true } : {}),
+        ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+      });
+    };
     return {
+      save,
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
@@ -7159,28 +7223,7 @@ export class ClawtrateClient {
             this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
-      store: async ({ deviceId, role, token, scopes }) => {
-        if (!current()) return;
-        // A setup connection's first token waits in memory for its grant to be checked.
-        const gate = this.tokenGate;
-        if (gate?.generation === generation && gate.url === url) {
-          gate.staged = { deviceId, role, token, scopes: [...scopes] };
-          return;
-        }
-        // A replacement token is this socket's credential now: taken out of gateway text too.
-        this.heldToken = token;
-        const existing = await this.loadToken(url, deviceId, role);
-        if (!current()) return;
-        const held = existing?.heldScopes ?? [...READ_SCOPES];
-        await this.writeToken(url, deviceId, role, {
-          token,
-          // A replacement token is held to what this client asks for, whatever it was granted.
-          grantedScopes: scopes.filter((scope) => held.includes(scope)),
-          heldScopes: held,
-          ...(existing?.adminHeld ? { adminHeld: true } : {}),
-          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-        });
-      },
+      store: (params) => save(params, () => true),
       clear: async ({ deviceId, role }) => {
         if (!current()) return;
         await this.host.storage.delete(this.tokenKey(url, deviceId, role));

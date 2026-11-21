@@ -326,6 +326,53 @@ describe("a setup connection, end to end of its first hello", () => {
     client.stop();
   });
 
+  it("F-492: a hello accepted on a socket replaced meanwhile saves no token and no settings", async () => {
+    const gateway = new FakeGateway();
+    let replies = 0;
+    let holdNext = false;
+    gateway.connectReply = () => {
+      replies += 1;
+      // The first socket's hello is accepted slowly: its read of the saved record waits.
+      if (replies === 1) holdNext = true;
+      return {
+        ok: true,
+        payload: helloOk([READ_SCOPE], replies === 1 ? "retired-token" : "current-token"),
+      };
+    };
+    const base = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const held = deferred<void>();
+    let settingsWrites = 0;
+    const storage = {
+      ...base,
+      get: async (key: string) => {
+        if (key === tokenKey(URL) && holdNext) {
+          holdNext = false;
+          await held.promise;
+        }
+        return base.get(key);
+      },
+      set: async (key: string, value: string) => {
+        if (key === "connection") settingsWrites += 1;
+        return base.set(key, value);
+      },
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL });
+    await until(() => replies === 1);
+    await sleep(50);
+    // That socket drops while its hello is being accepted; the protocol opens a newer one,
+    // on the same address and connection, which connects and saves its own token.
+    gateway.dropAll();
+    await until(() => base.data.get(tokenKey(URL))?.includes("current-token") === true);
+    const writes = settingsWrites;
+    held.resolve();
+    await sleep(150);
+    expect(JSON.parse(base.data.get(tokenKey(URL))!).token).toBe("current-token");
+    expect(settingsWrites).toBe(writes);
+    client.stop();
+  });
+
   it("F-492: a plan of a setup connection already replaced reads and changes nothing of the new one", async () => {
     const gateway = granting([READ_SCOPE]);
     const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
