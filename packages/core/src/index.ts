@@ -37,6 +37,7 @@ export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./file-paths.ts";
+export * from "./check-ins.ts";
 export { isStopNow } from "./stop-words.ts";
 export * from "./send-size.ts";
 export * from "./composer-menus.ts";
@@ -67,6 +68,7 @@ export {
   GatewayNotAllowedError,
   MAX_FILE_READS,
   MAX_MESSAGE_CHARS,
+  GATEWAY_CHANGED_MESSAGE,
   MAX_SESSION_PAGES,
   REQUESTED_SCOPES,
   SendTooLargeError,

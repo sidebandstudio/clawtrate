@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
+import { runningRunId } from "../packages/core/src/runs.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
@@ -79,13 +80,27 @@ async function openNewTask(client: ClawtrateClient, tag: string): Promise<string
   return key;
 }
 
+/**
+ * What the gateway has in flight and waiting in the task. An input it withdrew stays listed as
+ * `cancelled`, and waits for nothing.
+ */
+async function gatewayWork(op: OperatorSession, key: string) {
+  const history = await op.request<{
+    inFlightRun?: { runId?: string };
+    pendingInputs?: { items?: Array<{ runId?: string; state?: string }> };
+  }>("chat.history", { sessionKey: key, limit: 1 });
+  return {
+    inFlight: history.inFlightRun ? (history.inFlightRun.runId ?? "unnamed") : null,
+    pending: (history.pendingInputs?.items ?? [])
+      .filter((item) => item.state !== "cancelled")
+      .map((item) => [item.runId, item.state]),
+  };
+}
+
 /** Whether the gateway has nothing in flight or waiting in the task. */
 async function gatewayIdle(op: OperatorSession, key: string): Promise<boolean> {
-  const history = await op.request<{
-    inFlightRun?: unknown;
-    pendingInputs?: { items?: unknown[] };
-  }>("chat.history", { sessionKey: key, limit: 1 });
-  return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
+  const work = await gatewayWork(op, key);
+  return work.inFlight === null && work.pending.length === 0;
 }
 
 const runs = (client: ClawtrateClient, key: string) => client.state.transcripts[key]?.runs ?? [];
@@ -157,6 +172,62 @@ test("a turn the gateway runs from its queue under an id of its own is one run, 
     expect(runs(client, key).map((run) => [run.id, run.state])).toEqual(
       ids.map((runId) => [runId, "completed"]),
     );
+  } finally {
+    await close();
+  }
+});
+
+test("F-097: a run stopped during a connection gap ends on the gateway's word, and Stop is offered on the current run", async () => {
+  const { client, close } = await engine("missed end check");
+  try {
+    const key = await openNewTask(client, "missed-end");
+    // Another device's turn, followed here until this client goes away mid-tool.
+    const original = String((await op.send(key, "#slow-tool 15")).runId);
+    await expect
+      .poll(
+        () =>
+          runs(client, key)
+            .find((run) => run.id === original)
+            ?.steps.some((step) => step.kind === "tool"),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    await client.suspend();
+    // That device stops it and sends again while this one is away: history's rows stop at the
+    // call, so they do not say the run ended, and the new run is in flight.
+    await op.request("chat.abort", { sessionKey: key, runId: original });
+    const current = String((await op.send(key, "Next. #slow 20")).runId);
+    await expect
+      .poll(
+        async () =>
+          (
+            await op.request<{ inFlightRun?: { runId?: string } }>("chat.history", {
+              sessionKey: key,
+              limit: 1,
+            })
+          ).inFlightRun?.runId,
+        { timeout: 15_000 },
+      )
+      .toBe(current);
+    await client.retryNow();
+    await expect
+      .poll(() => runs(client, key).map((run) => [run.id, run.state]), { timeout: 15_000 })
+      .toEqual([
+        [original, "stopped"],
+        [current, "running"],
+      ]);
+    expect(runs(client, key)[0]!.outcomeKnown).toBe(true);
+    // Stop is offered on the current run and names it. The gateway lets only the device that
+    // started a run abort it, so that device stops it.
+    expect(runningRunId(client.state.transcripts[key]!, current)).toBe(current);
+    const ended = op.terminal(current, 30_000);
+    await op.request("chat.abort", { sessionKey: key, runId: current });
+    expect((await ended).state).toBe("aborted");
+    await expect.poll(() => runs(client, key)[1]?.state, { timeout: 15_000 }).toBe("stopped");
+    // Polled as what is left, so a cleanup that fails names the run that holds the task.
+    await expect
+      .poll(() => gatewayWork(op, key), { timeout: 30_000 })
+      .toEqual({ inFlight: null, pending: [] });
   } finally {
     await close();
   }
