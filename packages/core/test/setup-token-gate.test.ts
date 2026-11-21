@@ -338,6 +338,34 @@ describe("a setup connection's other reads", () => {
   });
 });
 
+describe("a setup connection's late failures", () => {
+  it("F-492: a session read sent on the setup connection that fails after a replacement logs fixed words", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const { client, everything } = recorded(gateway);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.discovery.status === "ready");
+    // A refresh of the task list goes out on the setup connection and doesn't answer.
+    const listed = deferred<object>();
+    const secret = "gateway-says-internal-path-/srv/secret-7d1e";
+    gateway.handlers["sessions.list"] = () => listed.promise;
+    gateway.emit("sessions.changed", { reason: "fixture" });
+    await until(() => gateway.calls("sessions.list").length > 0);
+    // An ordinary connection replaces it; the old read fails only then.
+    await client.connect({ url: "ws://127.0.0.1:19941", token: "typed-shared-token-0123456789" });
+    listed.reject(new GatewayError({ code: "UNAVAILABLE", message: secret }));
+    await sleep(200);
+    const text = everything();
+    expect(text).not.toContain(secret);
+    expect(text).not.toMatch(/sessions\.list failed: /);
+    client.stop();
+  });
+});
+
 /** A client whose every published state and log line is kept, as text. */
 function recorded(gateway: FakeGateway, storage = memoryStorage()) {
   const logs: string[] = [];

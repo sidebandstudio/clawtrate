@@ -921,6 +921,8 @@ export class ClawtrateClient {
   private selectionReady = -1;
   /** The generation of the connection opened as the host's setup connection, while it lasts. */
   private setupGeneration: number | null = null;
+  /** Each failed request's log policy, as it was when the request went out. */
+  private readonly dispatchedQuiet = new WeakMap<object, boolean>();
   private settings: ConnectionSettings | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
@@ -6284,7 +6286,7 @@ export class ClawtrateClient {
           this.replaceRows(rows);
           this.setDiscovery({ partial });
         } catch (error) {
-          this.log("warn", `sessions.list failed: ${String(error)}`);
+          this.logFailure("warn", "sessions.list", error);
         }
       } while (this.refreshAgain && generation === this.generation);
     } finally {
@@ -6509,7 +6511,7 @@ export class ClawtrateClient {
     try {
       if (subscribe) {
         await this.request("sessions.messages.subscribe", { key }).catch((error: unknown) => {
-          this.log("warn", `sessions.messages.subscribe failed: ${String(error)}`);
+          this.logFailure("warn", "sessions.messages.subscribe", error);
         });
       }
       const history = asRecord(
@@ -7093,7 +7095,13 @@ export class ClawtrateClient {
     options?: { onSent?: (requestId: string) => void },
   ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
-    return this.protocol.request(method, params, options);
+    // The log policy of the connection this goes out on: a late failure is logged with it,
+    // never with that of a connection that replaced it.
+    const quiet = this.quiet();
+    return this.protocol.request(method, params, options).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
+      throw error;
+    });
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
@@ -7354,12 +7362,11 @@ export class ClawtrateClient {
     this.log("warn", this.quiet() ? "a read failed on the setup connection" : message);
   }
 
-  private logFailure(
-    level: "warn" | "error",
-    what: string,
-    error: unknown,
-    setup = this.quiet(),
-  ): void {
+  private logFailure(level: "warn" | "error", what: string, error: unknown): void {
+    // Quiet if the request went out on a setup connection, or this one is setup's now.
+    const setup =
+      (typeof error === "object" && error !== null && this.dispatchedQuiet.get(error)) ||
+      this.quiet();
     this.log(
       level,
       setup ? `${what} failed on the setup connection` : `${what} failed: ${errorMessage(error)}`,
