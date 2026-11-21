@@ -19,6 +19,7 @@ import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
 import { gatewayLabel } from "./format.ts";
+import { followSetup, setupUnderWay } from "./screen.ts";
 import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
 
@@ -546,9 +547,15 @@ export function ConnectScreen({
   const settingUp = loadingBots || connection.status === "connecting";
   // The first question, when the host offers setup and no gateway is saved (docs/design/setup.md §3).
   // A setup the host has under way (another window, or a reload) opens where it stands.
-  const [view, setView] = useState<SetupView>(() =>
-    setup && (setup.phase !== "idle" || setup.there) ? "here" : "first",
-  );
+  const underWay = setupUnderWay(setup);
+  const [view, setView] = useState<SetupView>(() => (underWay ? "here" : "first"));
+  // …and one the host starts after this screen showed the first question, the same.
+  const [wasUnderWay, setWasUnderWay] = useState(underWay);
+  if (underWay !== wasUnderWay) {
+    setWasUnderWay(underWay);
+    const next = followSetup(view, wasUnderWay, underWay);
+    if (next !== view) setView(next);
+  }
   const setupOwns =
     setup !== undefined &&
     (setup.phase === "confirming" ||

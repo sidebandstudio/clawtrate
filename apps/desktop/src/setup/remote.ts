@@ -451,7 +451,11 @@ export class RemoteSetup {
       if (same) {
         // Another name for a saved endpoint: that route's id, never a second pin for one endpoint.
         transport.forget(first);
-        if (live && live.record.id === same.id) return live.route as Route & { ok: true };
+        // The live route only while this name's settings resolve to exactly its target.
+        if (live && live.record.id === same.id)
+          return sameTarget(first.target, live.route.target)
+            ? (live.route as Route & { ok: true })
+            : transport.prepareRoute(newRouteId(), destination);
         prepared = transport.prepareRoute(same.id, destination);
       }
     }
@@ -927,7 +931,7 @@ export class RemoteSetup {
     // The route is recorded before its first token, which only the store keeps.
     this.options.routes.put(record);
     this.publish({ ...this.state, step: 2 });
-    this.watchConnect(attempt, key);
+    this.watchConnect(attempt, key, channel.url);
     await this.options.client.connectRoute({
       url: channel.url,
       route: key,
@@ -962,7 +966,8 @@ export class RemoteSetup {
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
       await this.letGoPending();
-      this.failThere(forwardFailure(up));
+      // Back while the forward closed: the screen it went to stays.
+      if (attempt === this.attempt) this.failThere(forwardFailure(up));
       return null;
     }
     const channel = this.channelFor(forward, up.local, found.service.port);
@@ -993,16 +998,20 @@ export class RemoteSetup {
     });
   }
 
-  /** Follows Connect's connection until the bots are read, or it failed (§7). */
-  private watchConnect(attempt: number, key: string): void {
+  /** Follows Connect's connection on `url`, its channel, until the bots are read, or it failed (§7). */
+  private watchConnect(attempt: number, key: string, url: string): void {
     this.stopWatching();
     const client = this.options.client;
     const check = (state: ClawtrateState) => {
       if (attempt !== this.attempt || client.route !== key) return;
       const { connection, discovery } = state;
+      // Only this channel's connection: what the store still says of the one it replaces (another
+      // route, connected) is not this attempt's.
+      if (connection.gatewayUrl !== url) return;
       if (connection.status === "connected") {
         // The client reads the gateway's identity before it says connected; never live without it.
         if (!connection.gatewayId) return;
+        this.acceptPairing(key, connection.gatewayId);
         if (discovery.status === "ready") {
           this.stopWatching();
           void this.becomeLive(key, connection.gatewayId);
@@ -1019,8 +1028,11 @@ export class RemoteSetup {
         const identity = code === ROUTE_IDENTITY_CHANGED || code === ROUTE_IDENTITY_UNREAD;
         const pending = this.pending;
         // Not the route's gateway, or no saying: the same cleanup as on a restore (retireIdentity).
+        // The cleanup lets go only of its own attempt, never of a Connect started meanwhile.
         if (identity && pending?.record)
-          void this.retireIdentity(pending.record, pending.forward).then(() => this.letGoPending());
+          void this.retireIdentity(pending.record, pending.forward).then(() =>
+            this.pending === pending ? this.letGoPending() : undefined,
+          );
         else void this.letGoPending();
         if (this.saved)
           this.options.publishRoute(
@@ -1050,6 +1062,27 @@ export class RemoteSetup {
       }
     };
     this.watching = client.store.subscribe(check);
+  }
+
+  /**
+   * The gateway answered as itself and the client kept the token: the pairing
+   * is accepted, and its record keeps that identity from now on, so a Back
+   * while the bots load keeps it (§7) and a restore checks the next gateway
+   * against it.
+   */
+  private acceptPairing(key: string, identity: string): void {
+    const pending = this.pending;
+    if (!pending || pending.record.key !== key) return;
+    if (!pending.fresh && pending.record.identity === identity) return;
+    const record = { ...pending.record, identity };
+    try {
+      this.options.routes.put(record);
+    } catch {
+      // A store that can't be written kept no token either: the attempt stays as it was.
+      return;
+    }
+    pending.record = record;
+    pending.fresh = false;
   }
 
   private stopWatching(): void {
@@ -1535,7 +1568,7 @@ export class RemoteSetup {
     }
     const look = await transport.look(route);
     if (attempt !== this.attempt) return;
-    const now = look.ok ? serviceOnPort(look.facts, record.gatewayPort) : null;
+    const now = look.ok ? serviceOnPort(look.facts, record.gatewayPort, record.profile) : null;
     const expected = {
       profile: record.profile,
       serviceLabel: record.serviceLabel,
@@ -1544,8 +1577,9 @@ export class RemoteSetup {
     };
     const hasToken = await this.options.client.hasRouteToken(record.key).catch(() => false);
     if (attempt !== this.attempt) return;
-    if (!now?.ok || !sameService(now.service, expected) || !hasToken) {
-      // Not the same service, or no token kept: the found card, and Pair asks again.
+    if (!now?.ok || !sameService(now.service, expected) || !hasToken || record.identity === null) {
+      // Not the same service, no token kept, or no gateway identity recorded with the pairing to
+      // check the next one against: the found card, and Pair asks again.
       failRoute(now && !now.ok && now.reason === "not-running" ? "stopped" : "failed");
       if (look.ok) {
         this.found = sshLook(look.facts);
@@ -1563,11 +1597,12 @@ export class RemoteSetup {
     this.publish({ ...this.state, step: 1 });
     const channel = await this.openChannel(route, now, record, false, attempt);
     if (!channel) {
-      failRoute(this.state.there?.failure?.kind === "unreachable" ? "unreachable" : "failed");
+      if (attempt === this.attempt)
+        failRoute(this.state.there?.failure?.kind === "unreachable" ? "unreachable" : "failed");
       return;
     }
     this.publish({ ...this.state, step: 2 });
-    this.watchConnect(attempt, record.key);
+    this.watchConnect(attempt, record.key, channel.url);
     await this.options.client.connectRoute({
       url: channel.url,
       route: record.key,
