@@ -600,9 +600,9 @@ export function createFixtureBridge(
       sent.push(command);
       return usage;
     }
-    // Pairing and admin share one upgrade. A delayed answer belongs to the request that started it.
+    // Every access tier shares one upgrade. A delayed answer belongs to the request that started it.
     let setAnswer = set;
-    if (command.type === "requestAccess" && command.tier) {
+    if (command.type === "requestAccess") {
       const request = ++latestAccessRequest;
       setAnswer = (next) => {
         if (request === latestAccessRequest) set(next);
@@ -627,13 +627,7 @@ export function createFixtureBridge(
       sent.push(command);
       return rail;
     }
-    const live = liveCommand(
-      command,
-      () => state,
-      (next) => set(next),
-      files,
-      deferred,
-    );
+    const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);

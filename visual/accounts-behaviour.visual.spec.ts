@@ -181,36 +181,42 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   ).toBeVisible();
 });
 
-test("F-157: late pairing answers leave a newer admin grant in place", async ({ page }) => {
-  await page.clock.install({ time: NOW });
-  await openFixture(
-    page,
-    `scene=main&${OTTO_DISK}&access=write&admin=grant&pairing=grant`,
-    "light",
-  );
-  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
-  await page.evaluate(async () => {
-    const { clawtrateFixture: bridge } = window as unknown as {
-      clawtrateFixture: ClawtrateBridge & { hold(): void; release(): void };
-    };
-    await bridge.send({ type: "requestAccess", tier: "pairing" });
-    bridge.hold();
-    await bridge.send({ type: "requestAccess", tier: "admin" });
-    bridge.release();
-  });
-  const connection = () =>
-    page.evaluate(
-      () =>
-        (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState()
-          .connection,
+for (const first of ["pairing", "interactive"] as const) {
+  test(`F-157: late ${first} answers leave a newer admin grant in place`, async ({ page }) => {
+    await page.clock.install({ time: NOW });
+    await openFixture(
+      page,
+      `scene=main&${OTTO_DISK}&access=read&admin=grant&pairing=grant`,
+      "light",
     );
-  const granted = await connection();
-  expect(granted.scopes).toContain("operator.admin");
-  await page.clock.runFor(300);
-  expect((await connection()).upgrade.status).toBe("approved");
-  await page.clock.runFor(1_000);
-  expect((await connection()).scopes).toEqual(granted.scopes);
-});
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    await page.evaluate(async (first) => {
+      const { clawtrateFixture: bridge } = window as unknown as {
+        clawtrateFixture: ClawtrateBridge & { hold(): void; release(): void };
+      };
+      await bridge.send(
+        first === "pairing"
+          ? { type: "requestAccess", tier: "pairing" }
+          : { type: "requestAccess" },
+      );
+      bridge.hold();
+      await bridge.send({ type: "requestAccess", tier: "admin" });
+      bridge.release();
+    }, first);
+    const connection = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState()
+            .connection,
+      );
+    const granted = await connection();
+    expect(granted.scopes).toContain("operator.admin");
+    await page.clock.runFor(300);
+    expect((await connection()).upgrade.status).toBe("approved");
+    await page.clock.runFor(1_000);
+    expect((await connection()).scopes).toEqual(granted.scopes);
+  });
+}
 
 test("F-472: an approval released before the request turns pending stays approved", async ({
   page,
