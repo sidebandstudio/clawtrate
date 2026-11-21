@@ -23,6 +23,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import type { AccountChangeResult } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -4102,9 +4103,9 @@ export class ClawtrateClient {
   }
 
   /** Read one bot's stored order and model again: the lock's evidence. */
-  checkLock(botId: string): Promise<void> {
-    if (this.state.connection.status !== "connected") return Promise.resolve();
-    return this.accounts.checkLock(botId);
+  async checkLock(botId: string): Promise<void> {
+    if (this.state.connection.status !== "connected") return;
+    await this.accounts.checkLock(botId);
   }
 
   startSignIn(methodId: string, botId: string | null): Promise<void> {
@@ -4141,7 +4142,7 @@ export class ClawtrateClient {
     provider: string,
     key: string,
     botId: string | null,
-  ): Promise<{ profileId: string | null }> {
+  ): Promise<{ profileId: string | null; warning: string | null }> {
     return this.accounts.saveKey(provider, key, botId);
   }
 
@@ -4149,7 +4150,7 @@ export class ClawtrateClient {
     return this.accounts.setLabel(profileId, label);
   }
 
-  disconnectAccount(profileId: string): Promise<void> {
+  disconnectAccount(profileId: string): Promise<{ removed: boolean }> {
     return this.accounts.disconnect(profileId);
   }
 
@@ -4172,8 +4173,9 @@ export class ClawtrateClient {
     provider: string,
     model: string,
     effort: string | null,
-  ): Promise<void> {
-    return this.accounts.changeAccount(botId, account, provider, model, effort);
+    taskKey: string | null = null,
+  ): Promise<AccountChangeResult> {
+    return this.accounts.changeAccount(botId, account, provider, model, effort, taskKey);
   }
 
   setBotModel(botId: string, model: string, effort: string | null): Promise<void> {

@@ -19,6 +19,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { accountLines } from "./bots/lines.ts";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -530,6 +531,7 @@ export function Shell({
               <Conversation
                 task={task}
                 bot={bot}
+                eventLines={accountLines(state.accounts, task, state.bots)}
                 taskCount={selection.tasks.length}
                 discovery={state.discovery}
                 transcript={transcript}
@@ -586,8 +588,6 @@ export function Shell({
             panelRef={panelRef}
             accounts={state.accounts}
             bots={state.bots}
-            tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
-            transcripts={state.transcripts}
             connection={state.connection}
             info={info}
           />

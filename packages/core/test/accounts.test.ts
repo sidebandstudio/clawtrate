@@ -8,27 +8,35 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNTS,
   accountWord,
+  changesFor,
+  endingOf,
   enforceState,
   evaluateOrder,
+  isSignInActive,
+  MAX_ACCOUNT_CHANGES,
   initialState,
   labelProblem,
   lockCommand,
   MAX_ACCOUNTS,
   MAX_SECRET_CHARS,
+  MAX_SIGNIN_URL_CHARS,
   parseModelRef,
   readBotView,
+  readKeyProviders,
   retainedOrder,
+  signInAddress,
   unlockCommand,
   unreadEvidence,
   withoutSecret,
   worstCase,
   type ClawtrateState,
 } from "../src/index.ts";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { AccountsGateway, accountsClient, CHOICES } from "./accounts-fake.ts";
+import { AccountsGateway, accountsClient, CHOICES, HOST_NOTE } from "./accounts-fake.ts";
+import { MORE_INPUT, RETRY_ANSWER } from "../src/accounts-engine.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -68,10 +76,13 @@ describe("the accounts as each bot sees them", () => {
       [CHOICES.device, "code", "subscription"],
       [CHOICES.browser, "paste", "subscription"],
       [CHOICES.key, "key", "subscription"],
+      // The kind predicts the flow; the steps decide it (a note with a page: the gateway's machine).
+      [CHOICES.host, "paste", "subscription"],
+      [CHOICES.callback, "paste", "subscription"],
     ]);
     expect(accounts().keyProviders).toEqual([
-      { provider: "acme", hasKey: true, method: CHOICES.key },
-      { provider: "globex", hasKey: false, method: null },
+      { provider: "acme", replaces: null, method: CHOICES.key },
+      { provider: "globex", replaces: null, method: null },
     ]);
     expect(accounts().models.find((m) => m.provider === "globex")).toMatchObject({
       available: false,
@@ -758,6 +769,7 @@ describe("labels", () => {
         kind: "subscription" as const,
         made: "sign-in" as const,
         keptBy: null,
+        unclear: false,
         logoutSupported: true,
       },
     ];
@@ -800,7 +812,7 @@ describe("how an account was made", () => {
 });
 
 describe("sign-ins, through the gateway's own methods", () => {
-  it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
+  it("a link and a code: starting, waiting with the code and the link, signed in, and the account the read after it lists", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };
     const { client, accounts } = await accountsClient({ gateway: fake });
@@ -817,7 +829,7 @@ describe("sign-ins, through the gateway's own methods", () => {
       step: {
         code: "QK4F-7PZD",
         expiresInMinutes: 15,
-        url: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD",
+        url: { href: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD" },
       },
     });
     const login = fake.gateway.calls("models.authLogin")[0] as {
@@ -826,7 +838,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     };
     expect(login).toMatchObject({ agentId: "main", authChoice: CHOICES.device });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     // The read after it: the target's view and another bot's, refreshed.
     expect(accounts().signIn?.result).toMatchObject({
       added: ["acme:travel"],
@@ -838,10 +850,10 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "otto", account: "acme:work", outcome: "kept" },
     ]);
-    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("subscription");
+    // The gateway's answer names no account: nothing records that this sign-in made it.
+    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBeUndefined();
     expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
-      kind: "subscription",
-      made: "sign-in",
+      made: null,
       keptBy: null,
     });
     client.stop();
@@ -863,7 +875,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(accountWord(binding(accounts(), "main"))).toBe("locked");
     await client.startSignIn(CHOICES.device, null);
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "main", account: "acme:work", outcome: "widened" },
     ]);
@@ -879,7 +891,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     // The read after the sign-in reads main and one other bot; only Pip's own check fails.
     fake.failStatusFor = "pip";
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "pip", account: "acme:home", outcome: "unchecked" },
     ]);
@@ -930,7 +942,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     fake.failStatusFor = null;
     await client.recheckSignIn();
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { readFailed: false, added: ["acme:travel"], landed: "shared" },
     });
     client.stop();
@@ -981,7 +993,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
-  it("two new accounts after a sign-in that names neither: both are named, and the person's choice is its account", async () => {
+  it("two new accounts after a sign-in that names neither: both are offered, and the person's choice is only the account to label", async () => {
     const { client, fake, accounts } = await accountsClient();
     const next = fake.gateway.handlers["wizard.next"]!;
     fake.gateway.handlers["wizard.next"] = (params) => {
@@ -1002,10 +1014,10 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(Object.keys(fake.prefs).filter((key) => key.includes("acme:elsewhere"))).toEqual([]);
     await client.chooseSignInAccount("acme:mine");
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { added: ["acme:mine"], landed: "shared" },
     });
-    expect(fake.prefs["clawtrate.account-kind.acme:mine"]).toBeDefined();
+    expect(fake.prefs["clawtrate.account-kind.acme:mine"]).toBeUndefined();
     expect(fake.prefs["clawtrate.account-kind.acme:elsewhere"]).toBeUndefined();
     await expect(client.chooseSignInAccount("acme:work")).rejects.toThrow();
     client.stop();
@@ -1017,10 +1029,124 @@ describe("sign-ins, through the gateway's own methods", () => {
     fake.failStatusFor = "main";
     expect(await client.saveApiKey("globex", "made-up-key-direct-0001", null)).toEqual({
       profileId: null,
+      warning: null,
     });
     expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
-    expect(accounts().write?.error).toMatch(/reading its accounts afterwards failed/);
+    expect(accounts().write?.error).toMatch(/Reading its accounts again failed/);
     expect(fake.prefs["clawtrate.account-kind.globex:direct"]).toBeUndefined();
+    client.stop();
+  });
+
+  it("a key saved directly with the gateway's warning keeps the warning, and is not called saved", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const save = fake.gateway.handlers["models.authSetApiKey"]!;
+    const warning =
+      "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them.";
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => ({
+      ...(save(params) as object),
+      warning,
+    });
+    expect(await client.saveApiKey("globex", "made-up-key-direct-0002", null)).toEqual({
+      profileId: "globex:manual",
+      warning,
+    });
+    expect(accounts().write).toMatchObject({
+      what: "key",
+      status: "unverified",
+      error: `${warning} Its accounts list globex:manual.`,
+    });
+    client.stop();
+  });
+
+  it("a key the gateway stored and then failed on is read again before anything is said", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => {
+      const { provider } = params as { provider: string };
+      // Its order: the key is persisted, then the provider settings fail.
+      fake.shared.push({ id: `${provider}:manual`, provider, type: "api_key" });
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message:
+          "API key saved, but provider settings could not be applied: invalid. Reopen Models and save the key again.",
+      });
+    };
+    const reads = fake.gateway.calls("models.authStatus").length;
+    await expect(client.saveApiKey("globex", "made-up-key-direct-0003", null)).rejects.toThrow(
+      /may have kept the key before this error\. Its accounts now list one more Globex account\./,
+    );
+    expect(fake.gateway.calls("models.authStatus").length).toBeGreaterThan(reads);
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
+    client.stop();
+  });
+
+  it("a key saved while the connection drops is not accepted from the list cached before it", async () => {
+    const gateway = new AccountsGateway();
+    gateway.shared.push({ id: "globex:team", provider: "globex", type: "api_key" });
+    const { client, fake, accounts } = await accountsClient({ gateway });
+    expect(accounts().accounts.some((a) => a.id === "globex:team")).toBe(true);
+    // The gateway answers with an account the cached list already has, then the connection goes.
+    fake.gateway.handlers["models.authSetApiKey"] = () => ({
+      provider: "globex",
+      profileId: "globex:team",
+    });
+    // The answer arrives, and the connection goes at once, not back before the save is decided.
+    fake.gateway.afterReply = (method) => {
+      if (method !== "models.authSetApiKey") return;
+      fake.gateway.refuseConnections = true;
+      fake.gateway.dropAll();
+    };
+    expect(await client.saveApiKey("globex", "made-up-key-direct-0004", null)).toEqual({
+      profileId: null,
+      warning: null,
+    });
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
+    client.stop();
+  });
+
+  it("a new key is said to replace one only for the key the provider's settings name", () => {
+    const capability = { provider: "globex", apiKeySupported: true, loginOptions: [] };
+    const view = (source: string) =>
+      readBotView({
+        providers: [
+          {
+            provider: "globex",
+            profiles: [{ profileId: "globex:team", type: "api_key", source }],
+          },
+        ],
+        providerCapabilities: [capability],
+      });
+    expect(readKeyProviders(view("config"))).toEqual([
+      { provider: "globex", replaces: "globex:team", method: null },
+    ]);
+    // A key the gateway has otherwise does not establish which one the new key is written to.
+    for (const source of ["saved", "inherited", "external"])
+      expect(readKeyProviders(view(source))[0]?.replaces).toBeNull();
+  });
+
+  it("a start the gateway fails is followed by a read of its accounts, so the screen leaves Checking", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authLogin"] = (params) => {
+      // It may have begun something before failing: an account appears.
+      fake.shared.push({ id: "acme:half", provider: "acme", type: "api_key" });
+      void params;
+      throw new GatewayError({ code: "UNAVAILABLE", message: "provider plugin crashed" });
+    };
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn).toMatchObject({ stage: "failed", error: "provider plugin crashed" });
+    expect(accounts().signIn?.result).toMatchObject({ added: ["acme:half"], readFailed: false });
+    client.stop();
+  });
+
+  it("a busy gateway started nothing: no read is claimed after it", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authLogin"] = () => {
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message: "A wizard is already running for this gateway.",
+      });
+    };
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn?.stage).toBe("busy");
     client.stop();
   });
 
@@ -1031,7 +1157,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     await client.cancelSignIn();
     expect(accounts().signIn).toMatchObject({ stage: "waiting", saving: true });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     client.stop();
   });
 
@@ -1093,7 +1219,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     await client.startSignIn(CHOICES.device, "pip");
     expect(accounts().signIn).toMatchObject({ forBot: "pip", keptOnly: true });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result).toMatchObject({
       added: ["acme:travel"],
       landed: "kept",
@@ -1111,12 +1237,12 @@ describe("sign-ins, through the gateway's own methods", () => {
       step: {
         sensitive: true,
         placeholder: "Code or address",
-        url: "http://127.0.0.1:1/scripted/signin/browser?state=s1",
+        url: { href: "http://127.0.0.1:1/scripted/signin/browser?state=s1" },
       },
     });
     const code = "one-time-code-7Q2Z";
     await client.answerSignIn(code);
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(fake.typed).toContain(code);
     expect(JSON.stringify(client.state)).not.toContain(code);
     client.stop();
@@ -1161,6 +1287,70 @@ function reachable(root: unknown): string[] {
   return out;
 }
 
+describe("a sign-in page's address (ruling: one parsed address)", () => {
+  it("is parsed once into the destination shown and the one form opened", () => {
+    expect(signInAddress("https://Sign-In.example/device/?code=QK4F#top")).toEqual({
+      href: "https://sign-in.example/device/?code=QK4F#top",
+      scheme: "https",
+      host: "sign-in.example",
+      port: "443",
+      path: "/device/",
+      loopback: false,
+    });
+    expect(signInAddress("http://sign-in.example:8443/a")).toMatchObject({ port: "8443" });
+    expect(signInAddress("http://sign-in.example/a")).toMatchObject({ port: "80" });
+  });
+
+  it("refuses a user name or password, another scheme, and what is not an address", () => {
+    expect(signInAddress("https://name:secret@sign-in.example.com/")).toBeNull();
+    expect(signInAddress("https://name@sign-in.example.com/")).toBeNull();
+    expect(signInAddress("javascript:alert(1)")).toBeNull();
+    expect(signInAddress("file:///etc/passwd")).toBeNull();
+    expect(signInAddress("/relative")).toBeNull();
+    expect(signInAddress(`https://a.example/${"x".repeat(2_100)}`)).toBeNull();
+  });
+
+  it("F-474: refuses a sign-in URL whose canonical form exceeds the bound", () => {
+    // 1,021 characters as sent; parsing writes each "é" as "%C3%A9", past 2,048.
+    const raw = `http://127.0.0.1:1/${"é".repeat(1_002)}`;
+    expect(raw.length).toBeLessThan(MAX_SIGNIN_URL_CHARS);
+    expect(new URL(raw).href.length).toBeGreaterThan(MAX_SIGNIN_URL_CHARS);
+    expect(signInAddress(raw)).toBeNull();
+    // Within the bound once parsed, it is kept, with its parsed path.
+    const short = `http://127.0.0.1:1/${"é".repeat(300)}`;
+    expect(signInAddress(short)?.path).toBe(`/${"%C3%A9".repeat(300)}`);
+  });
+
+  it("knows a loopback address, which points to the device that opens it", () => {
+    for (const raw of [
+      "http://localhost:1455/auth",
+      "http://LOCALHOST./auth",
+      "http://app.localhost/auth",
+      "http://127.0.0.1:8080/",
+      "http://127.4.5.6/",
+      "http://2130706433/",
+      "http://[::1]:8080/",
+      "http://[::ffff:127.0.0.1]/",
+    ])
+      expect(signInAddress(raw)?.loopback, raw).toBe(true);
+    for (const raw of [
+      "https://sign-in.example/",
+      "http://192.0.2.10/",
+      "http://[::ffff:192.0.2.10]/",
+    ])
+      expect(signInAddress(raw)?.loopback, raw).toBe(false);
+  });
+
+  it("a step whose page has a password in it offers no page, and says it refused one", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.deviceUrl = "https://user:hunter2@sign-in.example.com/device";
+    await client.startSignIn(CHOICES.device, "pip");
+    expect(accounts().signIn?.step).toMatchObject({ url: null, urlRefused: true });
+    expect(JSON.stringify(client.state)).not.toContain("hunter2");
+    client.stop();
+  });
+});
+
 describe("a typed API key leaves no trace", () => {
   const KEY = "clawtrate-dev-key.acme.made-up-0042";
 
@@ -1203,10 +1393,15 @@ describe("a typed API key leaves no trace", () => {
   it("through the provider's key sign-in: saved, sent once, and absent afterwards", async () => {
     const { client, storage, logs, fake } = await keyClient();
     const { profileId } = await client.saveApiKey("acme", KEY, null);
-    expect(profileId).toBe("acme:travel");
+    // The gateway's answer names no account; the new one the read lists is only a candidate.
+    expect(profileId).toBeNull();
     expect(fake.typed.filter((value) => value === KEY)).toHaveLength(1);
-    expect(client.state.accounts.signIn).toMatchObject({ stage: "connected", byKey: true });
-    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("typed-key");
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "several",
+      byKey: true,
+      result: { added: ["acme:travel"] },
+    });
+    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBeUndefined();
     await traceless(client, storage, logs, KEY);
     client.stop();
   });
@@ -1218,7 +1413,8 @@ describe("a typed API key leaves no trace", () => {
     const { client, storage, logs } = await keyClient(fake);
     await client.saveApiKey("acme", KEY, null);
     expect(client.state.accounts.signIn?.stage).toBe("failed");
-    expect(client.state.accounts.signIn?.error).toMatch(/refused/);
+    // The gateway's words after the key went out are not shown.
+    expect(client.state.accounts.signIn?.error).toBeNull();
     await traceless(client, storage, logs, KEY);
     client.stop();
   });
@@ -1261,6 +1457,152 @@ describe("a typed API key leaves no trace", () => {
     client.stop();
   });
 
+  it("a gateway that echoes a key in a structured profile label puts it in no store and no viewer's snapshot", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      const answer = status(params) as {
+        providers: Array<{ profiles: Array<Record<string, unknown>> }>;
+      };
+      for (const profile of answer.providers.flatMap((provider) => provider.profiles))
+        if (profile.profileId === "globex:manual") profile.displayName = `Key ${KEY}`;
+      return answer;
+    };
+    const viewer = createBridgeSession(client);
+    const snapshots: string[] = [];
+    const stop = client.store.subscribe((state) => void snapshots.push(JSON.stringify(state)));
+    await viewer.apply({ type: "saveApiKey", provider: "globex", key: KEY, botId: null });
+    stop();
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.join("")).not.toContain(KEY);
+    await traceless(client, storage, logs, KEY);
+    viewer.dispose();
+    client.stop();
+  });
+
+  it("a pasted code is dropped when the request that carries it ends, though the sign-in goes on", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "one-time-code-dropped-7Q";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) =>
+      (params as { answer?: unknown }).answer
+        ? { done: false, status: "running", step: { id: "second", type: "text", sensitive: true } }
+        : next(params);
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    await until(() => client.state.accounts.signIn?.result != null);
+    // Another input after the answer: Clawtrate doesn't follow it, and holds nothing.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: MORE_INPUT });
+    expect(fake.gateway.calls("wizard.cancel")).toHaveLength(1);
+    expect(held(client)).toEqual([]);
+    await traceless(client, storage, logs, code);
+    client.stop();
+  });
+
+  it("F-475: redaction material is gone before the follow-up read and that read publishes no raw profile metadata", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const engine = (client as unknown as { accounts: { secrets: string[] } }).accounts;
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const save = fake.gateway.handlers["models.authSetApiKey"]!;
+    let saved = false;
+    const heldOnRead: number[] = [];
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => {
+      const answer = save(params);
+      saved = true;
+      return answer;
+    };
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      if (saved) heldOnRead.push(engine.secrets.length);
+      const answer = status(params) as {
+        providers: Array<{ profiles: Array<Record<string, unknown>> }>;
+      };
+      for (const profile of answer.providers.flatMap((p) => p.profiles))
+        if (profile.profileId === "globex:manual") profile.displayName = "Raw label 7Y";
+      return answer;
+    };
+    const shown = JSON.stringify(client.state.accounts.accounts);
+    const snapshots: string[] = [];
+    const stop = client.store.subscribe((state) => void snapshots.push(JSON.stringify(state)));
+    expect(await client.saveApiKey("globex", KEY, null)).toEqual({
+      profileId: "globex:manual",
+      warning: null,
+    });
+    stop();
+    // The follow-up read ran with nothing held, and published none of what it read.
+    expect(heldOnRead.length).toBeGreaterThan(0);
+    expect(heldOnRead.every((count) => count === 0)).toBe(true);
+    expect(snapshots.join("")).not.toContain("Raw label 7Y");
+    expect(JSON.stringify(client.state.accounts.accounts)).toBe(shown);
+    expect(client.state.accounts.write).toMatchObject({ what: "key", status: "saved" });
+    await traceless(client, storage, logs, KEY);
+    client.stop();
+  });
+
+  it("F-474: a subsequent step after submit publishes no unsolicited prompt data", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "made-up-code-unsolicited";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    fake.gateway.handlers["wizard.next"] = async (params) => {
+      if ((params as { answer?: unknown }).answer)
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "raw-step-id-91",
+            type: "progress",
+            title: "Unsolicited title",
+            message: "Unsolicited message",
+            externalUrl: "https://unsolicited.example/page",
+            deviceCode: { code: "UNSO-LICI", expiresInMinutes: 5 },
+          },
+        };
+      if (
+        (params as { sessionId: string }).sessionId &&
+        client.state.accounts.signIn?.stage === "waiting"
+      ) {
+        await gate;
+        return { done: true, status: "done" };
+      }
+      return next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    await until(() => client.state.accounts.signIn?.stage === "waiting");
+    const shown = JSON.stringify(client.state.accounts.signIn);
+    for (const word of ["raw-step-id-91", "Unsolicited", "unsolicited.example", "UNSO-LICI"])
+      expect(shown).not.toContain(word);
+    release();
+    await until(() => client.state.accounts.signIn?.result != null);
+    await traceless(client, storage, logs, code);
+    client.stop();
+  });
+
+  it("F-474: an answer the gateway refuses shows the step it answered again, in Clawtrate's words", async () => {
+    const { client, fake } = await keyClient();
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) =>
+      (params as { answer?: unknown }).answer
+        ? {
+            done: false,
+            status: "running",
+            error: "Invalid redirect: made-up-code-refused",
+            step: { id: "paste", type: "text", sensitive: true, message: "Try again" },
+          }
+        : next(params);
+    await client.startSignIn(CHOICES.browser, null);
+    const asked = client.state.accounts.signIn!.step;
+    await client.answerSignIn("made-up-code-refused");
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "entering",
+      step: asked,
+      error: RETRY_ANSWER,
+    });
+    expect(JSON.stringify(client.state)).not.toContain("made-up-code-refused");
+    client.stop();
+  });
+
   /** The engine's own copy of what was typed, which must be gone once the sign-in has ended. */
   const held = (client: ClawtrateClient) =>
     (client as unknown as { accounts: { secrets: string[] } }).accounts.secrets;
@@ -1288,9 +1630,9 @@ describe("a typed API key leaves no trace", () => {
     };
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn(` ${code} `);
-    // Still under way, waiting for another answer: the step is shown, without the code.
-    expect(client.state.accounts.signIn).toMatchObject({ stage: "entering" });
-    expect(client.state.accounts.signIn?.step?.title).toBe("Code … was not accepted");
+    await until(() => client.state.accounts.signIn?.result != null);
+    // A step after the answer asks for more: none of its words are shown.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: MORE_INPUT });
     expect(JSON.stringify(client.state)).not.toContain(code);
     // Once the sign-in ends, nothing of it is held.
     await client.dismissSignIn();
@@ -1317,8 +1659,9 @@ describe("a typed API key leaves no trace", () => {
         : next(params);
     };
     await client.saveApiKey("acme", KEY, null);
-    expect(client.state.accounts.signIn?.step?.title).toBe("Key rejected: …");
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", step: null });
     expect(JSON.stringify(client.state)).not.toContain(KEY);
+    expect(JSON.stringify(client.state)).not.toContain("Key rejected");
     await client.dismissSignIn();
     expect(held(client)).toEqual([]);
     await traceless(client, storage, logs, KEY);
@@ -1340,10 +1683,8 @@ describe("a typed API key leaves no trace", () => {
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn(address);
     await until(() => client.state.accounts.signIn?.result != null);
-    expect(client.state.accounts.signIn).toMatchObject({
-      stage: "failed",
-      error: "The provider refused code ….",
-    });
+    // The gateway's words after the answer are not shown, scrubbed or not.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "failed", error: null });
     expect(held(client)).toEqual([]);
     for (const form of [address, decoded, "abc%2Fdef-4417"])
       await traceless(client, storage, logs, form);
@@ -1392,7 +1733,8 @@ describe("a typed API key leaves no trace", () => {
     await client.answerSignIn(code);
     await until(() => client.state.accounts.status === "error");
     expect(client.state.accounts.signIn?.stage).toBe("unverified");
-    expect(client.state.accounts.error).toContain("could not read after");
+    // After an answer was sent the gateway's words are not taken: Clawtrate's own are shown.
+    expect(client.state.accounts.error).toBe("Clawtrate couldn't read the gateway's accounts.");
     expect(JSON.stringify(client.state)).not.toContain(code);
   });
 
@@ -1430,9 +1772,8 @@ describe("a typed API key leaves no trace", () => {
     await traceless(client, storage, logs, code);
   });
 
-  it("a log line that echoes the typed key while the sign-in lasts carries none of it", async () => {
+  it("a key sign-in writes no record of how an account was made, so no such write can echo the key", async () => {
     const { client, storage, logs, fake } = await keyClient();
-    // The record of how the account was made is written before the sign-in ends; its error echoes the key.
     fake.gateway.handlers["users.prefs.set"] = () => {
       throw new GatewayError({
         code: "UNAVAILABLE",
@@ -1440,7 +1781,7 @@ describe("a typed API key leaves no trace", () => {
       });
     };
     await client.saveApiKey("acme", KEY, null);
-    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(true);
+    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(false);
     await traceless(client, storage, logs, KEY);
   });
 
@@ -1470,7 +1811,7 @@ describe("labels", () => {
     const { client, fake } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);
     fake.answerDevice();
-    await until(() => client.state.accounts.signIn?.stage === "connected");
+    await until(() => client.state.accounts.signIn?.stage === "several");
     await client.setAccountLabel("acme:travel", "Travel");
     const patch = fake.gateway.calls("config.patch").at(-1) as { raw: string };
     expect(JSON.parse(patch.raw)).toEqual({
@@ -1569,6 +1910,7 @@ describe("the bounds", () => {
           kind: "subscription",
           made: "sign-in",
           keptBy: null,
+          unclear: false,
           logoutSupported: true,
         })),
       },
@@ -1632,12 +1974,20 @@ describe("the bounds", () => {
       (params as { answer?: unknown }).answer
         ? { done: false, status: "running", step: { id: "wait", type: "text", message: "Wait" } }
         : next(params);
+    // Measured while the request that carries it is under way: it is dropped when that ends.
+    let during: string[] = [];
+    const wizard = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      if ((params as { answer?: unknown }).answer) during = [...engine.secrets];
+      return wizard(params);
+    };
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn("\u0003".repeat(MAX_SECRET_CHARS));
-    expect(engine.secrets).toHaveLength(1);
-    expect(JSON.stringify(engine.secrets[0]).length).toBeLessThanOrEqual(
+    expect(during).toHaveLength(1);
+    expect(JSON.stringify(during[0]).length).toBeLessThanOrEqual(
       CLIENT_OWNERS["accounts.secrets"]!.each,
     );
+    expect(engine.secrets).toEqual([]);
     client.stop();
   });
 
@@ -1648,6 +1998,465 @@ describe("the bounds", () => {
     const { client } = await accountsClient({ gateway: fake });
     const engine = (client as unknown as { accounts: { kinds: Map<string, unknown> } }).accounts;
     expect(engine.kinds.size).toBeLessThanOrEqual(MAX_ACCOUNTS);
+    client.stop();
+  });
+});
+
+describe("which account a sign-in made, and who can use it (F-474)", () => {
+  type Profiles = { providers: Array<{ profiles: Array<Record<string, unknown>> }> };
+  /** Rewrite each bot's view as the gateway would answer it. */
+  const views = (
+    fake: AccountsGateway,
+    change: (agentId: string, profile: Record<string, unknown>) => void,
+  ) => {
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      const answer = status(params) as Profiles;
+      const { agentId } = params as { agentId: string };
+      for (const profile of answer.providers.flatMap((p) => p.profiles)) change(agentId, profile);
+      return answer;
+    };
+  };
+
+  it("F-474: an account the read just before the start found is not the pasted code's, though the last list lacked it", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.startSignIn(CHOICES.browser, null);
+    expect(accounts().signIn?.known).toContain("acme:elsewhere");
+    await client.answerSignIn("code-pasted-back-41");
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "several",
+      result: { added: ["acme:travel"] },
+    });
+    client.stop();
+  });
+
+  it("F-474: an account another client adds while the person pastes the code makes it ambiguous, never the sign-in's", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.browser, null);
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.answerSignIn("code-pasted-back-42");
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn?.stage).toBe("several");
+    expect(accounts().signIn?.result?.added.sort()).toEqual(["acme:elsewhere", "acme:travel"]);
+    client.stop();
+  });
+
+  it("F-474: a new account another bot lists from configuration or outside the stores is not called shared", async () => {
+    for (const source of ["config", "external"]) {
+      const { client, accounts, fake } = await accountsClient();
+      views(fake, (agentId, profile) => {
+        // `main`'s own store is the shared one: the gateway lists it there as saved.
+        if (profile.profileId === "acme:travel")
+          profile.source = agentId === "main" ? "saved" : source;
+      });
+      await client.startSignIn(CHOICES.device, null);
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn?.result).toMatchObject({ landed: "unclear", keptBy: null });
+      expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
+        keptBy: null,
+        unclear: true,
+      });
+      client.stop();
+    }
+  });
+
+  it("F-474: one id saved in two bots' own stores is one row that says the views don't settle who can use it", async () => {
+    const fake = new AccountsGateway();
+    fake.own.pip = [{ id: "acme:studio", provider: "acme", type: "api_key" }];
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().accounts.filter((a) => a.id === "acme:studio")).toEqual([
+      expect.objectContaining({ keptBy: null, unclear: true }),
+    ]);
+    // An account one bot keeps alone, and one every bot inherits, stay as they were.
+    expect(accounts().accounts.find((a) => a.id === "acme:work")).toMatchObject({
+      keptBy: null,
+      unclear: false,
+    });
+    client.stop();
+  });
+
+  it("F-474: an outside addition after a reauth never becomes the sign-in's account", async () => {
+    const fake = new AccountsGateway();
+    // The sign-in refreshes an account the gateway already has; another client adds one meanwhile.
+    fake.nextEnding = { outcome: "approve", account: "work" };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.startSignIn(CHOICES.device, null);
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "oauth" });
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    // A candidate to label, not the sign-in's account: nothing records that it made it.
+    expect(accounts().signIn).toMatchObject({
+      stage: "several",
+      result: { added: ["acme:elsewhere"] },
+    });
+    await client.chooseSignInAccount("acme:elsewhere");
+    expect(accounts().signIn?.stage).toBe("several");
+    expect(fake.prefs["clawtrate.account-kind.acme:elsewhere"]).toBeUndefined();
+    expect(accounts().accounts.find((a) => a.id === "acme:elsewhere")?.made).toBeNull();
+    client.stop();
+  });
+
+  it("F-474: a candidate is offered only once every bot's view is read, so one chosen at once is said to be inherited", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // The full read after the sign-in is held back at its last request, the model list.
+    const list = fake.gateway.handlers["models.list"]!;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let asked = false;
+    fake.gateway.handlers["models.list"] = async (params) => {
+      asked = true;
+      await held;
+      return list(params);
+    };
+    fake.answerDevice();
+    await until(() => asked);
+    expect(accounts().signIn?.stage).toBe("checking");
+    expect(accounts().signIn?.result).toBeNull();
+    release();
+    await until(() => accounts().signIn?.stage === "several");
+    await client.chooseSignInAccount("acme:travel");
+    expect(accounts().signIn?.result).toMatchObject({ added: ["acme:travel"], landed: "shared" });
+    client.stop();
+  });
+
+  it("F-474: a shadowing bot prevents the every-bot claim", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // The two views read after the sign-in list it inherited; a third bot keeps its own copy.
+    fake.own.pip = [
+      ...(fake.own.pip ?? []),
+      { id: "acme:travel", provider: "acme", type: "oauth" },
+    ];
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null && accounts().status === "ready");
+    await until(() => accounts().accounts.some((a) => a.id === "acme:travel"));
+    expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
+      unclear: true,
+    });
+    expect(accounts().signIn?.result).toMatchObject({
+      added: ["acme:travel"],
+      landed: "unclear",
+      keptBy: null,
+    });
+    client.stop();
+  });
+});
+
+describe("every kind of sign-in, and every stage (F-474)", () => {
+  it("F-474: a sign-in that finishes on the gateway's machine waits showing the gateway's own note and page, then connects", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.host, null);
+    // The note is the wait: shown, not acknowledged unseen.
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      step: {
+        type: "note",
+        message: HOST_NOTE,
+        url: { href: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=h1" },
+        code: null,
+      },
+    });
+    // Acknowledged, so the gateway goes on to wait for the browser to come back to it.
+    await until(() => fake.sessions.values().next().value?.phase === "waiting");
+    expect(isSignInActive(accounts().signIn!)).toBe(true);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "several");
+    expect(accounts().signIn?.result?.added).toEqual(["acme:travel"]);
+    client.stop();
+  });
+
+  it("F-474: a browser sign-in whose callback the gateway takes itself waits with the page, no code and no field", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.callback, null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      flow: "paste",
+      step: { type: "progress", code: null, sensitive: false },
+    });
+    expect(accounts().signIn?.step?.url?.href).toMatch(/state=c1$/);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "several");
+    client.stop();
+  });
+
+  it("F-474: the closing note of a link-and-code sign-in, which carries its page again, is not shown as a new wait", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    const shown: string[] = [];
+    const stop = client.store.subscribe(
+      (state) => void shown.push(state.accounts.signIn?.step?.type ?? ""),
+    );
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "several");
+    stop();
+    // The code's progress step stays the wait; the note that ends the sign-in is never shown.
+    expect(shown).not.toContain("note");
+    client.stop();
+  });
+
+  it("F-474: a running cancel reply reports what the gateway said without inferring saving", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // `{status: "running"}` and no more: the gateway declined; it did not say it is saving.
+    fake.declineCancel = true;
+    expect(await client.cancelSignIn()).toEqual({ cancelled: false });
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      saving: false,
+      cancelDeclined: true,
+      cancelUnknown: false,
+    });
+    // Cancel can be asked again; the sign-in goes on and ends as the gateway says.
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "several");
+    expect(accounts().signIn?.saving).toBe(false);
+    client.stop();
+  });
+
+  it("F-474: each of the gateway's 'saved, but' answers is saved, not confirmed, with the account it now lists", async () => {
+    for (const message of [
+      "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.",
+      "Credentials saved, but provider settings could not be applied: Config validation failed: models.providers.acme.api: Invalid option.",
+      "Provider credentials were saved, but sign-in did not finish: the step timed out.",
+    ]) {
+      expect(endingOf("error", message)).toBe("unconfirmed");
+      const fake = new AccountsGateway();
+      fake.nextEnding = { outcome: "unconfirmed", account: "spare", message };
+      const { client, accounts } = await accountsClient({ gateway: fake });
+      await client.startSignIn(CHOICES.device, null);
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "unconfirmed",
+        error: message,
+        result: { added: ["acme:spare"] },
+      });
+      client.stop();
+    }
+    // Words that only mention an expiry, or a refusal, are not a saved sign-in.
+    expect(endingOf("error", "Acme sign-in expired: The code expired.")).toBe("expired");
+    expect(endingOf("error", "Acme refused the sign-in: access_denied")).toBe("failed");
+  });
+});
+
+describe("disconnecting an account (F-477)", () => {
+  it("F-477: logout without a confirming read never announces a disconnect", async () => {
+    // The gateway takes the request and still lists the account.
+    {
+      const { client, fake, accounts } = await accountsClient();
+      fake.gateway.handlers["models.authLogout"] = () => ({ ok: true });
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: false });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "unverified" });
+      expect(accounts().write?.error).toMatch(/still list/);
+      client.stop();
+    }
+    // The gateway takes it, and the read after it fails.
+    {
+      const { client, fake, accounts } = await accountsClient();
+      const logout = fake.gateway.handlers["models.authLogout"]!;
+      fake.gateway.handlers["models.authLogout"] = (params) => {
+        const answer = logout(params);
+        fake.failStatusFor = "otto";
+        return answer;
+      };
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: false });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "unverified" });
+      client.stop();
+    }
+    // Removed only when the read after it no longer lists it.
+    {
+      const { client, accounts } = await accountsClient();
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: true });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "saved" });
+      client.stop();
+    }
+  });
+});
+
+describe("changing a bot's account (F-473)", () => {
+  const TASK = "agent:otto:main";
+  const entry = (fake: AccountsGateway, botId: string) =>
+    (
+      (fake.config.agents as Record<string, unknown>).entries as Record<
+        string,
+        Record<string, unknown>
+      >
+    )[botId]!;
+
+  it("F-473: a change the read after it shows keeps a line for the task, with the account that read returned", async () => {
+    const { client, accounts } = await accountsClient();
+    expect(await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK)).toEqual(
+      {
+        changed: true,
+      },
+    );
+    expect(accounts().write).toMatchObject({ what: "account", status: "saved", error: null });
+    expect(accounts().changes).toEqual([
+      {
+        botId: "otto",
+        taskKey: TASK,
+        at: expect.any(Number),
+        provider: "acme",
+        account: "acme:home",
+      },
+    ]);
+    // To no fixed account.
+    await client.changeBotAccount("otto", null, "acme", "dev-1", null, TASK);
+    expect(accounts().changes.at(-1)).toMatchObject({ account: null });
+    client.stop();
+  });
+
+  it("F-473: a change whose read afterwards shows another binding is not saved and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // The gateway takes the patch, and its settings then name something else.
+    fake.gateway.handlers["config.patch"] = () => ({ ok: true });
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/The gateway took the change, but/);
+    expect(accounts().write).toMatchObject({ status: "unverified" });
+    expect(accounts().write?.error).toMatch(/acme\/dev-1@acme:work/);
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a change whose read afterwards fails is not saved and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      fake.failStatusFor = "otto";
+      return answer;
+    };
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/The gateway took the change, but/);
+    expect(accounts().write).toMatchObject({ status: "unverified" });
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a binding another client already made is found by the read before the write: nothing is written or drawn", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // Another admin moved Otto to Home after this screen last read it.
+    entry(fake, "otto").model = { primary: "acme/dev-1@acme:home", fallbacks: [] };
+    fake.revision += 1;
+    const patches = fake.gateway.calls("config.patch").length;
+    expect(await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK)).toEqual(
+      {
+        changed: false,
+      },
+    );
+    expect(fake.gateway.calls("config.patch")).toHaveLength(patches);
+    expect(accounts().write).toMatchObject({ status: "saved" });
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a write after another client's write since the read before it is refused, and draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const get = fake.gateway.handlers["config.get"]!;
+    let reads = 0;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params);
+      // Someone else writes right after the read the change is decided on.
+      if ((reads += 1) === 1) fake.revision += 1;
+      return answer;
+    };
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow(/config changed/);
+    expect(accounts().write).toMatchObject({ status: "failed" });
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: a change the gateway refuses draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "config.patch refused";
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, TASK),
+    ).rejects.toThrow();
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: at most MAX_ACCOUNT_CHANGES are kept, the newest", async () => {
+    const { client, accounts } = await accountsClient();
+    for (let i = 0; i <= MAX_ACCOUNT_CHANGES; i += 1)
+      await client.changeBotAccount(
+        "otto",
+        i % 2 ? "acme:work" : "acme:home",
+        "acme",
+        "dev-1",
+        null,
+        `agent:otto:t${i}`,
+      );
+    expect(accounts().changes).toHaveLength(MAX_ACCOUNT_CHANGES);
+    expect(accounts().changes.at(-1)?.taskKey).toBe(`agent:otto:t${MAX_ACCOUNT_CHANGES}`);
+    expect(accounts().changes[0]?.taskKey).toBe("agent:otto:t1");
+    client.stop();
+  });
+
+  it("F-473: the line goes to the task the host knows its viewer has open for that bot, never one the command names", async () => {
+    const fake = new AccountsGateway();
+    const rows = [
+      { key: TASK, agentId: "otto", sessionId: "s-otto", label: "Main", updatedAt: 1 },
+      { key: "agent:pip:main", agentId: "pip", sessionId: "s-pip", label: "Main", updatedAt: 1 },
+    ];
+    fake.gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    fake.gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => (client.state.tasksByBot.otto ?? []).length > 0);
+    // A task id handed in the command is not part of it.
+    const parsed = parseBridgeCommand({
+      type: "changeBotAccount",
+      botId: "otto",
+      account: "acme:home",
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+      taskKey: "agent:pip:main",
+    });
+    expect(parsed).not.toHaveProperty("taskKey");
+    // A viewer with no task of Otto's open: the change lands, and no line is kept.
+    const idle = createBridgeSession(client);
+    await idle.apply({ ...parsed, account: "acme:studio" } as typeof parsed);
+    expect(accounts().changes).toEqual([]);
+    // A viewer with Otto's task open, and Pip's: the line goes to Otto's.
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "openSession", key: "agent:pip:main" });
+    await viewer.apply({ type: "openSession", key: TASK });
+    await viewer.apply(parsed);
+    expect(accounts().changes.map((change) => change.taskKey)).toEqual([TASK]);
+    // Only a viewer with that task open sees it.
+    expect(changesFor(accounts().changes, idle.openTasks())).toEqual([]);
+    expect(changesFor(accounts().changes, viewer.openTasks())).toHaveLength(1);
+    idle.dispose();
+    viewer.dispose();
+    client.stop();
+  });
+});
+
+describe("what a sign-in is compared against (F-474)", () => {
+  it("F-474: an account another client added since the last read is not counted as the sign-in's", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // Saved by someone else after Clawtrate last read the accounts.
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn?.known).toContain("acme:elsewhere");
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "several",
+      result: { added: ["acme:travel"] },
+    });
     client.stop();
   });
 });

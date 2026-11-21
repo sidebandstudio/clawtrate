@@ -105,7 +105,8 @@ describe("the sign-in plugin outside a development instance", () => {
     (await load(copy)).register(gateway);
     expect(gateway.warnings).toEqual([]);
     expect(gateway.providers.map((p) => [p.id, p.auth.map((m) => m.id)])).toEqual([
-      ["acme", ["device-code", "browser", "api-key"]],
+      ["acme", ["device-code", "browser", "host", "callback", "api-key"]],
+      ["globex", ["api-key"]],
     ]);
   });
 
@@ -187,7 +188,7 @@ describe("the sign-in plugin outside a development instance", () => {
     (await load(copy)).register(gateway);
     rmSync(join(stateDir, MARKER_FILE));
     const fetched = vi.spyOn(globalThis, "fetch");
-    for (const method of gateway.providers[0]!.auth) {
+    for (const method of gateway.providers.flatMap((provider) => provider.auth)) {
       await expect(
         method.run({ prompter: { text: async () => "clawtrate-dev-key.acme.x" } }),
         method.id,
@@ -264,5 +265,167 @@ describe("the sign-in plugin's requests", () => {
     ).rejects.toThrow(/must be the scripted model on 127\.0\.0\.1/);
     expect(fetched).not.toHaveBeenCalled();
     fetched.mockRestore();
+  });
+
+  /** The scripted side of a returning sign-in: a page, then the code the browser brings back. */
+  async function returning(tokens: Record<string, unknown>) {
+    return serve((body) => {
+      const fields = JSON.parse(body || "{}") as Record<string, unknown>;
+      if (fields.redirectUri !== undefined)
+        return {
+          status: 200,
+          body: JSON.stringify({
+            state: "s1",
+            authorizeUrl: `http://127.0.0.1:9/scripted/signin/browser/authorize?state=s1`,
+          }),
+        };
+      return {
+        status: 200,
+        body: JSON.stringify({ status: "approved", tokens, ...(fields.extra as object) }),
+      };
+    });
+  }
+
+  it("a sign-in on the gateway's machine shows the gateway's note with its port, and finishes when the browser comes back there", async () => {
+    const tokens = {
+      account: "acme:host",
+      access: "a",
+      refresh: "r",
+      expires: 1,
+    };
+    const scripted = await returning(tokens);
+    const { method } = await registered(`${scripted.url}/scripted/signin`);
+    const notes: string[] = [];
+    const opened: string[] = [];
+    const run = method("host").run({
+      openUrl: async (url: string) => void opened.push(url),
+      prompter: { note: async (message: string) => void notes.push(message) },
+    });
+    await vi.waitFor(() => expect(notes).toHaveLength(1));
+    const redirectUri = String(
+      (JSON.parse(scripted.received[0]!) as { redirectUri: string }).redirectUri,
+    );
+    // A listener on the gateway's own machine, on loopback, and the port the note names.
+    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+    const port = new URL(redirectUri).port;
+    expect(notes[0]).toContain(
+      `forward the port with: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
+    );
+    expect(opened).toEqual(["http://127.0.0.1:9/scripted/signin/browser/authorize?state=s1"]);
+    // Another sign-in's state is refused, and the listener closes.
+    const refused = expect(run).rejects.toThrow(/another sign-in's state/);
+    expect((await fetch(`${redirectUri}?code=c1&state=other`)).status).toBe(200);
+    await refused;
+    await expect(fetch(redirectUri)).rejects.toThrow();
+  });
+
+  /** The scripted side of the callback model: a page with its state, then the exchange. */
+  async function callbackSide(
+    extra: Record<string, unknown> = {},
+    authorizeUrl = "http://127.0.0.1:9/a?state=s2",
+  ) {
+    return serve((body) => {
+      const fields = JSON.parse(body || "{}") as Record<string, unknown>;
+      if (fields.code === undefined)
+        return { status: 200, body: JSON.stringify({ state: "s2", authorizeUrl }) };
+      return {
+        status: 200,
+        body: JSON.stringify({
+          status: "approved",
+          tokens: { account: "acme:back", access: "a", refresh: "r", expires: 1 },
+          ...extra,
+        }),
+      };
+    });
+  }
+
+  it("the callback model, on a connection with no browser origin: a note, the page, a note with it, then the address pasted back, as OpenRouter's", async () => {
+    for (const confirmed of [true, false]) {
+      const scripted = await callbackSide(confirmed ? {} : { confirmed: false });
+      const { method } = await registered(`${scripted.url}/scripted/signin`);
+      const steps: string[] = [];
+      const run = method("callback").run({
+        openUrl: async (url: string) => void steps.push(`open ${url}`),
+        prompter: {
+          note: async (message: string) =>
+            void steps.push(message.includes("http") ? "note with the page" : "note"),
+          text: async (params: { sensitive?: boolean; validate: (v: string) => unknown }) => {
+            steps.push(params.sensitive ? "secret text" : "text");
+            // The address of another sign-in is refused before it is sent on.
+            expect(params.validate("http://127.0.0.1/landed?code=c2&state=other")).toMatch(
+              /another sign-in/,
+            );
+            return "http://127.0.0.1/scripted/signin/browser/landed?code=c2&state=s2";
+          },
+        },
+      });
+      const result = (await run) as {
+        profiles: Array<{ profileId: string }>;
+        configPatch?: unknown;
+      };
+      expect(steps).toEqual([
+        "note",
+        "open http://127.0.0.1:9/a?state=s2",
+        "note with the page",
+        "text",
+      ]);
+      // No listener: the scripted page is asked for no address to send the browser back to.
+      expect(JSON.parse(scripted.received[0]!)).not.toHaveProperty("redirectUri");
+      expect(JSON.parse(scripted.received[1]!)).toMatchObject({ code: "c2" });
+      expect(result.profiles[0]?.profileId).toBe("acme:back");
+      expect(result.configPatch !== undefined).toBe(!confirmed);
+    }
+  });
+
+  // The callback model tests the gateway authorize interface. The stand-in's HTTP page is
+  // refused on that branch.
+  it("callback model passes the gateway callback to authorize and propagates its HTTP-page refusal", async () => {
+    const callback = "https://gateway.example/oauth/provider/callback";
+    // What the gateway's `authorize` does (provider-browser-auth): its own callback path on the
+    // accepted origin, and only an https authorization page with no user info.
+    const seen: Array<{ state: string; page: URL }> = [];
+    const authorize = async (params: {
+      state: string;
+      buildAuthorizationUrl: (redirect: string) => string;
+    }) => {
+      const page = new URL(params.buildAuthorizationUrl(callback));
+      if (page.protocol !== "https:" || page.username || page.password)
+        throw new Error("Provider sign-in requires an HTTPS authorization URL.");
+      seen.push({ state: params.state, page });
+      return { code: "c2" };
+    };
+    // The stand-in's own page is http: refused, and nothing is opened or pasted.
+    const scripted = await callbackSide();
+    const opened: string[] = [];
+    await expect(
+      (await registered(`${scripted.url}/scripted/signin`)).method("callback").run({
+        oauth: { authorize },
+        openUrl: async (url: string) => void opened.push(url),
+        prompter: {},
+      }),
+    ).rejects.toThrow(/requires an HTTPS authorization URL/);
+    expect(opened).toEqual([]);
+    expect(seen).toEqual([]);
+    // An https fixture page: the same authorize takes it, with the sign-in's state and the
+    // callback the gateway chose, and the method exchanges the code it returns.
+    const fixture = await callbackSide({}, "https://signin.example/authorize?state=s2");
+    const result = await (
+      await registered(`${fixture.url}/scripted/signin`)
+    )
+      .method("callback")
+      .run({
+        oauth: { authorize },
+        openUrl: async (url: string) => void opened.push(url),
+        prompter: {},
+      });
+    expect(opened).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.state).toBe("s2");
+    expect(seen[0]!.page.origin).toBe("https://signin.example");
+    expect(seen[0]!.page.searchParams.get("redirect_uri")).toBe(callback);
+    expect(JSON.parse(fixture.received[1]!)).toMatchObject({ code: "c2" });
+    expect((result as { profiles: Array<{ profileId: string }> }).profiles[0]?.profileId).toBe(
+      "acme:back",
+    );
   });
 });

@@ -112,6 +112,7 @@ import { contractProblems, matching, optional, type Contract } from "./contract.
 import { accountStoreProblems } from "./account-stores.ts";
 import {
   ACCOUNT_PROVIDERS,
+  providerKeyRefContract,
   accountProfiles,
   accountsConfig,
   authContract,
@@ -665,7 +666,14 @@ export function devConfigContract(
   ) as unknown as Record<string, Record<string, unknown>>;
   // With accounts, the gateway itself writes profile entries (labels, sign-ins,
   // the CLI's saves): scripted accounts only, each of a closed shape.
-  if (options.accounts) (contract as Record<string, unknown>).auth = authContract();
+  if (options.accounts) {
+    (contract as Record<string, unknown>).auth = authContract();
+    // A key saved with the gateway's key method names its account in the provider's entry.
+    const providers = (contract.models as Record<string, Record<string, Record<string, unknown>>>)
+      .providers!;
+    for (const provider of ACCOUNT_PROVIDERS)
+      providers[provider]!.apiKey = providerKeyRefContract(provider);
+  }
   (contract.gateway!.auth as Record<string, unknown>).token = matching(
     "a token",
     (value) => typeof value === "string" && /^\S+$/.test(value),

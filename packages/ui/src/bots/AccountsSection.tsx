@@ -17,10 +17,11 @@ import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
 import { Connect, keptLabel } from "./Connect.tsx";
 import { Confirm } from "./Dialog.tsx";
-import { AdminBar, GrantedBar, useGranted } from "./parts.tsx";
+import { AdminBar, GrantedBar, Note, useGranted } from "./parts.tsx";
 import {
   accountGroups,
   accountName,
+  clock,
   howMade,
   kindWord,
   lockText,
@@ -110,8 +111,6 @@ export function useAccountsSection({
       view: null,
       connect: (
         <Connect
-          from="settings"
-          draftName={null}
           forBot={null}
           accounts={accounts}
           bots={bots}
@@ -139,6 +138,26 @@ export function useAccountsSection({
     };
   }
 
+  // What is shown is the last read's: a failed read since is said, with its time and Try again,
+  // on the list and on an account's page alike.
+  const staleNote = accounts.status === "error" && accounts.accounts.length > 0 && (
+    <Note tone="warn" testId="accounts-stale">
+      <p>
+        <b>Couldn't read the gateway's accounts again.</b> {accounts.error} These are from the last
+        read{accounts.readAt !== null ? `, at ${clock(accounts.readAt)}` : ""}.
+      </p>
+      <div className="b-actions">
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() => void bridge.send({ type: "refreshAccounts" })}
+        >
+          Try again
+        </button>
+      </div>
+    </Note>
+  );
   const account =
     page.page === "account" ? accounts.accounts.find((each) => each.id === page.id) : undefined;
   if (page.page === "account" && account) {
@@ -178,6 +197,7 @@ export function useAccountsSection({
     };
     const body = (
       <>
+        {staleNote}
         <dl className="facts" data-testid="account-facts">
           <div>
             <dt>Provider</dt>
@@ -271,19 +291,23 @@ export function useAccountsSection({
             </dd>
           </div>
           <div>
-            <dt>Used by</dt>
+            <dt>Named in bot settings</dt>
             <dd>
               {account.keptBy
                 ? `Only ${keeper} can use it`
-                : users.length > 0
-                  ? users
-                      .map((each) =>
-                        each.lock
-                          ? `${each.bot.name} (${lockText(each.lock, true)})`
-                          : each.bot.name,
-                      )
-                      .join(", ")
-                  : "No bots"}
+                : account.unclear
+                  ? "The gateway's lists don't show which bots can use it"
+                  : users.length > 0
+                    ? users
+                        .map((each) =>
+                          each.byOrder
+                            ? `${each.bot.name} (by its order)`
+                            : each.lock
+                              ? `${each.bot.name} (${lockText(each.lock, true)})`
+                              : each.bot.name,
+                        )
+                        .join(", ")
+                    : "No listed bot names it."}
             </dd>
           </div>
           <div>
@@ -327,7 +351,8 @@ export function useAccountsSection({
               </span>
             )}
             <span className="spacer" />
-            {account.logoutSupported && (
+            {/* With copies the views can't tell apart, a request could remove the wrong one. */}
+            {account.logoutSupported && !account.unclear && (
               <button
                 type="button"
                 className="button"
@@ -343,12 +368,20 @@ export function useAccountsSection({
         )}
         {confirm && (
           <Confirm
-            title={`Disconnect ${accountName(confirm, accounts)}?`}
+            title={`Ask the gateway to disconnect ${accountName(confirm, accounts)}?`}
             text={(() => {
+              // Only what the last read establishes: the bots whose settings name it.
               const names = users.map((each) => each.bot.name);
-              return names.length > 0
-                ? `${names.join(" and ")} ${names.length === 1 ? "uses" : "use"} it. ${names.length === 1 ? "It shows" : "They show"} No account until you choose another, and Clawtrate doesn't start ${names.length === 1 ? "it" : "them"} until then. Your gateway removes the sign-in.`
-                : "No bot uses it. Your gateway removes the sign-in.";
+              return (
+                <>
+                  <span className="b-group" style={{ display: "block" }}>
+                    Last read from bot settings.
+                  </span>
+                  <span style={{ display: "block" }}>
+                    {names.length > 0 ? names.join(", ") : "No listed bot names it."}
+                  </span>
+                </>
+              );
             })()}
             action="Disconnect"
             busy={busy}
@@ -359,8 +392,13 @@ export function useAccountsSection({
               void bridge
                 .invoke({ type: "disconnectAccount", profileId: target.id })
                 .then(
-                  () => {
-                    announce(`Disconnected ${accountName(target, accounts)}`);
+                  ({ removed }) => {
+                    // A removal only once the read after the request no longer lists it.
+                    announce(
+                      removed
+                        ? `Disconnected ${accountName(target, accounts)}`
+                        : "Disconnect request sent. Check the refreshed accounts.",
+                    );
                     setConfirm(null);
                     go({ page: "list" });
                   },
@@ -390,8 +428,7 @@ export function useAccountsSection({
     <>
       <div className="b-headrow">
         <p className="b-lead" style={{ margin: 0 }}>
-          Your bots run on these. Your gateway signs in and keeps each sign-in; Clawtrate never sees
-          a password or keeps a sign-in.
+          Accounts listed by your gateway.
         </p>
         {admin && accounts.accounts.length > 0 && (
           <button
@@ -404,6 +441,7 @@ export function useAccountsSection({
           </button>
         )}
       </div>
+      {staleNote}
       {loading && accounts.accounts.length === 0 ? (
         <div aria-busy="true" aria-label="Loading accounts" style={{ marginTop: 16 }}>
           <div className="skeleton" style={{ height: 58, width: "100%" }} />
@@ -461,8 +499,8 @@ export function useAccountsSection({
           <span className="empty-mark">
             <LockIcon />
           </span>
-          <h4>No accounts yet</h4>
-          <p>Connect a subscription you already have, and choose it when you create a bot.</p>
+          <h4>No accounts listed</h4>
+          <p>The gateway listed no sign-in or saved key profiles in this read.</p>
           {admin && (
             <div style={{ marginTop: 12 }}>
               <button

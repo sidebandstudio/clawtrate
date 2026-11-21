@@ -2,19 +2,30 @@
 // `acme`, for development gateway instances only.
 //
 // Loaded by `pnpm dev-gateway start --instance <name> --with-accounts
-// --with-plugin clawtrate-dev-signin`. It gives the gateway three sign-in
+// --with-plugin clawtrate-dev-signin`. It gives the gateway five sign-in
 // methods for `acme`, which a client starts with `models.authLogin` and
 // steps with `wizard.next`, as it would a real provider's:
 //
 //   clawtrate-dev-signin/acme-device-code   a link and a code; the gateway polls
 //   clawtrate-dev-signin/acme-browser       a page to open, then the code (or the
 //                                           address the browser landed on) pasted back
+//   clawtrate-dev-signin/acme-host          finishes on the gateway's machine: a note
+//                                           with the page and the port to forward, and
+//                                           the browser sent back to a listener there
+//   clawtrate-dev-signin/acme-callback      a model of OpenRouter's: the gateway's own
+//                                           callback when the connection has a browser
+//                                           origin it accepts, otherwise notes, the
+//                                           page, and the address pasted back
 //   clawtrate-dev-signin/acme-api-key       a key typed in, checked by the provider
+//
+// and Globex a key method only, so a key for it goes through the gateway's
+// own `models.authSetApiKey`, which replaces the key the gateway has.
 //
 // The "provider" is the instance's own scripted model (`signinUrl`, set by the
 // tool to a path on it). This plugin never contacts anything else: it refuses
-// a `signinUrl` whose host is not 127.0.0.1. Every credential it saves is a
-// made-up development string the scripted model minted.
+// a `signinUrl` whose host is not 127.0.0.1, and the listener the sign-in
+// on the gateway's machine opens binds 127.0.0.1 only. Every credential it saves is
+// a made-up development string the scripted model minted.
 //
 // It works only inside a named development instance the dev-gateway tool
 // started (`developmentInstanceProblem`): the gateway's state folder is
@@ -24,6 +35,7 @@
 // says why in the log; each sign-in method checks again before it runs.
 
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,8 +171,18 @@ function outcomeError(answer) {
   return new Error(`${LABEL} refused the sign-in: ${answer.error}`);
 }
 
-function oauthResult(tokens) {
+/**
+ * A provider setting the gateway's own config schema refuses: returned with a
+ * sign-in the scripted page approved as "unconfirmed", the gateway saves the
+ * account, cannot apply the setting, and ends the sign-in in its own words
+ * ("Credentials saved, but provider settings could not be applied: …"). The
+ * write is refused whole, so nothing of it lands.
+ */
+const UNAPPLIABLE = { models: { providers: { [PROVIDER]: { api: "clawtrate-dev-refused" } } } };
+
+function oauthResult(tokens, confirmed = true) {
   return {
+    ...(confirmed === false ? { configPatch: UNAPPLIABLE } : {}),
     profiles: [
       {
         profileId: tokens.account,
@@ -211,7 +233,7 @@ function deviceCodeMethod(api) {
           { deviceCode: started.deviceCode },
           ctx.signal,
         );
-        if (answer.status === "approved") return oauthResult(answer.tokens);
+        if (answer.status === "approved") return oauthResult(answer.tokens, answer.confirmed);
         if (answer.status !== "pending") throw outcomeError(answer);
         await sleep(started.intervalSeconds * 1000, ctx.signal);
       }
@@ -254,8 +276,211 @@ function browserMethod(api) {
         { provider: PROVIDER, code: parsed.code },
         ctx.signal,
       );
-      if (answer.status === "approved") return oauthResult(answer.tokens);
+      if (answer.status === "approved") return oauthResult(answer.tokens, answer.confirmed);
       throw outcomeError(answer);
+    },
+  };
+}
+
+/**
+ * Wait, on the gateway's own machine, for the browser to come back from the
+ * scripted page: a listener on 127.0.0.1 at a port of its own, which takes one
+ * callback with the sign-in's state and its code, and closes. It is what a
+ * sign-in that finishes on the gateway's machine binds (Sign in with ChatGPT's
+ * fixed localhost:8080).
+ */
+async function loopbackCallback(signal) {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address();
+  let settle;
+  const arrived = new Promise((resolve, reject) => (settle = { resolve, reject }));
+  server.on("request", (req, res) => {
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
+    if (url.pathname !== "/callback") {
+      res.writeHead(404).end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      "<!doctype html><title>Scripted sign-in</title><p>Back on the gateway. You can close this page.</p>",
+    );
+    settle.resolve(url.searchParams);
+  });
+  const close = () => new Promise((resolve) => server.close(() => resolve()));
+  const abort = () => settle.reject(signal.reason ?? new Error("cancelled"));
+  signal?.addEventListener("abort", abort, { once: true });
+  return {
+    redirectUri: `http://127.0.0.1:${port}/callback`,
+    port,
+    async wait() {
+      try {
+        return await arrived;
+      } finally {
+        signal?.removeEventListener("abort", abort);
+        await close();
+      }
+    },
+    close,
+  };
+}
+
+/** A browser sign-in that ends with the browser sent back to the gateway's machine. */
+function returningMethod(api, { id, label, hint, note }) {
+  return {
+    id,
+    label,
+    hint,
+    kind: "oauth",
+    async run(ctx) {
+      assertDevelopmentInstance();
+      const callback = await loopbackCallback(ctx.signal);
+      try {
+        const started = await call(
+          api,
+          "/browser/start",
+          { provider: PROVIDER, redirectUri: callback.redirectUri },
+          ctx.signal,
+        );
+        await ctx.openUrl(started.authorizeUrl);
+        // The gateway's own form for a sign-in on its machine: a note with the page.
+        await ctx.prompter.note(note(callback.port), label);
+        const back = await callback.wait();
+        if (back.get("state") !== started.state)
+          throw outcomeError({
+            status: "refused",
+            error: "the browser came back with another sign-in's state",
+          });
+        if (back.get("error")) throw outcomeError({ status: "refused", error: back.get("error") });
+        ctx.assertCurrent?.();
+        const answer = await call(
+          api,
+          "/browser/exchange",
+          { provider: PROVIDER, code: back.get("code") ?? "" },
+          ctx.signal,
+        );
+        if (answer.status === "approved") return oauthResult(answer.tokens, answer.confirmed);
+        throw outcomeError(answer);
+      } finally {
+        await callback.close();
+      }
+    },
+  };
+}
+
+function hostMethod(api) {
+  return returningMethod(api, {
+    id: "host",
+    label: `${LABEL} on the gateway's machine`,
+    hint: "finishes on the gateway's machine",
+    // In the words OpenClaw's own sign-in on the gateway's machine uses.
+    note: (port) =>
+      [
+        "Sign in on the scripted page. Nothing here is a real provider.",
+        `Open the sign-in link in your browser. Its 127.0.0.1:${port} callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
+      ].join("\n\n"),
+  });
+}
+
+/** The redirect address pasted back, read as OpenRouter reads it: its state must be this one's. */
+function pastedRedirect(pasted, expectedState) {
+  let url;
+  try {
+    url = new URL(String(pasted ?? "").trim());
+  } catch {
+    throw new Error("Paste the whole address your browser landed on.");
+  }
+  if (url.searchParams.get("state") !== expectedState)
+    throw new Error("That address belongs to another sign-in.");
+  const error = url.searchParams.get("error");
+  if (error) return { error };
+  const code = url.searchParams.get("code");
+  if (!code) throw new Error("That address carries no code.");
+  return { code };
+}
+
+/**
+ * A local model of OpenRouter's browser sign-in as the installed gateway runs
+ * it (OpenClaw 2026.10.6, `resolveOpenRouterOAuthCode` in `oauth-*.mjs`, and
+ * `provider-browser-auth-*.mjs`), so a client is checked against the order of
+ * steps and the callback's conditions a real provider has:
+ *
+ * - The gateway's own callback (`ctx.oauth.authorize`) exists only when the
+ *   connection has a browser origin the gateway accepts: `https` on the
+ *   gateway's host, loopback `http` from a local client, or its published
+ *   Tailscale origin. The redirect is then the gateway's
+ *   `/oauth/provider/callback` on that origin, which the gateway chooses, and
+ *   the gateway refuses an authorization page that is not `https` or carries
+ *   a user name or password. The scripted page is `http`, so here the gateway
+ *   refuses it, as it would a real provider's `http` page.
+ * - Otherwise, as for a client with no browser origin (Clawtrate's host): a
+ *   note with no page, the page opened, a note carrying it, then a text step,
+ *   not marked secret, for the redirect address pasted back, whose state must
+ *   match. Nothing listens at that address: the browser lands on a page that
+ *   does not open, and the person copies it.
+ */
+function callbackMethod(api) {
+  return {
+    id: "callback",
+    label: `${LABEL}, back to the gateway`,
+    hint: "the gateway's callback, or the address pasted back",
+    kind: "oauth",
+    async run(ctx) {
+      assertDevelopmentInstance();
+      const started = await call(api, "/browser/start", { provider: PROVIDER }, ctx.signal);
+      const exchange = async (parsed) => {
+        if (parsed.error) throw outcomeError({ status: "refused", error: parsed.error });
+        ctx.assertCurrent?.();
+        const answer = await call(
+          api,
+          "/browser/exchange",
+          { provider: PROVIDER, code: parsed.code },
+          ctx.signal,
+        );
+        if (answer.status === "approved") return oauthResult(answer.tokens, answer.confirmed);
+        throw outcomeError(answer);
+      };
+      if (ctx.oauth?.authorize) {
+        const back = await ctx.oauth.authorize({
+          state: started.state,
+          timeoutMs: 5 * 60_000,
+          buildAuthorizationUrl: (redirectUrl) => {
+            const url = new URL(started.authorizeUrl);
+            url.searchParams.set("redirect_uri", redirectUrl);
+            return url.href;
+          },
+        });
+        return await exchange({ code: back.code });
+      }
+      await ctx.prompter.note(
+        [
+          "Open this URL in your LOCAL browser.",
+          "After signing in, paste the redirect URL back here.",
+        ].join("\n"),
+        LABEL,
+      );
+      await ctx.openUrl(started.authorizeUrl);
+      await ctx.prompter.note(
+        `Open this URL in your LOCAL browser:\n\n${started.authorizeUrl}`,
+        LABEL,
+      );
+      const pasted = await ctx.prompter.text({
+        message: `Paste the ${LABEL} redirect URL`,
+        placeholder: "http://127.0.0.1/scripted/signin/browser/landed?code=...&state=...",
+        signal: ctx.signal,
+        validate: (value) => {
+          try {
+            pastedRedirect(value, started.state);
+            return undefined;
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        },
+      });
+      return await exchange(pastedRedirect(pasted, started.state));
     },
   };
 }
@@ -305,7 +530,13 @@ export default {
     api.registerProvider({
       id: PROVIDER,
       label: LABEL,
-      auth: [deviceCodeMethod(api), browserMethod(api), apiKeyMethod(api)],
+      auth: [
+        deviceCodeMethod(api),
+        browserMethod(api),
+        hostMethod(api),
+        callbackMethod(api),
+        apiKeyMethod(api),
+      ],
       async refreshOAuth(credential) {
         assertDevelopmentInstance();
         const answer = await call(api, "/refresh", { refresh: credential.refresh });
@@ -316,6 +547,25 @@ export default {
           expires: answer.tokens.expires,
         };
       },
+    });
+    // Globex takes a key through the gateway's own key method (`models.authSetApiKey`), which
+    // replaces the key the gateway has for it; it has no sign-in of its own.
+    api.registerProvider({
+      id: "globex",
+      label: "Globex (scripted)",
+      auth: [
+        {
+          id: "api-key",
+          label: "Globex API key (scripted)",
+          kind: "api_key",
+          async run() {
+            assertDevelopmentInstance();
+            throw new Error(
+              "Globex has no sign-in here: save its key with the gateway's key method.",
+            );
+          },
+        },
+      ],
     });
   },
 };

@@ -16,6 +16,7 @@ const account = (id: string, label: string | null): GatewayAccount => ({
   kind: "subscription",
   made: "sign-in",
   keptBy: null,
+  unclear: false,
   logoutSupported: true,
 });
 

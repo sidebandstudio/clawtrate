@@ -6,6 +6,7 @@
 // characters (`bounds.ts`).
 
 import {
+  MAX_ACCOUNT_CHANGES,
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
   MAX_EFFORT_LEVELS,
@@ -14,9 +15,11 @@ import {
   MAX_LOCK_CHECKS,
   MAX_ORDER_IDS,
   MAX_SIGNIN_METHODS,
+  MAX_SIGNIN_URL_CHARS,
   type AccountsState,
   type AccountWrite,
   type BotBinding,
+  type AccountChange,
   type BotCreationState,
   type CatalogModel,
   type GatewayAccount,
@@ -26,6 +29,7 @@ import {
   type SignInMethod,
   type SignInResult,
   type SignInState,
+  type SignInAddress,
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
@@ -879,6 +883,7 @@ const account = object<GatewayAccount>()({
   kind: ENUM,
   made: ENUM,
   keptBy: ID,
+  unclear: FLAG,
   logoutSupported: FLAG,
 });
 const signInMethod = object<SignInMethod>()({
@@ -890,7 +895,7 @@ const signInMethod = object<SignInMethod>()({
   flow: ENUM,
   group: ENUM,
 });
-const keyProvider = object<KeyProvider>()({ provider: ID, hasKey: FLAG, method: ID });
+const keyProvider = object<KeyProvider>()({ provider: ID, replaces: ID, method: ID });
 const catalogModel = object<CatalogModel>()({
   provider: ID,
   id: ID,
@@ -926,12 +931,21 @@ const binding = object<BotBinding>()({
   evidence: lockEvidence,
   fallbacksUnwritten: FLAG,
 });
+const signInAddress = object<SignInAddress>()({
+  href: text(MAX_SIGNIN_URL_CHARS),
+  scheme: ENUM,
+  host: text(MAX_SIGNIN_URL_CHARS),
+  port: ENUM,
+  path: text(MAX_SIGNIN_URL_CHARS),
+  loopback: FLAG,
+});
 const signInStep = object<SignInStep>()({
   id: ID,
   type: ENUM,
   title: NAME,
   message: text(MAX_MESSAGE_LINE_CHARS),
-  url: text(MAX_MESSAGE_LINE_CHARS),
+  url: signInAddress,
+  urlRefused: FLAG,
   code: NAME,
   expiresInMinutes: NUMBER,
   placeholder: NAME,
@@ -963,6 +977,7 @@ const signIn = object<SignInState>()({
   byKey: FLAG,
   known: list(MAX_ACCOUNTS, ID),
   cancelUnknown: FLAG,
+  cancelDeclined: FLAG,
 });
 const botCreation = object<BotCreationState>()({
   name: NAME,
@@ -972,6 +987,13 @@ const botCreation = object<BotCreationState>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   missing: list(4, ENUM),
   uncertain: FLAG,
+});
+const accountChange = object<AccountChange>()({
+  botId: ID,
+  taskKey: ID,
+  at: NUMBER,
+  provider: ID,
+  account: ID,
 });
 const accountWrite = object<AccountWrite>()({
   what: ENUM,
@@ -995,6 +1017,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  changes: list(MAX_ACCOUNT_CHANGES, accountChange),
 });
 
 // Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.

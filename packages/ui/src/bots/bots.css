@@ -178,6 +178,21 @@
   font-weight: var(--weight-medium);
 }
 
+/* A sign-in page's button, with the destination it opens and where, before it is chosen. */
+.b-open {
+  margin-top: 8px;
+}
+
+.b-open [data-testid="page-address"] {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.b-open [data-testid="page-opens"] {
+  margin-top: 2px;
+}
+
 .b-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1123,6 +1138,12 @@ button.b-open > .icon {
 
 .b-faint {
   color: var(--text-faint);
+}
+
+/* The gateway's own words for a sign-in on its machine, as it gave them. */
+.b-step.b-said {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .b-note p.b-faint {

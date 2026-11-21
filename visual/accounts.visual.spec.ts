@@ -161,7 +161,7 @@ const SCENES: Scene[] = [
       await connectStep(page);
       await page.getByText("Use an API key instead").click();
       await page.getByRole("combobox", { name: "Provider" }).selectOption("anthropic");
-      await expect(page.getByText(/This replaces the Anthropic key/)).toBeVisible();
+      await expect(page.getByText(/If saved, this key replaces Anthropic · Lab key/)).toBeVisible();
     },
   },
   {
@@ -206,9 +206,14 @@ const SCENES: Scene[] = [
     name: "signin-host",
     query: ADMIN,
     ready: signIn(/^Sign in with ChatGPT/, (page) =>
-      expect(
-        page.getByText(/Waiting for OpenAI to send your browser back to the gateway/),
-      ).toBeVisible(),
+      expect(page.getByText("The gateway says:")).toBeVisible(),
+    ),
+  },
+  {
+    name: "signin-callback",
+    query: `${ADMIN}&signin=callback`,
+    ready: signIn(/^ChatGPT in the browser/, (page) =>
+      expect(page.getByText("Complete sign-in in your browser.")).toBeVisible(),
     ),
   },
   {
@@ -221,14 +226,16 @@ const SCENES: Scene[] = [
   {
     name: "signin-label",
     query: `${ADMIN}&signin=connected`,
-    ready: signIn(/^ChatGPT · /, (page) =>
-      expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible(),
-    ),
+    ready: signIn(/^ChatGPT · /, async (page) => {
+      await page.getByTestId("several").locator('[data-choose="openai:second"]').click();
+      await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+    }),
   },
   {
     name: "signin-label-clash",
     query: `${ADMIN}&signin=connected`,
     ready: signIn(/^ChatGPT · /, async (page) => {
+      await page.getByTestId("several").locator('[data-choose="openai:second"]').click();
       await page.getByRole("textbox", { name: "Label" }).fill("work");
       await expect(
         page.getByText("Another OpenAI account is called Work. Choose a different label."),
@@ -244,7 +251,9 @@ const SCENES: Scene[] = [
     name: "signin-failed-saved",
     query: `${ADMIN}&signin=failed&saved=1`,
     ready: signIn(/^xAI · /, (page) =>
-      expect(page.getByTestId("reread")).toContainText("It may not be ready to use."),
+      expect(page.getByTestId("reread")).toContainText(
+        "The gateway did not identify which sign-in added it.",
+      ),
     ),
   },
   {
@@ -400,6 +409,37 @@ const SCENES: Scene[] = [
       await expect(
         page.getByText("xAI doesn't offer gpt-5.5. Choose one of its models."),
       ).toBeVisible();
+    },
+  },
+  {
+    name: "bot-change-saved",
+    query: page$("bound"),
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Change account" }).click();
+      await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByTestId("bound-note")).toContainText(
+        "Otto is bound to OpenAI · Home in the gateway's settings.",
+      );
+    },
+  },
+  {
+    name: "bot-change-line",
+    query: page$("bound"),
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Change account" }).click();
+      await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByTestId("bound-note")).toContainText(
+        "Otto is bound to OpenAI · Home in the gateway's settings.",
+      );
+      // The pane closed: the line where the conversation ends.
+      await page.keyboard.press("ControlOrMeta+\\");
+      const line = page.getByTestId("transcript").getByTestId("client-event-line");
+      await expect(line).toBeVisible();
+      await line.scrollIntoViewIfNeeded();
     },
   },
 ];

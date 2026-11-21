@@ -5,16 +5,21 @@
 //
 // Address parameters:
 //   access=read|write|admin   what the connection may do (default: the scene's)
-//   accounts=none|loading|error   no account yet, still loading, or a failed read
+//   accounts=none|loading|error|stale   no account yet, still loading, a failed read, or a
+//                             failed read after one that listed the accounts
 //   lock=locked|bound|stale|gone|failed|multi|old|gateway|retained|none|watching|differs|lost|unwritten
 //        |configured|unavailable|elsewhere
 //                             the open bot's binding and evidence
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
-//                             checking (an answer stays checking), unverified (the read after
+//                             checking (an answer stays checking), decline-checking (and a
+//                             cancel there is declined), unverified (the read after
 //                             it failed), cancel-unknown (the cancel's answer says nothing),
-//                             several (two new accounts appeared while it ran)
+//                             several (two new accounts appeared while it ran), callback (a
+//                             browser sign-in whose callback the gateway takes itself)
 //   keyread=fail              a key saved directly whose read afterwards fails
+//   keywarn=1                 a key saved directly with the gateway's warning (with keyread=fail
+//                             too, the warning and a failed read after it)
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
@@ -34,11 +39,12 @@ import {
   type GatewayAccount,
   type LockEvidence,
   type SignInState,
+  signInAddress,
 } from "@clawtrate/core";
 
 export type AccountParams = {
   access: "read" | "write" | "admin" | null;
-  accounts: "ready" | "none" | "loading" | "error";
+  accounts: "ready" | "none" | "loading" | "error" | "stale";
   lock: string | null;
   signin: string | null;
   saved: boolean;
@@ -54,6 +60,7 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  keywarn: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -62,7 +69,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
   return {
     access: access === "read" || access === "write" || access === "admin" ? access : null,
     accounts:
-      accounts === "none" || accounts === "loading" || accounts === "error" ? accounts : "ready",
+      accounts === "none" || accounts === "loading" || accounts === "error" || accounts === "stale"
+        ? accounts
+        : "ready",
     lock: params.get("lock"),
     signin: params.get("signin"),
     saved: params.get("saved") === "1",
@@ -73,6 +82,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    keywarn: params.get("keywarn") === "1",
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -94,6 +104,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  keywarn: false,
 };
 
 const MINUTE = 60_000;
@@ -117,6 +128,7 @@ const account = (
   kind,
   made: kind === "subscription" ? "sign-in" : kind === "key" ? "typed" : null,
   keptBy: null,
+  unclear: false,
   logoutSupported: true,
   ...extra,
 });
@@ -220,9 +232,12 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         bound("pip", "openai/gpt-5.5-mini@openai:home", "low", now),
         binding("quartermaster", {}),
       ];
+  const stale = params.accounts === "stale";
   const state: AccountsState = {
     ...initialAccountsState,
-    status: "ready",
+    // A read that failed after one that listed them: its rows stay, as the engine keeps them.
+    status: stale ? "error" : "ready",
+    error: stale ? "models.authStatus timed out after 60 seconds." : null,
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
@@ -316,10 +331,10 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         : []),
     ],
     keyProviders: [
-      { provider: "openai", hasKey: false, method: null },
-      { provider: "anthropic", hasKey: !none, method: null },
-      { provider: "xai", hasKey: false, method: params.keyfails ? "xai/xai-api-key" : null },
-      { provider: "openrouter", hasKey: false, method: null },
+      { provider: "openai", replaces: null, method: null },
+      { provider: "anthropic", replaces: none ? null : "anthropic:manual", method: null },
+      { provider: "xai", replaces: null, method: params.keyfails ? "xai/xai-api-key" : null },
+      { provider: "openrouter", replaces: null, method: null },
     ],
     models: [
       {
@@ -628,6 +643,8 @@ export function accountCommand(
   set: (state: ClawtrateState) => void,
   params: AccountParams,
   deferred: (run: () => void, ms: number) => void,
+  /** The task of a bot that is open here, as a host knows it. */
+  openTaskOf: (botId: string) => string | null = () => null,
 ): Promise<unknown> | undefined {
   const accounts = () => get().accounts;
   const put = (change: (a: AccountsState) => AccountsState) =>
@@ -720,6 +737,7 @@ export function accountCommand(
         byKey: false,
         known: [],
         cancelUnknown: false,
+        cancelDeclined: false,
       };
       put((a) => ({ ...a, signIn: base }));
       const stage = params.signin ?? "waiting";
@@ -739,7 +757,8 @@ export function accountCommand(
               type: "progress",
               title: null,
               message: null,
-              url: "https://sign-in.example/device",
+              url: signInAddress("https://sign-in.example/device"),
+              urlRefused: false,
               code: "QK4F-7PZD",
               expiresInMinutes: 15,
               placeholder: null,
@@ -754,10 +773,7 @@ export function accountCommand(
           const ids = [`${method.provider}:other`, `${method.provider}:second`];
           put((a) => ({
             ...a,
-            accounts: [
-              ...a.accounts,
-              ...ids.map((id) => account(id, null, "oauth", "subscription")),
-            ],
+            accounts: [...a.accounts, ...ids.map((id) => account(id, null, "oauth", "gateway"))],
           }));
           return signIn({ stage: "several", step: null, result: result(ids) });
         }
@@ -776,7 +792,8 @@ export function accountCommand(
               type: "progress",
               title: null,
               message: null,
-              url: "https://sign-in.example/device",
+              url: signInAddress("https://sign-in.example/device"),
+              urlRefused: false,
               code: "QK4F-7PZD",
               expiresInMinutes: 15,
               placeholder: null,
@@ -797,6 +814,24 @@ export function accountCommand(
             ),
           });
         }
+        // signin=callback: a browser sign-in whose callback the gateway takes itself, as the
+        // gateway's steps show it: a page to open, and no code and no field.
+        if (method.flow === "paste" && stage === "callback")
+          return signIn({
+            stage: "waiting",
+            step: {
+              id: "callback",
+              type: "progress",
+              title: null,
+              message: "Complete sign-in in your browser.",
+              url: signInAddress("https://sign-in.example/authorize?state=callback"),
+              urlRefused: false,
+              code: null,
+              expiresInMinutes: null,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
         if (method.flow === "paste")
           return signIn({
             stage: "entering",
@@ -805,7 +840,8 @@ export function accountCommand(
               type: "text",
               title: null,
               message: null,
-              url: "https://sign-in.example/authorize?state=fixture",
+              url: signInAddress("https://sign-in.example/authorize?state=fixture"),
+              urlRefused: false,
               code: null,
               expiresInMinutes: null,
               placeholder: "Paste here",
@@ -822,22 +858,27 @@ export function accountCommand(
               message:
                 "Enter your company's GitHub address. The gateway then shows a code to enter there.",
               url: null,
+              urlRefused: false,
               code: null,
               expiresInMinutes: null,
               placeholder: "github.example.com",
               sensitive: false,
             },
           });
+        // A sign-in that finishes on the gateway's machine, in the gateway's own words: a note
+        // with the page, then the wait for the callback.
         if (method.flow === "host")
           return signIn({
             stage: "waiting",
+            saving: stage === "saving",
             step: {
               id: "host",
-              type: "progress",
-              title: null,
+              type: "note",
+              title: "Sign in with ChatGPT (Beta)",
               message:
-                "On a computer that isn't the gateway, forward its port first: ssh -N -L 8080:127.0.0.1:8080 gateway-host. Then open the sign-in page in that computer's browser.",
-              url: "https://sign-in.example/authorize?state=host",
+                "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.\n\nOpen the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+              url: signInAddress("https://sign-in.example/authorize?state=host"),
+              urlRefused: false,
               code: null,
               expiresInMinutes: null,
               placeholder: null,
@@ -852,7 +893,8 @@ export function accountCommand(
             type: "progress",
             title: null,
             message: null,
-            url: "https://sign-in.example/device",
+            url: signInAddress("https://sign-in.example/device"),
+            urlRefused: false,
             code: "QK4F-7PZD",
             expiresInMinutes: 15,
             placeholder: null,
@@ -872,18 +914,28 @@ export function accountCommand(
             type: "progress",
             code: "QK4F-7PZD",
             expiresInMinutes: 15,
-            url: "https://github.example.com/login/device",
+            url: signInAddress("https://github.example.com/login/device"),
+            urlRefused: false,
             sensitive: false,
           },
         });
         return Promise.resolve();
       }
       signIn({ stage: "checking" });
-      // signin=checking: the gateway is still finishing, for a picture of that stage.
-      if (params.signin !== "checking") later(400, () => connected());
+      // signin=checking: the gateway is still finishing, for a picture of that stage;
+      // signin=decline-checking: and it declines a cancel there, as it does once it is saving.
+      if (params.signin !== "checking" && params.signin !== "decline-checking")
+        later(400, () => connected());
       return Promise.resolve();
     }
     case "cancelSignIn":
+      // signin=saving: the gateway declines the cancel; it is saving.
+      if (accounts().signIn?.saving) return Promise.resolve({ cancelled: false });
+      if (params.signin === "decline-checking") {
+        // `{status: "running"}` and no more: declined, not said to be saving.
+        signIn({ cancelDeclined: true });
+        return Promise.resolve({ cancelled: false });
+      }
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
       if (params.signin === "cancel-unknown") {
         signIn({ cancelUnknown: true });
@@ -904,8 +956,8 @@ export function accountCommand(
     }
     case "chooseSignInAccount": {
       const chosen = accounts().accounts.find((x) => x.id === command.profileId);
+      // The account to label; the sign-in's outcome stays what it was.
       signIn({
-        stage: "connected",
         result: {
           ...result([command.profileId]),
           landed: chosen?.keptBy ? "kept" : "shared",
@@ -943,10 +995,11 @@ export function accountCommand(
             byKey: true,
             known: [],
             cancelUnknown: false,
+            cancelDeclined: false,
           },
         }));
         later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));
-        return Promise.resolve({ profileId: null });
+        return Promise.resolve({ profileId: null, warning: null });
       }
       const id = `${command.provider}:manual`;
       const add = () =>
@@ -956,24 +1009,28 @@ export function accountCommand(
             ? a.accounts
             : [...a.accounts, account(id, null, "api_key", "key")],
         }));
+      // The gateway's own words when it saved the key and didn't confirm applying it.
+      const warning = params.keywarn
+        ? "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them."
+        : null;
       if (params.keyread) {
         // The gateway took it; the read after it failed. Check again reads it, and finds it.
         pendingRead = add;
+        const failed = "Reading its accounts again failed, so Clawtrate can't say what it has now.";
         put((a) => ({
           ...a,
           write: {
             what: "key",
             target: command.provider,
             status: "unverified",
-            error:
-              "The gateway took the key, but reading its accounts afterwards failed: models.authStatus timed out.",
+            error: warning ? `${warning} ${failed}` : `The gateway took the key. ${failed}`,
             at: Date.now(),
           },
         }));
-        return Promise.resolve({ profileId: null });
+        return Promise.resolve({ profileId: null, warning });
       }
       add();
-      return Promise.resolve({ profileId: id });
+      return Promise.resolve({ profileId: id, warning });
     }
     case "setAccountLabel":
       put((a) => ({
@@ -991,7 +1048,7 @@ export function accountCommand(
           b.account === command.profileId ? { ...b, accountMissing: true } : b,
         ),
       }));
-      return Promise.resolve();
+      return Promise.resolve({ removed: true });
     case "createBot": {
       const name = command.name.trim() || "New bot";
       put((a) => ({
@@ -1082,6 +1139,7 @@ export function accountCommand(
       return Promise.resolve();
     case "changeBotAccount":
     case "setBotModel": {
+      const before = accounts().bindings.find((b) => b.botId === command.botId);
       put((a) => ({
         ...a,
         bindings: a.bindings.map((b) => {
@@ -1107,7 +1165,27 @@ export function accountCommand(
           return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
         }),
       }));
-      return Promise.resolve();
+      // The line Clawtrate draws in the open task for its own change of account.
+      const taskKey = openTaskOf(command.botId);
+      const changed =
+        command.type === "changeBotAccount" &&
+        (before?.account !== command.account || before?.provider !== command.provider);
+      if (command.type === "changeBotAccount" && changed && taskKey) {
+        put((a) => ({
+          ...a,
+          changes: [
+            ...a.changes,
+            {
+              botId: command.botId,
+              taskKey,
+              at: Date.now(),
+              provider: command.provider,
+              account: command.account,
+            },
+          ],
+        }));
+      }
+      return Promise.resolve(command.type === "changeBotAccount" ? { changed } : undefined);
     }
     case "removeBotFallbacks":
       put((a) => ({
@@ -1135,12 +1213,13 @@ export function accountCommand(
               id,
               null,
               current.flow === "key" ? "api_key" : "oauth",
-              "subscription",
+              "gateway",
               params.kept ? { keptBy: current.forBot } : {},
             ),
           ],
       signIn: a.signIn
-        ? { ...a.signIn, stage: "connected", step: null, result: result([id]) }
+        ? // The gateway's answer names no account: the new one is a candidate to label.
+          { ...a.signIn, stage: "several", step: null, result: result([id]) }
         : null,
     }));
   }

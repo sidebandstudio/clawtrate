@@ -5,6 +5,7 @@
 import {
   AttachmentTooLargeError,
   batchSnapshots,
+  changesFor,
   type HostInfo,
   type AttachmentReservation,
   MAX_BRIDGE_FRAME_BYTES,
@@ -180,14 +181,18 @@ export function createViewerChannel(
   };
 }
 
-/** A viewer's snapshot: the shared state with only the tasks that viewer has open. */
+/**
+ * A viewer's snapshot: the shared state with only the tasks that viewer has
+ * open, and only the account changes drawn in those tasks.
+ */
 export function viewerState(state: ClawtrateState, open: ReadonlySet<string>): ClawtrateState {
   const transcripts: ClawtrateState["transcripts"] = {};
   for (const key of open) {
     const transcript = state.transcripts[key];
     if (transcript) transcripts[key] = transcript;
   }
-  return { ...state, transcripts };
+  const accounts = { ...state.accounts, changes: changesFor(state.accounts.changes, open) };
+  return { ...state, transcripts, accounts };
 }
 
 const CONTENT_TYPES: Record<string, string> = {

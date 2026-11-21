@@ -148,7 +148,8 @@ export function NewBot({
 
   // The gateway's default model names an account: it is chosen at first (section 4).
   const named = defaultAccount(accounts);
-  const shared = accounts.accounts.filter((a) => a.keptBy === null);
+  // Offered to a new bot only when the gateway shows it as shared (section 5).
+  const shared = accounts.accounts.filter((a) => a.keptBy === null && !a.unclear);
   const name = draft.name.trim() || "New bot";
   const gw = defaultRef(accounts);
   const providerOf = (value: string | null) =>
@@ -577,8 +578,6 @@ export function NewBot({
     return (
       <Dialog kind="create" labelledBy="create-title" onClose={onClose} testId="new-bot">
         <Connect
-          from="create"
-          draftName={draft.name.trim() || null}
           forBot={null}
           accounts={accounts}
           bots={bots}
@@ -586,7 +585,10 @@ export function NewBot({
           info={info}
           announce={announce}
           onDone={(account) => {
-            if (account && accounts.accounts.some((a) => a.id === account && a.keptBy === null))
+            if (
+              account &&
+              accounts.accounts.some((a) => a.id === account && a.keptBy === null && !a.unclear)
+            )
               choose(account);
             setStep("account");
           }}

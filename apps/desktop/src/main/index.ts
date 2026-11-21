@@ -2,6 +2,7 @@
 
 import {
   batchSnapshots,
+  changesFor,
   createBridgeSession,
   type BridgeSession,
   parseBridgeCommand,
@@ -66,11 +67,16 @@ function isAppContent(raw: string): boolean {
   return url.hostname === dev.hostname && url.port === dev.port;
 }
 
-/** Links leave the app only for the web: http and https open in the system browser. */
+/**
+ * Links leave the app only for the web: http and https open in the system
+ * browser, never an address with a user name or password in it, and only in
+ * the form parsed here.
+ */
 function openExternally(raw: string): void {
   try {
-    const { protocol } = new URL(raw);
-    if (protocol === "http:" || protocol === "https:") void shell.openExternal(raw);
+    const url = new URL(raw);
+    if (url.username || url.password) return;
+    if (url.protocol === "http:" || url.protocol === "https:") void shell.openExternal(url.href);
   } catch {
     // not a URL: ignored
   }
@@ -259,12 +265,20 @@ async function main(): Promise<void> {
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
 
-  ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
-    info,
-    state: client.state,
-  }));
   // One bridge session per window, so a closed window releases its transcripts.
   const sessions = new Map<number, BridgeSession>();
+  /** What a window is sent: an account change's line only for a task that window has open. */
+  const forWindow = (state: ClawtrateState, id: number): ClawtrateState => ({
+    ...state,
+    accounts: {
+      ...state.accounts,
+      changes: changesFor(state.accounts.changes, sessions.get(id)?.openTasks() ?? new Set()),
+    },
+  });
+  ipcMain.handle("clawtrate:hello", (event): { info: HostInfo; state: ClawtrateState } => ({
+    info,
+    state: forWindow(client.state, event.sender.id),
+  }));
   ipcMain.handle("clawtrate:command", async (event, raw: unknown) => {
     const contents = event.sender;
     let session = sessions.get(contents.id);
@@ -326,7 +340,8 @@ async function main(): Promise<void> {
   });
   batchSnapshots(client.store.subscribe, (state) => {
     // A snapshot can fire after the window closed, during quit for one.
-    if (window && !window.isDestroyed()) window.webContents.send("clawtrate:state", state);
+    if (window && !window.isDestroyed())
+      window.webContents.send("clawtrate:state", forWindow(state, window.webContents.id));
   });
 
   window = createWindow();

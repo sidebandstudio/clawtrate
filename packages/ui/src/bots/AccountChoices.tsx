@@ -48,7 +48,8 @@ function AccountText({
       <span className="b-choice-title" title={accountName(account, accounts)}>
         <AccountTitle account={account} accounts={accounts} />
       </span>
-      <span className="b-choice-sub">
+      {/* Wraps rather than cuts: who the views say names the account is read whole. */}
+      <span className="b-choice-sub b-wrap">
         {line.kind}
         {line.state && (
           <>

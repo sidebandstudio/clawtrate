@@ -29,6 +29,10 @@ export const MAX_ORDER_IDS = 16;
 export const MAX_FALLBACKS = 16;
 /** Bots whose lock a sign-in re-checks. */
 export const MAX_LOCK_CHECKS = 32;
+/** The longest sign-in page address read from a step; a longer one is refused. */
+export const MAX_SIGNIN_URL_CHARS = 2_048;
+/** Account changes Clawtrate made and keeps, for the grey line it draws in a task (row 15). */
+export const MAX_ACCOUNT_CHANGES = 32;
 /** Bots whose `models.authStatus` is read at once. */
 export const ACCOUNT_READ_CONCURRENCY = 4;
 /** A label: trimmed, 1 to 32 characters (bots.md section 22). */
@@ -125,6 +129,14 @@ export type GatewayAccount = {
    * as inherited; null when it is in the shared store, which every bot sees.
    */
   keptBy: string | null;
+  /**
+   * The views don't establish which bots can use it: the same id is saved in
+   * more than one bot's own store, a bot's own copy stands beside the shared
+   * one, or the gateway lists it from its settings or an outside source
+   * (`config`, `external`) and no bot as inherited. One row may then stand for
+   * different credentials, and it is shared with no bot.
+   */
+  unclear: boolean;
   logoutSupported: boolean;
 };
 
@@ -146,8 +158,13 @@ export type SignInMethod = {
 
 export type KeyProvider = {
   provider: string;
-  /** The gateway already has a key for it: a new one replaces it. */
-  hasKey: boolean;
+  /**
+   * The key a new one replaces, only where the gateway establishes it: the one
+   * `api_key` account its provider settings name (`source: "config"`), which
+   * `models.authSetApiKey` writes to (OpenClaw 2026.10.6,
+   * `saveModelProviderApiKey`). Otherwise null, and nothing is said.
+   */
+  replaces: string | null;
   /** A sign-in method of kind `secret` that takes the key, when the gateway offers one. */
   method: string | null;
 };
@@ -253,11 +270,30 @@ export type SignInStep = {
   type: string;
   title: string | null;
   message: string | null;
-  url: string | null;
+  /** The sign-in page, parsed once: what is shown, checked and opened. Null when refused. */
+  url: SignInAddress | null;
+  /** The gateway sent a page this client refuses to open (user info, or not http or https). */
+  urlRefused: boolean;
   code: string | null;
   expiresInMinutes: number | null;
   placeholder: string | null;
   sensitive: boolean;
+};
+
+/**
+ * A sign-in page's address, parsed once in the core (decisions.md, "Addresses
+ * a gateway hands the client"): the destination shown beside the button, and
+ * `href`, its canonical form, is the only one opened.
+ */
+export type SignInAddress = {
+  href: string;
+  scheme: "http" | "https";
+  host: string;
+  /** The effective port: the address's own, or its scheme's. */
+  port: string;
+  path: string;
+  /** It points to the device that opens it: a `localhost` name or a loopback literal. */
+  loopback: boolean;
 };
 
 export type LockCheck = {
@@ -276,8 +312,13 @@ export type LockCheck = {
 export type SignInResult = {
   /** Accounts of the provider that were not there before the sign-in. */
   added: string[];
-  /** Where the first of them is visible: to every bot, or to one. */
-  landed: "shared" | "kept" | null;
+  /**
+   * Where the first of them is visible: to every bot (another bot's view lists
+   * it as inherited), to one (only the target's own store has it), or
+   * `unclear` (the views list it otherwise, so which bots can use it is not
+   * established).
+   */
+  landed: "shared" | "kept" | "unclear" | null;
   keptBy: string | null;
   /** The read after the sign-in failed. */
   readFailed: boolean;
@@ -311,6 +352,8 @@ export type SignInState = {
   known: string[];
   /** A cancel was asked for and the gateway's answer did not say whether it took. */
   cancelUnknown: boolean;
+  /** The gateway declined a cancel and still reports the sign-in as running, saying no more. */
+  cancelDeclined: boolean;
 };
 
 /**
@@ -349,6 +392,32 @@ export type AccountWrite = {
   at: number;
 };
 
+/**
+ * A change of a bot's account that Clawtrate made and a read of the gateway
+ * then showed, kept to draw the grey event line in the task the viewer that
+ * made it had open for that bot: the gateway records no such line (row 15).
+ * `account` is the binding that read returned; null is no fixed account.
+ */
+export type AccountChange = {
+  botId: string;
+  /** The viewer's open task of that bot, as the host knows it; the line is drawn there only. */
+  taskKey: string;
+  at: number;
+  provider: string;
+  account: string | null;
+};
+
+/** What a change of a bot's account did: `changed` false when a read found it already so. */
+export type AccountChangeResult = { changed: boolean };
+
+/** The account changes a viewer may see: those of the tasks it has open (host-side). */
+export function changesFor(
+  changes: readonly AccountChange[],
+  open: ReadonlySet<string>,
+): AccountChange[] {
+  return changes.filter((change) => open.has(change.taskKey));
+}
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -367,6 +436,8 @@ export type AccountsState = {
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
+  /** The account changes Clawtrate made, newest last, at most `MAX_ACCOUNT_CHANGES`. */
+  changes: AccountChange[];
 };
 
 export const initialAccountsState: AccountsState = {
@@ -384,6 +455,7 @@ export const initialAccountsState: AccountsState = {
   signIn: null,
   creation: null,
   write: null,
+  changes: [],
 };
 
 export const unreadEvidence: LockEvidence = {
@@ -543,11 +615,13 @@ export function readBotView(answer: unknown): BotView {
 }
 
 /**
- * Every account across the bots' refreshed views. An account is shared when
- * any bot's view lists it as inherited (or from configuration); otherwise it
- * is kept by the one bot whose view lists it as its own. With a single bot
- * there is no second view, so its own accounts are kept by it until a read
- * with another bot present shows otherwise (bots.md section 5).
+ * Every account across the bots' refreshed views. An account is shared only
+ * when some bot's view lists it as inherited; it is kept by a bot when that
+ * bot's view alone lists it as its own (`saved`). Anything else, the same id
+ * in several bots' own stores, a bot's own copy beside the shared one, or a
+ * `config` or `external` source with no inherited one, is `unclear`. With a
+ * single bot there is no second view, so its own accounts are kept by it
+ * until a read with another bot present shows otherwise (bots.md section 5).
  */
 const kindOf = (record: KindRecord | undefined): AccountKind =>
   record === "subscription" ? "subscription" : record ? "key" : "gateway";
@@ -562,23 +636,34 @@ export function mergeAccounts(
   views: Map<string, BotView>,
   kinds: ReadonlyMap<string, KindRecord>,
 ): GatewayAccount[] {
-  const seen = new Map<string, { profile: ViewProfile; shared: boolean; owners: Set<string> }>();
+  const seen = new Map<
+    string,
+    { profile: ViewProfile; shared: boolean; owners: Set<string>; other: boolean }
+  >();
   for (const [botId, view] of views) {
     for (const profile of view.profiles) {
-      const entry = seen.get(profile.id) ?? { profile, shared: false, owners: new Set<string>() };
+      const entry = seen.get(profile.id) ?? {
+        profile,
+        shared: false,
+        owners: new Set<string>(),
+        other: false,
+      };
       // A label comes only with admin: take any view's.
       if (!entry.profile.label && profile.label)
         entry.profile = { ...entry.profile, label: profile.label };
       if (profile.source === "saved") entry.owners.add(botId);
-      else entry.shared = true;
+      else if (profile.source === "inherited") entry.shared = true;
+      else entry.other = true;
       seen.set(profile.id, entry);
     }
   }
   const accounts: GatewayAccount[] = [];
-  for (const { profile, shared, owners } of seen.values()) {
+  for (const { profile, shared, owners, other } of seen.values()) {
     if (accounts.length >= MAX_ACCOUNTS) break;
-    // Saved in several bots' own stores, and inherited by none: each keeps its own copy.
-    const keptBy = shared ? null : ([...owners].sort()[0] ?? null);
+    // The shared store is `main`'s own: another bot's own copy beside it is not the shared one.
+    const copies = [...owners].filter((owner) => !shared || owner !== "main");
+    const unclear = shared ? copies.length > 0 : other || owners.size !== 1;
+    const keptBy = !shared && !unclear ? [...owners][0]! : null;
     accounts.push({
       id: profile.id,
       provider: profile.provider,
@@ -589,6 +674,7 @@ export function mergeAccounts(
       kind: kindOf(kinds.get(profile.id)),
       made: madeOf(kinds.get(profile.id)),
       keptBy,
+      unclear,
       logoutSupported: profile.logoutSupported,
     });
   }
@@ -639,9 +725,12 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
     const secret = (Array.isArray(capability.loginOptions) ? capability.loginOptions : [])
       .map(asRecord)
       .find((option) => option?.kind === "secret");
+    const named = view.profiles.filter(
+      (p) => p.provider === provider && p.type === "api_key" && p.source === "config",
+    );
     out.push({
       provider,
-      hasKey: view.keyed.includes(provider),
+      replaces: named.length === 1 ? named[0]!.id : null,
       method: str(secret?.id),
     });
   }
@@ -778,17 +867,66 @@ export function unlockCommand(prefix: string, botId: string, provider: string): 
 
 // Sign-in steps ------------------------------------------------------------------------
 
+/** Whether a parsed host names the device itself: `localhost` and its subdomains, or loopback. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/\.$/, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (/^127\.\d+\.\d+\.\d+$/.test(host)) return true;
+  const v6 = host.replace(/^\[|\]$/g, "");
+  if (v6 === "::1") return true;
+  // IPv4-mapped: the URL parser writes ::ffff:127.0.0.1 as ::ffff:7f00:1.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/.exec(v6);
+  if (mapped) return parseInt(mapped[1]!, 16) >> 8 === 127;
+  return /^::ffff:127\.\d+\.\d+\.\d+$/.test(v6);
+}
+
+/**
+ * Parse a sign-in page's address once: `http` or `https` only, and never one
+ * with a user name or password in it. Null when it is refused.
+ */
+export function signInAddress(raw: string | null): SignInAddress | null {
+  if (raw === null || raw.length > MAX_SIGNIN_URL_CHARS) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  // The bound holds for what is shown and opened, not only for what the gateway sent: parsing
+  // can make an address longer (`é` becomes `%C3%A9`).
+  if (url.href.length > MAX_SIGNIN_URL_CHARS) return null;
+  const scheme = url.protocol === "https:" ? "https" : "http";
+  return {
+    href: url.href,
+    scheme,
+    host: url.hostname,
+    port: url.port || (scheme === "https" ? "443" : "80"),
+    path: url.pathname,
+    loopback: isLoopbackHost(url.hostname),
+  };
+}
+
+/** A step whose answer is kept from view: one the gateway marks secret, or one with a page. */
+export function isSecretStep(step: Pick<SignInStep, "sensitive" | "url" | "urlRefused">): boolean {
+  return step.sensitive || step.url !== null || step.urlRefused;
+}
+
 export function readStep(value: unknown): SignInStep | null {
   const step = asRecord(value);
   const id = str(step?.id);
   if (!step || !id) return null;
   const device = asRecord(step.deviceCode);
+  const raw = str(step.externalUrl);
+  const url = signInAddress(raw);
   return {
     id,
     type: str(step.type) ?? "note",
     title: str(step.title),
     message: str(step.message),
-    url: str(step.externalUrl),
+    url,
+    urlRefused: raw !== null && url === null,
     code: str(device?.code),
     expiresInMinutes: num(device?.expiresInMinutes),
     placeholder: str(step.placeholder),
@@ -801,9 +939,11 @@ export function endingOf(status: string | null, error: string | null): SignInSta
   if (status === "cancelled") return "cancelled";
   if (status === "done") return "connected";
   const words = (error ?? "").toLowerCase();
+  // The gateway saved the credential and then could not finish or confirm it (row 6). Its own
+  // words: "Your sign-in was saved, but …", "Credentials saved, but provider settings could not
+  // be applied: …", "Provider credentials were saved, but sign-in did not finish: …".
+  if (/\bsaved\b[^.]*\bbut\b/.test(words)) return "unconfirmed";
   if (/\bexpired?\b|timed out|time limit/.test(words)) return "expired";
-  // The gateway saved the credential and could not confirm it is active (row 6).
-  if (/saved/.test(words) && /(confirm|activat|verify)/.test(words)) return "unconfirmed";
   return "failed";
 }
 

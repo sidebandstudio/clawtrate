@@ -22,7 +22,7 @@ import {
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
-import type { MissingStep } from "./accounts.ts";
+import type { AccountChangeResult, MissingStep } from "./accounts.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -332,54 +332,58 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       : C extends { type: "dismissSignIn" }
                                         ? { dismissed: boolean }
                                         : C extends { type: "saveApiKey" }
-                                          ? { profileId: string | null }
-                                          : C extends { type: "createBot" | "finishBot" }
-                                            ? { botId: string; missing: MissingStep[] }
-                                            : C extends { type: "newTask" | "newMainTask" }
-                                              ? { key: string }
-                                              : C extends { type: "archiveTask" }
-                                                ? ArchiveResult
-                                                : C extends { type: "listArchived" }
-                                                  ? ArchivedList
-                                                  : C extends { type: "readComposerMenu" }
-                                                    ? MenuRow[]
-                                                    : C extends { type: "readUsage" }
-                                                      ? UsageReport | UsageBusy
-                                                      : C extends { type: "listRoutines" }
-                                                        ? BudgetRoutine[]
-                                                        : C extends { type: "readPlacement" }
-                                                          ? BotPlacement
-                                                          : C extends { type: "readMachines" }
-                                                            ? MachinesView
-                                                            : C extends {
-                                                                  type: "setCommandMachine";
-                                                                }
-                                                              ? ConfigSave
-                                                              : C extends {
-                                                                    type: "setBotWorkspace";
-                                                                  }
-                                                                ? {
-                                                                    workspace: string | null;
-                                                                    asTyped: boolean;
-                                                                  }
+                                          ? { profileId: string | null; warning: string | null }
+                                          : C extends { type: "disconnectAccount" }
+                                            ? { removed: boolean }
+                                            : C extends { type: "changeBotAccount" }
+                                              ? AccountChangeResult
+                                              : C extends { type: "createBot" | "finishBot" }
+                                                ? { botId: string; missing: MissingStep[] }
+                                                : C extends { type: "newTask" | "newMainTask" }
+                                                  ? { key: string }
+                                                  : C extends { type: "archiveTask" }
+                                                    ? ArchiveResult
+                                                    : C extends { type: "listArchived" }
+                                                      ? ArchivedList
+                                                      : C extends { type: "readComposerMenu" }
+                                                        ? MenuRow[]
+                                                        : C extends { type: "readUsage" }
+                                                          ? UsageReport | UsageBusy
+                                                          : C extends { type: "listRoutines" }
+                                                            ? BudgetRoutine[]
+                                                            : C extends { type: "readPlacement" }
+                                                              ? BotPlacement
+                                                              : C extends { type: "readMachines" }
+                                                                ? MachinesView
                                                                 : C extends {
-                                                                      type: "setMachineDefaults";
+                                                                      type: "setCommandMachine";
                                                                     }
-                                                                  ? ApprovalsFile
+                                                                  ? ConfigSave
                                                                   : C extends {
-                                                                        type: "refreshCheckIns";
-                                                                        botId: string;
+                                                                        type: "setBotWorkspace";
                                                                       }
-                                                                    ? CheckInRead | null
+                                                                    ? {
+                                                                        workspace: string | null;
+                                                                        asTyped: boolean;
+                                                                      }
                                                                     : C extends {
-                                                                          type: "listMemory";
+                                                                          type: "setMachineDefaults";
                                                                         }
-                                                                      ? MemoryList
+                                                                      ? ApprovalsFile
                                                                       : C extends {
-                                                                            type: "readMemory";
+                                                                            type: "refreshCheckIns";
+                                                                            botId: string;
                                                                           }
-                                                                        ? MemoryDocument
-                                                                        : void;
+                                                                        ? CheckInRead | null
+                                                                        : C extends {
+                                                                              type: "listMemory";
+                                                                            }
+                                                                          ? MemoryList
+                                                                          : C extends {
+                                                                                type: "readMemory";
+                                                                              }
+                                                                            ? MemoryDocument
+                                                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1355,12 +1359,15 @@ class ViewerSession implements BridgeSession {
       case "finishBot":
         return client.finishBot(command.botId);
       case "changeBotAccount":
+        // The line for the change goes in this viewer's open task of that bot, as the host
+        // knows it: never a task the command names.
         return client.changeBotAccount(
           command.botId,
           command.account,
           command.provider,
           command.model,
           command.effort,
+          this.openTaskOf(command.botId),
         );
       case "setBotModel":
         return client.setBotModel(command.botId, command.model, command.effort);
@@ -1605,6 +1612,14 @@ class ViewerSession implements BridgeSession {
 
   openTasks(): ReadonlySet<string> {
     return this.open;
+  }
+
+  /** The task of `botId` this viewer opened last and still has open, from the host's task list. */
+  private openTaskOf(botId: string): string | null {
+    const keys = new Set((this.client.state.tasksByBot[botId] ?? []).map((task) => task.key));
+    let last: string | null = null;
+    for (const key of this.open) if (keys.has(key)) last = key;
+    return last;
   }
 
   dispose(): void {

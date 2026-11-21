@@ -13,8 +13,6 @@ import {
   type Bot,
   type ConnectionState,
   type HostInfo,
-  type Task,
-  type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
@@ -22,7 +20,6 @@ import {
   BackIcon,
   CheckIcon,
   ChevronIcon,
-  ClockIcon,
   LockIcon,
   PlusIcon,
   ShieldIcon,
@@ -62,8 +59,6 @@ export function BotSettings({
   bot,
   accounts,
   bots,
-  tasks,
-  transcripts,
   connection,
   info,
   visible,
@@ -74,8 +69,6 @@ export function BotSettings({
   bot: Bot;
   accounts: AccountsState;
   bots: readonly Bot[];
-  tasks: readonly Task[];
-  transcripts: Record<string, Transcript>;
   connection: ConnectionState;
   info: HostInfo;
   visible: boolean;
@@ -424,8 +417,6 @@ export function BotSettings({
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <Connect
-          from="settings"
-          draftName={null}
           forBot={bot.id}
           accounts={accounts}
           bots={bots}
@@ -489,9 +480,6 @@ export function BotSettings({
       targetProvider && model
         ? (pickEffort ?? firstEffort(accounts, targetProvider, model, binding.effort))
         : null;
-    const running = tasks.some((task) =>
-      transcripts[task.key]?.runs.some((run) => run.state === "running" || run.state === "waiting"),
-    );
     // Only a choice in the list as it stands now: an account the last read lost cannot be saved.
     const listedNow =
       toGateway || (accounts.status === "ready" && list.some((each) => each.id === chosen));
@@ -501,7 +489,7 @@ export function BotSettings({
       setSaving(true);
       setError(null);
       try {
-        await bridge.invoke({
+        const { changed: made } = await bridge.invoke({
           type: "changeBotAccount",
           botId: bot.id,
           account: toGateway ? null : chosen,
@@ -509,10 +497,17 @@ export function BotSettings({
           model,
           effort,
         });
+        // From the read after the write: what the gateway's settings now show, or that it
+        // already had it.
+        const named = target ? accountName(target, accounts) : chosen;
         announce(
           toGateway
-            ? `${name} now has no fixed account`
-            : `${name} now runs on ${target ? accountName(target, accounts) : chosen}`,
+            ? made
+              ? `${name} now has no fixed account`
+              : `${name} already had no fixed account`
+            : made
+              ? `${name} is now bound to ${named}`
+              : `${name} was already bound to ${named}`,
         );
         setPick(null);
         setPickModel(null);
@@ -529,7 +524,7 @@ export function BotSettings({
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         {sub("Change account", "account", "[data-bs='change']")}
         <p className="b-lead" style={{ textAlign: "left" }}>
-          Choose the account {name} runs on.
+          Choose the account to bind to {name}.
         </p>
         <AccountChoices
           label={`Accounts for ${name}`}
@@ -561,9 +556,11 @@ export function BotSettings({
                 <span className="b-choice-text">
                   <span className="b-choice-title">Connect an account</span>
                   <span className="b-choice-sub">
+                    Clawtrate starts sign-in for{" "}
                     {accounts.mainShared
-                      ? "A sign-in here is shared with every bot."
-                      : `A sign-in here is kept for ${name}.`}
+                      ? (bots.find((each) => each.id === "main")?.name ?? "main")
+                      : name}
+                    .
                   </span>
                 </span>
               </button>
@@ -592,15 +589,6 @@ export function BotSettings({
             </p>
           </>
         )}
-        {changed && running && (
-          <Note icon={<ClockIcon />}>
-            <p>
-              {toGateway
-                ? `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. From the next run ${name} has no fixed account.`
-                : `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. The next run uses ${target ? accountName(target, accounts) : chosen}.`}
-            </p>
-          </Note>
-        )}
         {changed && lock && was && (toGateway || target?.provider === was.provider) && (
           <Note tone="warn" testId="locked-change-note">
             <p>
@@ -608,8 +596,8 @@ export function BotSettings({
                 ? `${name} is locked to ${accountName(was, accounts)}.`
                 : `${name} was locked to ${accountName(was, accounts)} when Clawtrate last checked, at ${clock(lock.asOf)}.`}{" "}
               {toGateway
-                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
-                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
+                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)} until its owner clears it on the gateway's machine. Account shows the command.`
+                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} is bound to ${accountName(target!, accounts)} while the gateway's order for ${name} still names only ${accountName(was, accounts)}, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
             </p>
           </Note>
         )}
@@ -665,11 +653,7 @@ export function BotSettings({
   if (binding.mode === "default-model") {
     page.push(
       <Note key="s" icon={<ShieldIcon />}>
-        <p>
-          <b>The gateway's default model.</b> {name} has no model of its own. It uses the gateway's
-          default model and that model's fallbacks, and for each run the gateway picks one of that
-          provider's accounts that its account order allows.
-        </p>
+        <p>{name} has no model of its own. The gateway has a default model configured.</p>
       </Note>,
       changeButton("Choose an account", true),
     );
@@ -678,20 +662,13 @@ export function BotSettings({
     const keptAccount = kept ? accounts.accounts.find((a) => a.id === kept) : null;
     page.push(
       <Note key="s" icon={<ShieldIcon />} testId="gateway-note">
-        <p>
-          <b>The gateway chooses.</b> {name} has no fixed account: for each run the gateway picks
-          one of {who}'s accounts that its account order allows. {name} keeps its own model and no
-          fallbacks.
-        </p>
+        <p>{name} has no fixed account in the gateway's settings.</p>
       </Note>,
     );
     if (binding.suffixLost)
       page.push(
         <Note key="lost" tone="warn">
-          <p>
-            The gateway's model for {name} has no account. It now uses the gateway's choice of {who}{" "}
-            account.
-          </p>
+          <p>The model in the gateway's settings for {name} has no account suffix.</p>
         </Note>,
       );
     if (kept && provider)
@@ -699,29 +676,20 @@ export function BotSettings({
         <Note key="kept" tone="warn" testId="retained-order">
           <p>
             The gateway still has an order for {name} that names only{" "}
-            {keptAccount ? accountName(keptAccount, accounts) : kept}, so it keeps using that
-            account alone. To let the gateway choose among {who}'s accounts, the gateway's owner can
-            clear it on the gateway's machine:
+            {keptAccount ? accountName(keptAccount, accounts) : kept}.
           </p>
           <CommandBlock command={unlockCommand(cli, bot.id, provider)} label="Copy clear command" />
         </Note>,
       );
     page.push(changeButton(binding.suffixLost ? "Choose an account" : "Bind to an account", true));
   } else if (word === "no-account") {
-    // An account still on the gateway, but in another bot's own store, is that bot's.
-    const kept = accounts.accounts.find((each) => each.id === binding.account);
-    const keeper =
-      kept?.keptBy && kept.keptBy !== bot.id
-        ? (bots.find((each) => each.id === kept.keptBy)?.name ?? kept.keptBy)
-        : null;
+    // Only what the read shows: this bot's view does not list the account its settings name.
+    const listed = accounts.accounts.find((each) => each.id === binding.account);
     page.push(
       <Note key="s" tone="warn">
         <p>
-          <b>No account.</b>{" "}
-          {keeper
-            ? `${name}'s account, ${accountName(kept!, accounts)}, is kept by ${keeper} only, so ${name} can't use it.`
-            : `${name}'s account was disconnected.`}{" "}
-          Clawtrate won't start {name} until you choose one.
+          <b>No account.</b> The gateway's list does not show{" "}
+          {listed ? accountName(listed, accounts) : binding.account} for {name}.
         </p>
       </Note>,
       changeButton("Choose an account", true),
@@ -748,12 +716,6 @@ export function BotSettings({
           </dd>
         </div>
       </dl>,
-    );
-    const others = accounts.accounts.filter(
-      (a) =>
-        a.provider === account.provider &&
-        a.id !== account.id &&
-        (a.keptBy === null || a.keptBy === bot.id),
     );
     const me = accountName(account, accounts);
     const e = binding.evidence;
@@ -933,8 +895,8 @@ export function BotSettings({
       page.push(
         <Note key="s" tone="warn" testId="stale-note">
           <p>
-            <b>The lock is out of date.</b> {name} runs on {me} first, but the gateway's order for{" "}
-            {name} still lists only {oldName}, so when {me} fails the gateway tries {oldName}.
+            <b>The lock is out of date.</b> {name} is bound to {me}. The gateway's stored order for{" "}
+            {name} still names only {oldName}.
           </p>
         </Note>,
         <h4 className="b-group" key="h">
@@ -956,11 +918,7 @@ export function BotSettings({
       page.push(
         <Note key="s" icon={<ShieldIcon />} testId="bound-note">
           <p>
-            <b>Bound.</b> {name} runs on {me}. If that account fails, the gateway may use{" "}
-            {others.length > 0
-              ? `another ${who} account, such as ${accountName(others[0]!, accounts)},`
-              : `another ${who} account, if one is added,`}{" "}
-            for that run.
+            <b>Bound.</b> {name} is bound to {me} in the gateway's settings.
           </p>
         </Note>,
         ...warnings,

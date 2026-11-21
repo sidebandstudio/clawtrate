@@ -190,7 +190,24 @@ describe("the closed contract with accounts", () => {
       models: { providers: Record<string, Record<string, unknown>> };
     };
     keyed.models.providers.globex!.apiKey = "clawtrate-dev-key.globex.team";
-    expect(problems(keyed)).toEqual(["models.providers.globex.apiKey is not allowed"]);
+    expect(problems(keyed)).toEqual([
+      expect.stringMatching(/^models\.providers\.globex\.apiKey must be an account id of globex/),
+    ]);
+    keyed.models.providers.globex!.apiKey = "acme:manual";
+    expect(problems(keyed)).toEqual([
+      expect.stringMatching(/^models\.providers\.globex\.apiKey must be an account id of globex/),
+    ]);
+  });
+
+  it("accepts what the gateway's key method writes: the provider's entry naming the account it saved, never the key", () => {
+    const keyed = withAccounts() as unknown as {
+      models: { providers: Record<string, Record<string, unknown>> };
+      auth: { profiles: Record<string, unknown>; order?: unknown };
+    };
+    keyed.models.providers.globex!.apiKey = "globex:manual";
+    keyed.auth.profiles["globex:manual"] = { provider: "globex", mode: "api_key" };
+    keyed.auth.order = { globex: ["globex:manual", "globex:team"] };
+    expect(problems(keyed)).toEqual([]);
   });
 
   it("keeps accounts out of an instance started without them", () => {
@@ -293,11 +310,11 @@ describe("local pairing at the gateway's default", () => {
 });
 
 describe("the sign-in plugin and the plugin rule", () => {
-  it("loads the checkout's sign-in plugin with a path on the scripted model and sign-ins for acme only", () => {
+  it("loads the checkout's sign-in plugin with a path on the scripted model, sign-ins for acme and a key method for globex", () => {
     const plugin = loadDevPlugin("clawtrate-dev-signin", CHECKOUT_DIR, PLUGIN_RULE);
     expect([plugin.id, plugin.providers, plugin.tools]).toEqual([
       "clawtrate-dev-signin",
-      ["acme"],
+      ["acme", "globex"],
       [],
     ]);
     expect(pluginEntry(plugin, STATE, 19250)).toEqual({

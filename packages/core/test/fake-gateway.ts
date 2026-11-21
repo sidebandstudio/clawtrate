@@ -86,7 +86,10 @@ class FakeSocket implements WebSocketLike {
         return handler(frame.params);
       })
       .then(
-        (payload) => this.reply(id, { ok: true, payload }),
+        (payload) => {
+          this.reply(id, { ok: true, payload });
+          this.gateway.afterReply?.(method);
+        },
         (error: unknown) =>
           this.reply(id, {
             ok: false,
@@ -114,6 +117,8 @@ export class FakeGateway {
   readonly requests: Array<{ method: string; params: unknown; id?: string }> = [];
   readonly sockets: FakeSocket[] = [];
   refuseConnections = false;
+  /** Run right after a successful reply is delivered, before the client acts on it. */
+  afterReply: ((method: string) => void) | null = null;
   handlers: Record<string, Handler> = {
     "agents.list": () => ({
       defaultId: "main",

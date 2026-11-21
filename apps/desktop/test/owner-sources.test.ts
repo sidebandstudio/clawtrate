@@ -100,6 +100,8 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.changes":
+    "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.counts": "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.limits.providers":

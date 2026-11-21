@@ -7,12 +7,14 @@ import {
   normalizeLabel,
   providerName,
   retainedOrder,
+  type AccountChange,
   type AccountsState,
   type Bot,
   type BotBinding,
   type ConnectionState,
   type GatewayAccount,
   type HostInfo,
+  type SignInAddress,
   type SignInFlow,
 } from "@clawtrate/core";
 
@@ -139,21 +141,34 @@ export function lockText(claim: { asOf: number | null }, inSentence = false): st
   return claim.asOf === null ? word : `${word}${inSentence ? "" : ","} as of ${clock(claim.asOf)}`;
 }
 
-/** The bots bound to an account in their settings: "Used by" (section 7), each with its lock claim. */
+/**
+ * The bots whose settings name an account, as the views show them: "Used by"
+ * (section 7). Bound to it, each with its lock claim, or `byOrder`: no account
+ * of its own in its model, and a stored order of its provider that names this
+ * one. Nothing beyond that is established of which bots it serves.
+ */
 export function usedBy(
   accountId: string,
   bindings: readonly BotBinding[],
   bots: readonly Bot[],
   age: EvidenceAge,
-): Array<{ bot: Bot; lock: { asOf: number | null } | null }> {
+): Array<{ bot: Bot; lock: { asOf: number | null } | null; byOrder: boolean }> {
   return bindings
-    .filter((binding) => binding.mode === "account" && binding.account === accountId)
+    .filter(
+      (binding) =>
+        (binding.mode === "account" && binding.account === accountId) ||
+        (binding.account === null &&
+          binding.order?.stored === true &&
+          binding.order.ids.includes(accountId)),
+    )
     .map((binding) => ({
       bot: bots.find((bot) => bot.id === binding.botId),
-      lock: lockClaim(binding, age),
+      lock: binding.account === accountId ? lockClaim(binding, age) : null,
+      byOrder: binding.account !== accountId,
     }))
     .filter(
-      (each): each is { bot: Bot; lock: { asOf: number | null } | null } => each.bot !== undefined,
+      (each): each is { bot: Bot; lock: { asOf: number | null } | null; byOrder: boolean } =>
+        each.bot !== undefined,
     );
 }
 
@@ -166,17 +181,21 @@ export function accountLine(
 ): { kind: string; state: { tone: "warn" | "danger"; word: string } | null; users: string } {
   const { tone, word } = stateWord(account, now);
   const keeper = account.keptBy ? bots.find((bot) => bot.id === account.keptBy) : null;
-  const users = accounts.bindings
-    .filter((binding) => binding.mode === "account" && binding.account === account.id)
-    .flatMap((binding) => bots.filter((bot) => bot.id === binding.botId).map((bot) => bot.name));
+  const users = usedBy(account.id, accounts.bindings, bots, {
+    now,
+    connected: true,
+    connectedAt: null,
+  }).map((each) => each.bot.name);
   return {
     kind: kindWord(account),
     state: tone ? { tone, word } : null,
     users: account.keptBy
       ? `Only ${keeper?.name ?? account.keptBy} can use it`
-      : users.length > 0
-        ? users.join(", ")
-        : "Not used yet",
+      : account.unclear
+        ? "Which bots can use it isn't clear"
+        : users.length > 0
+          ? users.join(", ")
+          : "No listed bot names it.",
   };
 }
 
@@ -313,3 +332,61 @@ export function levelWord(level: string | null): string {
 }
 
 export { retainedOrder };
+
+/** An account by its id: its name when the gateway still lists it, else its provider and id. */
+function nameOf(id: string, accounts: Pick<AccountsState, "labels" | "accounts">): string {
+  const listed = accounts.accounts.find((each) => each.id === id);
+  return listed ? accountName(listed, accounts) : `${providerName(id.split(":")[0] ?? id)} ${id}`;
+}
+
+/**
+ * The grey line Clawtrate draws in a task for a change of a bot's account it
+ * made and then read back (section 11): the gateway records none. It names
+ * the binding the gateway's settings show, and nothing of which account a
+ * run uses: a task's own account, a pause or a fallback can decide that.
+ */
+export function changeLine(
+  change: AccountChange,
+  accounts: Pick<AccountsState, "labels" | "accounts">,
+  botName: string,
+): string {
+  if (change.account === null) return `${botName} now has no fixed account.`;
+  return `${botName} is now bound to ${nameOf(change.account, accounts)}.`;
+}
+
+/**
+ * A sign-in that finishes on the gateway's machine: the gateway's own words,
+ * and the command it gives for forwarding its port, when it gives one
+ * ("… forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host").
+ */
+/**
+ * Where a sign-in page's button goes, before it is chosen: the parsed scheme,
+ * host, effective port and path; its query and fragment are not shown
+ * (decisions.md, "Addresses a gateway hands the client").
+ */
+export function pageDestination(address: SignInAddress): string {
+  return `${address.scheme}://${address.host}:${address.port}${address.path}`;
+}
+
+/** The line beside a sign-in page's button, in the rule's words. */
+export function opensIn(address: SignInAddress): string {
+  return address.loopback
+    ? "Opens in this device's browser. This address points to this device. It points directly to the gateway's machine only when this is the gateway's machine."
+    : "Opens in this device's browser.";
+}
+
+/**
+ * A page the gateway named that is not offered: user info in it, not http or https, or too long.
+ * Which of them it was is not said.
+ */
+export const REFUSED_PAGE = "Clawtrate couldn't open the address given for this sign-in.";
+
+export function forwardCommand(message: string | null): { words: string; command: string | null } {
+  if (!message) return { words: "", command: null };
+  const match = /([^\n.]*forward the port with:\s*)(ssh\s[^\n]+?)\s*$/im.exec(message);
+  if (!match) return { words: message.trim(), command: null };
+  const words = (message.slice(0, match.index) + message.slice(match.index + match[0].length))
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { words, command: match[2]!.trim() };
+}

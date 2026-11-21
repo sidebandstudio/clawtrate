@@ -1,11 +1,11 @@
 {
   "id": "clawtrate-dev-signin",
   "name": "Clawtrate development sign-ins",
-  "description": "Development instances only: scripted sign-ins for the scripted provider acme, against the instance's own scripted model on loopback. No real provider, account or network beyond loopback.",
+  "description": "Development instances only: scripted sign-ins for the scripted provider acme, and a key method for globex, against the instance's own scripted model on loopback. No real provider, account or network beyond loopback.",
   "activation": {
     "onStartup": true
   },
-  "providers": ["acme"],
+  "providers": ["acme", "globex"],
   "setup": {
     "requiresRuntime": false
   },
@@ -34,6 +34,28 @@
     },
     {
       "provider": "acme",
+      "method": "host",
+      "choiceId": "acme-host",
+      "choiceLabel": "Acme (scripted) on the gateway's machine",
+      "choiceHint": "finishes on the gateway's machine",
+      "groupId": "acme",
+      "groupLabel": "Acme (scripted)",
+      "credentialOnly": true,
+      "appGuidedAuth": "oauth"
+    },
+    {
+      "provider": "acme",
+      "method": "callback",
+      "choiceId": "acme-callback",
+      "choiceLabel": "Acme (scripted), back to the gateway",
+      "choiceHint": "the gateway's callback, or the address pasted back",
+      "groupId": "acme",
+      "groupLabel": "Acme (scripted)",
+      "credentialOnly": true,
+      "appGuidedAuth": "oauth"
+    },
+    {
+      "provider": "acme",
       "method": "api-key",
       "choiceId": "acme-api-key",
       "choiceLabel": "Acme API key (scripted)",
@@ -42,6 +64,16 @@
       "groupLabel": "Acme (scripted)",
       "credentialOnly": true,
       "appGuidedSecret": true
+    },
+    {
+      "provider": "globex",
+      "method": "api-key",
+      "choiceId": "globex-api-key",
+      "choiceLabel": "Globex API key (scripted)",
+      "choiceHint": "saved with the gateway's key method",
+      "groupId": "globex",
+      "groupLabel": "Globex (scripted)",
+      "credentialOnly": true
     }
   ],
   "configSchema": {

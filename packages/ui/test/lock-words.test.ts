@@ -77,3 +77,29 @@ describe("lock claims", () => {
     });
   });
 });
+
+describe("which bots name an account (F-477)", () => {
+  const bots = [
+    { id: "otto", name: "Otto" },
+    { id: "pip", name: "Pip" },
+  ] as unknown as Parameters<typeof usedBy>[2];
+  it("counts a bot with no account of its own whose stored order names it, as named by its order", () => {
+    const pip: BotBinding = {
+      ...locked({}),
+      botId: "pip",
+      primary: "acme/dev-1",
+      account: null,
+      mode: "gateway",
+      order: { ids: ["acme:work"], stored: true, configured: null },
+    };
+    expect(
+      usedBy("acme:work", [locked({}), pip], bots, fresh).map((each) => [
+        each.bot.name,
+        each.byOrder,
+      ]),
+    ).toEqual([
+      ["Otto", false],
+      ["Pip", true],
+    ]);
+  });
+});

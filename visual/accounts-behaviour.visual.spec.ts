@@ -2,7 +2,7 @@
 // 19): the "+" menu and ⌘N, focus in and out of the dialogs, the radio groups'
 // one tab stop and arrows, the selects, Escape that belongs to the innermost
 // thing, the access bar for admin, and what a read-only connection shows.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -259,17 +259,19 @@ test("F-474: a pasted code is a password field, cleared as it is sent", async ({
   await expect(paste).toHaveAttribute("autocomplete", "off");
   await paste.fill("made-up-code-0001");
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to OpenAI" })).toBeVisible();
   expect(await page.content()).not.toContain("made-up-code-0001");
+  // The gateway's answer names no account: the new one the read lists is offered to label.
+  await labelNew(page, "openai:second");
   // The label step: another OpenAI account exists, so a label is required.
-  await expect(page.getByRole("textbox", { name: "Label" })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Done" })).toBeDisabled();
   await page.getByRole("textbox", { name: "Label" }).fill("Studio");
   await page.getByRole("button", { name: "Done" }).click();
-  // Back on the Account step, the new account chosen.
+  // Back on the Account step: a list difference alone chooses nothing.
   await expect(page.getByRole("radio", { name: /^OpenAI · Studio/ })).toHaveAttribute(
     "aria-checked",
-    "true",
+    "false",
   );
 });
 
@@ -285,7 +287,7 @@ test("F-490: the Account page: the lock command, Check now, and Back to the row 
   await row.click();
   await expect(page.getByRole("heading", { name: "Account", level: 3 })).toBeFocused();
   await expect(page.getByTestId("bound-note")).toContainText(
-    "Bound. Otto runs on OpenAI · Work. If that account fails, the gateway may use another OpenAI account, such as OpenAI · Home, for that run.",
+    "Bound. Otto is bound to OpenAI · Work in the gateway's settings.",
   );
   await expect(page.getByTestId("command")).toHaveText(
     "openclaw models auth order set --provider openai --agent otto openai:work",
@@ -336,12 +338,12 @@ test("F-473: changing a locked bot's account: the note before saving, then the l
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
   await expect(
     page.getByText(
-      /Otto is locked to OpenAI · Work\. After saving, Otto runs on OpenAI · Home first/,
+      /Otto is locked to OpenAI · Work\. After saving, Otto is bound to OpenAI · Home while the gateway.s order for Otto still names only OpenAI · Work/,
     ),
   ).toBeVisible();
   await save.click();
   await expect(page.getByTestId("stale-note")).toContainText(
-    "The lock is out of date. Otto runs on OpenAI · Home first, but the gateway's order for Otto still lists only OpenAI · Work",
+    "The lock is out of date. Otto is bound to OpenAI · Home. The gateway's stored order for Otto still names only OpenAI · Work.",
   );
   await expect(page.getByTestId("command").first()).toHaveText(
     "openclaw models auth order set --provider openai --agent otto openai:home",
@@ -397,7 +399,9 @@ test("F-472: Let the gateway choose for an existing bot, and the one-account ord
     "light",
   );
   await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
-  await expect(page.getByTestId("gateway-note")).toContainText("The gateway chooses.");
+  await expect(page.getByTestId("gateway-note")).toHaveText(
+    "Otto has no fixed account in the gateway's settings.",
+  );
   await expect(page.getByTestId("retained-order")).toContainText(
     "The gateway still has an order for Otto that names only OpenAI · Work",
   );
@@ -436,6 +440,49 @@ test("F-476: below admin there are no labels: accounts are told apart by their i
   await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
 });
 
+test("F-477: a read that fails after one that listed the accounts is said beside the last rows, with their time and Try again", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=stale`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  const stale = settings.getByTestId("accounts-stale");
+  await expect(stale).toContainText(
+    /^Couldn't read the gateway's accounts again\. models\.authStatus timed out after 60 seconds\. These are from the last read, at \d{1,2}:\d{2}/,
+  );
+  // The last read's rows stay, under the note.
+  await expect(settings.getByRole("button", { name: /^OpenAI · Work/ })).toBeVisible();
+  await stale.getByRole("button", { name: "Try again" }).click();
+  expect((await sent(page)).some((each) => each.type === "refreshAccounts")).toBe(true);
+});
+
+test("F-477: account details show the last-read time after a refresh fails", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=stale`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await expect(settings.getByTestId("account-facts")).toBeVisible();
+  const stale = settings.getByTestId("accounts-stale");
+  await expect(stale).toContainText(
+    /^Couldn't read the gateway's accounts again\. .* These are from the last read, at \d{1,2}:\d{2}/,
+  );
+  await stale.getByRole("button", { name: "Try again" }).click();
+  expect((await sent(page)).some((each) => each.type === "refreshAccounts")).toBe(true);
+});
+
+test("F-477: an empty list says what was read", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=none`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "No accounts listed" })).toBeVisible();
+  await expect(
+    settings.getByText("The gateway listed no sign-in or saved key profiles in this read."),
+  ).toBeVisible();
+});
+
 test("F-490: a read-only connection shows a bot's settings with every value, and changes nothing", async ({
   page,
 }) => {
@@ -463,12 +510,14 @@ test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the conf
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Accounts", exact: true }).click();
   await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
-  await expect(settings.getByTestId("account-facts")).toContainText("Used byMarlow, Otto (locked)");
-  await settings.getByRole("button", { name: "Disconnect…" }).click();
-  const confirm = page.getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" });
-  await expect(confirm).toHaveAccessibleDescription(
-    "Marlow and Otto use it. They show No account until you choose another, and Clawtrate doesn't start them until then. Your gateway removes the sign-in.",
+  await expect(settings.getByTestId("account-facts")).toContainText(
+    "Named in bot settingsMarlow, Otto (locked)",
   );
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  const confirm = page.getByRole("alertdialog", {
+    name: "Ask the gateway to disconnect OpenAI · Work?",
+  });
+  await expect(confirm).toHaveAccessibleDescription("Last read from bot settings. Marlow, Otto");
   await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(confirm).toHaveCount(0);
@@ -584,10 +633,9 @@ test("F-490 F-476: an account only another bot keeps is no account for this bot,
   await openFixture(page, `${SETTINGS_TAB}&lock=elsewhere`, "light");
   await page.getByRole("button", { name: /^Account: .*No account\. Open\.$/ }).click();
   await expect(
-    page.getByText(
-      "No account. Otto's account, Anthropic · Pip's key, is kept by Pip only, so Otto can't use it.",
-      { exact: false },
-    ),
+    page.getByText("No account. The gateway's list does not show Anthropic · Pip's key for Otto.", {
+      exact: false,
+    }),
   ).toBeVisible();
   await expect(page.getByTestId("locked-note")).toHaveCount(0);
 });
@@ -636,6 +684,11 @@ test("F-472: Create and Save take only a choice the list shows now: a failed rea
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
+/** The read after a sign-in lists a new account: it is chosen to be labelled. */
+async function labelNew(scope: Page | Locator, id: string) {
+  await scope.getByTestId("several").locator(`[data-choose="${id}"]`).click();
+}
+
 /** New bot, connecting an account, on the sign-in methods. */
 async function connectFromNewBot(page: Page) {
   await page.keyboard.press("ControlOrMeta+n");
@@ -654,7 +707,7 @@ test("F-474: a sign-in whose read afterwards failed says so, and Check again rea
   await expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Check again" }).click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   expect((await sent(page)).some((each) => each.type === "recheckSignIn")).toBe(true);
 });
 
@@ -681,25 +734,25 @@ test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   const connect = page.getByRole("button", { name: /^Connect an account/ });
-  await expect(connect).toContainText("A sign-in here is kept for Otto.");
+  await expect(connect).toContainText("Clawtrate starts sign-in for Otto.");
   await connect.click();
-  await expect(page.getByTestId("kept-note")).toContainText(
-    "This gateway keeps this sign-in for Otto only.",
-  );
+  await expect(page.getByTestId("kept-note")).toHaveText("Clawtrate starts sign-in for Otto.");
   await page.getByRole("button", { name: /^xAI · / }).click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
   await expect(page.getByTestId("landed")).toHaveText(
-    "Saved for Otto only. Other bots can't use it.",
+    "The gateway lists this account in Otto's own store.",
   );
   const start = (await sent(page)).find((each) => each.type === "startSignIn");
   expect(start).toMatchObject({ botId: "otto" });
   await page.getByRole("textbox", { name: "Label" }).fill("Side");
   await page.getByRole("button", { name: "Done" }).click();
-  // Back on the choice, with the new account chosen, kept by Otto.
+  // Back on the choice: the new account is listed, kept by Otto, and a list difference alone
+  // chooses nothing.
   await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
   await expect(
-    page.getByRole("radio", { name: /^xAI · Side, Subscription, Only Otto can use it/ }),
-  ).toHaveAttribute("aria-checked", "true");
+    page.getByRole("radio", { name: /^xAI · Side, .*Only Otto can use it/ }),
+  ).toHaveAttribute("aria-checked", "false");
 });
 
 test("F-034: a bot written whose first task did not land is said to exist, unfinished; Finish completes it by its id and opens it", async ({
@@ -808,19 +861,20 @@ test("F-476: a label step closed before Done comes back, in New bot and in Setti
   await newBot(page)
     .getByRole("button", { name: /^xAI · / })
     .click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   // Closed before Done: New bot opens on the label step again.
   await page.keyboard.press("Escape");
   await expect(newBot(page)).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+n");
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await page.keyboard.press("Escape");
   // Settings → Accounts opens on it too.
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Accounts", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await settings.getByRole("textbox", { name: "Label" }).fill("Travel");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
@@ -861,7 +915,8 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   await newBot(page)
     .getByRole("button", { name: /^xAI · / })
     .click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await change(
     page,
     `return { ...state, accounts: { ...state.accounts, signIn: { ...state.accounts.signIn, result: { ...state.accounts.signIn.result, locks: [{ botId: "otto", account: "openai:work", outcome: "unchecked" }] } } } };`,
@@ -872,7 +927,7 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   await expect(page.getByText(/added the new account to Otto's lock/)).toHaveCount(0);
 });
 
-test("F-474: a key saved directly is called saved only when the read after it shows the account; Check again reads it", async ({
+test("F-474: a key saved directly whose read afterwards failed is never called saved, even when Check again lists a new account", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&keyread=fail`, "light");
@@ -887,12 +942,42 @@ test("F-474: a key saved directly is called saved only when the read after it sh
   await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
   await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
   await newBot(page).getByRole("button", { name: "Check again" }).click();
+  // A new account in the list says nothing of whether this key was applied: no green Key saved.
+  await expect(newBot(page).getByText("The gateway now lists a new OpenAI account.")).toBeVisible();
   await newBot(page).getByRole("button", { name: "Continue" }).click();
-  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toBeVisible();
-  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
 });
 
-test("F-474: when two new accounts appear during a sign-in, the person chooses which is theirs before it is labelled", async ({
+test("F-475: a warning survives a failed first read and Continue after another account appears", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keyread=fail&keywarn=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check-0003");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  const result = newBot(page).getByRole("heading", { name: "Key sent, not confirmed" });
+  await expect(result).toBeVisible();
+  const warning = newBot(page).getByText(
+    /API key saved, but the Gateway has not confirmed applying the provider settings\./,
+  );
+  await expect(warning).toBeVisible();
+  // The write's record is replaced by a later one: the warning stays with this key.
+  await change(page, `return { ...state, accounts: { ...state.accounts, write: null } };`);
+  await expect(warning).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Check again" }).click();
+  await expect(newBot(page).getByText("The gateway now lists a new OpenAI account.")).toBeVisible();
+  await expect(warning).toBeVisible();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await newBot(page).getByRole("button", { name: "Continue" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
+});
+
+test("F-474: when two new accounts appear during a sign-in whose answer names neither, the person may choose one to label", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&signin=several`, "light");
@@ -904,12 +989,12 @@ test("F-474: when two new accounts appear during a sign-in, the person chooses w
   await expect(several.getByRole("button")).toHaveCount(2);
   await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
   await expect(
-    newBot(page).getByText(/2 new xAI accounts appeared while this sign-in ran/),
+    newBot(page).getByText(
+      "The gateway's answer doesn't name an account. The refreshed list has 2 new xAI accounts. Choose an account to label, or return to Accounts.",
+    ),
   ).toBeVisible();
-  await several
-    .getByRole("button", { name: /^xAI xai:second: this is the account I signed in to$/ })
-    .click();
-  await expect(newBot(page).getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await several.getByRole("button", { name: /^xAI xai:second: label this account$/ }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await expect(
     newBot(page).getByText("You have another xAI account", { exact: false }),
   ).toBeVisible();
@@ -983,3 +1068,284 @@ for (const size of [WIDE, PHONE]) {
     });
   });
 }
+
+test("F-473: Save draws a grey line in the open task naming the binding, and says nothing of which account a run uses", async ({
+  page,
+}) => {
+  // Otto has a run in progress in another task.
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  // A task's own account, a pause or a fallback decide which account serves a run.
+  await expect(page.getByText(/finishes on|next run|run in progress/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Save" }).click();
+  const line = page.getByTestId("transcript").getByTestId("client-event-line");
+  await expect(line).toHaveText("Otto is now bound to OpenAI · Home.");
+  // Centred, grey, after the last message: drawn by Clawtrate from its own change.
+  await expect(line).toHaveAttribute("data-side", "center");
+  await expect(line).toHaveClass(/event-line/);
+  // The command names no task and no run: the host knows which task is open.
+  const change = (await sent(page)).find((each) => each.type === "changeBotAccount");
+  expect(change).toMatchObject({ botId: "otto", account: "openai:home" });
+  expect(change).not.toHaveProperty("taskKey");
+  expect(change).not.toHaveProperty("running");
+  // To no fixed account.
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(line.last()).toHaveText("Otto now has no fixed account.");
+  await expect(page.getByTestId("transcript").getByText(/finishes on|next run/)).toHaveCount(0);
+});
+
+test("F-473: the line is drawn in the task that was open for the bot, with no run in progress", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&bot=pip&task=agent:pip:week&panel=open&tab=settings&access=admin`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("transcript").getByTestId("client-event-line")).toHaveText(
+    "Pip is now bound to OpenAI · Work.",
+  );
+});
+
+test("F-473: the binding event is visible in a loaded task with no messages", async ({ page }) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  // A new, empty task of Otto's: its history is read, and it has no messages.
+  await page.keyboard.press("Alt+t");
+  await expect(page.locator(".title-pill-task")).toHaveText("New task");
+  await expect(page.getByText("Nothing here yet")).toBeVisible();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  // Before any first message, the line is in the task.
+  await expect(page.getByTestId("transcript").getByTestId("client-event-line")).toHaveText(
+    "Otto is now bound to OpenAI · Home.",
+  );
+  await expect(page.getByText("Nothing here yet")).toHaveCount(0);
+});
+
+/** New bot, on the sign-in methods, and one of them started. */
+async function startMethod(page: Page, method: RegExp) {
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).getByRole("button", { name: method }).click();
+}
+
+test("F-474: a note that carries a page is shown as the gateway's note, with its command to copy and the page, and nothing inferred of how it finishes", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await startMethod(page, /^Sign in with ChatGPT/);
+  await expect(page.getByText("The gateway says:")).toBeVisible();
+  // The gateway's words as given, without the command it gives, which is its own block.
+  await expect(page.getByTestId("gateway-says")).toHaveText([
+    "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+    "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process.",
+  ]);
+  await expect(page.getByText("The command in the gateway's note:")).toBeVisible();
+  await expect(newBot(page).getByTestId("command")).toHaveText(
+    "ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+  );
+  await expect(page.getByTestId("open-page")).toHaveAttribute(
+    "href",
+    "https://sign-in.example/authorize?state=host",
+  );
+  await expect(page.getByText("Waiting for the gateway…")).toBeVisible();
+  // Nothing says where the provider sends the browser, or which machine finishes it.
+  await expect(
+    page.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("paste")).toHaveCount(0);
+});
+
+test("F-474: a page and no code shows the gateway's words and the page, nothing to paste, and nothing inferred of how it finishes", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=callback`, "light");
+  await startMethod(page, /^ChatGPT in the browser/);
+  await expect(page.getByText("Complete sign-in in your browser.")).toBeVisible();
+  await expect(page.getByTestId("open-page")).toHaveAttribute(
+    "href",
+    "https://sign-in.example/authorize?state=callback",
+  );
+  await expect(page.getByTestId("paste")).toHaveCount(0);
+  await expect(page.getByRole("group", { name: /^Code / })).toHaveCount(0);
+  await expect(
+    page.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),
+  ).toHaveCount(0);
+});
+
+for (const [method, query, href, destination] of [
+  [/^xAI · /, ADMIN, "https://sign-in.example/device", "https://sign-in.example:443/device"],
+  [
+    /^ChatGPT in the browser/,
+    ADMIN,
+    "https://sign-in.example/authorize?state=fixture",
+    "https://sign-in.example:443/authorize",
+  ],
+  [
+    /^Sign in with ChatGPT/,
+    ADMIN,
+    "https://sign-in.example/authorize?state=host",
+    "https://sign-in.example:443/authorize",
+  ],
+  [
+    /^ChatGPT in the browser/,
+    `${ADMIN}&signin=callback`,
+    "https://sign-in.example/authorize?state=callback",
+    "https://sign-in.example:443/authorize",
+  ],
+] as const) {
+  test(`F-474: before it opens, the page's scheme, host, port and path are shown beside its button, and where it opens (${query.includes("callback") ? "callback" : method.source})`, async ({
+    page,
+  }) => {
+    await openFixture(page, query, "light");
+    await startMethod(page, method);
+    const open = page.getByTestId("open");
+    await expect(open.getByTestId("open-page")).toHaveAttribute("href", href);
+    // The query and fragment are not shown; the port is, even when it is the scheme's.
+    await expect(open.getByTestId("page-address")).toHaveText(destination);
+    await expect(open.getByTestId("page-opens")).toHaveText("Opens in this device's browser.");
+  });
+}
+
+test("F-474: a sign-in saved but not confirmed stays not confirmed on the naming screen", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=unconfirmed`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await labelNew(page, "xai:second");
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await expect(page.getByText(/^Your sign-in was saved, but/)).toBeVisible();
+  // No green heading, before or after the label is saved.
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Label" }).fill("Spare");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+});
+
+test("F-474: an account listed after a sign-in that failed is named as listed, not finished", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed&saved=1`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Name it" }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Listed, not finished" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Label" }).fill("Spare");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+});
+
+test("F-474: a cancel the gateway declines after a code was entered is said there too", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=decline-checking`, "light");
+  await startMethod(page, /^ChatGPT in the browser/);
+  await page.getByTestId("paste").fill("made-up-code");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText(/Finishing the sign-in with OpenAI/)).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Cancel", exact: true }).click();
+  // A bare `running` answer: declined, never said to be saving, and Cancel can be tried again.
+  await expect(page.getByTestId("cancel-declined")).toHaveText(
+    "The gateway declined to cancel. It still reports the sign-in as running.",
+  );
+  await expect(page.getByTestId("too-late")).toHaveCount(0);
+  await expect(newBot(page).getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+});
+
+test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=saving`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(
+    page.getByText("Too late to cancel: the gateway is saving the sign-in."),
+  ).toBeVisible();
+  const saving = newBot(page).getByRole("button", { name: "Saving…" });
+  await expect(saving).toBeDisabled();
+  await expect(newBot(page).getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).toBeVisible();
+});
+
+test("F-475: the key path says a new key replaces one only for the key the gateway's provider settings name; the key is sent once and kept nowhere on the page", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).locator("details.b-disclosure summary").click();
+  const provider = page.getByRole("combobox", { name: "Provider" });
+  const replaces = page.getByText(
+    "If saved, this key replaces Anthropic · Lab key, which the gateway's Anthropic settings name. To keep both, add the second on the gateway's machine.",
+  );
+  await provider.selectOption("openai");
+  await expect(page.getByText(/this key replaces/)).toHaveCount(0);
+  await provider.selectOption("anthropic");
+  await expect(replaces).toBeVisible();
+  const key = "made-up-key-for-the-fixture-0001";
+  const field = page.getByTestId("api-key");
+  await expect(field).toHaveAttribute("type", "password");
+  await expect(field).toHaveAttribute("autocomplete", "off");
+  await field.fill(key);
+  await page.getByRole("button", { name: "Save key" }).click();
+  await expect(page.getByRole("heading", { name: "Key saved" })).toBeVisible();
+  // The account it replaced keeps its label.
+  await expect(page.getByRole("textbox", { name: "Label" })).toHaveValue("Lab key");
+  const saves = (await sent(page)).filter((each) => each.type === "saveApiKey");
+  expect(saves).toHaveLength(1);
+  expect(saves[0]).toMatchObject({ provider: "anthropic", key });
+  expect(await page.content()).not.toContain(key);
+});
+
+test("F-475: a key saved with the gateway's warning keeps the warning on the naming screen, not Key saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keywarn=1`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).locator("details.b-disclosure summary").click();
+  await page.getByRole("combobox", { name: "Provider" }).selectOption("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-the-fixture-0002");
+  await page.getByRole("button", { name: "Save key" }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await expect(
+    page.getByText(/^API key saved, but the Gateway has not confirmed applying/),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+});
