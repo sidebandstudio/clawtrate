@@ -5,6 +5,7 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -637,7 +638,7 @@ const upgrade = object<ScopeUpgradeState>()({
 });
 const connection = object<ConnectionState>()({
   status: ENUM,
-  gatewayUrl: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayUrl: text(MAX_GATEWAY_URL_CHARS),
   gatewayId: ID,
   serverVersion: NAME,
   protocol: NUMBER,
@@ -1044,6 +1045,8 @@ const routineSchedule = object<RoutineSchedule>()({
   expr: NAME,
   tz: NAME,
   everyMs: NUMBER,
+  anchorMs: NUMBER,
+  staggerMs: NUMBER,
   at: NAME,
   name: NAME,
 });
@@ -1055,6 +1058,8 @@ const routine = object<Routine>()({
   schedule: routineSchedule,
   payload: ENUM,
   text: text(MAX_ROUTINE_TEXT_CHARS),
+  textCut: FLAG,
+  canRecreate: FLAG,
   target: ENUM,
   sharedSessionKey: ID,
   delivery: ENUM,
@@ -1081,6 +1086,7 @@ export const ROUTINES: Bound = object<RoutinesState>()({
     ranOnce: FLAG,
     runAt: NUMBER,
   }),
+  listedOn: NUMBER,
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
