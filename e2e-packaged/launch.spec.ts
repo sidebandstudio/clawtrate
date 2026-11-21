@@ -3,10 +3,22 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
@@ -14,9 +26,11 @@ import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
+import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
-import { appEnv } from "./desktop-driver.ts";
-import { packagedExecutable } from "./global-setup.ts";
+import { appEnv, debuggingPort } from "./desktop-driver.ts";
+import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
   integrityLevels,
   mainWindowTitle,
@@ -447,4 +461,112 @@ test("stays on its own content", async () => {
   // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
   expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
+test("opens with the same pairing and tasks after a newer build takes its place", async () => {
+  // An update in place quits the app and starts a newer build of the same
+  // bundle id, name and data folder. Here the newer build is a copy of this
+  // one with only its version raised and an ad hoc signature, so this shows
+  // the paths a signed update keeps, not Squirrel's handoff itself.
+  test.skip(WINDOWS, NO_GATEWAY);
+  test.setTimeout(300_000);
+  const gateway = join(USER_DATA, "gateway");
+  const key = readFileSync(join(gateway, "device-key.pem"));
+  const state = () =>
+    JSON.parse(readFileSync(join(gateway, "state.json"), "utf8")) as Record<string, string>;
+  const before = state();
+  expect(before.connection).toBeTruthy();
+  expect(Object.keys(before).some((name) => name.startsWith("deviceToken:"))).toBe(true);
+
+  const running = packagedManifest(APP);
+  const [major, minor, patch] = parseVersion(running.version as string)!;
+  const newer = `${major}.${minor}.${patch + 1}`;
+  const run = dirname(USER_DATA);
+  const updated = join(run, "updated", "Clawtrate.app");
+  mkdirSync(dirname(updated));
+  await newerCopy(APP, updated, newer, join(run, "newer-scratch"));
+  // Only the version differs, so the name the data folder is derived from does not.
+  expect({ ...packagedManifest(updated), version: running.version }).toEqual(running);
+  expect(
+    execFileSync(
+      "plutil",
+      ["-extract", "CFBundleIdentifier", "raw", join(updated, "Contents/Info.plist")],
+      {
+        encoding: "utf8",
+      },
+    ).trim(),
+  ).toBe(APP_ID);
+
+  // Quit the running app as an update does, and wait for it and its helpers.
+  // Asked while the debugging client is attached, as the teardown asks.
+  process.kill(APP_PID, "SIGTERM");
+  await browser.close();
+  await expect
+    .poll(
+      () => {
+        // The runner that started the app reaps it; until then `ps` shows a zombie.
+        const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
+          encoding: "utf8",
+        }).stdout.trim();
+        if (state && !state.startsWith("Z")) return `running (${state})`;
+        return processesUsing(USER_DATA).length ? "helpers running" : "gone";
+      },
+      // Its own quit time is the teardown's check; under load it has taken over 20 seconds.
+      { timeout: 60_000, message: "the app quits when asked, as an update asks it" },
+    )
+    .toBe("gone");
+
+  rmSync(join(USER_DATA, "DevToolsActivePort"), { force: true });
+  const logFd = openSync(join(run, "updated.log"), "a", 0o600);
+  const next = spawn(
+    packagedExecutable(updated),
+    [`--user-data-dir=${USER_DATA}`, "--remote-debugging-port=0"],
+    { env: appEnv(), stdio: ["ignore", logFd, logFd] },
+  );
+  const exited = new Promise((resolve) => next.once("exit", resolve));
+  let second: Browser | undefined;
+  try {
+    const port = await debuggingPort(USER_DATA, next);
+    second = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    await expect
+      .poll(() => second!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const view = second.contexts().flatMap((context) => context.pages())[0]!;
+
+    // Straight back to the gateway, with no address to type and no device to approve.
+    const bots = view.getByTestId("bot");
+    await expect(bots).toHaveCount(4, { timeout: 30_000 });
+    await expect(view.getByPlaceholder("Gateway address")).toHaveCount(0);
+    await expect(view.getByRole("heading", { name: "Approve this device" })).toHaveCount(0);
+    // The rail may remember Otto open from before the update; open it only if not.
+    const otto = view.getByRole("button", { name: /^Otto, \d+ tasks?/ });
+    if ((await otto.getAttribute("aria-expanded")) !== "true") await otto.click();
+    await expect(
+      view
+        .getByRole("list", { name: "Otto's tasks" })
+        .getByTestId("task")
+        .filter({ hasText: "Disk almost full on the media box" }),
+    ).toHaveCount(1);
+    const updates = await view.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.get(),
+    );
+    expect(updates.runningVersion).toBe(newer);
+
+    // The same device key, saved connection and device token.
+    expect(readFileSync(join(gateway, "device-key.pem")).equals(key)).toBe(true);
+    const after = state();
+    expect(after.connection).toBe(before.connection);
+    for (const name of Object.keys(before).filter((each) => each.startsWith("deviceToken:")))
+      expect(after[name], name).toBeTruthy();
+  } finally {
+    // Asked to quit while the debugging client is still attached, as the first
+    // app was: a SIGTERM right after that client leaves was seen to go unanswered.
+    if (next.exitCode === null && next.signalCode === null) next.kill("SIGTERM");
+    await second?.close();
+    const outcome = await Promise.race([exited, sleep(60_000).then(() => "running")]);
+    closeSync(logFd);
+    expect(outcome, "the newer build quits when asked").not.toBe("running");
+  }
 });
