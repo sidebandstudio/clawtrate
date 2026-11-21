@@ -858,8 +858,10 @@ function PhoneLayout(
             autoFocus
             onChange={(event) => {
               const value = event.target.value;
-              // Each character typed is sent as text as it is typed; nothing is stored.
-              const added = value.startsWith(typed) ? value.slice(typed.length) : "";
+              // Each character typed is sent as text as it is typed; nothing is stored. Only text
+              // can be sent, so a deletion or a replacement is not shown: the field is what was sent.
+              if (!value.startsWith(typed)) return;
+              const added = value.slice(typed.length);
               setTyped(value);
               if (added) props.onInput({ kind: "text", text: added.slice(0, 2000) });
             }}

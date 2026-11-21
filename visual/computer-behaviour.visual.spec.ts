@@ -691,6 +691,18 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
       .getByRole("textbox", { name: "Type into the page" })
       .pressSequentially("ab");
     await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBeGreaterThan(0);
+    // A deletion can't reach the page, so the field doesn't show one: it shows what was sent.
+    const field = fullView(page).getByRole("textbox", { name: "Type into the page" });
+    await field.press("Backspace");
+    await field.pressSequentially("c");
+    await expect(field).toHaveValue("abc");
+    await expect
+      .poll(async () =>
+        (await sentOf(page, "computerInput"))
+          .map((each) => (each.input as { text?: string }).text ?? "")
+          .join(""),
+      )
+      .toBe("abc");
     await fullView(page).getByRole("textbox", { name: "Type into the page" }).press("Enter");
     await expect(
       fullView(page).getByText("Enter isn't sent to the page. Tap the page's button instead."),
