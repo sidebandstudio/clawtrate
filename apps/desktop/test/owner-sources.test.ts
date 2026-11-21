@@ -57,6 +57,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/new-bot.ts:COMMAND_CHOICES": "static, the two command choices",
+  "packages/core/src/new-bot.ts:REPORTED": "static, the four reported command policies",
+  "packages/core/src/new-bot.ts:KEPT_DENIED": "static, two tool names",
+  "packages/core/src/new-bot.ts:FINAL_DENY": "static, three tool names",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",
@@ -67,6 +71,8 @@ const ALLOWED: Record<string, string> = {
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
     "the words for those steps, one each, gone when it returns",
+  "packages/core/src/accounts-engine.ts:complete>left":
+    "one creation's steps still to run, at most four, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",
@@ -99,6 +105,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/accounts.ts:initialAccountsState.models":
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
+    "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.policies":
     "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
   "packages/core/src/usage.ts:initialUsage.counts": "static, an empty list copied on write",

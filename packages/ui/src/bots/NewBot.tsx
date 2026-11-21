@@ -1,20 +1,30 @@
 // New bot (bots.md sections 3 and 4): the picture and the name, then the
-// Account step, then Create. Connecting an account opens inside the same
-// dialog. What was entered is kept until the app quits, through a sign-in
-// and a request for access; Create clears it.
+// Account step, then the Approvals step and Create. Connecting an account
+// opens inside the same dialog. What was entered is kept for its gateway until
+// the app quits, through a sign-in and a request for access; Create clears it,
+// and so does "Review bots" for an attempt whose outcome isn't known. A
+// wizard belongs to the gateway it opened on: on another it is a new one.
 
-import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
+import {
+  isChoiceRefusal,
+  type AccountsState,
+  type Bot,
+  type CommandChoice,
+  type ConnectionState,
+  type HostInfo,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
-import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
+import { BackIcon, CheckIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.tsx";
 import { ModelPair } from "./ModelPair.tsx";
-import { recall, remember } from "./memory.ts";
+import { forgetAll, recall, remember } from "./memory.ts";
 import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
+import { CHOICE_ROWS, chooseLine, fileLine, inheritsLine, machineLine } from "./policy-words.ts";
 
 export const BODIES: BodyName[] = [
   "pebble",
@@ -36,6 +46,12 @@ type Draft = {
   account: string | null;
   model: string | null;
   effort: string | null;
+  /** The provider `model` was chosen for: a gateway choice whose provider changed chooses again. */
+  modelFor: string | null;
+  /** The Approvals step's choice; nothing is chosen at first. */
+  approvals: CommandChoice | null;
+  /** This attempt: the host's outcome of its Create, and that outcome's dismissal, are its own. */
+  attempt: string;
 };
 
 const freshDraft = (): Draft => ({
@@ -44,12 +60,37 @@ const freshDraft = (): Draft => ({
   color: "#ff6f9c",
   account: null,
   model: null,
+  modelFor: null,
   effort: null,
+  approvals: null,
+  attempt: Math.random().toString(36).slice(2, 12) + Date.now().toString(36),
 });
 
-/** Kept until the app quits: closing the dialog does not lose what was entered. */
-type Kept = { draft: Draft; step: "look" | "account" | "connect" };
-const KEPT = "new-bot";
+type Step = "look" | "account" | "connect" | "approvals";
+/** The gateway a draft was entered for: its id once read, else its address. */
+type DraftGateway = { id: string | null; url: string | null };
+/**
+ * Kept until the app quits: closing the dialog does not lose what was
+ * entered. A draft is the gateway's it was entered for, kept under that
+ * gateway's address, and is never offered on another.
+ */
+type Kept = { draft: Draft; step: Step; gateway: DraftGateway };
+const KEPT = "new-bot:";
+const slotOf = (gateway: DraftGateway) => `${KEPT}${gateway.url ?? ""}`;
+
+const gatewayOf = (connection: ConnectionState): DraftGateway => ({
+  id: connection.gatewayId,
+  url: connection.gatewayUrl,
+});
+
+const sameDraftGateway = (a: DraftGateway, b: DraftGateway) =>
+  a.id !== null && b.id !== null ? a.id === b.id : a.url === b.url;
+
+/** The draft kept for this gateway, or null. */
+function keptFor(gateway: DraftGateway): Kept | null {
+  const kept = recall<Kept>(slotOf(gateway));
+  return kept && sameDraftGateway(kept.gateway, gateway) ? kept : null;
+}
 
 /** The size of the picture New bot sends: the drawn character, rasterised. */
 const PICTURE_PX = 128;
@@ -114,10 +155,21 @@ export function NewBot({
   onCreated: (botId: string) => void;
 }) {
   const bridge = useBridge();
-  const [draft, setDraftState] = useState<Draft>(() => recall<Kept>(KEPT)?.draft ?? freshDraft());
-  const [step, setStepState] = useState<"look" | "account" | "connect">(
-    () => recall<Kept>(KEPT)?.step ?? "look",
+  // The gateway this wizard opened on: what it keeps and sends is that gateway's alone.
+  const [route] = useState(() => gatewayOf(connection));
+  const slot = slotOf(route);
+  /** Still the gateway this wizard opened on: once it isn't, nothing more of it is sent or kept. */
+  const onRoute = () => sameDraftGateway(route, gatewayOf(bridge.getState().connection));
+  const [draft, setDraftState] = useState<Draft>(() => ({
+    ...freshDraft(),
+    ...keptFor(route)?.draft,
+  }));
+  // A bot made and not finished is offered where its Finish is, without new choices.
+  const [step, setStepState] = useState<Step>(
+    () => keptFor(route)?.step ?? (accounts.creation?.status === "partial" ? "approvals" : "look"),
   );
+  /** Why the host refused the account or model chosen, said on the Account step. */
+  const [choiceRefusal, setChoiceRefusal] = useState<string | null>(null);
   const [announcer, announce] = useAnnouncer();
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -126,11 +178,11 @@ export function NewBot({
   const setDraft = (change: (draft: Draft) => Draft) =>
     setDraftState((was) => {
       const next = change(was);
-      remember(KEPT, { draft: next, step: recall<Kept>(KEPT)?.step ?? step });
+      remember(slot, { draft: next, step: keptFor(route)?.step ?? step, gateway: route });
       return next;
     });
-  const setStep = (next: "look" | "account" | "connect") => {
-    remember(KEPT, { draft, step: next });
+  const setStep = (next: Step) => {
+    remember(slot, { draft, step: next, gateway: route });
     setStepState(next);
     requestAnimationFrame(() => {
       const dialog = document.querySelector<HTMLElement>('[data-testid="new-bot"]');
@@ -141,10 +193,12 @@ export function NewBot({
     });
   };
 
-  // The accounts are read when the dialog opens.
+  // The accounts are read when the dialog opens, and again when the connection comes back while
+  // it is open (a grant of admin access reconnects): a read asked while offline reads nothing.
+  const online = connection.status === "connected";
   useEffect(() => {
-    void bridge.send({ type: "refreshAccounts" }).catch(() => {});
-  }, [bridge]);
+    if (online) void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+  }, [bridge, online]);
 
   // The gateway's default model names an account: it is chosen at first (section 4).
   const named = defaultAccount(accounts);
@@ -159,8 +213,10 @@ export function NewBot({
 
   function choose(value: string) {
     const nextProvider = providerOf(value);
+    setChoiceRefusal(null);
     setDraft((was) => {
-      const keepModel = nextProvider && providerOf(was.account) === nextProvider ? was.model : null;
+      // A model is kept only when it was chosen for this same provider.
+      const keepModel = nextProvider && was.modelFor === nextProvider ? was.model : null;
       const model =
         keepModel ??
         (nextProvider
@@ -172,10 +228,21 @@ export function NewBot({
         ...was,
         account: value,
         model,
+        modelFor: model ? nextProvider : null,
         effort: nextProvider ? firstEffort(accounts, nextProvider, model, was.effort) : null,
       };
     });
   }
+
+  // "Let the gateway choose" chosen before the accounts were read takes the default model once
+  // they are: until then the gateway's default model isn't known. A default model whose provider
+  // changed since makes the model chosen for the old provider no choice at all: chosen again.
+  if (
+    draft.account === GATEWAY_CHOICE &&
+    gw &&
+    (draft.model === null || draft.modelFor !== gw.provider)
+  )
+    choose(GATEWAY_CHOICE);
 
   // Once, when the accounts arrive and nothing is chosen yet.
   const [autoChosen, setAutoChosen] = useState(false);
@@ -190,33 +257,122 @@ export function NewBot({
     draft.account === GATEWAY_CHOICE ||
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
-  const busy = creation?.status === "creating" || creation?.status === "checking";
+  const submitting = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  /** A refusal of Create that no creation outcome names. */
+  const [refused, setRefused] = useState<string | null>(null);
+  const open = useRef(true);
+  useEffect(
+    () => () => {
+      open.current = false;
+    },
+    [],
+  );
+  const busy = creation?.status === "creating" || preparing;
+  const unconfirmed = creation?.status === "unconfirmed" ? creation : null;
+  const accountReady = !!draft.account && listedChoice && !!provider && !!draft.model;
   const create = async () => {
-    if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
+    if (!accountReady || !draft.approvals || busy || unconfirmed || submitting.current) return;
+    // Taken before the picture is drawn: a second click meanwhile sends nothing.
+    submitting.current = true;
+    setPreparing(true);
+    setRefused(null);
     announce("Creating the bot");
     try {
+      const avatar = await pictureOf(previewRef.current?.querySelector("svg"));
+      // The gateway changed while the picture was drawn: this wizard's choices were the old one's.
+      if (!onRoute()) return;
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
-        avatar: await pictureOf(previewRef.current?.querySelector("svg")),
+        avatar,
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
-        provider,
-        model: draft.model,
+        provider: provider!,
+        model: draft.model!,
         effort: draft.effort,
+        approvals: draft.approvals,
+        attempt: draft.attempt,
+        gateway: { id: route.id, url: route.url ?? "" },
       });
-      remember(KEPT, null);
+      // Closed meanwhile: a wizard opened since owns the screen; this one only lets go of its draft.
+      if (!open.current) {
+        if (keptFor(route)?.draft.attempt === draft.attempt) remember(slot, null);
+        return;
+      }
+      remember(slot, null);
+      if (!onRoute()) return;
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
         announce(`Created ${name}, not finished`);
         return;
       }
       announce(`Created ${name}`);
-      void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+      void bridge.send({ type: "dismissBotCreation", attempt: draft.attempt }).catch(() => {});
       onCreated(botId);
-    } catch {
-      announce("Could not create the bot");
+    } catch (error) {
+      // The account or model chosen is no longer one the gateway has: back to where it is chosen.
+      const words = error instanceof Error ? error.message : String(error);
+      if (!open.current) return;
+      if (onRoute() && isChoiceRefusal(words)) {
+        setChoiceRefusal(words);
+        setStep("account");
+        return;
+      }
+      // A refusal or an unknown outcome the state names is said from it, below; one it doesn't
+      // name (refused before Create began, as on a lost admin grant) is said here.
+      const outcome = bridge.getState().accounts.creation;
+      const named =
+        outcome?.attempt === draft.attempt &&
+        (outcome.status === "failed" || outcome.status === "unconfirmed");
+      if (!named) {
+        setRefused(words);
+        announce("Could not create the bot");
+      }
+    } finally {
+      submitting.current = false;
+      setPreparing(false);
     }
   };
+  /**
+   * "Review bots": the outcome of the attempt shown goes, and with it, when
+   * it was this draft's, what was entered for it.
+   */
+  const review = (attempt: string | null) => {
+    void bridge.send({ type: "dismissBotCreation", attempt }).catch(() => {});
+    if (attempt === draft.attempt) {
+      remember(slot, null);
+      setDraftState(freshDraft());
+      setStepState("look");
+    }
+    onClose();
+  };
+  // How a Create ended, said once as it ends: refused, or a reply that settled nothing.
+  const outcome = creation?.status ?? null;
+  const [lastOutcome, setLastOutcome] = useState(outcome);
+  if (outcome !== lastOutcome) {
+    setLastOutcome(outcome);
+    if (lastOutcome === "creating" && outcome === "failed") announce("Could not create the bot");
+    if (lastOutcome === "creating" && outcome === "unconfirmed")
+      announce(`Clawtrate couldn't confirm whether ${creation!.name} was created`);
+  }
+  // What the gateway's approvals file settles, read when the Approvals step opens on admin.
+  const [approvalsRead, setApprovalsFile] = useState<{ blocks: boolean; name: string } | null>(
+    null,
+  );
+  const fileName = draft.name.trim();
+  useEffect(() => {
+    if (step !== "approvals" || !admin) return;
+    let live = true;
+    bridge.invoke({ type: "readApprovalsFile", name: fileName }).then(
+      (read) => live && setApprovalsFile({ blocks: read.blocks, name: fileName }),
+      () => live && setApprovalsFile(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, step, admin, fileName]);
+  // Only the read made for the name as it is now: until it answers, the general line.
+  const approvalsFile = approvalsRead?.name === fileName ? approvalsRead : null;
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
     if (!partial?.botId) return;
@@ -224,7 +380,7 @@ export function NewBot({
       const { botId, missing } = await bridge.invoke({ type: "finishBot", botId: partial.botId });
       if (missing.length > 0) return;
       announce(`Created ${partial.name}`);
-      void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+      void bridge.send({ type: "dismissBotCreation", attempt: partial.attempt }).catch(() => {});
       onCreated(botId);
     } catch {
       announce(`Could not finish ${partial.name}`);
@@ -492,64 +648,33 @@ export function NewBot({
       />
     ) : (
       <>
-        {creation?.status === "failed" && (
-          <Note tone="danger" testId="create-failed">
-            <p>
-              <b>Could not create the bot.</b>{" "}
-              {creation.uncertain ? creation.error : "Please try again."}
-            </p>
-          </Note>
-        )}
-        {partial && (
-          <Note tone="warn" testId="create-partial">
-            <p>
-              <b>{partial.name} exists, and isn't finished.</b> {partial.error}
-            </p>
-            <div className="b-actions">
-              <button
-                type="button"
-                className="button"
-                data-variant="primary"
-                data-size="sm"
-                onClick={() => void finish()}
-              >
-                Finish {partial.name}
-              </button>
-              {/* A bot the gateway's list doesn't show yet can't be opened. */}
-              {!partial.missing.includes("listed") && (
-                <button
-                  type="button"
-                  className="button"
-                  data-variant="quiet"
-                  data-size="sm"
-                  onClick={() => {
-                    void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-                    onCreated(partial.botId!);
-                  }}
-                >
-                  Open {partial.name} as it is
-                </button>
-              )}
-            </div>
-          </Note>
-        )}
         <button
           type="button"
           className="button"
           data-variant="primary"
           data-size="lg"
-          disabled={busy || partial !== null || !draft.account || !listedChoice || !draft.model}
-          onClick={() => void create()}
-          data-testid="create"
+          disabled={!accountReady}
+          onClick={() => setStep("approvals")}
+          data-testid="account-next"
         >
-          {busy ? "Creating…" : "Create"}
+          Next
         </button>
-        {!draft.account && !busy && (
+        {!draft.account && (
           <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
             Choose an account, or let the gateway choose.
           </p>
         )}
-        {draft.account && !listedChoice && !busy && (
+        {choiceRefusal && listedChoice && (
+          <p
+            className="b-hint"
+            role="status"
+            style={{ textAlign: "center", margin: 0 }}
+            data-testid="choice-refused"
+          >
+            {choiceRefusal}
+          </p>
+        )}
+        {draft.account && !listedChoice && (
           <p
             className="b-hint"
             role="status"
@@ -561,15 +686,240 @@ export function NewBot({
               : "The gateway's accounts aren't loaded, so the account chosen can't be used. Try again, or let the gateway choose."}
           </p>
         )}
-        {creation?.status === "checking" && (
-          <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
-            Checking whether {name} was created…
-          </p>
+      </>
+    );
+  } else if (step === "approvals") {
+    head = (
+      <header className="b-head">
+        {back("Back to the account", () => setStep("account"))}
+        <h2 id="create-title" tabIndex={-1}>
+          Approvals
+        </h2>
+        {close}
+      </header>
+    );
+    const choose = (approvals: CommandChoice) => setDraft((was) => ({ ...was, approvals }));
+    const values = CHOICE_ROWS.map((row) => row.value);
+    body = (
+      <>
+        <span
+          className="b-preview"
+          style={{ ["--avatar-create" as string]: "56px", marginBottom: 10 }}
+          aria-hidden="true"
+          ref={previewRef}
+        >
+          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
+        </span>
+        <p className="b-lead">When {name} wants to run a command:</p>
+        {/* The choices are never shown below admin; the access bar takes their place. */}
+        {admin && (
+          <>
+            <div
+              role="radiogroup"
+              aria-label="Approvals"
+              data-testid="approvals"
+              onKeyDown={(event) => {
+                const row = (event.target as HTMLElement).closest<HTMLElement>("[data-value]");
+                const at = values.indexOf(row?.dataset.value as CommandChoice);
+                if (at < 0) return;
+                if (event.key === " " || event.key === "Enter") {
+                  // Space or Enter chooses the row; focus stays on it.
+                  event.preventDefault();
+                  choose(values[at]!);
+                  return;
+                }
+                let next: number | null = null;
+                if (event.key === "ArrowDown" || event.key === "ArrowRight")
+                  next = (at + 1) % values.length;
+                else if (event.key === "ArrowUp" || event.key === "ArrowLeft")
+                  next = (at - 1 + values.length) % values.length;
+                else if (event.key === "Home") next = 0;
+                else if (event.key === "End") next = values.length - 1;
+                if (next === null) return;
+                event.preventDefault();
+                event.currentTarget
+                  .querySelector<HTMLElement>(`[data-value="${values[next]}"]`)
+                  ?.focus();
+                choose(values[next]!);
+              }}
+            >
+              <ul className="b-choices">
+                {CHOICE_ROWS.map((row, index) => {
+                  const checked = draft.approvals === row.value;
+                  // One tab stop: the chosen row, or the first while nothing is chosen.
+                  const stop = draft.approvals === null ? index === 0 : checked;
+                  return (
+                    <li key={row.value}>
+                      <button
+                        type="button"
+                        className="b-choice"
+                        role="radio"
+                        aria-checked={checked}
+                        tabIndex={stop ? 0 : -1}
+                        data-value={row.value}
+                        data-b-focus={stop ? "" : undefined}
+                        aria-labelledby={`b-approvals-${row.value}`}
+                        aria-describedby={`b-approvals-${row.value}-line`}
+                        onClick={() => choose(row.value)}
+                      >
+                        <span className="b-choice-text">
+                          <span className="b-choice-title" id={`b-approvals-${row.value}`}>
+                            {row.title}
+                          </span>
+                          <span
+                            className="b-choice-sub b-wrap"
+                            id={`b-approvals-${row.value}-line`}
+                          >
+                            {row.line(name)}
+                          </span>
+                        </span>
+                        <CheckIcon className="b-tick" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <p className="b-hint">{machineLine(name)}</p>
+            <p
+              className="b-hint"
+              data-tone={approvalsFile?.blocks ? "warn" : undefined}
+              data-testid="approvals-file"
+            >
+              {fileLine(approvalsFile?.blocks === true)}
+            </p>
+          </>
         )}
-        {creation?.status === "creating" && creation.slow && (
-          <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
-            Still creating. What you entered is kept.
-          </p>
+      </>
+    );
+    // How the Create went stays readable below admin too; only Create and the choices need it.
+    const outcomes = (
+      <>
+        {refused && (
+          <Note tone="danger" testId="create-refused">
+            <p>
+              <b>Could not create the bot.</b> {refused}
+            </p>
+          </Note>
+        )}
+        {creation?.status === "failed" && (
+          <Note tone="danger" testId="create-failed">
+            <p>
+              <b>Could not create the bot.</b> Please try again.
+            </p>
+          </Note>
+        )}
+        {unconfirmed && (
+          <Note tone="warn" testId="create-unconfirmed">
+            <p>
+              <b>Clawtrate couldn't confirm whether {unconfirmed.name} was created.</b> Review the
+              gateway's bot list.
+            </p>
+            <div className="b-actions">
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                data-size="sm"
+                onClick={() => review(unconfirmed.attempt)}
+              >
+                Review bots
+              </button>
+            </div>
+          </Note>
+        )}
+        {partial && (
+          <Note tone="warn" testId="create-partial">
+            <p>
+              <b>{partial.name} exists, and isn't finished.</b> {partial.error}
+            </p>
+            <div className="b-actions">
+              {admin && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="primary"
+                  data-size="sm"
+                  onClick={() => void finish()}
+                >
+                  Finish {partial.name}
+                </button>
+              )}
+              {/* A bot the gateway's list doesn't show yet can't be opened. */}
+              {!partial.missing.includes("listed") && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="quiet"
+                  data-size="sm"
+                  onClick={() => {
+                    void bridge
+                      .send({ type: "dismissBotCreation", attempt: partial.attempt })
+                      .catch(() => {});
+                    onCreated(partial.botId!);
+                  }}
+                >
+                  Open {partial.name} as it is
+                </button>
+              )}
+            </div>
+          </Note>
+        )}
+      </>
+    );
+    foot = (
+      <>
+        {outcomes}
+        {granted ? (
+          <GrantedBar />
+        ) : !admin ? (
+          <AdminBar
+            connection={connection}
+            info={info}
+            need="Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask."
+          />
+        ) : (
+          <>
+            {draft.approvals && !unconfirmed && !partial && (
+              <p className="b-hint" style={{ margin: 0 }} data-testid="inherits">
+                {inheritsLine(name)}
+              </p>
+            )}
+            {/* Not offered again from an attempt whose outcome isn't known. */}
+            {!unconfirmed && (
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                data-size="lg"
+                disabled={busy || partial !== null || !accountReady || !draft.approvals}
+                onClick={() => void create()}
+                data-testid="create"
+              >
+                {busy ? "Creating…" : "Create"}
+              </button>
+            )}
+            {!draft.approvals && !busy && (
+              <p
+                className="b-hint"
+                style={{ textAlign: "center", margin: 0 }}
+                data-testid="choose-line"
+              >
+                {chooseLine(name)}
+              </p>
+            )}
+            {draft.approvals && !accountReady && !busy && (
+              <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
+                The account chosen can't be used now. Go back and choose another, or let the gateway
+                choose.
+              </p>
+            )}
+            {busy && creation?.slow && (
+              <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
+                Still creating. What you entered is kept.
+              </p>
+            )}
+          </>
         )}
       </>
     );
@@ -625,5 +975,5 @@ export function NewBot({
 
 /** Forget what New bot kept, for a test that starts afresh. */
 export function forgetNewBotDraft(): void {
-  remember(KEPT, null);
+  forgetAll(KEPT);
 }

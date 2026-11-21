@@ -24,6 +24,7 @@ import {
   MAX_SIGNIN_SECRETS,
 } from "./accounts.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
+import { HELD_BOT_CHARS, MAX_CREATED_ID_CHARS, MAX_HELD_BOTS } from "./new-bot.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
   FOREIGN_RUNS_PER_SESSION,
@@ -59,7 +60,6 @@ import {
 } from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
-  MAX_BOTS,
   APPROVAL_OUTCOME,
   MAX_CREATIONS,
   MAX_FILE_NAME_CHARS,
@@ -255,8 +255,16 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
-  // The bots there before the first Create of the bot being made, while its answer is in doubt.
-  "accounts.before": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The last confirmed Create's plan, for Finish on the gateway that made it: its held record and
+  // the account it records; gone with a change of gateway and once nothing is left to finish.
+  "accounts.planned": {
+    max: 1,
+    each: MAX_CREATED_ID_CHARS + HELD_BOT_CHARS + 2 * MAX_PREF_ID_CHARS + SHORT,
+    row: "bookkeeping",
+  },
+  // New bots whose command setting hasn't read back as chosen, on any gateway, as the host's
+  // storage keeps them: each field bounded where it enters (`readCreateReply`, `readHeldBot`).
+  "accounts.held": { max: MAX_HELD_BOTS, each: 2 * HELD_BOT_CHARS, row: "bookkeeping" },
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },

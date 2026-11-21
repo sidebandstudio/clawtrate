@@ -12,6 +12,7 @@ export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./accounts.ts";
+export * from "./new-bot.ts";
 export * from "./routines.ts";
 export {
   AdminNeededError,

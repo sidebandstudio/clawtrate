@@ -48,6 +48,7 @@ import {
   type BindingIntent,
   type BotBinding,
   type BotView,
+  type CatalogModel,
   type LockCheck,
   type ModelRef,
   type SignInResult,
@@ -56,6 +57,35 @@ import {
 } from "./accounts.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import {
+  approvalsFileBlocks,
+  CHOICE_REFUSALS,
+  chosenHolds,
+  chosenReadBack,
+  COMMAND_CHOICES,
+  configEntry,
+  entryProblem,
+  FINAL_DENY,
+  implicitMain,
+  likelyBotId,
+  MAIN_SESSIONS_PARAMS,
+  MAX_HELD_BOTS,
+  MAX_POLICY_NOTES,
+  missingDeny,
+  readCreateReply,
+  readFirstBot,
+  readHeldBot,
+  readReportedLabel,
+  restrictiveDeny,
+  restrictiveReadBack,
+  sameGateway,
+  savedMode,
+  unapplied,
+  type CommandChoice,
+  type CreatedIdentity,
+  type HeldBot,
+  type NewBotPolicy,
+} from "./new-bot.ts";
 
 /** What the engine needs from the client. */
 export type AccountsContext = {
@@ -69,10 +99,25 @@ export type AccountsContext = {
   /** The bots the client lists: ids, names, which is the default. */
   bots(): Array<{ id: string; name: string; isDefault: boolean }>;
   connected(): boolean;
+  /**
+   * The connection now: `epoch` changes with every hello and every close,
+   * `generation` with every change of gateway; `gateway` is the gateway
+   * connected or being connected, its id once read.
+   */
+  connection(): {
+    epoch: number;
+    generation: number;
+    gateway: { id: string | null; url: string } | null;
+  };
+  /** The host's own storage: the unfinished new bots are kept there across restarts. */
+  storage: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+  };
   /** The connection holds `operator.admin`. */
   admin(): boolean;
-  /** Read the bot list again (`agents.list`). */
-  refreshBots(): Promise<void>;
+  /** Read the bot list again (`agents.list`); its answer as the gateway sent it. */
+  refreshBots(): Promise<unknown>;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
   createMainTask(botId: string): Promise<void>;
   now(): number;
@@ -97,7 +142,85 @@ export type CreateBotInput = {
   provider: string;
   model: string;
   effort: string | null;
+  /** The command policy chosen in the Approvals step; without it the host sends nothing. */
+  approvals: CommandChoice | null;
+  /** The New bot attempt this Create is: its outcome and its dismissal are that attempt's. */
+  attempt: string | null;
+  /**
+   * The gateway the person entered this for, as their screen showed it: on
+   * any other, the host sends nothing.
+   */
+  gateway?: { id: string | null; url: string } | null;
 };
+
+/** One read of what the account screens show; `catalog` is null when `models.list` failed. */
+type AccountsRead = {
+  config: RawRecord | null;
+  views: Map<string, BotView>;
+  prefs: RawRecord | null;
+  catalog: CatalogModel[] | null;
+};
+
+/** A Create's place among the held records, kept before `agents.create` is sent. */
+type Reservation = Omit<HeldBot, "made">;
+
+/**
+ * What a confirmed Create made and what Clawtrate writes for it, on the
+ * gateway that confirmed it (its held record names it): Finish uses it; it
+ * goes with a change of gateway, and once nothing is left to finish.
+ */
+type CreatePlan = {
+  /** The bot's held record: its identity, choice, model and how far its writes got. */
+  held: HeldBot;
+  intent: BindingIntent;
+};
+
+/** The connection a sequence began on. */
+type Binding = { epoch: number; generation: number };
+
+/** The connection a sequence began on is gone: nothing more is sent or shown for it. */
+class ConnectionChangedError extends Error {
+  constructor() {
+    super("The connection changed.");
+    this.name = "ConnectionChangedError";
+  }
+}
+
+const rethrowChanged = (error: unknown): void => {
+  if (error instanceof ConnectionChangedError) throw error;
+};
+
+/** Where the host keeps the unfinished new bots. */
+export const HELD_KEY = "clawtrate.new-bots-held";
+
+const heldKey = (held: HeldBot) =>
+  `${held.gatewayId ?? ""}\u0000${held.gatewayUrl}\u0000${held.made.botId}`;
+
+/**
+ * A short print of a bot's config entry, its keys in order: two reads that
+ * give the same print read the same entry. A bot made again at the same id
+ * has another entry once Clawtrate has written to the first.
+ */
+export function entryPrint(entry: RawRecord | null): string {
+  const canonical = (value: unknown): string =>
+    Array.isArray(value)
+      ? `[${value.map(canonical).join(",")}]`
+      : value && typeof value === "object"
+        ? `{${Object.keys(value)
+            .sort()
+            .map((key) => `${JSON.stringify(key)}:${canonical((value as RawRecord)[key])}`)
+            .join(",")}}`
+        : JSON.stringify(value ?? null);
+  const text = canonical(entry);
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    a = Math.imul(a ^ code, 0x01000193) >>> 0;
+    b = Math.imul(b ^ code, 0x5bd1e995) >>> 0;
+  }
+  return `${text.length.toString(36)}.${a.toString(36)}.${b.toString(36)}`;
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -115,18 +238,32 @@ export class AccountsEngine {
   /** Bots created here whose empty fallback list did not land. */
   private readonly unwritten = new Set<string>();
   /**
-   * The bots there before the first Create of the bot being made: kept while
-   * that Create's answer is in doubt, so a retry adopts only a bot that was not.
+   * What the last confirmed Create made and writes for it, so Finish writes to
+   * that id alone, on that gateway: at most one, gone with a change of gateway
+   * and once nothing is left to finish.
    */
-  private readonly before: string[] = [];
-  /** What the Create under way, or the last one, writes, so Finish can write what is missing. */
-  private planned: {
-    name: string;
-    botId: string | null;
-    ref: ModelRef;
-    effort: string | null;
-    intent: BindingIntent;
-  } | null = null;
+  private readonly planned = new Map<string, CreatePlan>();
+  /**
+   * New bots whose saved command setting hasn't read back as chosen, on any
+   * gateway (`MAX_HELD_BOTS`), as the host's storage keeps them: nothing is
+   * sent to one until it does, and "Write it again" writes from it.
+   */
+  private readonly held = new Map<string, HeldBot>();
+  /**
+   * The Create under way, from before `agents.create` until its reply settles
+   * what it made: kept in storage with the held records, so it counts toward
+   * their bound, and a second Create is refused while it lasts.
+   */
+  private reserved: Reservation | null = null;
+  /** The held records' writes to storage, one after another. */
+  private saving: Promise<void> = Promise.resolve();
+  /** Moves with each change a write makes to the notes: a read of them begun before it applies nothing. */
+  private noteWrites = 0;
+  /** The new bots' settings read for their notes; one read at a time, one more after it if asked. */
+  private policyRead: Promise<void> | null = null;
+  private policyReadAgain = false;
+  /** The latest first-bot check; an earlier one's answer is not shown. */
+  private firstBotChecks = 0;
   private readonly ctx: AccountsContext;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
@@ -171,19 +308,11 @@ export class AccountsEngine {
     if (!ctx.connected()) return;
     ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
     try {
-      const bots = ctx.bots();
-      const [config, views, prefs] = await Promise.all([
-        ctx.request("config.get", {}).then(asRecord),
-        this.readViews(bots.map((bot) => bot.id)),
-        ctx.request("users.prefs.get", {}).then(asRecord, () => null),
-      ]);
-      this.readPrefs(prefs);
-      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
-      const catalog = await ctx
-        .request("models.list", { agentId: defaultBot })
-        .then(readCatalog, () => ctx.get().models);
+      const read = await this.readParts((method, params) => ctx.request(method, params));
+      this.readPrefs(read.prefs);
       const at = ctx.now();
-      ctx.update((a) => this.compose(a, config, views, catalog, at));
+      // A catalogue that couldn't be read leaves the last one shown.
+      ctx.update((a) => this.compose(a, read.config, read.views, read.catalog ?? a.models, at));
     } catch (error) {
       // While a sign-in lasts, its typed values are taken out of whatever comes back.
       const message = this.scrub(errorText(error));
@@ -191,13 +320,51 @@ export class AccountsEngine {
     }
   }
 
-  private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
+  /** One read of the config, every bot's view, the preferences and the catalogue, each through `request`. */
+  private async readParts(
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<AccountsRead> {
+    const bots = this.ctx.bots();
+    const [config, views, prefs] = await Promise.all([
+      request("config.get", {}).then(asRecord),
+      this.readViews(
+        bots.map((bot) => bot.id),
+        request,
+      ),
+      request("users.prefs.get", {}).then(asRecord, () => null),
+    ]);
+    const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+    const catalog = await request("models.list", { agentId: defaultBot }).then(
+      readCatalog,
+      () => null,
+    );
+    return { config, views, prefs, catalog };
+  }
+
+  /**
+   * Create's own read of the accounts and the catalogue, on the connection
+   * Create began on: each request goes only while it lasts, and what was read
+   * is shown only if it still does.
+   */
+  private async preflight(binding: Binding): Promise<AccountsRead> {
+    const read = await this.readParts((method, params) => this.call(binding, method, params));
+    if (!this.live(binding)) throw new ConnectionChangedError();
+    this.readPrefs(read.prefs);
+    const at = this.ctx.now();
+    this.ctx.update((a) => this.compose(a, read.config, read.views, read.catalog ?? a.models, at));
+    return read;
+  }
+
+  private async readViews(
+    botIds: string[],
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
       const chunk = botIds.slice(i, i + ACCOUNT_READ_CONCURRENCY);
       const answers = await Promise.all(
-        chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
+        chunk.map((agentId) => request("models.authStatus", { agentId, refresh: true })),
       );
       for (let j = 0; j < chunk.length; j += 1) {
         const view = readBotView(answers[j]);
@@ -1100,46 +1267,294 @@ export class AccountsEngine {
 
   // Bots ---------------------------------------------------------------------------------
 
+  /** The connection a sequence runs on: it stops, and publishes nothing, once this changes. */
+  private bind(): Binding {
+    const { epoch, generation } = this.ctx.connection();
+    return { epoch, generation };
+  }
+
+  /** The connection the sequence began on is the one still open. */
+  private live(binding: Binding): boolean {
+    const now = this.ctx.connection();
+    return now.epoch === binding.epoch && now.generation === binding.generation;
+  }
+
+  /** The screen still shows the gateway the sequence began on. */
+  private shown(binding: Binding): boolean {
+    return this.ctx.connection().generation === binding.generation;
+  }
+
+  /** One request of a sequence, sent only on the connection it began on. */
+  private call(binding: Binding, method: string, params: unknown): Promise<unknown> {
+    if (!this.live(binding)) return Promise.reject(new ConnectionChangedError());
+    return this.ctx.request(method, params);
+  }
+
+  /** The bot list read again on the sequence's connection; its answer as the gateway sent it. */
+  private refreshBotsOn(binding: Binding): Promise<unknown> {
+    if (!this.live(binding)) return Promise.reject(new ConnectionChangedError());
+    return this.ctx.refreshBots();
+  }
+
+  /** The held record of a bot on the gateway now connected (any, before one is known). */
+  private heldFor(botId: string): HeldBot | null {
+    const gateway = this.ctx.connection().gateway;
+    for (const held of this.held.values()) {
+      if (held.made.botId !== botId) continue;
+      if (!gateway || sameGateway(held, gateway)) return held;
+    }
+    return null;
+  }
+
+  private isHeld(held: HeldBot): boolean {
+    return this.held.get(heldKey(held)) === held;
+  }
+
   /**
-   * Create a bot on an account, or with no fixed account (bots.md section 3):
-   * `agents.create`, the record of what Clawtrate set for it, its model with
-   * an empty fallback list and its effort through `config.patch`, the bot
-   * list read back, then its first task. A create that got no answer is never
-   * sent again: the bot list is read first for the one it may have made, and
-   * only a bot that was not there before the first Create can be that one.
+   * Create's reply named the bot: its record takes the reservation's place,
+   * in memory at once (nothing is sent to it from here), in storage as soon
+   * as the write behind it is done.
+   */
+  private adopt(reservation: Reservation, held: HeldBot): Promise<boolean> {
+    if (this.reserved === reservation) this.reserved = null;
+    this.held.set(heldKey(held), held);
+    return this.persist();
+  }
+
+  /** A Create that made nothing known gives back its place; only its own reservation goes. */
+  private async unreserve(reservation: Reservation): Promise<void> {
+    if (this.reserved !== reservation) return;
+    this.reserved = null;
+    await this.persist();
+  }
+
+  /** Its setting read back as chosen, or the bot can't be identified: its record goes. */
+  private async release(held: HeldBot): Promise<void> {
+    if (!this.isHeld(held)) return;
+    this.held.delete(heldKey(held));
+    await this.persist();
+  }
+
+  /**
+   * Write the held records, and a Create's reservation, to the host's storage,
+   * one write after another: true once this one is saved.
+   */
+  private persist(): Promise<boolean> {
+    const records: unknown[] = [...this.held.values()];
+    // A reservation names no bot yet: an earlier run's is read as nothing to hold.
+    if (this.reserved) records.push({ ...this.reserved, made: null });
+    const value = JSON.stringify(records);
+    const write = this.saving
+      .then(() => this.ctx.storage.set(HELD_KEY, value))
+      .then(
+        () => true,
+        (error: unknown) => {
+          this.log(`the unfinished bots could not be saved on this device: ${errorText(error)}`);
+          return false;
+        },
+      );
+    this.saving = write.then(() => undefined);
+    return write;
+  }
+
+  /** At start: the unfinished bots an earlier run kept, each within its bounds. */
+  async restore(): Promise<void> {
+    let kept: unknown;
+    try {
+      kept = JSON.parse((await this.ctx.storage.get(HELD_KEY)) ?? "[]");
+    } catch (error) {
+      this.log(`the unfinished bots could not be read on this device: ${errorText(error)}`);
+      return;
+    }
+    if (!Array.isArray(kept)) return;
+    for (const each of kept.slice(0, MAX_HELD_BOTS)) {
+      const held = readHeldBot(each);
+      if (held && this.held.size < MAX_HELD_BOTS) this.held.set(heldKey(held), held);
+      else if (asRecord(each)?.made === null)
+        this.log("a Create an earlier run sent ended before its reply named the bot it made");
+    }
+  }
+
+  private notes(): NewBotPolicy[] {
+    return this.ctx.get().policies;
+  }
+
+  /** A new bot's note, as shown. */
+  private noteOf(botId: string): NewBotPolicy | null {
+    return this.notes().find((note) => note.botId === botId) ?? null;
+  }
+
+  private setNote(botId: string, change: Partial<NewBotPolicy>): void {
+    this.ctx.update((a) => ({
+      ...a,
+      policies: a.policies.map((note) => (note.botId === botId ? { ...note, ...change } : note)),
+    }));
+  }
+
+  /**
+   * Show a note, in place of the bot's earlier one. Past the bound a confirmed
+   * note gives way first, then another bot no longer held: a held bot's note
+   * stays, as its composer waits on it.
+   */
+  private putNote(note: NewBotPolicy): void {
+    this.noteWrites += 1;
+    this.ctx.update((a) => {
+      const policies = [...a.policies.filter((each) => each.botId !== note.botId), note];
+      while (policies.length > MAX_POLICY_NOTES) {
+        const loose = (each: NewBotPolicy) => !this.heldFor(each.botId);
+        let index = policies.findIndex((each) => each.status === "confirmed" && loose(each));
+        if (index < 0) index = policies.findIndex(loose);
+        policies.splice(Math.max(index, 0), 1);
+      }
+      return { ...a, policies };
+    });
+  }
+
+  private dropNote(botId: string): void {
+    this.ctx.update((a) => ({
+      ...a,
+      policies: a.policies.filter((note) => note.botId !== botId),
+    }));
+  }
+
+  /** A held bot's note while nothing about it has been read on this connection. */
+  private unreadNote(held: HeldBot): NewBotPolicy {
+    return {
+      botId: held.made.botId,
+      name: held.made.name,
+      workspace: held.made.workspace,
+      chosen: held.chosen,
+      status: "checking",
+      restrictive: held.restrictive,
+      saved: null,
+      missingDeny: [],
+      reported: null,
+      retryable: false,
+    };
+  }
+
+  /**
+   * Why Create can't go with this account and model, from Create's own read
+   * of the gateway, or null: the account is still one of its shared accounts,
+   * of the provider named, or the gateway's valid config still chooses that
+   * provider; and a catalogue that was read lists the model as available, or
+   * it is the gateway's own default and isn't listed as unavailable.
+   */
+  private choiceProblem(input: CreateBotInput, read: AccountsRead): string | null {
+    const valid = read.config?.valid === true;
+    const defaults = asRecord(asRecord(asRecord(read.config?.config)?.agents)?.defaults);
+    const gateway = valid ? parseModelRef(readModelConfig(defaults?.model).primary) : null;
+    if (input.account) {
+      const account = mergeAccounts(read.views, this.kinds).find(
+        (each) => each.id === input.account && each.keptBy === null,
+      );
+      if (!account || account.provider !== input.provider) return CHOICE_REFUSALS.gone;
+    } else if (!gateway || gateway.provider !== input.provider) {
+      return CHOICE_REFUSALS.defaultChanged;
+    }
+    if (!read.catalog) return CHOICE_REFUSALS.noCatalog;
+    const listed = read.catalog.find(
+      (model) => model.provider === input.provider && model.id === input.model,
+    );
+    if (listed) return listed.available ? null : CHOICE_REFUSALS.unavailable;
+    if (!input.account && gateway?.model === input.model) return null;
+    return CHOICE_REFUSALS.unlisted;
+  }
+
+  /**
+   * Create a bot on an account, or with no fixed account, with the command
+   * policy the person chose (bots.md section 3, "What Create does";
+   * controls.md section 10): `agents.create` once, and only on its confirmed
+   * reply, for the `agentId` and workspace it returned, the restrictive write,
+   * the chosen policy, Clawtrate's record of its account, the bot list and its
+   * first task. Everything after `agents.create` goes on the connection it was
+   * sent on, and stops when that changes. A reply that settles nothing is
+   * never followed by a write: the bot list is for the person to review.
    */
   async createBot(input: CreateBotInput): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const { ctx } = this;
+    // The host's own guards: without both choices nothing is sent (bots.md section 3).
+    if (!COMMAND_CHOICES.includes(input.approvals as CommandChoice))
+      throw new Error("Choose how the new bot runs commands. Nothing was sent.");
+    if (!input.provider || !input.model)
+      throw new Error("Choose an account, or let the gateway choose. Nothing was sent.");
+    const chosen = input.approvals as CommandChoice;
     const name = input.name.trim() || "New bot";
     const previous = ctx.get().creation;
-    if (previous?.status === "creating" || previous?.status === "checking")
+    if (previous?.status === "creating" || this.reserved)
       throw new Error("A bot is already being created.");
+    if (previous?.status === "unconfirmed")
+      throw new Error("Review the gateway's bot list before creating another bot.");
     if (previous?.status === "partial" && previous.botId)
       throw new Error(`${previous.name} exists already: finish it rather than create it again.`);
-    const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
     if (input.account && accountProvider(input.account) !== input.provider)
       throw new Error("That account belongs to another provider.");
+    if (this.held.size >= MAX_HELD_BOTS)
+      throw new Error(
+        "Several new bots' command settings aren't confirmed yet. Write them again or delete those bots first. Nothing was sent.",
+      );
+    const binding = this.bind();
+    const gateway = ctx.connection().gateway;
+    if (!gateway || !ctx.connected()) throw new Error("Not connected. Nothing was sent.");
+    // Entered for another gateway than this one: its choices were that gateway's.
+    if (
+      input.gateway &&
+      !sameGateway({ gatewayId: input.gateway.id, gatewayUrl: input.gateway.url }, gateway)
+    )
+      throw new Error("The gateway changed since this was entered. Nothing was sent.");
+    const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
+    const reservation: Reservation = {
+      gatewayId: gateway.id,
+      gatewayUrl: gateway.url,
+      chosen,
+      primary: formatModelRef(ref),
+      effort: input.effort || null,
+      restrictive: false,
+      taskMade: false,
+      seen: null,
+    };
+    // What is kept must come back after a restart: a record restore would refuse holds nothing.
+    const sample = { ...reservation, made: { botId: "x", name: "x", workspace: "x" } };
+    if (!readHeldBot(JSON.parse(JSON.stringify(sample))))
+      throw new Error(
+        "The model, effort or gateway address is too long for Clawtrate to keep with the new bot. Nothing was sent.",
+      );
+    // Its place among the held records, taken before anything waits: a second Create finds it.
+    this.reserved = reservation;
+    try {
+      if (!(await this.persist()))
+        throw new Error("This device couldn't save the new bot's record. Nothing was sent.");
+      // The account and model are checked against the gateway as it is now, not as a viewer saw it.
+      let read: AccountsRead;
+      try {
+        read = await this.preflight(binding);
+      } catch (error) {
+        // A request the old connection took down with it is a change of connection too.
+        if (error instanceof ConnectionChangedError || !this.live(binding))
+          throw new ConnectionChangedError();
+        this.log(`the accounts could not be read before Create: ${errorText(error)}`);
+        throw new Error(CHOICE_REFUSALS.unread, { cause: error });
+      }
+      const problem = this.choiceProblem(input, read);
+      if (problem) throw new Error(problem);
+    } catch (error) {
+      await this.unreserve(reservation);
+      if (error instanceof ConnectionChangedError)
+        throw new Error("The connection changed. Nothing was sent.", { cause: error });
+      throw error;
+    }
+    if (!this.live(binding)) {
+      await this.unreserve(reservation);
+      throw new Error("The connection changed. Nothing was sent.");
+    }
     const avatar =
       input.avatar &&
       input.avatar.startsWith("data:image/png;base64,") &&
       input.avatar.length <= MAX_CREATE_AVATAR_CHARS
         ? input.avatar
         : null;
-    // The bots there before: kept from the first Create of this name while its answer is in doubt.
-    const retrying =
-      previous?.status === "failed" && previous.uncertain && previous.name === name && this.planned
-        ? this.planned.name === name
-        : false;
-    // The state's bot list, which holds at most MAX_BOTS.
-    if (!retrying) this.before.splice(0, this.before.length, ...ctx.bots().map((bot) => bot.id));
-    this.planned = {
-      name,
-      botId: null,
-      ref,
-      effort: input.effort,
-      intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
-    };
+    this.planned.clear();
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1149,53 +1564,69 @@ export class AccountsEngine {
         botId: null,
         error: null,
         missing: [],
-        uncertain: false,
+        attempt: input.attempt,
       },
     }));
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = setTimeout(() => {
       ctx.update((a) =>
-        a.creation && (a.creation.status === "creating" || a.creation.status === "checking")
-          ? { ...a, creation: { ...a.creation, slow: true } }
-          : a,
+        a.creation?.status === "creating" ? { ...a, creation: { ...a.creation, slow: true } } : a,
       );
     }, SLOW_CREATE_MS);
-    let botId: string | null = null;
-    // After an answer that settled nothing, the bot may exist: look before asking again.
-    if (retrying) botId = await this.findMade(name);
-    if (!botId) {
-      try {
-        const answer = asRecord(
-          await ctx.request("agents.create", {
-            name,
-            model: formatModelRef(ref),
-            ...(avatar ? { avatar } : {}),
-          }),
-        );
-        botId = typeof answer?.agentId === "string" ? answer.agentId : null;
-      } catch (error) {
-        // Only a refusal that establishes nothing was written ends here. Anything else (no
-        // answer, a dropped connection, "saved but not applied") may have made the bot.
-        if (isCertainRefusal(error)) return this.creationFailed(error, false);
-        botId = await this.findMade(name);
-        if (!botId) return this.creationFailed(error, true);
-      }
+    let made: CreatedIdentity | null;
+    try {
+      made = readCreateReply(
+        await this.call(binding, "agents.create", {
+          name,
+          model: formatModelRef(ref),
+          ...(avatar ? { avatar } : {}),
+        }),
+      );
+    } catch (error) {
+      await this.unreserve(reservation);
+      // Only a refusal that establishes nothing was written can be tried again. Anything else (no
+      // answer, a dropped connection, "saved but not applied") may have made a bot, and a bot of
+      // that name found later may be another client's: nothing more is sent for this attempt.
+      if (isCertainRefusal(error)) return this.creationFailed(binding, error);
+      return this.creationUnconfirmed(binding, error);
     }
-    if (!botId)
-      return this.creationFailed(new Error("The gateway did not say which bot it made."), true);
-    this.planned = { ...this.planned, botId };
-    return this.complete(name, botId, ["preference", "fallbacks", "listed", "task"]);
+    if (!made) {
+      await this.unreserve(reservation);
+      return this.creationUnconfirmed(
+        binding,
+        new Error("The gateway's reply didn't name the bot it made and its workspace."),
+      );
+    }
+    const held: HeldBot = { ...reservation, made };
+    const plan: CreatePlan = {
+      held,
+      intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
+    };
+    this.planned.set(made.botId, plan);
+    // Held from here: until its setting reads back as chosen, nothing is sent to it, after a
+    // restart too. Its first read of the config goes now, not after the save: a bot deleted and
+    // made again with the same id, name and workspace before that read can't be told apart from
+    // it on this gateway (docs/decisions.md), and the read comes as early as it can.
+    void this.adopt(reservation, held);
+    return this.complete(binding, plan, ["policy", "preference", "listed", "task"]);
   }
 
   /**
-   * Write what the plan of a Create still lacks for `botId`, in order: the
-   * record of what Clawtrate set, the model with its empty fallback list and
-   * effort, the bot list read back showing it, the first task. What does not
-   * land is reported, and finished by the bot's id.
+   * What a Create still lacks for the bot it made, in order: its command
+   * policy (step 2, then step 3), Clawtrate's record of its account, the bot
+   * list read back showing it, its first task. The first task waits for step
+   * 2's read-back of this plan's bot. The bot is identified again by a fresh
+   * read just before its account's record and before its first task. A bot
+   * that can no longer be identified stops it all: the bot list is read again,
+   * nothing more is sent for it, and the person is offered "Review bots".
    */
-  private async complete(name: string, botId: string, steps: MissingStep[]): Promise<CreatedBot> {
-    const { ctx } = this;
-    const plan = this.planned?.botId === botId ? this.planned : null;
+  private async complete(
+    binding: Binding,
+    plan: CreatePlan,
+    steps: MissingStep[],
+  ): Promise<CreatedBot> {
+    const { made } = plan.held;
+    const botId = made.botId;
     const missing: MissingStep[] = [];
     const errors: string[] = [];
     const failed = (step: MissingStep, words: string, error?: unknown) => {
@@ -1204,162 +1635,798 @@ export class AccountsEngine {
       errors.push(`${words}${why}`);
       this.log(`${botId}: ${words}${why}`);
     };
-    if (steps.includes("preference") && plan) {
-      const error = await this.recordIntent(botId, plan.intent);
-      if (error !== null)
-        failed("preference", "Clawtrate's record of its account was not saved", error);
-    }
-    if (steps.includes("fallbacks")) {
-      try {
-        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false);
-        else
-          await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-            `agents.entries.${botId}.model.fallbacks`,
-          ]);
-        this.unwritten.delete(botId);
-      } catch (error) {
-        this.unwritten.add(botId);
-        if (this.unwritten.size > MAX_ACCOUNTS)
-          this.unwritten.delete(this.unwritten.values().next().value!);
-        failed(
-          "fallbacks",
-          plan?.effort
-            ? "its model with an empty fallback list and its effort were not written"
-            : "its model with an empty fallback list was not written",
-          error,
-        );
+    const left = [...steps];
+    const done = (step: MissingStep) => left.splice(left.indexOf(step), 1);
+    try {
+      if (left.includes("policy")) {
+        if ((await this.writePolicy(binding, plan.held, false)) === "lost")
+          return await this.lostAfterCreate(binding, plan, "done");
+        done("policy");
       }
-    }
-    if (steps.includes("listed")) {
-      // "Created" only once the gateway's bot list shows it.
-      let shown = false;
-      let readError: unknown;
-      try {
-        await ctx.refreshBots();
-        shown = ctx.bots().some((bot) => bot.id === botId);
-      } catch (error) {
-        readError = error;
+      if (left.includes("preference")) {
+        const identified = await this.identified(binding, plan.held);
+        if (identified === "lost" || identified === "changed")
+          return await this.lostAfterCreate(binding, plan, identified);
+        if (identified === "unread") {
+          failed("preference", "the bot couldn't be read again before its account was recorded");
+        } else {
+          if (!this.live(binding)) throw new ConnectionChangedError();
+          const error = await this.recordIntent(botId, plan.intent);
+          if (error !== null)
+            failed("preference", "Clawtrate's record of its account was not saved", error);
+        }
+        done("preference");
       }
-      if (!shown)
-        failed(
-          "listed",
-          readError === undefined
-            ? "the gateway's bot list doesn't show it yet"
-            : "reading the gateway's bot list afterwards failed",
-          readError,
-        );
-    }
-    if (steps.includes("task")) {
-      try {
-        await ctx.createMainTask(botId);
-      } catch (error) {
-        failed("task", "its first task was not made", error);
+      if (left.includes("listed")) {
+        // "Created" only once the gateway's bot list shows it.
+        let shown = false;
+        let readError: unknown;
+        try {
+          const list = await this.refreshBotsOn(binding);
+          shown = this.ctx.bots().some((bot) => bot.id === botId);
+          this.readReported(botId, list);
+        } catch (error) {
+          rethrowChanged(error);
+          readError = error;
+        }
+        if (!shown)
+          failed(
+            "listed",
+            readError === undefined
+              ? "the gateway's bot list doesn't show it yet"
+              : "reading the gateway's bot list afterwards failed",
+            readError,
+          );
+        done("listed");
       }
+      // Nothing goes to the bot, its first task included, until step 2 reads back for this bot.
+      if (left.includes("task")) {
+        if (plan.held.restrictive && !plan.held.taskMade) {
+          const identified = await this.identified(binding, plan.held);
+          if (identified === "lost" || identified === "changed")
+            return await this.lostAfterCreate(binding, plan, identified);
+          if (identified === "unread") {
+            failed("task", "the bot couldn't be read again before its first task");
+          } else {
+            try {
+              await this.firstTask(binding, plan.held);
+            } catch (error) {
+              rethrowChanged(error);
+              failed("task", "its first task was not made", error);
+            }
+          }
+        }
+        done("task");
+      }
+    } catch (error) {
+      if (!(error instanceof ConnectionChangedError)) throw error;
+      // The connection changed: what is left is finished by the bot's id, on a later connection
+      // to the same gateway, or not at all.
+      for (const step of left)
+        failed(step, "the connection changed before Clawtrate finished", undefined);
     }
-    return this.settleCreation(name, botId, missing, errors);
+    return this.settleCreation(binding, plan, missing, errors);
   }
 
-  /** The creation's end: created, or partial with what it lacks. */
-  private async settleCreation(
-    name: string,
-    botId: string,
-    missing: MissingStep[],
-    errors: string[],
-  ): Promise<CreatedBot> {
-    if (this.slowTimer) clearTimeout(this.slowTimer);
-    this.slowTimer = null;
-    this.ctx.update((a) => ({
-      ...a,
-      creation: {
-        name,
-        status: missing.length > 0 ? "partial" : "created",
-        slow: false,
-        botId,
-        error:
-          errors.length > 0
-            ? this.scrub(`${name} was created, but ${errors.join(", and ")}.`)
-            : null,
-        missing,
-        uncertain: false,
-      },
-    }));
-    await this.load();
-    return { botId, missing };
+  /** The new bot's first, empty task, "Main", once step 2 has read back for it. */
+  private async firstTask(binding: Binding, held: HeldBot): Promise<void> {
+    if (!held.restrictive) return;
+    if (!this.live(binding)) throw new ConnectionChangedError();
+    await this.ctx.createMainTask(held.made.botId);
+    held.taskMade = true;
+    if (this.isHeld(held)) await this.persist();
   }
 
   /**
-   * The bot a create may have made: once connected, read the list and find a
-   * bot of that name that was not there before the first Create of it. Never
-   * one that was: without what was there before, nothing is found.
+   * A fresh read just before the record of a bot's account or its first task:
+   * "ok" while its entry is there, carries the name and workspace Create
+   * answered with, and is the entry Clawtrate last identified; "lost" when it
+   * is gone or carries another name or workspace; "changed" when it carries
+   * them but isn't the entry Clawtrate last read; "unread" when no valid
+   * config was read.
    */
-  private async findMade(name: string): Promise<string | null> {
-    const { ctx } = this;
-    ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
-    const before = new Set(this.before);
-    // Until a read of the list succeeds, within the deadline: an answer lost to a dropped
-    // connection is often followed by a reconnect, and a read made during it is not an answer.
-    for (let tries = 0; tries < 150; tries += 1) {
-      if (ctx.connected()) {
-        try {
-          await ctx.refreshBots();
-          return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
-        } catch {
-          // Not read: try again once the connection is back.
-        }
-      }
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+  private async identified(
+    binding: Binding,
+    held: HeldBot,
+  ): Promise<"ok" | "lost" | "changed" | "unread"> {
+    let read: RawRecord | null;
+    try {
+      read = asRecord(await this.call(binding, "config.get", {}));
+    } catch (error) {
+      rethrowChanged(error);
+      this.log(`${held.made.botId}: the config could not be read again: ${errorText(error)}`);
+      return "unread";
     }
+    if (read?.valid !== true) return "unread";
+    const config = asRecord(read.config);
+    if (entryProblem(config, held.made) !== null) return "lost";
+    if (held.seen !== null && entryPrint(configEntry(config, held.made.botId)) !== held.seen)
+      return "changed";
+    return "ok";
+  }
+
+  /**
+   * After Create: the bot can't be identified, and nothing more is sent for
+   * it. Gone or another bot: its record and note go. Changed: it stays held.
+   * The bot list is read again, and the person reviews it.
+   */
+  private async lostAfterCreate(
+    binding: Binding,
+    plan: CreatePlan,
+    why: "lost" | "changed" | "done",
+  ): Promise<never> {
+    if (why === "lost") await this.lose(binding, plan.held);
+    if (why === "changed") await this.suspect(binding, plan.held);
+    await this.refreshBotsOn(binding).catch(rethrowChanged);
+    return this.identityLost(binding, plan);
+  }
+
+  /** The bot Create made is gone or another is at its id: nothing more is sent for it. */
+  private identityLost(binding: Binding, plan: CreatePlan): never {
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    this.planned.delete(plan.held.made.botId);
+    const error = new Error(
+      `${plan.held.made.name} changed on the gateway before Clawtrate finished setting it up. Nothing more was sent to it.`,
+    );
+    if (this.shown(binding))
+      this.ctx.update((a) => ({
+        ...a,
+        creation: a.creation
+          ? { ...a.creation, status: "unconfirmed", slow: false, error: error.message }
+          : null,
+      }));
+    throw error;
+  }
+
+  /** The reported default command policy for a bot with a note, from a read of `agents.list`. */
+  private readReported(botId: string, list: unknown): void {
+    if (!this.noteOf(botId)) return;
+    const agents = asRecord(list)?.agents;
+    const agent = Array.isArray(agents)
+      ? agents.map(asRecord).find((each) => each?.id === botId)
+      : undefined;
+    if (!agent) return;
+    this.setNote(botId, { reported: readReportedLabel(agent) });
+  }
+
+  /**
+   * Steps 2 and 3 for a held bot, each one hash-guarded write read back
+   * before the next. `again`: "Write it again", which repeats only what did
+   * not read back, for the same id, and never Create. "lost": the bot can no
+   * longer be identified and nothing more is sent for it: gone or another
+   * bot, its record and note are gone; changed since Clawtrate last read it,
+   * it stays held without "Write it again".
+   */
+  private async writePolicy(
+    binding: Binding,
+    held: HeldBot,
+    again: boolean,
+  ): Promise<"done" | "lost"> {
+    if (!this.isHeld(held)) return "done";
+    const { made } = held;
+    // What was read is shown only while its connection is the open one: after a close the note
+    // waits for the next connection's read (`onClose`, `refreshPolicies`).
+    const show = (change: Partial<NewBotPolicy>) => {
+      this.noteWrites += 1;
+      if (this.live(binding)) this.setNote(made.botId, change);
+    };
+    // A new write: both facts are cleared until they are read again.
+    if (this.shown(binding)) this.putNote(this.unreadNote(held));
+    if (!held.restrictive) {
+      let deny: string[] | null = null;
+      const step2 = await this.guardedWrite(
+        binding,
+        held,
+        (config) => {
+          deny = restrictiveDeny(config);
+          if (!deny) return null;
+          const entry: RawRecord = {
+            tools: { exec: { mode: "deny" }, deny },
+            model: { primary: held.primary, fallbacks: [] },
+          };
+          if (held.effort) entry.thinkingDefault = held.effort;
+          return {
+            patch: { agents: { entries: { [made.botId]: entry } } },
+            replacePaths: [
+              `agents.entries.${made.botId}.tools.deny`,
+              `agents.entries.${made.botId}.model.fallbacks`,
+            ],
+          };
+        },
+        (entry) => deny !== null && restrictiveReadBack(entry, deny, held.primary),
+      );
+      if (step2.outcome === "lost") return this.lose(binding, held);
+      if (step2.outcome === "changed") return this.suspect(binding, held);
+      if (step2.outcome !== "confirmed") {
+        if (!again) {
+          this.unwritten.add(made.botId);
+          if (this.unwritten.size > MAX_ACCOUNTS)
+            this.unwritten.delete(this.unwritten.values().next().value!);
+        }
+        await this.persist();
+        show({
+          status: "restrictive",
+          saved: step2.saved,
+          missingDeny: step2.missingDeny,
+          retryable: step2.retryable,
+        });
+        return "done";
+      }
+      this.unwritten.delete(made.botId);
+      held.restrictive = true;
+      await this.persist();
+      show({ restrictive: true, saved: "deny", missingDeny: [] });
+    }
+    const step3 = await this.guardedWrite(
+      binding,
+      held,
+      () => ({
+        patch: {
+          agents: {
+            entries: {
+              [made.botId]: { tools: { exec: { mode: held.chosen }, deny: [...FINAL_DENY] } },
+            },
+          },
+        },
+        replacePaths: [`agents.entries.${made.botId}.tools.deny`],
+      }),
+      (entry) => chosenReadBack(entry, held.chosen),
+    );
+    if (step3.outcome === "lost") return this.lose(binding, held);
+    if (step3.outcome === "changed") return this.suspect(binding, held);
+    if (step3.outcome === "confirmed") {
+      await this.release(held);
+      show({ status: "confirmed", saved: step3.saved, missingDeny: [], retryable: false });
+    } else {
+      await this.persist();
+      show({
+        status: "unconfirmed",
+        saved: step3.saved,
+        missingDeny: step3.missingDeny,
+        retryable: step3.retryable,
+      });
+    }
+    return "done";
+  }
+
+  /** A held bot that can no longer be identified: its record and its note go. */
+  /**
+   * A held bot whose entry, at its id and with its name and workspace, isn't
+   * the one Clawtrate last read: another write changed it, perhaps another
+   * bot made in its place. Nothing more is written to it, and it stays held,
+   * held again if its setting had read back, until a read shows what was chosen.
+   */
+  private async suspect(binding: Binding, held: HeldBot): Promise<"lost"> {
+    this.noteWrites += 1;
+    this.log(
+      `${held.made.botId}: its entry changed since Clawtrate last read it; held, not written`,
+    );
+    if (!this.isHeld(held)) this.held.set(heldKey(held), held);
+    await this.persist();
+    if (this.shown(binding))
+      this.putNote({
+        ...this.unreadNote(held),
+        status: held.restrictive ? "unconfirmed" : "restrictive",
+      });
+    return "lost";
+  }
+
+  private async lose(binding: Binding, held: HeldBot): Promise<"lost"> {
+    this.noteWrites += 1;
+    this.log(`${held.made.botId}: no longer the bot Create made; nothing more is sent for it`);
+    await this.release(held);
+    if (this.shown(binding)) this.dropNote(held.made.botId);
+    return "lost";
+  }
+
+  /**
+   * One `config.patch` to a held bot, guarded by the hash of the `config.get`
+   * just before it, then read back. It writes nothing when that read has no
+   * hash or the gateway says its config is invalid. When the bot's entry is
+   * gone, no longer carries the name and workspace Create answered with, or is
+   * not the entry Clawtrate last read (`seen`), the bot is lost: another write
+   * changed it, and matching names are no proof it is the same one. A
+   * revision the gateway hasn't applied reads back as nothing. After anything
+   * but a confirmed read-back, a fresh read says what the bot's mode now is
+   * and whether a further write may be offered.
+   */
+  private async guardedWrite(
+    binding: Binding,
+    held: HeldBot,
+    build: (config: RawRecord | null) => { patch: RawRecord; replacePaths: string[] } | null,
+    readBack: (entry: RawRecord | null) => boolean,
+  ): Promise<{
+    outcome: "confirmed" | "unconfirmed" | "stopped" | "lost" | "changed";
+    saved: string | null;
+    missingDeny: string[];
+    retryable: boolean;
+  }> {
+    const { made } = held;
+    const fresh = async (outcome: "unconfirmed" | "stopped") => {
+      const unread = { outcome, saved: null, missingDeny: [], retryable: false };
+      if (outcome === "stopped") await this.refreshBotsOn(binding).catch(rethrowChanged);
+      let now: RawRecord | null;
+      try {
+        now = asRecord(await this.call(binding, "config.get", {}));
+      } catch (error) {
+        rethrowChanged(error);
+        return unread;
+      }
+      // An invalid config is answered empty: it says nothing of the bot.
+      if (now?.valid !== true) return unread;
+      const config = asRecord(now.config);
+      if (entryProblem(config, made) !== null)
+        return { outcome: "lost" as const, saved: null, missingDeny: [], retryable: false };
+      const entry = configEntry(config, made.botId);
+      // No read identified the bot before this one, so nothing was written to it: this read is its
+      // first, as Create's own first read would have been.
+      if (held.seen === null) {
+        held.seen = entryPrint(entry);
+        if (this.isHeld(held)) await this.persist();
+      }
+      return {
+        outcome,
+        saved: savedMode(entry),
+        missingDeny: missingDeny(entry),
+        // Offered again only while the bot's entry is the one Clawtrate last read.
+        retryable:
+          typeof now.hash === "string" && now.hash.length > 0 && entryPrint(entry) === held.seen,
+      };
+    };
+    let before: RawRecord | null;
+    try {
+      before = asRecord(await this.call(binding, "config.get", {}));
+    } catch (error) {
+      rethrowChanged(error);
+      this.log(`${made.botId}: the config could not be read before writing: ${errorText(error)}`);
+      return fresh("unconfirmed");
+    }
+    if (before?.valid !== true) {
+      this.log(`${made.botId}: not written: the gateway says its config is invalid`);
+      return fresh("stopped");
+    }
+    const config = asRecord(before.config);
+    const hash = typeof before?.hash === "string" && before.hash ? before.hash : null;
+    const entry = configEntry(config, made.botId);
+    const problem = entryProblem(config, made);
+    const changed = !problem && held.seen !== null && entryPrint(entry) !== held.seen;
+    if (problem || changed) {
+      this.log(`${made.botId}: not written: ${problem ?? "its entry changed since it was read"}`);
+      await this.refreshBotsOn(binding).catch(rethrowChanged);
+      return {
+        outcome: problem ? "lost" : "changed",
+        saved: null,
+        missingDeny: [],
+        retryable: false,
+      };
+    }
+    held.seen = entryPrint(entry);
+    if (!hash) {
+      this.log(`${made.botId}: not written: the config has no hash`);
+      return fresh("stopped");
+    }
+    const write = build(config);
+    if (!write) {
+      this.log(`${made.botId}: not written: the config's tool servers could not all be named`);
+      return fresh("stopped");
+    }
+    try {
+      await this.call(binding, "config.patch", {
+        raw: JSON.stringify(write.patch),
+        baseHash: hash,
+        replacePaths: write.replacePaths,
+      });
+    } catch (error) {
+      rethrowChanged(error);
+      // A changed hash is a conflict: nothing was written, and the bot list is read again.
+      this.log(`${made.botId}: the write was refused: ${errorText(error)}`);
+      return fresh(isCertainRefusal(error) ? "stopped" : "unconfirmed");
+    }
+    let after: RawRecord | null;
+    try {
+      after = await this.appliedAfter(binding, before);
+    } catch (error) {
+      rethrowChanged(error);
+      this.log(`${made.botId}: the write could not be read back: ${errorText(error)}`);
+      return fresh("unconfirmed");
+    }
+    const now = asRecord(after?.config);
+    const written = configEntry(now, made.botId);
+    if (
+      after?.valid === true &&
+      !unapplied(after) &&
+      entryProblem(now, made) === null &&
+      readBack(written)
+    ) {
+      held.seen = entryPrint(written);
+      return { outcome: "confirmed", saved: savedMode(written), missingDeny: [], retryable: false };
+    }
+    return fresh("unconfirmed");
+  }
+
+  /**
+   * The config once the gateway applied the write that followed `before`: the
+   * first `config.get` whose revision moved and is applied, or the read after
+   * three seconds with no new revision (a write that changed nothing).
+   */
+  private async appliedAfter(
+    binding: Binding,
+    before: RawRecord | null,
+  ): Promise<RawRecord | null> {
+    const started = this.ctx.now();
+    let now = asRecord(await this.call(binding, "config.get", {}));
+    if (before?.configRevisionHash === undefined) return now;
+    for (let reads = 1; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
+      const revised = now?.configRevisionHash !== before.configRevisionHash;
+      if (revised && now?.appliedConfigHash === now?.configRevisionHash) return now;
+      if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return now;
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+      now = asRecord(await this.call(binding, "config.get", {}));
+    }
+    return now;
+  }
+
+  /**
+   * "Write it again" for a held bot: offered only while a fresh read still
+   * identifies it, its entry is the one Clawtrate last read, and the config
+   * has a hash. It repeats what did not read back (step 2 and step 3, or step
+   * 3 alone) for that id, never Create, then reads the bot list and makes the
+   * first task if it waited. It runs on the connection it was asked on.
+   */
+  async retryPolicy(botId: string): Promise<void> {
+    this.requireAdmin("Changing a bot's settings");
+    const note = this.noteOf(botId);
+    const held = this.heldFor(botId);
+    if (!note || !held || note.status === "confirmed" || note.status === "checking")
+      throw new Error("There is nothing to write again for that bot.");
+    if (!note.retryable)
+      throw new Error("Clawtrate can't identify that bot in the gateway's settings any more.");
+    const binding = this.bind();
+    try {
+      if ((await this.writePolicy(binding, held, true)) === "lost") {
+        await this.refreshBotsOn(binding).catch(rethrowChanged);
+        throw new Error("Clawtrate can't identify that bot in the gateway's settings any more.");
+      }
+      try {
+        this.readReported(botId, await this.refreshBotsOn(binding));
+      } catch (error) {
+        rethrowChanged(error);
+        this.log(`${botId}: the bot list could not be read: ${errorText(error)}`);
+      }
+      if (held.restrictive && !held.taskMade) {
+        // Identified again just before: a bot replaced since the writes gets no task.
+        const identified = await this.identified(binding, held);
+        if (identified === "lost" || identified === "changed") {
+          if (identified === "lost") await this.lose(binding, held);
+          else await this.suspect(binding, held);
+          await this.refreshBotsOn(binding).catch(rethrowChanged);
+          throw new Error("Clawtrate can't identify that bot in the gateway's settings any more.");
+        }
+        if (identified === "unread") this.log(`${botId}: not read again; its first task waits`);
+        else
+          try {
+            await this.firstTask(binding, held);
+          } catch (error) {
+            rethrowChanged(error);
+            this.log(`${botId}: its first task was not made: ${errorText(error)}`);
+          }
+      }
+    } catch (error) {
+      if (error instanceof ConnectionChangedError)
+        throw new Error(
+          "The connection changed before Clawtrate finished. Nothing more was sent.",
+          {
+            cause: error,
+          },
+        );
+      throw error;
+    }
+  }
+
+  /**
+   * Read the new bots' settings again, for their notes and for the bots held
+   * on this gateway: what is saved for each, then the reported label from a
+   * bot list read after it. A held bot whose valid read shows what was chosen
+   * is settled; one a valid read shows gone or replaced is dropped. A failed
+   * or invalid read settles nothing and clears what the notes said.
+   */
+  refreshPolicies(): Promise<void> {
+    if (this.policyRead) {
+      this.policyReadAgain = true;
+      return this.policyRead;
+    }
+    this.policyRead = (async () => {
+      try {
+        do {
+          this.policyReadAgain = false;
+          await this.readPolicies();
+        } while (this.policyReadAgain);
+      } finally {
+        this.policyRead = null;
+      }
+    })();
+    return this.policyRead;
+  }
+
+  private async readPolicies(): Promise<void> {
+    const gateway = this.ctx.connection().gateway;
+    if (!gateway || !this.ctx.connected()) return;
+    // What this read judges, as it stands before it is sent: a note or a held bot that comes
+    // after it is not taken for gone, and a write in between leaves its answer unused.
+    const checked = this.notes().map((note) => {
+      const held = this.heldFor(note.botId);
+      const made = held?.made ?? { botId: note.botId, name: note.name, workspace: note.workspace };
+      return { note: note as NewBotPolicy | null, held, made, chosen: held?.chosen ?? note.chosen };
+    });
+    for (const held of this.held.values())
+      if (sameGateway(held, gateway) && !checked.some((each) => each.held === held))
+        checked.push({ note: null, held, made: held.made, chosen: held.chosen });
+    if (checked.length === 0) return;
+    const binding = this.bind();
+    const writes = this.noteWrites;
+    const current = () => this.live(binding) && this.noteWrites === writes;
+    let now: RawRecord | null;
+    try {
+      now = asRecord(await this.call(binding, "config.get", {}));
+    } catch (error) {
+      if (error instanceof ConnectionChangedError) return;
+      this.log(`the new bots' settings could not be read: ${errorText(error)}`);
+      if (current()) this.unverified(checked.map((each) => each.made.botId));
+      return;
+    }
+    if (!current()) return;
+    // OpenClaw answers an invalid config as empty: no bot is gone by it.
+    const config = now?.valid === true ? asRecord(now.config) : null;
+    if (!config) {
+      this.log("the new bots' settings were not read: the gateway says its config is invalid");
+      this.unverified(checked.map((each) => each.made.botId));
+      return;
+    }
+    // Saved but not applied yet: what it shows isn't in force, and settles nothing.
+    const inForce = !unapplied(now);
+    const hashed = typeof now?.hash === "string" && now.hash.length > 0;
+    let save = false;
+    for (const { note, held, made, chosen } of checked) {
+      const botId = made.botId;
+      if (held && !this.isHeld(held)) continue;
+      if (entryProblem(config, made) !== null) {
+        if (held) save = this.held.delete(heldKey(held)) || save;
+        if (note) this.dropNote(botId);
+        continue;
+      }
+      const entry = configEntry(config, botId);
+      // A held bot no read had identified yet, with nothing written: this read is its first.
+      if (held && held.seen === null && !held.restrictive) {
+        held.seen = entryPrint(entry);
+        save = true;
+      }
+      const confirmed = inForce && chosenHolds(entry, chosen);
+      // Step 2 as Clawtrate writes it, whose answer was lost: it landed, and step 3 may follow.
+      const deny =
+        held && !held.restrictive && !confirmed && inForce ? restrictiveDeny(config) : null;
+      if (held && deny && restrictiveReadBack(entry, deny, held.primary)) {
+        held.restrictive = true;
+        held.seen = entryPrint(entry);
+        save = true;
+      }
+      // Settled only by a read that shows what was chosen, for that bot.
+      if (confirmed && held) save = this.held.delete(heldKey(held)) || save;
+      if (!note) continue;
+      const restrictive = held ? held.restrictive : note.restrictive;
+      this.setNote(botId, {
+        status: confirmed ? "confirmed" : restrictive ? "unconfirmed" : "restrictive",
+        restrictive,
+        saved: savedMode(entry),
+        missingDeny: missingDeny(entry),
+        // The label is read again after this read, and belongs to it alone.
+        reported: null,
+        retryable: !confirmed && !!held && hashed && entryPrint(entry) === held.seen,
+      });
+    }
+    if (save) await this.persist();
+    if (!current()) return;
+    let list: unknown;
+    try {
+      list = await this.refreshBotsOn(binding);
+    } catch (error) {
+      if (!(error instanceof ConnectionChangedError))
+        this.log(`the new bots' reported policies could not be read: ${errorText(error)}`);
+      return;
+    }
+    if (!current()) return;
+    for (const { note, made } of checked) if (note) this.readReported(made.botId, list);
+  }
+
+  /** A read that settles nothing: what these notes said is cleared, and none is confirmed by it. */
+  private unverified(botIds: string[]): void {
+    this.ctx.update((a) => ({
+      ...a,
+      policies: a.policies.map((note) =>
+        botIds.includes(note.botId)
+          ? {
+              ...note,
+              status: note.status === "confirmed" ? "checking" : note.status,
+              saved: null,
+              missingDeny: [],
+              reported: null,
+              retryable: false,
+            }
+          : note,
+      ),
+    }));
+  }
+
+  /** The created bot's first message went out: its note has said what it had to. */
+  dismissPolicy(botId: string): void {
+    this.ctx.update((a) => ({
+      ...a,
+      policies: a.policies.filter((note) => note.botId !== botId || note.status !== "confirmed"),
+    }));
+  }
+
+  /**
+   * Why nothing may be sent to a bot yet, or null: a new bot whose saved
+   * command setting hasn't read back as chosen, on this connection's reads or
+   * by the record kept for it.
+   */
+  heldBack(botId: string): string | null {
+    const note = this.noteOf(botId);
+    if (note && note.status !== "confirmed")
+      return `Clawtrate couldn't confirm ${note.name}'s command setting yet. Nothing was sent.`;
+    const held = this.heldFor(botId);
+    if (held)
+      return `Clawtrate couldn't confirm ${held.made.name}'s command setting yet. Nothing was sent.`;
     return null;
   }
 
   /**
-   * Finish a bot whose creation is partial, by its id: write what is missing
-   * (the record of its account, its model with the empty fallback list and
-   * effort, the bot list showing it, the first task), never create it again.
+   * Why no task may be made for a bot yet, or null: a new bot whose step 2
+   * hasn't read back. Its first task comes from Create, after step 2.
+   */
+  taskHeldBack(botId: string): string | null {
+    const held = this.heldFor(botId);
+    if (held && !held.restrictive)
+      return `Clawtrate couldn't confirm ${held.made.name}'s settings yet. Nothing was sent.`;
+    return null;
+  }
+
+  /**
+   * What New bot's Approvals step says of the gateway's approvals file
+   * (`exec.approvals.get`, admin): whether it blocks commands for a bot of this
+   * name. Only that is kept; the file is not.
+   */
+  async approvalsFile(name: string): Promise<{ blocks: boolean }> {
+    this.requireAdmin("Reading the gateway's approvals file");
+    try {
+      const snapshot = await this.ctx.request("exec.approvals.get", {});
+      return { blocks: approvalsFileBlocks(snapshot, likelyBotId(name.trim() || "New bot")) };
+    } catch (error) {
+      this.log(`the gateway's approvals file could not be read: ${errorText(error)}`);
+      return { blocks: false };
+    }
+  }
+
+  /**
+   * The creation's end: created, or partial with what it lacks; published only
+   * while the screen shows the gateway it was made on. With nothing left to
+   * finish, its plan goes.
+   */
+  private async settleCreation(
+    binding: Binding,
+    plan: CreatePlan,
+    missing: MissingStep[],
+    errors: string[],
+  ): Promise<CreatedBot> {
+    const { name, botId } = plan.held.made;
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    if (missing.length === 0) this.planned.delete(botId);
+    if (this.shown(binding)) {
+      this.ctx.update((a) => ({
+        ...a,
+        creation: {
+          name,
+          status: missing.length > 0 ? "partial" : "created",
+          slow: false,
+          botId,
+          error:
+            errors.length > 0
+              ? this.scrub(`${name} was created, but ${errors.join(", and ")}.`)
+              : null,
+          missing,
+          attempt: a.creation?.attempt ?? null,
+        },
+      }));
+    }
+    if (this.live(binding)) await this.load();
+    return { botId, missing };
+  }
+
+  /**
+   * Finish a bot whose creation is partial, by its id, on the gateway that
+   * made it: write what is missing (its policy, the record of its account, the
+   * bot list showing it, the first task), never create it again.
    */
   async finishBot(botId: string): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const creation = this.ctx.get().creation;
+    const binding = this.bind();
+    const plan = this.planned.get(botId);
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
+    // The gateway that made it, by its identity, on whichever connection to it is open now.
+    const gateway = this.ctx.connection().gateway;
+    if (
+      !plan ||
+      !gateway ||
+      !sameGateway(plan.held, gateway) ||
+      (plan.held.gatewayId !== null && gateway.id === null)
+    )
+      throw new Error("Clawtrate can't finish that bot from here. Review the gateway's bot list.");
     this.ctx.update((a) =>
       a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
     );
-    return this.complete(creation.name, botId, creation.missing);
+    return this.complete(binding, plan, creation.missing);
   }
 
-  private creationFailed(error: unknown, uncertain: boolean): never {
+  /** A refusal that establishes nothing was made: Create may be tried again. */
+  private creationFailed(binding: Binding, error: unknown): never {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
-    const name = this.ctx.get().creation?.name ?? "the bot";
-    this.ctx.update((a) => ({
-      ...a,
-      creation: a.creation
-        ? {
-            ...a.creation,
-            status: "failed",
-            slow: false,
-            uncertain,
-            error: uncertain
-              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}), and Clawtrate found no new bot of that name. Create again looks for it first.`
-              : errorText(error),
-          }
-        : null,
-    }));
+    if (this.shown(binding))
+      this.ctx.update((a) => ({
+        ...a,
+        creation: a.creation
+          ? { ...a.creation, status: "failed", slow: false, error: this.scrub(errorText(error)) }
+          : null,
+      }));
     throw error instanceof Error ? error : new Error(String(error));
   }
 
-  /** Forget a creation that has settled. */
-  dismissCreation(): void {
+  /** A reply that settles nothing: the bot may exist, and nothing more is sent for it. */
+  private creationUnconfirmed(binding: Binding, error: unknown): never {
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    this.log(`agents.create did not confirm what it made: ${errorText(error)}`);
+    if (this.shown(binding))
+      this.ctx.update((a) => ({
+        ...a,
+        creation: a.creation
+          ? {
+              ...a.creation,
+              status: "unconfirmed",
+              slow: false,
+              error: this.scrub(errorText(error)),
+            }
+          : null,
+      }));
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+
+  /**
+   * Forget a creation that has settled; "Review bots" reads the bot list
+   * again. With `attempt`, only that attempt's outcome goes.
+   */
+  dismissCreation(attempt: string | null = null): void {
+    const creation = this.ctx.get().creation;
+    if (attempt !== null && creation?.attempt !== attempt) return;
+    const unconfirmed = creation?.status === "unconfirmed";
     this.ctx.update((a) =>
       a.creation &&
       (a.creation.status === "failed" ||
+        a.creation.status === "unconfirmed" ||
         a.creation.status === "created" ||
         // The person chose to open the bot as it is; its Account page still says what is missing.
         a.creation.status === "partial")
         ? { ...a, creation: null }
         : a,
     );
+    if (creation && creation.status !== "creating") this.planned.clear();
+    if (unconfirmed && this.ctx.connected())
+      void this.ctx.refreshBots().catch((error: unknown) => {
+        this.log(`the bot list could not be read: ${errorText(error)}`);
+      });
   }
 
   /** The bot's model with its account and `fallbacks: []`, and its effort, in one patch. */
@@ -1521,6 +2588,13 @@ export class AccountsEngine {
       // Only once a screen has asked: the accounts are read for the screens that show them.
       void this.load();
     }
+    // The held bots of this gateway, kept across restarts, get their notes; every note is read.
+    const gateway = this.ctx.connection().gateway;
+    if (gateway)
+      for (const held of this.held.values())
+        if (sameGateway(held, gateway) && !this.noteOf(held.made.botId))
+          this.putNote(this.unreadNote(held));
+    void this.refreshPolicies();
   }
 
   /** The connection went: what waits on it is let go. */
@@ -1532,6 +2606,58 @@ export class AccountsEngine {
       this.setSignIn(signIn.id, { stage: "ended", step: null, cancelling: false, saving: false });
     // A sign-in ends with its connection: what it was given goes with it.
     this.forgetSecrets();
+    // What the new bots' notes said was read on that connection: cleared until read again, and
+    // their composers wait meanwhile.
+    if (this.notes().length > 0)
+      this.ctx.update((a) => ({
+        ...a,
+        policies: a.policies.map((note) => ({
+          ...note,
+          status: "checking",
+          saved: null,
+          missingDeny: [],
+          reported: null,
+          retryable: false,
+        })),
+      }));
+    // Nor does the first-bot prompt outlive the reads that showed it.
+    this.firstBotFailed();
+  }
+
+  /** A read of the bot list failed, or the connection went: no first-bot prompt from older reads. */
+  firstBotFailed(): void {
+    this.firstBotChecks += 1;
+    if (this.ctx.get().firstBot.status !== "roster")
+      this.ctx.update((a) => ({ ...a, firstBot: { status: "unknown", mainPolicy: null } }));
+  }
+
+  /**
+   * Whether the app opens on "Make your first bot" (bots.md section 3): from
+   * a read of `agents.list` that shows only an unnamed `main`, the config and
+   * that bot's complete session list are read too, and only reads that all
+   * succeed and agree make it so. Anything else is the normal roster.
+   */
+  async checkFirstBot(list: unknown): Promise<void> {
+    const issued = ++this.firstBotChecks;
+    const binding = this.bind();
+    // Only the latest check's answer, and only on the connection it read.
+    const settle = (firstBot: ReturnType<typeof readFirstBot>) => {
+      if (issued === this.firstBotChecks && this.live(binding))
+        this.ctx.update((a) => ({ ...a, firstBot }));
+    };
+    if (!implicitMain(list)) return settle({ status: "roster", mainPolicy: null });
+    // Until the reads agree, the normal roster.
+    settle({ status: "unknown", mainPolicy: null });
+    try {
+      const [config, sessions] = await Promise.all([
+        this.call(binding, "config.get", {}),
+        this.call(binding, "sessions.list", MAIN_SESSIONS_PARAMS),
+      ]);
+      settle(readFirstBot(list, config, sessions));
+    } catch (error) {
+      this.log(`the first-bot reads failed: ${errorText(error)}`);
+      settle({ status: "roster", mainPolicy: null });
+    }
   }
 
   /** Another gateway: nothing read from this one is kept. */
@@ -1540,6 +2666,8 @@ export class AccountsEngine {
     this.kinds.clear();
     this.intents.clear();
     this.unwritten.clear();
+    // A Create's plan belongs to its gateway; the held bots stay, each kept for its own gateway.
+    this.planned.clear();
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
   }

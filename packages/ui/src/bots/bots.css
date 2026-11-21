@@ -1380,3 +1380,41 @@ button.b-open > .icon {
   width: 100%;
   resize: vertical;
 }
+
+/* The Approvals step's line about the approvals file, when the file blocks commands. */
+.b-hint[data-tone="warn"] {
+  color: var(--warn);
+}
+
+/* The first-bot prompt below admin: its two lines, then the access bar (bots.md section 3). */
+.first-bot-below {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  width: min(100%, 420px);
+  margin-top: var(--space-4);
+}
+
+.first-bot-below .access-bar {
+  width: 100%;
+}
+
+/* A new bot's command setting, as read, above its composer (controls.md section 10). */
+.policy-note {
+  flex: none;
+  padding: 0 var(--space-5) var(--space-2);
+}
+
+.policy-note > .b-note {
+  max-width: calc(var(--transcript-max) - 2 * var(--space-5));
+  margin: 0 auto;
+}
+
+/* A new bot's composer, closed until its command setting reads back as chosen. */
+.composer[data-held] .composer-box {
+  opacity: 0.55;
+}
+
+.composer[data-held] .composer-input {
+  cursor: not-allowed;
+}
