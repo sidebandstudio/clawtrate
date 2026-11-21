@@ -3,6 +3,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import { MAX_FRAME_BYTES, MAX_INPUT_TEXT, MAX_QUEUED_INPUTS } from "../src/computer.ts";
+import { CLIENT_OWNERS } from "../src/owners.ts";
 import { KEY, openTask } from "./client-harness.ts";
 
 describe("closing a task with the Computer tab shown", () => {
@@ -20,5 +22,15 @@ describe("closing a task with the Computer tab shown", () => {
     expect(leave).toHaveBeenCalledWith(id);
     viewer.dispose();
     client.stop();
+  });
+});
+
+describe("the Computer tab's part of the host's worst case (owners.ts)", () => {
+  it("counts each queued text input as JSON writes it, control characters included", () => {
+    const each = CLIENT_OWNERS["computer.lives"]!.each;
+    // The worst text a viewer can queue: every character escaped as `\u0001`.
+    const worst = JSON.stringify("\u0001".repeat(MAX_INPUT_TEXT)).length;
+    const frame = Math.ceil(MAX_FRAME_BYTES / 3) * 4;
+    expect(each - frame).toBeGreaterThanOrEqual(MAX_QUEUED_INPUTS * worst);
   });
 });
