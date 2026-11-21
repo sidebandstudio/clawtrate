@@ -6,7 +6,7 @@
 // are made up (apps/desktop/src/fixture/routines.ts).
 import type { ClawtrateState, ConnectionState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
 
 const ADMIN = "scene=main&routines=on&access=admin";
 const READ = "scene=main&routines=on";
@@ -209,6 +209,65 @@ test.describe("1440", () => {
     expect((update?.edit as { text: string }).text).toBe(
       "List the three articles worth reading first.",
     );
+  });
+
+  test("F-189: Check now while another gateway connects says it couldn't check, never found or missing", async ({
+    page,
+  }) => {
+    for (const edit of [false, true]) {
+      await open(page, `${ADMIN}&save=noanswer`);
+      const gatewayId = await connectionValue(page, "gatewayId");
+      if (edit) {
+        await row(page, "Morning digest").locator(".r-row-main").click();
+        await view(page).getByRole("button", { name: "Edit", exact: true }).click();
+        await editor(page).getByLabel("Name").fill("Morning digest, short");
+      } else await fillNew(page, "In doubt");
+      await save(page).click();
+      const note = editor(page).getByTestId("editor-unknown");
+      await note.getByRole("button", { name: "Check now" }).click();
+      // A new connection's hello arrives while the check is out; who it is isn't read yet.
+      await setConnection(page, { connectedAt: Date.now() + 5_000, gatewayId: null });
+      await expect(note).toContainText("Couldn't check: Another gateway is connected now.");
+      await expect(note).not.toContainText("now reads as you typed it");
+      await expect(note).not.toContainText("no routine from this form");
+      // The gateway the save went to is back: the same check now confirms it.
+      await setConnection(page, { gatewayId });
+      await note.getByRole("button", { name: "Check again" }).click();
+      if (edit)
+        await expect(note).toContainText("Morning digest, short now reads as you typed it.");
+      else await expect(editor(page)).toHaveCount(0);
+    }
+  });
+
+  test("F-189: a check that reads the old version keeps the save in doubt, and its late answer saves it", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await openPage(page, "Morning digest");
+    await view(page).getByRole("button", { name: "Edit", exact: true }).click();
+    await editor(page).getByLabel("Name").fill("Morning digest, short");
+    // The save is held: the gateway hasn't applied it or answered.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        releaseSave: () => void;
+        clawtrateFixture: { invoke: (command: { type: string }) => Promise<unknown> };
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) =>
+        command.type === "updateRoutine"
+          ? new Promise((resolve) => (w.releaseSave = () => resolve(invoke(command))))
+          : invoke(command);
+    });
+    await save(page).click();
+    await page.clock.fastForward("00:31");
+    const note = editor(page).getByTestId("editor-unknown");
+    await expect(note).toContainText("No answer in 30 seconds.");
+    await note.getByRole("button", { name: "Check now" }).click();
+    await expect(note).toContainText("The gateway still has this routine as it was.");
+    await expect(editor(page).getByTestId("editor-changed")).toHaveCount(0);
+    await page.evaluate(() => (window as unknown as { releaseSave(): void }).releaseSave());
+    await expect(editor(page)).toHaveCount(0);
+    await expect(view(page).getByRole("heading", { name: "Morning digest, short" })).toBeVisible();
   });
 
   test("F-189: while a save is out, Use my version can't swap the draft it sent", async ({

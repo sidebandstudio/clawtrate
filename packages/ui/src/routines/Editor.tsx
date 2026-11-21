@@ -71,6 +71,8 @@ type Check =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "missing" }
+  /** The gateway still has the routine as it was: the save may not have been applied yet. */
+  | { status: "unchanged" }
   /** The gateway's routine reads as this save sent it: maybe this save, maybe the same change made elsewhere. */
   | { status: "matches"; routine: Routine }
   | { status: "failed"; error: string };
@@ -387,7 +389,11 @@ export function Editor({
     at({ status: "checking" });
     try {
       if (mode.mode === "new") {
-        const found = await bridge.invoke({ type: "findCreatedRoutine", key: key.current });
+        const found = await bridge.invoke({
+          type: "findCreatedRoutine",
+          key: key.current,
+          gateway,
+        });
         if (id !== attempt.current) return;
         if (!found) return at({ status: "missing" });
         if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
@@ -399,7 +405,8 @@ export function Editor({
         setSave({ status: "conflict", current: found });
         return;
       }
-      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.routine.id });
+      // `gateway` is the one the save was written to: it never changes once bound.
+      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.routine.id, gateway });
       if (id !== attempt.current) return;
       if (!fresh) {
         setSave({ status: "idle" });
@@ -407,13 +414,17 @@ export function Editor({
         return;
       }
       // Each field this save sent, as it was sent, against the job read back.
-      const wanted = original ? changedFields(original, sent) : [];
-      const differ = changedFields(sent, fieldsOf(fresh)).filter((each) => wanted.includes(each));
-      if (differ.length === 0) at({ status: "matches", routine: fresh });
-      else {
+      const base = original ?? sent;
+      const wanted = changedFields(base, sent);
+      const differ = changedFields(sent, fieldsOf(fresh));
+      if (!differ.some((each) => wanted.includes(each))) at({ status: "matches", routine: fresh });
+      // A field that is neither what the editor opened with nor what this save
+      // sent was changed by someone else. Otherwise the gateway may only not have
+      // applied this save yet, and its answer can still come and settle it.
+      else if (changedFields(base, fieldsOf(fresh)).some((each) => differ.includes(each))) {
         attempt.current += 1;
         setSave({ status: "conflict", current: fresh });
-      }
+      } else at({ status: "unchanged" });
     } catch (error) {
       at({ status: "failed", error: errorText(error) });
     }
@@ -463,6 +474,11 @@ export function Editor({
             <>
               <strong>{c.routine.name} now reads as you typed it.</strong> That may be your save, or
               the same change made elsewhere.
+            </>
+          ) : c.status === "unchanged" ? (
+            <>
+              <strong>The gateway still has this routine as it was.</strong> The save may not have
+              arrived yet. Check again in a moment.
             </>
           ) : c.status === "missing" ? (
             <>
