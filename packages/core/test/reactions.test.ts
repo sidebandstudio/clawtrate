@@ -1,6 +1,7 @@
 // Reactions never go backwards (parity F-283): a list or an answer from before a newer event or
 // change does not replace it, and reactions leave with the history they belonged to.
 import { describe, expect, it } from "vitest";
+import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
@@ -147,6 +148,33 @@ describe("reactions (F-283)", () => {
     self.resolve({ profile: { id: "me" } });
     await expect(reacting).rejects.toThrow("That message is no longer shown here.");
     expect(gateway.calls("session.reactions.set")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-283: a reaction that waited for write access is sent once the gateway approves it", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = history(["m1"]);
+    gateway.handlers["users.self"] = () => ({ profile: { id: "me" } });
+    gateway.handlers["session.reactions.list"] = () => ({ reactions: {} });
+    gateway.handlers["session.reactions.set"] = () => ({ reactions: summary("👍", "me") });
+    const approval = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
+    const { client, transcript } = await openTask({ gateway, held: READ_SCOPES });
+    const reacting = client.setReaction(KEY, "m1", "👍", false);
+    await until(() => client.pendingAccessWaiters === 1);
+    // The approval rotates the token, and the client reconnects with it to the same gateway.
+    approval.resolve({
+      status: "approved",
+      requestId: "up-1",
+      deviceToken: "rotated",
+      scopes: [...INTERACTIVE_SCOPES],
+    });
+    await reacting;
+    expect(gateway.calls("session.reactions.set")).toEqual([
+      { sessionKey: KEY, messageId: "m1", emoji: "👍" },
+    ]);
+    expect(transcript().reactions?.m1).toEqual([{ emoji: "👍", count: 1, mine: true }]);
     client.stop();
   });
 });
