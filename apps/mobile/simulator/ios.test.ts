@@ -337,7 +337,10 @@ describe("the iOS app", () => {
     await steps("echoing", [
       ...anotherGateway(),
       ...typeAddress(echo.url, env.token),
-      waitFor({ id: "connect-error-message", text: ".*•••.*" }, 90_000),
+      waitFor(
+        { id: "connect-error-message", text: `.*${lit('"token":"[credential]"')}.*` },
+        90_000,
+      ),
       notSee(`.*${lit(env.token)}.*`),
     ]);
     await shoot("credential-scrubbed");
