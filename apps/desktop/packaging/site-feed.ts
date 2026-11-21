@@ -7,16 +7,22 @@
 // copies the source, reads the repository's releases from GitHub's API, takes
 // the newest published beta that carries both Mac zips, feed.json and
 // latest-mac.json, checks the two files against each other, the release's tag
-// and GitHub's size and digest of each zip, and writes them to
-// <output>/updates/beta/. With no published beta it writes no feed, so a
-// withdrawn first beta leaves none. The Site workflow runs it on every deploy
-// and every release event; docs/development/releases.md has the flow.
+// and GitHub's size and digest of each zip, reads each zip from its release
+// address to check the SHA-512 the app will check, and writes them to
+// <output>/updates/beta/. From the same beta it fills the Mac download page
+// (download/mac/index.html, a template) and requires install.sh to pin that
+// beta's team. With no published beta, a template token left or another
+// team pinned, it fails, so the workflow deploys nothing and the last
+// deployment stays. The Site workflow runs it on every deploy and every
+// release event; docs/development/releases.md has the flow.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import {
   checkBetaFiles,
+  releaseFolder,
   FEED_NAME,
   LATEST_MAC_NAME,
   MAC_ARCHITECTURES,
@@ -30,6 +36,7 @@ export interface ReleaseRow {
   draft: boolean;
   prerelease: boolean;
   target_commitish?: string;
+  body?: string | null;
   assets: Array<{
     id?: number;
     name: string;
@@ -61,6 +68,19 @@ export function newestBeta(rows: readonly ReleaseRow[]): ReleaseRow | null {
     if (!best || isNewer(version, best.version)) best = { row, version };
   }
   return best?.row ?? null;
+}
+
+/** The size and base64 SHA-512 of what an address serves, read as a stream. */
+async function streamedSha512(get: Get, url: string): Promise<{ size: number; sha512: string }> {
+  const response = await get(url, {});
+  if (!response.ok || !response.body) throw new Error(`${url} answered ${response.status}.`);
+  const hash = createHash("sha512");
+  let size = 0;
+  for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+    hash.update(chunk);
+    size += chunk.length;
+  }
+  return { size, sha512: hash.digest("base64") };
 }
 
 async function text(get: Get, url: string, headers: Record<string, string>): Promise<string> {
@@ -102,14 +122,27 @@ export async function writeSiteFeed(
     await text(get, asset(FEED_NAME).browser_download_url, {}),
     await text(get, asset(LATEST_MAC_NAME).browser_download_url, {}),
   );
-  // Each architecture's entries name the zip GitHub holds: its size and its digest.
-  const feed = JSON.parse(files.feed) as { files: Record<string, { size: number }> };
+  // Each architecture's entries name the zip GitHub holds: its size and digest
+  // as GitHub reports them, and the SHA-512 of the bytes it serves, which is
+  // what the app checks. Both are checked before either file is written.
+  const feed = JSON.parse(files.feed) as {
+    files: Record<string, { size: number; sha512: string }>;
+  };
   const latest = JSON.parse(files.latest) as LatestMac;
   for (const [arch, key] of Object.entries(MAC_ARCHITECTURES)) {
     const zip = asset(artifactName(version, key));
+    const entry = feed.files[key]!;
     const sha256 = latest[arch as keyof typeof MAC_ARCHITECTURES].sha256;
-    if (zip.size !== feed.files[key]!.size || zip.digest !== `sha256:${sha256}`)
-      throw new Error(`${zip.name} on ${tag} is not the file its feed and latest-mac.json name.`);
+    const mismatch = `${zip.name} on ${tag} is not the file its feed and latest-mac.json name.`;
+    if (
+      zip.state !== "uploaded" ||
+      zip.browser_download_url !== `${releaseFolder(tag)}${zip.name}` ||
+      zip.size !== entry.size ||
+      zip.digest !== `sha256:${sha256}`
+    )
+      throw new Error(mismatch);
+    const served = await streamedSha512(get, zip.browser_download_url);
+    if (served.size !== entry.size || served.sha512 !== entry.sha512) throw new Error(mismatch);
   }
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, FEED_NAME), files.feed);
@@ -117,20 +150,85 @@ export async function writeSiteFeed(
   return tag;
 }
 
-/** Copies the site source into `output` and adds the Beta feed. Refuses a missing source. */
+/** The Mac download page, a template the assembly fills from the beta it serves. */
+export const DOWNLOAD_PAGE = join("download", "mac", "index.html");
+/** The install script, whose pinned team must be the beta's. */
+export const INSTALL_SCRIPT = "install.sh";
+/** What the install script holds until the owner pins the real team. */
+export const TEAM_PLACEHOLDER = "APPLE_CLAWTRATE_TEAM_ID";
+const TEMPLATE_TOKEN = /__CLAWTRATE_[A-Z0-9_]+__/;
+
+/** Every file under `dir`, as paths relative to it. */
+function filesUnder(dir: string, prefix = ""): string[] {
+  return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((entry) => {
+    const path = join(prefix, entry.name);
+    return entry.isDirectory() ? filesUnder(dir, path) : [path];
+  });
+}
+
+/**
+ * Copies the site source into `output`, adds the Beta feed, and fills the Mac
+ * download page from the same beta. Refuses, so nothing deploys, a missing
+ * source, a source with its own updates/beta/, no beta to fill the page from,
+ * a template token left anywhere, and an install script whose pinned team is
+ * the placeholder or not the beta's.
+ */
 export async function assembleSite(
   source: string,
   output: string,
   get: Get,
   token: string | undefined,
-): Promise<string | null> {
+): Promise<string> {
   if (!existsSync(join(source, "index.html")))
     throw new Error(`${source}/index.html does not exist: there is no site to deploy.`);
   if (existsSync(join(source, "updates", "beta")))
     throw new Error(`${source}/updates/beta/ is reserved for the generated Beta feed.`);
+  for (const required of [DOWNLOAD_PAGE, INSTALL_SCRIPT])
+    if (!existsSync(join(source, required)))
+      throw new Error(`${source}/${required} does not exist: there is no site to deploy.`);
   mkdirSync(output, { recursive: true });
   cpSync(source, output, { recursive: true });
-  return writeSiteFeed(output, get, token);
+  const tag = await writeSiteFeed(output, get, token);
+  if (!tag)
+    throw new Error("No published beta: the download page cannot be filled, so nothing deploys.");
+  const latest = JSON.parse(
+    readFileSync(join(output, "updates", "beta", LATEST_MAC_NAME), "utf8"),
+  ) as LatestMac;
+
+  const page = join(output, DOWNLOAD_PAGE);
+  const filled = readFileSync(page, "utf8")
+    .replaceAll("__CLAWTRATE_BETA_VERSION__", tag.slice(1))
+    .replaceAll("__CLAWTRATE_ARM64_ZIP__", latest.arm64.url)
+    .replaceAll("__CLAWTRATE_X64_ZIP__", latest.x86_64.url)
+    .replaceAll(
+      "__CLAWTRATE_RELEASE_PAGE__",
+      `https://github.com/${REPOSITORY}/releases/tag/${tag}`,
+    );
+  writeFileSync(page, filled);
+  for (const file of filesUnder(output)) {
+    const left = TEMPLATE_TOKEN.exec(readFileSync(join(output, file), "latin1"));
+    if (left) throw new Error(`${file} still holds ${left[0]}, so nothing deploys.`);
+  }
+
+  const pins = [
+    ...readFileSync(join(output, INSTALL_SCRIPT), "utf8").matchAll(
+      /^CLAWTRATE_TEAM_ID="([^"]*)"$/gm,
+    ),
+  ];
+  if (pins.length !== 1)
+    throw new Error(
+      `${INSTALL_SCRIPT} must pin CLAWTRATE_TEAM_ID exactly once, so nothing deploys.`,
+    );
+  const team = pins[0]![1]!;
+  if (team === TEAM_PLACEHOLDER)
+    throw new Error(
+      `${INSTALL_SCRIPT} still pins the placeholder ${TEAM_PLACEHOLDER}, so nothing deploys.`,
+    );
+  if (team !== latest.teamIdentifier)
+    throw new Error(
+      `${INSTALL_SCRIPT} pins team ${team}, but ${tag} is signed by ${latest.teamIdentifier}, so nothing deploys.`,
+    );
+  return tag;
 }
 
 if (import.meta.main) {
@@ -145,5 +243,5 @@ if (import.meta.main) {
     (url, headers) => fetch(url, { headers, signal: AbortSignal.timeout(60_000) }),
     process.env.GITHUB_TOKEN,
   );
-  console.log(tag ? `Beta feed from ${tag}.` : "No published beta: the site has no Beta feed.");
+  console.log(`The site, its Beta feed and its download page are from ${tag}.`);
 }

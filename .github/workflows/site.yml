@@ -2,8 +2,11 @@ name: Site
 
 # Deploys site/ to GitHub Pages with the newest published beta's feed under
 # updates/beta/. Publishing or withdrawing a release deploys it again, so the
-# feed follows the releases. Without site/index.html it deploys nothing: the
-# assembly step fails. docs/development/releases.md has the flow.
+# feed follows the releases. The assembly step also fills the Mac download
+# page from the same beta and checks install.sh pins that beta's team. It
+# fails, so nothing deploys, without site/index.html, without a published beta,
+# while a template token is left or while install.sh pins another team or the
+# placeholder. docs/development/releases.md has the flow.
 on:
   push:
     branches: [main]
@@ -37,7 +40,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-      - name: Copy the site and add the Beta feed
+      - name: Copy the site, add the Beta feed and fill the download page
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node apps/desktop/packaging/site-feed.ts site _site
