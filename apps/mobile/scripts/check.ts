@@ -102,6 +102,8 @@ function devGateway(...args: string[]): number {
   return (
     spawnSync(process.execPath, [join(REPO, "tools/dev-gateway/src/cli.ts"), ...args], {
       cwd: REPO,
+      // The approved workspace listing in the seed fixture uses byte order.
+      env: { ...process.env, LC_ALL: "C" },
       stdio: "inherit",
     }).status ?? 1
   );
