@@ -19,6 +19,8 @@ export type SendShape = {
   idempotencyKey: string;
   queueMode: "steer" | "followup";
   replyToId?: string | null;
+  /** The gateway's id of the session the task's history came from, when it named one. */
+  sessionId?: string | null;
   files: SizedFile[];
 };
 
@@ -45,6 +47,11 @@ export function chatSendParams<A extends { fileName: string; mimeType: string; c
     idempotencyKey: shape.idempotencyKey,
     // Always the mode meant: with none the gateway steers.
     queueMode: shape.queueMode,
+    // For that session only: under a key whose task was deleted, the gateway refuses the send
+    // instead of starting a new, empty task there (F-278). It applies neither to a steer.
+    ...(shape.sessionId && shape.queueMode !== "steer"
+      ? { sessionId: shape.sessionId, expectedLeafEntryId: null }
+      : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(shape.replyToId ? { replyToId: shape.replyToId } : {}),
   };

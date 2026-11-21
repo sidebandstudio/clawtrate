@@ -302,6 +302,12 @@ export type MessageReaction = {
 /** One open task: its durable transcript plus its live runs and outgoing messages. */
 export type Transcript = TaskActivity & {
   sessionKey: string;
+  /**
+   * The gateway's id of the session the history came from (`chat.history` `sessionId`): a message
+   * that is not a steer is sent to that session only. A read that names none (the task was
+   * deleted) keeps the one before. Absent until a read names one.
+   */
+  sessionId?: string;
   status: "loading" | "ready" | "error";
   items: TranscriptItem[];
   error: string | null;

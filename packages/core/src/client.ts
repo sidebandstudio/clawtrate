@@ -298,6 +298,7 @@ import {
   pinTask,
   renameTask,
   restoreTask,
+  TASK_DELETED_ELSEWHERE,
   type ArchivedList,
   type ArchiveResult,
   type CreatedTask,
@@ -881,6 +882,14 @@ function approvalAccessOf(sources: Record<ApprovalKind, ApprovalSourceAccess>): 
   return "error";
 }
 
+/** The gateway refused a send because the task it was for is no longer under its key. */
+export class TaskDeletedError extends Error {
+  constructor() {
+    super(TASK_DELETED_ELSEWHERE);
+    this.name = "TaskDeletedError";
+  }
+}
+
 /** A request that never left this client: nothing happened. */
 export class NotSentError extends Error {
   constructor() {
@@ -971,6 +980,12 @@ export class GatewayNotAllowedError extends Error {
     super(`This host is not allowed to connect to ${url}.`);
     this.name = "GatewayNotAllowedError";
   }
+}
+
+/** The session a history read came from, when it names one within the id bound; never cut. */
+function sessionNamed(history: RawRecord | null): string | null {
+  const id = history?.sessionId;
+  return typeof id === "string" && id.length > 0 && id.length <= MAX_ID_CHARS ? id : null;
 }
 
 /**
@@ -2345,7 +2360,15 @@ export class ClawtrateClient {
       );
     // As it will be sent, its reply reference included; checked again at delivery.
     this.checkSize(
-      this.sendParams(key, body, "x".repeat(36), "followup", attachments, options.replyToId),
+      this.sendParams(
+        key,
+        body,
+        "x".repeat(36),
+        "followup",
+        attachments,
+        options.replyToId,
+        transcript.sessionId,
+      ),
     );
     const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
     if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
@@ -2435,9 +2458,17 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
+    sessionId?: string,
   ) {
     return chatSendParams(
-      { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
+      {
+        sessionKey: key,
+        text,
+        idempotencyKey,
+        queueMode,
+        replyToId: replyToId ?? null,
+        sessionId: sessionId ?? null,
+      },
       attachments,
     );
   }
@@ -3086,24 +3117,29 @@ export class ClawtrateClient {
 
     let result: RawRecord | null;
     try {
-      const params = this.sendParams(
-        key,
-        message.text,
-        message.id,
-        message.mode === "steer" ? "steer" : "followup",
-        this.attachmentContent.get(messageId)?.files ?? [],
-        message.replyToId,
-      );
+      const build = (sessionId?: string) =>
+        this.sendParams(
+          key,
+          message.text,
+          message.id,
+          message.mode === "steer" ? "steer" : "followup",
+          this.attachmentContent.get(messageId)?.files ?? [],
+          message.replyToId,
+          sessionId,
+        );
+      const params = build(this.state.transcripts[key]?.sessionId);
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      const sent = this.request("chat.send", params, {
-        onSent: (requestId) => {
-          if (!starts) return;
-          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
-        },
-      });
+      const send = (frame: typeof params) =>
+        this.request("chat.send", frame, {
+          onSent: (requestId) => {
+            if (!starts) return;
+            this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+          },
+        });
+      const sent = send(params);
       // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
       // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
       // withdrawal of it, need not wait for the answer.
@@ -3112,13 +3148,18 @@ export class ClawtrateClient {
         const left = updateMessage(activity, messageId, { leftAt: this.now() });
         return joins ? registerSteerAlias(left, messageId, joins) : left;
       });
-      result = asRecord(await sent);
+      result = asRecord(
+        await sent.catch((error: unknown) =>
+          this.afterSessionRefusal(key, params, error, () => send(build())),
+        ),
+      );
     } catch (error) {
       this.noteMissingScope(error);
       // A Stop withdrew it while the answer was on its way: it stays Not sent.
       if (this.outgoing(key, messageId)?.steer === "withdrawn") return;
       if (
         error instanceof GatewayProtocolRequestError ||
+        error instanceof TaskDeletedError ||
         error instanceof SendTooLargeError ||
         error instanceof NotSentError
       ) {
@@ -3209,6 +3250,40 @@ export class ClawtrateClient {
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     if (command) this.dropAttachments(messageId);
     this.scheduleHistory(key);
+  }
+
+  /**
+   * A send that named its session, refused as no longer for it (`active-leaf-changed`, "active
+   * branch changed; review and retry"). What the gateway has under the key now says why. No
+   * session, or another one, means the task was deleted and nothing was sent: OpenClaw 2026.10.6
+   * keeps a task's session through `sessions.reset`, `/new` and `/reset`. The same session means
+   * the refusal was not about the task. A stop command ("stop", "/stop") is checked against the
+   * task's latest message, which a guard naming none matches only in an empty task. Such a send
+   * goes again as before, unguarded, under the same idempotency key. Any other refusal stands.
+   */
+  private async afterSessionRefusal(
+    key: string,
+    params: { sessionId?: string },
+    error: unknown,
+    again: () => Promise<unknown>,
+  ): Promise<unknown> {
+    if (
+      params.sessionId === undefined ||
+      !(error instanceof GatewayProtocolRequestError) ||
+      asRecord(error.details)?.reason !== "active-leaf-changed"
+    )
+      throw error;
+    let now: unknown;
+    try {
+      now = asRecord(
+        asRecord(await this.request("sessions.describe", { key }))?.session,
+      )?.sessionId;
+    } catch {
+      // What the gateway has under the key is not known: its refusal stands as it came.
+      throw error;
+    }
+    if (now !== params.sessionId) throw new TaskDeletedError();
+    return again();
   }
 
   /**
@@ -7429,12 +7504,15 @@ export class ClawtrateClient {
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages);
+      const named = sessionNamed(history);
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
           settleQuestionsOfEndedRuns(normalizeApprovals(activity, (runId) => this.otherRun(runId))),
         ),
         sessionKey: key,
+        // A deleted task's read names no session: the one the history on screen came from stays.
+        ...(named ? { sessionId: named } : {}),
         status: "ready",
         items,
         interSession: interSessionMessages(messages),
