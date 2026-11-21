@@ -21,7 +21,8 @@ export async function debuggingPort(userData: string, app: ChildProcess): Promis
   for (;;) {
     try {
       text = readFileSync(portFile, "utf8");
-      break;
+      // Chromium can create the file before writing it: wait for the port's line to end.
+      if (text.includes("\n")) break;
     } catch (error) {
       // Chromium may still hold the file open on Windows after creating it.
       const code = (error as NodeJS.ErrnoException).code;
