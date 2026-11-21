@@ -428,6 +428,34 @@ test.describe("message actions", () => {
     await expect(quote).toBeFocused();
   });
 
+  test("F-067: when write access ends while the reply field has focus, the thread takes it, so Escape closes it", async ({
+    page,
+  }) => {
+    await open(page);
+    const quote = page.getByTestId("reply-quote");
+    await quote.click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await expect(thread.getByTestId("thread-input")).toBeFocused();
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...(state.connection as object), canWrite: false },
+      }));
+    });
+    await expect(thread.getByTestId("thread-input")).toHaveCount(0);
+    await expect(thread).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(thread).toHaveCount(0);
+    await expect(quote).toBeFocused();
+  });
+
   test("F-067: a reply that leaves the outbox without history holding it is never announced as sent", async ({
     page,
   }) => {
