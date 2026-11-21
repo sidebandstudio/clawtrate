@@ -258,12 +258,18 @@ describe("a setup connection, end to end of its first hello", () => {
     client.stop();
   });
 
-  it("F-492: a setup code connection that meets a token saved meanwhile keeps that record's held access", async () => {
+  it("F-492: a setup code connection that meets a token saved after its code went keeps that record's held access", async () => {
     const gateway = new FakeGateway();
-    gateway.connectReply = () => ({ ok: true, payload: helloOk([READ_SCOPE], "reissued-token") });
-    const storage = memoryStorage({
-      [tokenKey(URL)]: record([READ_SCOPE, WRITE_SCOPE], { adminHeld: true, pairingHeld: true }),
-    });
+    const storage = memoryStorage();
+    // Saved while the gateway answers the code: before it, the code wouldn't go (SETUP_PAIRING_APPEARED).
+    gateway.connectReply = (params) => {
+      expect((params as { auth?: { bootstrapToken?: string } }).auth?.bootstrapToken).toBeTruthy();
+      storage.data.set(
+        tokenKey(URL),
+        record([READ_SCOPE, WRITE_SCOPE], { adminHeld: true, pairingHeld: true }),
+      );
+      return { ok: true, payload: helloOk([READ_SCOPE], "reissued-token") };
+    };
     const client = new ClawtrateClient(testHost(gateway, storage), FAST);
     await client.start();
     await client.connectWithSetupCode({
@@ -271,7 +277,7 @@ describe("a setup connection, end to end of its first hello", () => {
       bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnop",
       expiresAtMs: Date.now() + 600_000,
     });
-    await until(() => JSON.parse(storage.data.get(tokenKey(URL))!).token === "reissued-token");
+    await until(() => storage.data.get(tokenKey(URL))?.includes("reissued-token") === true);
     const stored = JSON.parse(storage.data.get(tokenKey(URL))!);
     expect(stored.heldScopes).toEqual(expect.arrayContaining([READ_SCOPE, WRITE_SCOPE]));
     expect(stored.adminHeld).toBe(true);

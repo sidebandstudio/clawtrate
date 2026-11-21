@@ -80,6 +80,8 @@ export type SetupFailureKind =
   | "refused"
   /** Connected, but the bots couldn't be read. */
   | "bots"
+  /** Back couldn't close the connection setup opened; Back tries again. */
+  | "cleanup"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 

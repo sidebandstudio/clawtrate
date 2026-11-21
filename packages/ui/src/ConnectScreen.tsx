@@ -5,6 +5,7 @@ import type {
   HostInfo,
   SetupState,
 } from "@clawtrate/core";
+import { SETUP_PAIRING_APPEARED, SETUP_PAIRING_GONE } from "@clawtrate/core";
 import {
   useEffect,
   useRef,
@@ -547,7 +548,11 @@ export function ConnectScreen({
     (setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
-      (setup.phase === "done" && connection.status !== "connected"));
+      (setup.phase === "done" && connection.status !== "connected") ||
+      // A saved pairing gone or appeared under setup's connection: its card asks again.
+      (setup.phase === "found" &&
+        (connection.error?.code === SETUP_PAIRING_GONE ||
+          connection.error?.code === SETUP_PAIRING_APPEARED)));
   const noGateway = connection.status === "idle" && connection.gatewayUrl === null;
   const showSetup =
     info.setup !== undefined &&

@@ -552,6 +552,12 @@ const FAILURES: Record<
     next: "bots",
     step: 2,
   },
+  cleanup: {
+    lead: "Clawtrate couldn't close the connection it started.",
+    text: () => "Go back to try again.",
+    next: "back",
+    step: 1,
+  },
   other: {
     lead: "Clawtrate couldn't connect to the gateway.",
     text: () => "Try again, or use Advanced.",
