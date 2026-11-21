@@ -14,6 +14,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -23,7 +24,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { memoryStorage } from "../../../packages/core/test/fake-gateway.ts";
 import type { LookFacts } from "../src/main/ssh/look.ts";
 import { approvalInstructionsFor } from "../src/host/runtime.ts";
-import { ensurePrivateDir, sshTransportFor, type AclReading } from "../src/setup/private-dir.ts";
+import {
+  chooseDataDir,
+  ensurePrivateDir,
+  sshTransportFor,
+  type AclReading,
+} from "../src/setup/private-dir.ts";
 import {
   NO_SEAL,
   RouteStore,
@@ -347,6 +353,62 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
     });
     expect(made).toBe(1);
   });
+
+  it("the launch's data folder: a redirected folder, an ancestor another account can write and a macOS ACL each stop the launch, and nothing is changed or made there", () => {
+    const root = fresh("clawtrate-data-");
+    // A redirected leaf: refused, and the folder it leads to keeps its mode.
+    const outside = fresh("clawtrate-data-outside-");
+    chmodSync(outside, 0o755);
+    symlinkSync(outside, join(root, "redirected"));
+    expect(chooseDataDir(join(root, "redirected"), { root })).toMatchObject({ ok: false });
+    expect(statSync(outside).mode & 0o777).toBe(0o755);
+    // An ancestor another account can write: refused, and the data folder isn't made below it.
+    mkdirSync(join(root, "shared"), { mode: 0o700 });
+    chmodSync(join(root, "shared"), 0o777);
+    expect(chooseDataDir(join(root, "shared", "gateway"), { root })).toMatchObject({
+      ok: false,
+      reason: "writable-by-others",
+    });
+    expect(existsSync(join(root, "shared", "gateway"))).toBe(false);
+    expect(statSync(join(root, "shared")).mode & 0o777).toBe(0o777);
+    // A private place: proven, made, and the same folder the SSH leaf is then made in.
+    expect(chooseDataDir(join(root, "home", "gateway"), { root })).toEqual({
+      ok: true,
+      dir: join(root, "home", "gateway"),
+      verified: "posix",
+    });
+    expect(sshTransportFor(join(root, "home", "gateway"), () => "transport", { root })).toBe(
+      "transport",
+    );
+    // Windows keeps its own branch: the folder is made, its ACLs are the system's.
+    const made: string[] = [];
+    expect(
+      chooseDataDir("C:\\Users\\you\\gateway", {
+        platform: "win32",
+        mkdir: (dir) => made.push(dir),
+      }),
+    ).toMatchObject({ ok: true, verified: "windows-unverified" });
+    expect(made).toEqual(["C:\\Users\\you\\gateway"]);
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "the launch's data folder below a folder with a macOS ACL that lets everyone add files is refused and not made",
+    () => {
+      const root = fresh("clawtrate-data-acl-");
+      mkdirSync(join(root, "app"), { mode: 0o700 });
+      execFileSync("/bin/chmod", [
+        "+a",
+        "group:everyone allow add_file,delete_child",
+        join(root, "app"),
+      ]);
+      expect(chooseDataDir(join(root, "app", "gateway"), { root })).toMatchObject({
+        ok: false,
+        reason: "acl",
+      });
+      expect(existsSync(join(root, "app", "gateway"))).toBe(false);
+      execFileSync("/bin/chmod", ["-N", join(root, "app")]);
+    },
+  );
 
   it.skipIf(process.platform !== "darwin")(
     "reads a real macOS ACL: an entry that lets everyone add files to an ancestor is refused at the entry point",

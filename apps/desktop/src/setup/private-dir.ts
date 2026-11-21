@@ -308,3 +308,31 @@ export function sshTransportFor<T>(
   }
   return make(join(dataDir, "ssh"));
 }
+
+/** The data folder the desktop app keeps its device key, tokens and routes in, or why there is none. */
+export type DataDirChoice =
+  | { ok: true; dir: string; verified: "posix" | "windows-unverified" }
+  | { ok: false; dir: string; reason: Fail["reason"] };
+
+/**
+ * The desktop app's data folder, as its main process takes it at launch,
+ * before either store is built: on macOS and Linux only once `ensurePrivateDir`
+ * proved it and the folders above it private (making the missing ones below a
+ * proven parent). A folder that can't be proven is not changed or made, and
+ * the launch stops with a folder error the person can fix and retry. Windows
+ * relies on the folder's inherited access controls, which this doesn't verify.
+ */
+export function chooseDataDir(
+  dir: string,
+  options: PrivateDirOptions & { mkdir?: (dir: string) => void } = {},
+): DataDirChoice {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    (options.mkdir ?? ((path) => mkdirSync(path, { recursive: true })))(dir);
+    return { ok: true, dir, verified: "windows-unverified" };
+  }
+  const verdict = ensurePrivateDir(dir, options);
+  return verdict.ok
+    ? { ok: true, dir, verified: "posix" }
+    : { ok: false, dir, reason: verdict.reason };
+}

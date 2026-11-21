@@ -21,7 +21,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -39,7 +39,7 @@ import {
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
 import { SetupRouter, SetupSlice } from "../setup/host.ts";
-import { ensurePrivateDir, sshTransportFor } from "../setup/private-dir.ts";
+import { chooseDataDir, sshTransportFor } from "../setup/private-dir.ts";
 import { RemoteSetup, type HostAnswer, type HostQuestion } from "../setup/remote.ts";
 import { RouteStore, routedStorage, type TokenSeal } from "../setup/routes.ts";
 import { productionWorld as sshProductionWorld } from "./ssh/world.ts";
@@ -397,16 +397,20 @@ function systemSeal(): TokenSeal {
 }
 
 /** The device key and tokens live here, readable by this user only. */
-function privateDataDir(): string {
+function privateDataDir(): string | null {
   // Only a person's app takes its folder from the environment; every other run keeps its own.
   const chosen = SETUP.kind === "production" ? process.env.CLAWTRATE_DATA_DIR : undefined;
   const dir = chosen ?? join(app.getPath("userData"), "gateway");
-  // Proven first and made only below a proven parent. A folder that can't be proven still holds
-  // the app's other data, as before, and offers no SSH route (`sshTransportFor` asks again).
-  if (process.platform !== "win32" && ensurePrivateDir(dir).ok) return dir;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(dir, 0o700);
-  return dir;
+  // Proven first and made only below a proven parent; a folder that can't be proven is left as
+  // it is, and nothing is kept below it (`chooseDataDir`).
+  const choice = chooseDataDir(dir);
+  if (choice.ok) return choice.dir;
+  console.log(`[setup] The data folder isn't proven private (${choice.reason}).`);
+  dialog.showErrorBox(
+    "Clawtrate can't keep its data private",
+    `Clawtrate keeps this device's key and pairings in ${dir}, and another account could change that folder or one above it. Clawtrate didn't change it. Make the folders above it yours alone, then open Clawtrate again.`,
+  );
+  return null;
 }
 
 async function main(): Promise<void> {
@@ -418,6 +422,10 @@ async function main(): Promise<void> {
 
   const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
   const dataDir = privateDataDir();
+  if (dataDir === null) {
+    app.quit();
+    return;
+  }
   // A route's device token is encrypted by the system before it is written (Keychain on macOS,
   // the desktop's secret service on Linux); where it can't be, no token is kept and SSH doesn't pair.
   const routes = new RouteStore(dataDir, {

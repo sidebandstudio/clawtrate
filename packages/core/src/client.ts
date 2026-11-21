@@ -5783,8 +5783,7 @@ export class ClawtrateClient {
     // A route's refusal comes before its gateway said who it is: the attempt ends, and the
     // token is kept (its forgetting waits for an identity that never matched, so it lapses).
     const routeRefused = refused && Boolean(this.settings?.route);
-    const pause =
-      setup || routeRefused || shouldPauseGatewayReconnect({ details: error.details });
+    const pause = setup || routeRefused || shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
