@@ -5,8 +5,10 @@ import {
   relayIdFromKey,
   Responder,
   type ChannelEvent,
+  type Admission,
+  type AdmissionAttempt,
+  type CommitResult,
   type GateCheck,
-  type Refusal,
   type KeyPair,
   type PhoneGate,
 } from "../src/index.ts";
@@ -44,7 +46,7 @@ export const RELAY_ID = relayIdFromKey(new Uint8Array(32).fill(7));
 
 /**
  * An allowlist of phone keys and at most one pending offer, as a connector keeps them: a
- * read-only `check` for message 1 and an all-or-nothing `commit` for the admit event.
+ * read-only `check` for message 1 and an all-or-nothing `commit` for the admission.
  */
 export class TestGate implements PhoneGate {
   readonly enrolled: Uint8Array[] = [];
@@ -53,6 +55,7 @@ export class TestGate implements PhoneGate {
   /** Set to make the next commit fail as a storage error would. */
   failNextCommit = false;
   checks = 0;
+  commits = 0;
 
   isEnrolled(phoneKey: Uint8Array): boolean {
     return this.enrolled.some((key) => key.every((byte, i) => byte === phoneKey[i]));
@@ -62,36 +65,58 @@ export class TestGate implements PhoneGate {
     this.checks++;
     if (this.isEnrolled(phoneKey)) return "enrolled";
     if (enroll === undefined) return "not_enrolled";
-    return this.offer?.matches(enroll, this.nowMs) ? "eligible" : "enrollment_refused";
+    const offer = this.offer;
+    return offer?.matches(enroll, this.nowMs) ? { eligible: offer } : "enrollment_refused";
   }
 
-  /** Rechecks and, in one step, spends the offer and adds the key. */
-  commit(phoneKey: Uint8Array, enroll: Uint8Array | null): "enrolled" | Refusal {
+  /**
+   * The transaction: in one synchronous step, checks the attempt is live, rechecks, and spends
+   * the offer and adds the key.
+   */
+  commit(attempt: AdmissionAttempt): CommitResult {
+    this.commits++;
     if (this.failNextCommit) {
       this.failNextCommit = false;
       throw new Error("allowlist write failed");
     }
-    if (this.isEnrolled(phoneKey)) return "enrolled";
-    if (enroll === null) return "not_enrolled";
-    if (this.offer === null || !this.offer.redeem(enroll, this.nowMs)) return "enrollment_refused";
-    this.enrolled.push(Uint8Array.from(phoneKey));
+    if (!attempt.live) return "not_enrolled";
+    if (this.isEnrolled(attempt.phoneKey)) return "enrolled";
+    const offer = attempt.candidate as EnrollmentOffer | null;
+    if (offer === null || offer !== this.offer || !offer.spend(this.nowMs)) {
+      return attempt.candidate === null ? "not_enrolled" : "enrollment_refused";
+    }
+    this.enrolled.push(Uint8Array.from(attempt.phoneKey));
     return "enrolled";
   }
 }
 
+/** The admit event's handle, from a list of events. */
+export function admissionOf(events: readonly ChannelEvent[]): Admission {
+  const admit = events.find((event) => event.type === "admit");
+  if (admit?.type !== "admit") throw new Error("No admit event.");
+  return admit.admission;
+}
+
 /**
- * The connector host's part at the admit event: commit, then admit or refuse. Returns the frame
- * for the phone.
+ * The connector host's part at the admit event: begin, commit, settle. Returns the frame for
+ * the phone.
  */
 export function settle(
   connector: Responder,
   gate: TestGate,
   events: readonly ChannelEvent[],
 ): Uint8Array {
-  const admit = events.find((event) => event.type === "admit");
-  if (admit?.type !== "admit") throw new Error("No admit event.");
-  const result = gate.commit(admit.phoneKey, admit.enroll);
-  return result === "enrolled" ? connector.admit().frame : connector.refuse(result);
+  const attempt = connector.beginAdmission(admissionOf(events));
+  let result: CommitResult;
+  try {
+    result = gate.commit(attempt);
+  } catch (error) {
+    connector.abort();
+    throw error;
+  }
+  const settled = connector.settle(attempt, result);
+  if (settled.frame === null) throw new Error("The channel ended during the transaction.");
+  return settled.frame;
 }
 
 export interface Pair {

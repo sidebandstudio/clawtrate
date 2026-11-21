@@ -83,7 +83,9 @@ export type RegisterProofFailureCode =
   /** The socket already registered, or tried to. */
   | "already_used"
   /** The relay id was first claimed by another key. */
-  | "claimed_by_other_key";
+  | "claimed_by_other_key"
+  /** The socket was aborted while the attempt waited. */
+  | "aborted";
 
 export type RegisterProofResult =
   | {
@@ -111,32 +113,42 @@ interface RegisterProofPayload {
 
 const PAYLOAD_KEYS = ["typ", "aud", "relayId", "key", "nonce", "iat", "jti"] as const;
 
+/** Only these hosts may use `ws:`, and only where a test turns it on. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+/** A scheme and an authority (host and optional port), and at most a final slash. */
+const ORIGIN_SPELLING = /^wss?:\/\/[A-Za-z0-9.\-[\]:]+\/?$/i;
+
+export interface OriginOptions {
+  /** Tests only: accept `ws:` for a relay on this machine. */
+  readonly allowLoopbackWs?: boolean;
+}
+
 /**
- * The one spelling of a relay origin both sides sign and compare: `wss://host[:port]` (or `ws:`
- * for a relay on this machine in tests), lowercase, without the default port, a path, a query
- * or credentials. Anything else fails with `malformed`.
+ * The one spelling of a relay origin both sides sign and compare: `wss://host[:port]`,
+ * lowercase, without the default port. The text given must already be a scheme, a host, an
+ * optional port and at most a final slash; no path, query, fragment or credentials, checked
+ * before any normalizing. `ws:` only for a loopback host, and only with `allowLoopbackWs`.
+ * Anything else fails with `malformed`.
  */
-export function canonicalRelayOrigin(origin: string): string {
+export function canonicalRelayOrigin(origin: string, options: OriginOptions = {}): string {
+  if (typeof origin !== "string" || origin.length > MAX_AUDIENCE_CHARS) {
+    fail("malformed", "The relay origin is not short text.");
+  }
+  if (!ORIGIN_SPELLING.test(origin)) {
+    fail("malformed", "A relay origin is a scheme, a host and an optional port.");
+  }
   let url: URL;
   try {
     url = new URL(origin);
   } catch {
     return fail("malformed", "The relay origin is not a URL.");
   }
-  if (
-    (url.protocol !== "wss:" && url.protocol !== "ws:") ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    url.host === ""
-  ) {
-    fail("malformed", "A relay origin is ws: or wss:, a host and an optional port.");
+  const loopbackWs =
+    url.protocol === "ws:" && options.allowLoopbackWs === true && LOOPBACK_HOSTS.has(url.hostname);
+  if ((url.protocol !== "wss:" && !loopbackWs) || url.host === "") {
+    fail("malformed", "A relay origin is wss:, or ws: on this machine in tests.");
   }
-  const canonical = `${url.protocol}//${url.host}`;
-  if (canonical.length > MAX_AUDIENCE_CHARS) fail("malformed", "The relay origin is too long.");
-  return canonical;
+  return `${url.protocol}//${url.host}`;
 }
 
 /**
@@ -186,19 +198,25 @@ export class MemoryReplayStore implements ReplayStore {
 }
 
 /**
- * Pins each relay id to the full public key that first registered it. The contract: `claim`
- * checks and records in one atomic step, returns true for an unclaimed id (recording the key)
- * or for the key already pinned, false for any other key, and throws or rejects if it cannot
- * answer. `MemoryKeyClaims` is the reference implementation.
+ * Pins each relay id to the full public key that first registered it. The contract a relay's
+ * store must meet: `claim` checks and records in one atomic step, and in that same step reads
+ * `attempt.live`: when it is false it records nothing and returns false. Otherwise it returns
+ * true for an unclaimed id (recording the key) or for the key already pinned, and false for any
+ * other key. It throws or rejects if it cannot answer. `MemoryKeyClaims` is the reference.
  */
 export interface KeyClaims {
-  claim(relayId: string, publicKey: Uint8Array): boolean | Promise<boolean>;
+  claim(
+    relayId: string,
+    publicKey: Uint8Array,
+    attempt: { readonly live: boolean },
+  ): boolean | Promise<boolean>;
 }
 
 export class MemoryKeyClaims implements KeyClaims {
   readonly #keys = new Map<string, string>();
 
-  claim(relayId: string, publicKey: Uint8Array): boolean {
+  claim(relayId: string, publicKey: Uint8Array, attempt: { readonly live: boolean }): boolean {
+    if (!attempt.live) return false;
     const key = toBase64Url(publicKey);
     const pinned = this.#keys.get(relayId);
     if (pinned === undefined) this.#keys.set(relayId, key);
@@ -216,12 +234,19 @@ export function createRegisterProof(input: {
   readonly nowMs: number;
   /** Tests only; production uses `crypto.getRandomValues`. */
   readonly random?: RandomBytes;
+  readonly allowLoopbackWs?: boolean;
 }): string {
   const nowMs = checkMillis(input.nowMs, "The time");
+  if (Math.floor(nowMs / 1_000) > MAX_IAT_SECONDS) {
+    fail("bad_time", "The time is past what a register proof can carry.");
+  }
+  if (fromBase64UrlOfLength(input.nonce, REGISTER_NONCE_BYTES) === null) {
+    fail("malformed", "The challenge nonce is not 32 bytes of canonical base64url.");
+  }
   const publicKey = ed25519.getPublicKey(input.secretKey);
   const payload: RegisterProofPayload = {
     typ: REGISTER_PROOF_TYP,
-    aud: canonicalRelayOrigin(input.audience),
+    aud: canonicalRelayOrigin(input.audience, input),
     relayId: relayIdFromKey(publicKey),
     key: toBase64Url(publicKey),
     nonce: input.nonce,
@@ -256,8 +281,9 @@ export async function verifyRegisterProof(input: {
   readonly nonce: string;
   readonly nowMs: number;
   readonly replay: ReplayStore;
+  readonly allowLoopbackWs?: boolean;
 }): Promise<RegisterProofResult> {
-  const audience = canonicalRelayOrigin(input.audience);
+  const audience = canonicalRelayOrigin(input.audience, input);
   if (!isMillis(input.nowMs)) return { ok: false, code: "bad_clock" };
   const result = checkRegisterProof({ ...input, audience });
   if (!result.ok) return result;
@@ -284,10 +310,10 @@ function checkRegisterProof(input: {
   readonly nonce: string;
   readonly nowMs: number;
 }): RegisterProofResult {
-  if (typeof input.proof !== "string" || input.proof.trim() === "") {
-    return { ok: false, code: "missing_proof" };
-  }
+  // Type and length first, so nothing scans text over the cap.
+  if (typeof input.proof !== "string") return { ok: false, code: "missing_proof" };
   if (input.proof.length > MAX_REGISTER_PROOF_CHARS) return { ok: false, code: "malformed_proof" };
+  if (input.proof.trim() === "") return { ok: false, code: "missing_proof" };
   const parts = input.proof.split(".");
   if (parts.length !== 2) return { ok: false, code: "malformed_proof" };
   const [encoded, encodedSignature] = parts as [string, string];
@@ -363,10 +389,10 @@ export interface RegistrationSnapshot {
   readonly state: RegistrationState;
 }
 
-export interface ControlRegistrationOptions {
+export interface ControlRegistrationOptions extends OriginOptions {
   /** The relay id in the socket's path. */
   readonly relayId: string;
-  /** This relay's configured origin. */
+  /** This relay's configured origin. It is checked and pinned when the socket starts. */
   readonly origin: string;
   /**
    * Elapsed time in whole milliseconds, never set back by wall-clock corrections; on a relay
@@ -377,6 +403,12 @@ export interface ControlRegistrationOptions {
   readonly wallClock: () => number;
   readonly replay: ReplayStore;
   readonly claims: KeyClaims;
+  /**
+   * Stores the snapshot. Called, and awaited, after every change of state: `verifying` before
+   * any store is asked, and the outcome before it is returned. A failure fails the attempt.
+   * The relay restores only the latest snapshot it stored; an older one must never replace it.
+   */
+  readonly persist?: (snapshot: RegistrationSnapshot) => void | Promise<void>;
   /** A registration restored after hibernation, instead of a fresh challenge. */
   readonly restore?: RegistrationSnapshot;
   /** Tests only; production uses `crypto.getRandomValues`. */
@@ -385,19 +417,35 @@ export interface ControlRegistrationOptions {
 
 /**
  * One control socket's registration, as the relay runs it: one fresh challenge, good for
- * `REGISTER_CHALLENGE_MS`, and one registration attempt. The state moves to `verifying` before
- * the first await, so a second attempt, even one that overlaps the first, gets `already_used`.
+ * `REGISTER_CHALLENGE_MS`, and one registration attempt.
+ *
+ * - The state moves to `verifying` before the first await, so a second attempt, even one that
+ *   overlaps the first, gets `already_used`.
+ * - The attempt is bound to this object's one in-flight token. After every await it checks
+ *   that the token is still current and the challenge still in time, before the key claim and
+ *   before returning success; the key claim itself is told whether the attempt is live.
+ * - `expire()` ends a challenge that ran out with no proof; the relay calls it from a timer,
+ *   since a quiet socket sends nothing. `abort()` ends the registration when the socket goes.
  */
 export class ControlRegistration {
   readonly #options: ControlRegistrationOptions;
+  readonly #relayId: string;
+  readonly #origin: string;
+  readonly #allowLoopbackWs: boolean;
   readonly #nonce: string;
   readonly #issuedAtMs: number;
   #state: RegistrationState;
+  #attempt: object | null = null;
 
   constructor(options: ControlRegistrationOptions) {
     this.#options = options;
-    canonicalRelayOrigin(options.origin);
+    this.#relayId = options.relayId;
+    this.#allowLoopbackWs = options.allowLoopbackWs === true;
+    this.#origin = canonicalRelayOrigin(options.origin, options);
     if (options.restore) {
+      if (fromBase64UrlOfLength(options.restore.nonce, REGISTER_NONCE_BYTES) === null) {
+        fail("malformed", "The restored nonce is not 32 bytes of canonical base64url.");
+      }
       this.#nonce = options.restore.nonce;
       this.#issuedAtMs = checkMillis(options.restore.issuedAtMs, "The challenge time");
       // An attempt cut off by hibernation cannot be resumed.
@@ -413,52 +461,136 @@ export class ControlRegistration {
     return this.#state;
   }
 
+  /** The canonical origin this socket checks proofs against, fixed when it started. */
+  get origin(): string {
+    return this.#origin;
+  }
+
   /** The challenge message to send as the socket's first text. */
   get challengeMessage(): string {
     return encodeRelayMessage({ t: "challenge", nonce: this.#nonce });
+  }
+
+  /** The clock reading after which the challenge has expired. */
+  get expiresAtMs(): number {
+    return this.#issuedAtMs + REGISTER_CHALLENGE_MS;
   }
 
   snapshot(): RegistrationSnapshot {
     return { nonce: this.#nonce, issuedAtMs: this.#issuedAtMs, state: this.#state };
   }
 
+  /**
+   * Ends the registration if the challenge is past its time (or the clock is not readable),
+   * with or without an attempt in flight. Returns true if it ended it now.
+   */
+  expire(): boolean {
+    if (this.#state !== "challenged" && this.#state !== "verifying") return false;
+    if (this.#inTime()) return false;
+    this.#end();
+    return true;
+  }
+
+  /** Ends the registration, for a socket that closed. Safe to call any number of times. */
+  abort(): void {
+    if (this.#state === "challenged" || this.#state === "verifying") this.#end();
+  }
+
   /** Checks the socket's one register proof. Any failure ends the registration for good. */
   async register(proof: string): Promise<RegisterProofResult> {
     if (this.#state !== "challenged") return { ok: false, code: "already_used" };
+    const token = {};
+    this.#attempt = token;
     this.#state = "verifying";
-    const result = await this.#verify(proof);
-    this.#state = result.ok ? "registered" : "failed";
+    let result: RegisterProofResult;
+    try {
+      await this.#options.persist?.(this.snapshot());
+      result = await this.#verify(token, proof);
+    } catch {
+      result = { ok: false, code: "store_failed" };
+    }
+    if (result.ok && !this.#live(token)) result = this.#lost(token);
+    if (this.#attempt === token) {
+      this.#attempt = null;
+      this.#state = result.ok ? "registered" : "failed";
+      try {
+        await this.#options.persist?.(this.snapshot());
+      } catch {
+        this.#state = "failed";
+        return { ok: false, code: "store_failed" };
+      }
+    }
     return result;
   }
 
-  async #verify(proof: string): Promise<RegisterProofResult> {
+  async #verify(token: object, proof: string): Promise<RegisterProofResult> {
     const options = this.#options;
-    let elapsedMs: number;
     let wallMs: number;
     try {
-      elapsedMs = checkMillis(options.clock(), "The clock") - this.#issuedAtMs;
       wallMs = checkMillis(options.wallClock(), "The wall clock");
     } catch {
       return { ok: false, code: "bad_clock" };
     }
-    if (!(elapsedMs >= 0 && elapsedMs <= REGISTER_CHALLENGE_MS)) {
-      return { ok: false, code: "challenge_expired" };
-    }
+    if (!this.#live(token)) return this.#lost(token);
     const result = await verifyRegisterProof({
       proof,
-      relayId: options.relayId,
-      audience: options.origin,
+      relayId: this.#relayId,
+      audience: this.#origin,
       nonce: this.#nonce,
       nowMs: wallMs,
       replay: options.replay,
+      allowLoopbackWs: this.#allowLoopbackWs,
     });
     if (!result.ok) return result;
+    // A store that took its time may have outlasted the challenge or the socket.
+    if (!this.#live(token)) return this.#lost(token);
+    const live = (): boolean => this.#live(token);
     let claimed: boolean;
     try {
-      claimed = await options.claims.claim(result.relayId, Uint8Array.from(result.publicKey));
+      claimed = await options.claims.claim(result.relayId, Uint8Array.from(result.publicKey), {
+        get live() {
+          return live();
+        },
+      });
     } catch {
       return { ok: false, code: "store_failed" };
     }
+    if (!this.#live(token)) return this.#lost(token);
     return claimed === true ? result : { ok: false, code: "claimed_by_other_key" };
+  }
+
+  /** True while `token` is the attempt in flight and the challenge is in time. */
+  #live(token: object): boolean {
+    return this.#attempt === token && this.#state === "verifying" && this.#inTime();
+  }
+
+  /** Why a live check failed, ending the registration if it has not ended yet. */
+  #lost(token: object): RegisterProofResult {
+    let clockOk = true;
+    try {
+      checkMillis(this.#options.clock(), "The clock");
+    } catch {
+      clockOk = false;
+    }
+    const aborted = this.#attempt !== token || this.#state !== "verifying";
+    if (!aborted) this.#end();
+    if (aborted) return { ok: false, code: "aborted" };
+    return { ok: false, code: clockOk ? "challenge_expired" : "bad_clock" };
+  }
+
+  #inTime(): boolean {
+    let now: number;
+    try {
+      now = checkMillis(this.#options.clock(), "The clock");
+    } catch {
+      return false;
+    }
+    const elapsed = now - this.#issuedAtMs;
+    return elapsed >= 0 && elapsed <= REGISTER_CHALLENGE_MS;
+  }
+
+  #end(): void {
+    this.#attempt = null;
+    this.#state = "failed";
   }
 }

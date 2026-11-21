@@ -32,7 +32,11 @@ export interface KeyPair {
 
 /** An X25519 key pair for Noise: the phone's or the connector's static key. */
 export function generateKeyPair(random: RandomBytes = secureRandomBytes): KeyPair {
-  return keyPairFromSecret(random(KEY_BYTES));
+  const seed = random(KEY_BYTES);
+  const pair = keyPairFromSecret(seed);
+  // The pair keeps its own copy; a seed from a test's source belongs to the test.
+  if (random === secureRandomBytes) seed.fill(0);
+  return pair;
 }
 
 export function keyPairFromSecret(secretKey: Uint8Array): KeyPair {
@@ -58,7 +62,10 @@ function dh(secretKey: Uint8Array, publicKey: Uint8Array): Uint8Array {
 function hkdf2(chainingKey: Uint8Array, input: Uint8Array): [Uint8Array, Uint8Array] {
   const tempKey = hmac(sha256, chainingKey, input);
   const out1 = hmac(sha256, tempKey, Uint8Array.of(1));
-  const out2 = hmac(sha256, tempKey, concatBytes(out1, Uint8Array.of(2)));
+  const second = concatBytes(out1, Uint8Array.of(2));
+  const out2 = hmac(sha256, tempKey, second);
+  tempKey.fill(0);
+  second.fill(0);
   return [out1, out2];
 }
 
@@ -141,7 +148,7 @@ class SymmetricState {
     const h = name.length <= HASH_BYTES ? new Uint8Array(HASH_BYTES) : sha256(name);
     if (name.length <= HASH_BYTES) h.set(name);
     this.#hash = h;
-    this.#chainingKey = h;
+    this.#chainingKey = Uint8Array.from(h);
   }
 
   get handshakeHash(): Uint8Array {
@@ -150,7 +157,9 @@ class SymmetricState {
 
   mixKey(input: Uint8Array): void {
     const [chainingKey, key] = hkdf2(this.#chainingKey, input);
+    this.#chainingKey.fill(0);
     this.#chainingKey = chainingKey;
+    this.#cipher.clear();
     this.#cipher = new CipherState(key);
   }
 
@@ -170,9 +179,22 @@ class SymmetricState {
     return plaintext;
   }
 
+  /** Section 5.2's Split, after which the chaining key and the handshake cipher are wiped. */
   split(): [CipherState, CipherState] {
     const [k1, k2] = hkdf2(this.#chainingKey, EMPTY);
+    this.dispose();
     return [new CipherState(k1), new CipherState(k2)];
+  }
+
+  /** What a test needs to see that the secrets are gone. */
+  get secretsForTests(): { readonly chainingKey: Uint8Array; readonly cipherKeyed: boolean } {
+    return { chainingKey: this.#chainingKey, cipherKeyed: this.#cipher.hasKey };
+  }
+
+  /** Wipes the chaining key and the handshake cipher, best effort. The hash `h` is kept. */
+  dispose(): void {
+    this.#chainingKey.fill(0);
+    this.#cipher.clear();
   }
 }
 
@@ -236,17 +258,57 @@ export class IKHandshake {
     return this.#step === "done";
   }
 
-  /** The transport keys once the handshake is complete. */
+  /** The transport keys once the handshake is complete, while the handshake still owns them. */
   get transportKeys(): TransportKeys {
-    if (this.#keys === null) return fail("unexpected", "The handshake is not complete.");
+    if (this.#keys === null) return fail("unexpected", "The handshake holds no transport keys.");
     return this.#keys;
+  }
+
+  /**
+   * Hands the transport keys to the caller, once. From then on the caller owns them and clears
+   * them; `dispose` no longer touches them.
+   */
+  takeTransportKeys(): TransportKeys {
+    const keys = this.transportKeys;
+    this.#keys = null;
+    return keys;
+  }
+
+  /**
+   * Ends the handshake and wipes what it owns, best effort: the ephemeral secret, the remote
+   * ephemeral key, the chaining key and the handshake cipher, and transport keys not yet taken.
+   * The static keys belong to the caller. Safe to call any number of times.
+   */
+  dispose(): void {
+    if (this.#step !== "done") this.#step = "failed";
+    this.#ephemeral?.secretKey.fill(0);
+    this.#ephemeral = null;
+    this.#remoteEphemeral?.fill(0);
+    this.#remoteEphemeral = null;
+    this.#symmetric.dispose();
+    this.#keys?.send.clear();
+    this.#keys?.receive.clear();
+    this.#keys = null;
+  }
+
+  /** Tests only: the secrets the handshake still holds, to check that disposal wiped them. */
+  static secretsForTests(handshake: IKHandshake): {
+    readonly ephemeralSecret: Uint8Array | null;
+    readonly chainingKey: Uint8Array;
+    readonly cipherKeyed: boolean;
+    readonly holdsTransportKeys: boolean;
+  } {
+    return {
+      ephemeralSecret: handshake.#ephemeral?.secretKey ?? null,
+      ...handshake.#symmetric.secretsForTests,
+      holdsTransportKeys: handshake.#keys !== null,
+    };
   }
 
   #run<T>(step: Step, next: Step, body: () => T): T {
     if (this.#step !== step) {
+      this.dispose();
       this.#step = "failed";
-      this.#ephemeral?.secretKey.fill(0);
-      this.#ephemeral = null;
       return fail("unexpected", `This handshake cannot take step ${step} now.`);
     }
     try {
@@ -254,15 +316,22 @@ export class IKHandshake {
       this.#step = next;
       return result;
     } catch (error) {
-      this.#step = "failed";
-      this.#ephemeral?.secretKey.fill(0);
-      this.#ephemeral = null;
+      this.dispose();
       throw error;
     }
   }
 
+  /** MixKey(DH(secret, public)), wiping the shared secret after. */
+  #mixDh(secretKey: Uint8Array, publicKey: Uint8Array): void {
+    const shared = dh(secretKey, publicKey);
+    this.#symmetric.mixKey(shared);
+    shared.fill(0);
+  }
+
   #newEphemeral(): Uint8Array {
-    this.#ephemeral = keyPairFromSecret(this.#random(KEY_BYTES));
+    const seed = this.#random(KEY_BYTES);
+    this.#ephemeral = keyPairFromSecret(seed);
+    if (this.#random === secureRandomBytes) seed.fill(0);
     this.#symmetric.mixHash(this.#ephemeral.publicKey);
     return this.#ephemeral.publicKey;
   }
@@ -271,9 +340,9 @@ export class IKHandshake {
   writeMessage1(payload: Uint8Array): Uint8Array {
     return this.#run("write1", "read2", () => {
       const e = this.#newEphemeral();
-      this.#symmetric.mixKey(dh(this.#ephemeral!.secretKey, this.#remoteStatic!));
+      this.#mixDh(this.#ephemeral!.secretKey, this.#remoteStatic!);
       const s = this.#symmetric.encryptAndHash(this.#static.publicKey);
-      this.#symmetric.mixKey(dh(this.#static.secretKey, this.#remoteStatic!));
+      this.#mixDh(this.#static.secretKey, this.#remoteStatic!);
       return checkSize(concatBytes(e, s, this.#symmetric.encryptAndHash(payload)));
     });
   }
@@ -288,11 +357,11 @@ export class IKHandshake {
       const re = message.subarray(0, KEY_BYTES);
       this.#remoteEphemeral = Uint8Array.from(re);
       this.#symmetric.mixHash(re);
-      this.#symmetric.mixKey(dh(this.#static.secretKey, re));
+      this.#mixDh(this.#static.secretKey, re);
       const rs = this.#symmetric.decryptAndHash(
         message.subarray(KEY_BYTES, KEY_BYTES + KEY_BYTES + TAG_BYTES),
       );
-      this.#symmetric.mixKey(dh(this.#static.secretKey, rs));
+      this.#mixDh(this.#static.secretKey, rs);
       this.#remoteStatic = rs;
       return this.#symmetric.decryptAndHash(message.subarray(KEY_BYTES + KEY_BYTES + TAG_BYTES));
     });
@@ -302,8 +371,8 @@ export class IKHandshake {
   writeMessage2(payload: Uint8Array): Uint8Array {
     return this.#run("write2", "done", () => {
       const e = this.#newEphemeral();
-      this.#symmetric.mixKey(dh(this.#ephemeral!.secretKey, this.#remoteEphemeral!));
-      this.#symmetric.mixKey(dh(this.#ephemeral!.secretKey, this.#remoteStatic!));
+      this.#mixDh(this.#ephemeral!.secretKey, this.#remoteEphemeral!);
+      this.#mixDh(this.#ephemeral!.secretKey, this.#remoteStatic!);
       const message = checkSize(concatBytes(e, this.#symmetric.encryptAndHash(payload)));
       const [initiatorToResponder, responderToInitiator] = this.#symmetric.split();
       this.#finish(responderToInitiator, initiatorToResponder);
@@ -320,8 +389,8 @@ export class IKHandshake {
       checkSize(message);
       const re = message.subarray(0, KEY_BYTES);
       this.#symmetric.mixHash(re);
-      this.#symmetric.mixKey(dh(this.#ephemeral!.secretKey, re));
-      this.#symmetric.mixKey(dh(this.#static.secretKey, re));
+      this.#mixDh(this.#ephemeral!.secretKey, re);
+      this.#mixDh(this.#static.secretKey, re);
       const payload = this.#symmetric.decryptAndHash(message.subarray(KEY_BYTES));
       const [initiatorToResponder, responderToInitiator] = this.#symmetric.split();
       this.#finish(initiatorToResponder, responderToInitiator);
@@ -334,6 +403,7 @@ export class IKHandshake {
     // Section 5.3: the ephemeral keys are no longer needed once the handshake is done.
     this.#ephemeral?.secretKey.fill(0);
     this.#ephemeral = null;
+    this.#remoteEphemeral?.fill(0);
     this.#remoteEphemeral = null;
   }
 }

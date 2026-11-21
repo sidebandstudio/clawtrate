@@ -52,6 +52,7 @@ export function encodeFrame(frame: Frame): Uint8Array {
 
 /** Reads a frame's header and checks its length. Throws `RelayProtocolError` and nothing else. */
 export function decodeFrame(bytes: Uint8Array): Frame {
+  if (!(bytes instanceof Uint8Array)) fail("malformed", "A frame is binary.");
   if (bytes.length > MAX_FRAME_BYTES) fail("malformed", "The frame is over the size cap.");
   if (bytes.length < FRAME_HEADER_BYTES) fail("malformed", "The frame has no header.");
   if (bytes[0] !== PROTOCOL_VERSION) {
@@ -119,7 +120,7 @@ export function encodeRecord(record: ChannelRecord): Uint8Array {
     case "confirm":
       return kind;
     case "admission":
-      return concatBytes(kind, Uint8Array.of(ANSWER_BYTE[record.answer]));
+      return concatBytes(kind, Uint8Array.of(answerByte(record.answer)));
     case "text-part":
     case "text-end":
     case "ping":
@@ -139,6 +140,7 @@ export function encodeRecord(record: ChannelRecord): Uint8Array {
 
 /** Reads a decrypted transport payload. Throws `RelayProtocolError` and nothing else. */
 export function decodeRecord(bytes: Uint8Array): ChannelRecord {
+  if (!(bytes instanceof Uint8Array)) fail("malformed", "A record is binary.");
   if (bytes.length < RECORD_HEADER_BYTES) fail("malformed", "The record has no kind.");
   const data = bytes.subarray(RECORD_HEADER_BYTES);
   switch (bytes[0]) {
@@ -234,7 +236,20 @@ const ANSWER_BYTE: Readonly<Record<Answer, number>> = {
 };
 
 export function encodeAnswer(answer: Answer): Uint8Array {
-  return Uint8Array.of(PROTOCOL_VERSION, ANSWER_BYTE[answer]);
+  return Uint8Array.of(PROTOCOL_VERSION, answerByte(answer));
+}
+
+/** The one encoder of an answer's status byte. Anything but the three answers fails. */
+function answerByte(answer: unknown): number {
+  if (typeof answer !== "string" || !Object.hasOwn(ANSWER_BYTE, answer)) {
+    return fail("malformed", "The answer is not one of the three answers.");
+  }
+  return ANSWER_BYTE[answer as Answer];
+}
+
+/** True for the two ways to turn a phone away. */
+export function isRefusal(value: unknown): value is Exclude<Answer, "accepted"> {
+  return value === "not_enrolled" || value === "enrollment_refused";
 }
 
 export function decodeAnswer(bytes: Uint8Array): Answer {

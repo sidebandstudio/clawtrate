@@ -14,6 +14,7 @@ declare class URL {
   constructor(input: string, base?: string);
   readonly protocol: string;
   readonly host: string;
+  readonly hostname: string;
   readonly username: string;
   readonly password: string;
   readonly pathname: string;

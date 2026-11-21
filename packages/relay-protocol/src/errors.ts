@@ -26,7 +26,9 @@ export type RelayProtocolErrorCode =
   /** A time is not a nonnegative safe integer number of milliseconds. */
   | "bad_time"
   /** A shared receive budget has no room for more buffered text. */
-  | "over_budget";
+  | "over_budget"
+  /** A text message stayed unfinished past `MAX_PARTIAL_MESSAGE_MS`. */
+  | "timed_out";
 
 export class RelayProtocolError extends Error {
   readonly code: RelayProtocolErrorCode;

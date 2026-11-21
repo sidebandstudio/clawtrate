@@ -7,8 +7,9 @@
 //   phone                                         connector
 //   handshake1  (hello: enroll secret or none) ->
 //                                              <- handshake2  (answer, provisional if accepted)
-//   confirm record                             ->              "admit" event: the host rechecks
-//                                                              and commits, then calls admit()
+//   confirm record                             ->              "admit" event with a one-use
+//                                                              handle; the host's transaction
+//                                                              commits through settle()
 //                                              <- admission record ("open" on the phone)
 //
 // Nothing changes on the connector before the confirm record: handshake message 1 can be
@@ -22,6 +23,7 @@ import {
   decodeHello,
   decodeRecord,
   encodeAnswer,
+  isRefusal,
   encodeFrame,
   encodeHello,
   encodeRecord,
@@ -41,6 +43,56 @@ import { IKHandshake, type KeyPair, type TransportKeys } from "./noise.ts";
 import { isRelayId } from "./relay-id.ts";
 import { checkMillis } from "./time.ts";
 
+/**
+ * Whatever the connector's gate needs to find a matching offer again at commit: an id or the
+ * offer object. Opaque to the channel. Never the raw secret.
+ */
+export type OfferCandidate = object;
+
+/** Admissions that can still be settled. A handle leaves it when settled or when its channel ends. */
+const liveAdmissions = new WeakSet<Admission>();
+
+/**
+ * One confirmed phone on one session, waiting for the host's transaction. It carries nothing a
+ * caller could reuse: no key, no secret. Use it once, through `Responder.beginAdmission`.
+ */
+export class Admission {
+  /** True until it is settled or its channel ends. */
+  get live(): boolean {
+    return liveAdmissions.has(this);
+  }
+}
+
+/** What the host's transaction is given by `beginAdmission`. */
+export interface AdmissionAttempt {
+  /** A copy of the authenticated phone key. Persist exactly these bytes. */
+  readonly phoneKey: Uint8Array;
+  /** The gate's candidate when it found a matching offer; null when it found the key enrolled. */
+  readonly candidate: OfferCandidate | null;
+  /**
+   * True while this attempt can still be admitted. Check it inside the transaction, in the same
+   * atomic step as the write: once the channel ends it is false, and nothing may be committed.
+   */
+  readonly live: boolean;
+}
+
+/**
+ * The transaction's answer: the key is enrolled now (it was, or the offer was spent and the
+ * key added), or a refusal.
+ */
+export type CommitResult = "enrolled" | Refusal;
+
+export type SettleResult =
+  /** Send `frame`; act only on `phoneKey`. */
+  | { readonly admitted: true; readonly frame: Uint8Array; readonly phoneKey: Uint8Array }
+  /** Send `frame`, the refusal; the channel is closed. */
+  | { readonly admitted: false; readonly reason: Refusal; readonly frame: Uint8Array }
+  /**
+   * The channel ended while the transaction ran. Whatever it committed stays committed; nothing
+   * is sent and the gateway is not opened.
+   */
+  | { readonly admitted: false; readonly reason: "ended"; readonly frame: null };
+
 /** Why a connector turned a phone away. */
 export type Refusal = Exclude<Answer, "accepted">;
 
@@ -50,10 +102,10 @@ export type ChannelEvent =
   /** The phone: the connector admitted it; text may flow. */
   | { readonly type: "open" }
   /**
-   * The connector: the phone confirmed the handshake. Recheck and commit, then call `admit` or
-   * `refuse`. `enroll` is the secret the phone sent, or null. Both are copies.
+   * The connector: the phone confirmed the handshake. Pass the handle to `beginAdmission`, run
+   * the transaction, then `settle`.
    */
-  | { readonly type: "admit"; readonly phoneKey: Uint8Array; readonly enroll: Uint8Array | null }
+  | { readonly type: "admit"; readonly admission: Admission }
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "pong"; readonly data: Uint8Array }
   /** The peer closed the channel. A message it had not finished is discarded. */
@@ -67,7 +119,7 @@ export type ChannelState =
   | "handshaking"
   /** Message 2 is done: the connector waits for the confirm record, the phone for admission. */
   | "confirming"
-  /** The connector has the confirm record and waits for the host's `admit` or `refuse`. */
+  /** The connector has the confirm record and waits for the host's `settle`. */
   | "admitting"
   | "open"
   /** Ended by an authenticated close or refusal. */
@@ -85,18 +137,32 @@ export function channelPrologue(relayId: string): Uint8Array {
 }
 
 /**
- * What the connector's allowlist says at message 1: the key is enrolled, or it is not but its
- * secret matches a live offer, or a refusal.
+ * What the connector's allowlist says at message 1: the key is enrolled; or it is not, but its
+ * secret matches a live offer, named by an opaque candidate; or a refusal.
  */
-export type GateCheck = "enrolled" | "eligible" | Refusal;
+export type GateCheck = "enrolled" | Refusal | { readonly eligible: OfferCandidate };
 
 /**
  * The connector's read-only look at its allowlist when message 1 arrives. It must change
- * nothing: the commit comes with the `admit` event, after the phone proves it is live. It is
- * given copies.
+ * nothing: the commit comes after the phone proves it is live. It is given copies, which are
+ * wiped when it returns. It must not call back into the channel.
  */
 export interface PhoneGate {
   check(phoneKey: Uint8Array, enroll: Uint8Array | undefined): GateCheck;
+}
+
+function checkGateResult(check: unknown): GateCheck {
+  if (check === "enrolled" || isRefusal(check)) return check;
+  if (
+    typeof check === "object" &&
+    check !== null &&
+    Object.hasOwn(check, "eligible") &&
+    typeof (check as { eligible: unknown }).eligible === "object" &&
+    (check as { eligible: unknown }).eligible !== null
+  ) {
+    return check as { readonly eligible: OfferCandidate };
+  }
+  return fail("malformed", "The gate's answer is not one it may give.");
 }
 
 /**
@@ -126,9 +192,13 @@ export class EnrollmentOffer {
     return same && !this.#used && nowMs < this.expiresAtMs;
   }
 
-  /** Spends the offer if `matches` holds; true once. */
-  redeem(secret: Uint8Array, nowMs: number): boolean {
-    if (!this.matches(secret, nowMs)) return false;
+  /**
+   * Spends the offer at commit, without the secret: the gate matched it at message 1. True
+   * once, before `expiresAtMs`.
+   */
+  spend(nowMs: number): boolean {
+    checkMillis(nowMs, "The time");
+    if (this.#used || nowMs >= this.expiresAtMs) return false;
     this.#used = true;
     this.#secret.fill(0);
     return true;
@@ -170,9 +240,11 @@ export interface ChannelOptions {
   /** A budget shared by the host's channels for buffered text. */
   readonly budget?: ReceiveBudget;
   /**
-   * The host's monotonic clock, in milliseconds. With it, a record that arrives more than
-   * `MAX_PARTIAL_MESSAGE_MS` after its message began fails the channel. The host still needs
-   * its own timer for a peer that goes quiet: abort when `partialMessageSince` is that old.
+   * The host's monotonic clock, in whole milliseconds; a reading that is not one, or that goes
+   * back, fails the channel. With it, any record that arrives after `partialMessageDeadline`
+   * fails the channel, keep-alives included. A peer that goes quiet sends nothing to check, so
+   * once a message begins the host arms a timer for just after `partialMessageDeadline` and
+   * calls `expirePartialMessage`, and cancels it when the message completes or the channel ends.
    */
   readonly clock?: () => number;
 }
@@ -186,6 +258,8 @@ abstract class Channel {
   #parts: Uint8Array[] = [];
   #partBytes = 0;
   #partialSince: number | null = null;
+  #lastSample: number | null = null;
+  #receiving = false;
 
   protected constructor(state: ChannelState, options: ChannelOptions) {
     this.state = state;
@@ -213,18 +287,48 @@ abstract class Channel {
   }
 
   /**
+   * The last clock reading at which the unfinished message may still continue, or null. One
+   * millisecond later it has expired, on the receive path and for `expirePartialMessage` alike.
+   */
+  get partialMessageDeadline(): number | null {
+    return this.#partialSince === null ? null : this.#partialSince + MAX_PARTIAL_MESSAGE_MS;
+  }
+
+  /**
+   * For the host's timer: fails the channel if its unfinished message is past the deadline, and
+   * returns true if it did. A bad clock reading fails the channel too.
+   */
+  expirePartialMessage(): boolean {
+    if (this.state === "closed" || this.state === "failed") return false;
+    try {
+      const now = this.#sample();
+      if (now === null || !this.#pastDeadline(now)) return false;
+    } catch (error) {
+      this.terminate("failed");
+      throw error;
+    }
+    this.terminate("failed");
+    return true;
+  }
+
+  /**
    * Takes one binary frame from the peer. Anything wrong with it (tampering, a replayed,
    * reordered or dropped frame, a frame the state does not allow, a size over a cap) throws
    * `RelayProtocolError` and fails the channel for good: the caller closes the socket.
    */
   receive(bytes: Uint8Array): ChannelEvent[] {
     this.#checkUsable();
+    // A callback (the gate) calling back in would see a half-made transition.
+    if (this.#receiving) fail("unexpected", "receive was called from inside a callback.");
+    this.#receiving = true;
     try {
       const frame = decodeFrame(bytes);
       return this.receiveFrame(frame.type, frame.body);
     } catch (error) {
       this.terminate("failed");
       throw error;
+    } finally {
+      this.#receiving = false;
     }
   }
 
@@ -306,15 +410,21 @@ abstract class Channel {
     return decodeRecord(this.keys!.receive.decrypt(new Uint8Array(0), body));
   }
 
-  protected takeKeys(keys: TransportKeys): void {
+  /** Takes ownership of the handshake's transport keys, the moment the handshake splits. */
+  protected adoptKeys(handshake: IKHandshake): void {
+    const keys = handshake.takeTransportKeys();
     this.keys = keys;
     this.#handshakeHash = Uint8Array.from(keys.handshakeHash);
   }
 
-  /** The one way into `closed` or `failed`: drops keys, buffered text and anything pending. */
+  /**
+   * The one way into `closed` or `failed`: wipes the handshake, the transport keys, buffered
+   * text and anything pending, and ends a pending admission.
+   */
   protected terminate(state: "closed" | "failed"): void {
     if (this.state === "closed" || this.state === "failed") return;
     this.state = state;
+    this.handshake.dispose();
     this.keys?.send.clear();
     this.keys?.receive.clear();
     this.keys = null;
@@ -322,11 +432,21 @@ abstract class Channel {
     this.dropPending();
   }
 
-  /** Subclasses wipe what they hold for the handshake. */
+  /** The channel's handshake, disposed of with the channel. */
+  protected abstract readonly handshake: IKHandshake;
+
+  /** Subclasses wipe what they hold for the opening. */
   protected dropPending(): void {}
 
-  /** Handles a record on an open channel. */
+  /** Handles a record on an open channel. Every record, keep-alives too, meets the deadline. */
   protected receiveRecord(record: ChannelRecord): ChannelEvent[] {
+    const now = this.#sample();
+    if (now !== null && this.#pastDeadline(now)) {
+      fail("timed_out", "The message took too long to arrive.");
+    }
+    if (now !== null && this.#partialSince === null && record.kind === "text-part") {
+      this.#partialSince = now;
+    }
     switch (record.kind) {
       case "text-part":
       case "text-end":
@@ -345,15 +465,22 @@ abstract class Channel {
     }
   }
 
-  #receiveText(kind: "text-part" | "text-end", data: Uint8Array): ChannelEvent[] {
-    if (this.#clock !== null) {
-      const now = this.#clock();
-      if (this.#partialSince === null) {
-        if (kind === "text-part") this.#partialSince = now;
-      } else if (!(now - this.#partialSince <= MAX_PARTIAL_MESSAGE_MS)) {
-        fail("unexpected", "The message took too long to arrive.");
-      }
+  /** A checked reading of the host's clock, or null without one. */
+  #sample(): number | null {
+    if (this.#clock === null) return null;
+    const now = checkMillis(this.#clock(), "The clock");
+    if (this.#lastSample !== null && now < this.#lastSample) {
+      fail("bad_time", "The clock went backwards.");
     }
+    this.#lastSample = now;
+    return now;
+  }
+
+  #pastDeadline(now: number): boolean {
+    return this.#partialSince !== null && now - this.#partialSince > MAX_PARTIAL_MESSAGE_MS;
+  }
+
+  #receiveText(kind: "text-part" | "text-end", data: Uint8Array): ChannelEvent[] {
     if (this.#partBytes + data.length > MAX_MESSAGE_BYTES) {
       fail("message_too_large", `A message is at most ${MAX_MESSAGE_BYTES} bytes.`);
     }
@@ -363,14 +490,28 @@ abstract class Channel {
     this.#partBytes += data.length;
     this.#parts.push(Uint8Array.from(data));
     if (kind === "text-part") return [];
-    const joined = new Uint8Array(this.#partBytes);
-    let offset = 0;
-    for (const part of this.#parts) {
-      joined.set(part, offset);
-      offset += part.length;
+    // Joining makes a second copy of the message; reserve room for it before allocating.
+    const total = this.#partBytes;
+    if (this.#budget !== null && !this.#budget.take(total)) {
+      fail("over_budget", "The host has no room to join this message.");
+    }
+    let joined: Uint8Array | null = null;
+    let text: string;
+    try {
+      joined = new Uint8Array(total);
+      let offset = 0;
+      for (const part of this.#parts) {
+        joined.set(part, offset);
+        offset += part.length;
+      }
+      text = utf8Decode(joined);
+    } finally {
+      joined?.fill(0);
+      this.#budget?.give(total);
     }
     this.#dropPartial();
-    return [{ type: "text", text: utf8Decode(joined) }];
+    // The returned text, and the host's own write queues, need bounds of their own.
+    return [{ type: "text", text }];
   }
 
   #dropPartial(): void {
@@ -409,13 +550,13 @@ export interface InitiatorOptions extends ChannelOptions {
  * `receive`. It reports `open` only on the connector's admission record.
  */
 export class Initiator extends Channel {
-  readonly #handshake: IKHandshake;
+  protected readonly handshake: IKHandshake;
   readonly #hello: Uint8Array;
 
   constructor(options: InitiatorOptions) {
     super("idle", options);
     this.#hello = encodeHello(options.enroll === undefined ? {} : { enroll: options.enroll });
-    this.#handshake = new IKHandshake({
+    this.handshake = new IKHandshake({
       initiator: true,
       prologue: channelPrologue(options.relayId),
       staticKey: options.staticKey,
@@ -428,7 +569,7 @@ export class Initiator extends Channel {
   start(): Uint8Array {
     if (this.state !== "idle") fail("unexpected", "The channel has already started.");
     try {
-      const body = this.#handshake.writeMessage1(this.#hello);
+      const body = this.handshake.writeMessage1(this.#hello);
       this.state = "handshaking";
       return encodeFrame({ type: "handshake1", body });
     } catch (error) {
@@ -445,8 +586,15 @@ export class Initiator extends Channel {
 
   protected receiveFrame(type: FrameType, body: Uint8Array): ChannelEvent[] {
     if (this.state === "handshaking" && type === "handshake2") {
-      const answer = decodeAnswer(this.#handshake.readMessage2(body));
-      this.takeKeys(this.#handshake.transportKeys);
+      const payload = this.handshake.readMessage2(body);
+      // Adopt the split keys before reading the answer, so a bad answer still wipes them.
+      this.adoptKeys(this.handshake);
+      let answer: Answer;
+      try {
+        answer = decodeAnswer(payload);
+      } finally {
+        payload.fill(0);
+      }
       if (answer !== "accepted") {
         this.terminate("closed");
         return [{ type: "refused", reason: answer }];
@@ -485,23 +633,29 @@ export interface ResponderOptions extends ChannelOptions {
  * The connector's end, one per relayed session. Feed it every frame from the relay.
  *
  * At message 1 it asks the gate, read-only, and answers; an "accepted" answer is provisional.
- * When the phone's confirm record arrives it reports `admit` with the phone's key and secret.
- * The host then rechecks and, in one transaction, spends the offer and adds the key (or finds
- * the key still enrolled), and calls `admit()`, which returns the admission frame and opens the
- * channel, or `refuse()`. Act only on the key `admit()` returns, and open no gateway socket
- * before it. Call `abort()` when the socket ends or the host gives up waiting.
+ * When the phone's confirm record arrives it reports `admit` with a one-use `Admission`. The
+ * host passes it to `beginAdmission`, which gives the transaction the authenticated key and
+ * the gate's candidate. Inside one atomic step the transaction checks the attempt is still
+ * live, rechecks the offer's expiry and its own policy, and spends the offer and adds the key
+ * (or finds the key still enrolled); then the host calls `settle` with the result. Only a
+ * committed "enrolled" admits the phone. Act only on the key `settle` returns, and open no gateway socket before it. Call `abort()` when the socket ends, a write
+ * fails or the host gives up waiting; a write that fails after a commit leaves the enrollment
+ * in place.
  */
 export class Responder extends Channel {
-  readonly #handshake: IKHandshake;
+  protected readonly handshake: IKHandshake;
   readonly #gate: PhoneGate;
   /** The phone's key as message 1 authenticated it; never handed out, only copies. */
   #phoneKey: Uint8Array | null = null;
-  #enroll: Uint8Array | null = null;
+  #candidate: OfferCandidate | null = null;
+  /** The pending admission, until it is settled or the channel ends. */
+  #admission: Admission | null = null;
+  #attempt: AdmissionAttempt | null = null;
 
   constructor(options: ResponderOptions) {
     super("handshaking", options);
     this.#gate = options.gate;
-    this.#handshake = new IKHandshake({
+    this.handshake = new IKHandshake({
       initiator: false,
       prologue: channelPrologue(options.relayId),
       staticKey: options.staticKey,
@@ -515,76 +669,124 @@ export class Responder extends Channel {
   }
 
   /**
-   * Admits the phone after the host committed its enrollment, or found it still enrolled.
-   * Returns the admission frame to send and a copy of the admitted key.
+   * Starts the host's transaction for this channel's admission, once. The attempt carries a
+   * copy of the authenticated key and the gate's candidate; check `attempt.live` inside the
+   * transaction, in the same atomic step as the write. Then call `settle` with its result; if
+   * the transaction fails, call `abort()`.
    */
-  admit(): { readonly frame: Uint8Array; readonly phoneKey: Uint8Array } {
-    this.#checkAdmitting();
-    const phoneKey = Uint8Array.from(this.#phoneKey!);
-    const frame = this.seal({ kind: "admission", answer: "accepted" });
-    this.dropPending();
-    this.state = "open";
-    return { frame, phoneKey };
+  beginAdmission(admission: Admission): AdmissionAttempt {
+    if (
+      admission !== this.#admission ||
+      !admission.live ||
+      this.state !== "admitting" ||
+      this.#attempt !== null
+    ) {
+      fail("unexpected", "This admission is not this channel's pending one.");
+    }
+    const attempt: AdmissionAttempt = {
+      phoneKey: Uint8Array.from(this.#phoneKey!),
+      candidate: this.#candidate,
+      get live() {
+        return liveAdmissions.has(admission);
+      },
+    };
+    this.#attempt = attempt;
+    return attempt;
   }
 
-  /** Turns the phone away after all. Returns the frame to send; the channel is closed. */
-  refuse(reason: Refusal): Uint8Array {
-    this.#checkAdmitting();
-    const frame = this.seal({ kind: "admission", answer: reason });
+  /**
+   * Ends the admission with the transaction's result. Only "enrolled" admits the phone. A
+   * result that is not a `CommitResult`, or an attempt whose key was changed, fails the
+   * channel. If the channel ended while the transaction ran, nothing is sent: whatever was
+   * committed stays committed, and the gateway is not opened.
+   */
+  settle(attempt: AdmissionAttempt, result: CommitResult): SettleResult {
+    // An attempt whose channel ended changes nothing, whichever channel it was.
+    if (!attempt.live) return { admitted: false, reason: "ended", frame: null };
+    if (attempt !== this.#attempt) fail("unexpected", "This is not this channel's attempt.");
+    if (result !== "enrolled" && !isRefusal(result)) {
+      this.terminate("failed");
+      fail("malformed", "The transaction's answer is not one it may give.");
+    }
+    if (!equalBytes(attempt.phoneKey, this.#phoneKey!)) {
+      this.terminate("failed");
+      fail("unexpected", "The transaction changed the phone key it was given.");
+    }
+    if (result === "enrolled") {
+      const frame = this.seal({ kind: "admission", answer: "accepted" });
+      const phoneKey = Uint8Array.from(this.#phoneKey!);
+      this.dropPending();
+      this.state = "open";
+      return { admitted: true, frame, phoneKey };
+    }
+    const frame = this.seal({ kind: "admission", answer: result });
     this.terminate("closed");
-    return frame;
+    return { admitted: false, reason: result, frame };
   }
 
-  #checkAdmitting(): void {
-    if (this.state !== "admitting") fail("unexpected", "No phone is waiting for admission.");
-  }
-
+  /** Ends the pending admission too: a transaction still running sees `live` turn false. */
   protected override dropPending(): void {
-    this.#enroll?.fill(0);
-    this.#enroll = null;
+    if (this.#admission !== null) liveAdmissions.delete(this.#admission);
+    this.#admission = null;
+    this.#attempt = null;
+    this.#candidate = null;
   }
 
   protected receiveFrame(type: FrameType, body: Uint8Array): ChannelEvent[] {
-    if (this.state === "handshaking" && type === "handshake1") {
-      const payload = this.#handshake.readMessage1(body);
-      const hello = decodeHello(payload);
-      payload.fill(0);
-      this.#phoneKey = this.#handshake.remoteStaticKey!;
-      this.#enroll = hello.enroll ?? null;
-      const check = this.#gate.check(
-        Uint8Array.from(this.#phoneKey),
-        this.#enroll === null ? undefined : Uint8Array.from(this.#enroll),
-      );
-      const answer: Answer = check === "enrolled" || check === "eligible" ? "accepted" : check;
-      const frame = encodeFrame({
-        type: "handshake2",
-        body: this.#handshake.writeMessage2(encodeAnswer(answer)),
-      });
-      this.takeKeys(this.#handshake.transportKeys);
-      if (answer !== "accepted") {
-        this.terminate("closed");
-        return [
-          { type: "send", frame },
-          { type: "refused", reason: answer },
-        ];
-      }
-      this.state = "confirming";
-      return [{ type: "send", frame }];
-    }
+    if (this.state === "handshaking" && type === "handshake1") return this.#readHello(body);
     if (this.state === "confirming" && type === "transport") {
       const record = this.open(body);
       if (record.kind !== "confirm")
         fail("unexpected", "The phone's first record must be confirm.");
+      const admission = new Admission();
+      liveAdmissions.add(admission);
+      this.#admission = admission;
       this.state = "admitting";
-      return [
-        {
-          type: "admit",
-          phoneKey: Uint8Array.from(this.#phoneKey!),
-          enroll: this.#enroll === null ? null : Uint8Array.from(this.#enroll),
-        },
-      ];
+      return [{ type: "admit", admission }];
     }
     if (this.state === "open" && type === "transport") return this.receiveRecord(this.open(body));
     return fail("unexpected", `A ${type} frame is not expected now.`);
+  }
+
+  #readHello(body: Uint8Array): ChannelEvent[] {
+    let payload: Uint8Array | null = null;
+    let enroll: Uint8Array | null = null;
+    let check: GateCheck;
+    try {
+      payload = this.handshake.readMessage1(body);
+      enroll = decodeHello(payload).enroll ?? null;
+      this.#phoneKey = this.handshake.remoteStaticKey!;
+      const keyCopy = Uint8Array.from(this.#phoneKey);
+      const enrollCopy = enroll === null ? undefined : Uint8Array.from(enroll);
+      try {
+        check = checkGateResult(this.#gate.check(keyCopy, enrollCopy));
+      } finally {
+        keyCopy.fill(0);
+        enrollCopy?.fill(0);
+      }
+    } finally {
+      payload?.fill(0);
+      enroll?.fill(0);
+    }
+    // The gate may have ended the channel (an abort from inside it); stop before sealing.
+    if ((this.state as ChannelState) !== "handshaking") {
+      fail("failed", "The channel ended while the gate was deciding.");
+    }
+    const answer: Answer = check === "enrolled" || typeof check === "object" ? "accepted" : check;
+    const frame = encodeFrame({
+      type: "handshake2",
+      body: this.handshake.writeMessage2(encodeAnswer(answer)),
+    });
+    this.adoptKeys(this.handshake);
+    if (answer !== "accepted") {
+      this.terminate("closed");
+      return [
+        { type: "send", frame },
+        { type: "refused", reason: answer },
+      ];
+    }
+    this.#candidate = typeof check === "object" ? check.eligible : null;
+    this.state = "confirming";
+    return [{ type: "send", frame }];
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  Admission,
   decodeFrame,
   EnrollmentOffer,
   generateKeyPair,
@@ -11,7 +12,7 @@ import {
   RelayProtocolError,
   Responder,
 } from "../src/index.ts";
-import { deliver, makePair, openPair, RELAY_ID, sends, TestGate } from "./helpers.ts";
+import { admissionOf, deliver, makePair, openPair, RELAY_ID, sends, TestGate } from "./helpers.ts";
 
 function texts(events: ReturnType<typeof deliver>): string[] {
   return events.flatMap((event) => (event.type === "text" ? [event.text] : []));
@@ -104,16 +105,19 @@ describe("the end-to-end channel", () => {
     expect(used.gate.enrolled).toHaveLength(1);
   });
 
-  it("an enrollment offer is good once and compares the whole secret", () => {
+  it("an enrollment offer matches the whole secret and is spent once", () => {
     const secret = new Uint8Array(32).fill(5);
     const offer = new EnrollmentOffer(secret, 100);
     const almost = Uint8Array.from(secret);
     almost[31] = 6;
-    expect(offer.redeem(almost, 0)).toBe(false);
-    expect(offer.redeem(secret.subarray(0, 31), 0)).toBe(false);
-    expect(offer.redeem(secret, 100)).toBe(false);
-    expect(offer.redeem(secret, 99)).toBe(true);
-    expect(offer.redeem(secret, 99)).toBe(false);
+    expect(offer.matches(almost, 0)).toBe(false);
+    expect(offer.matches(secret.subarray(0, 31), 0)).toBe(false);
+    expect(offer.matches(secret, 100)).toBe(false);
+    expect(offer.matches(secret, 99)).toBe(true);
+    expect(offer.spend(100)).toBe(false);
+    expect(offer.spend(99)).toBe(true);
+    expect(offer.spend(99)).toBe(false);
+    expect(offer.matches(secret, 0)).toBe(false);
     expect(() => new EnrollmentOffer(new Uint8Array(16), 100)).toThrow(RelayProtocolError);
   });
 
@@ -130,14 +134,18 @@ describe("the end-to-end channel", () => {
     const connectorEvents = pair.connector.receive(sends(phoneEvents)[0]!);
     expect(connectorEvents.map((e) => e.type)).toEqual(["admit"]);
     expect(pair.connector.currentState).toBe("admitting");
-    const { frame, phoneKey } = pair.connector.admit();
-    expect(phoneKey).toEqual(pair.phoneKey.publicKey);
-    expect(pair.phone.receive(frame)).toEqual([{ type: "open" }]);
+    const attempt = pair.connector.beginAdmission(admissionOf(connectorEvents));
+    const settled = pair.connector.settle(attempt, pair.gate.commit(attempt));
+    if (!settled.admitted) throw new Error("Not admitted.");
+    expect(settled.phoneKey).toEqual(pair.phoneKey.publicKey);
+    expect(pair.phone.receive(settled.frame)).toEqual([{ type: "open" }]);
   });
 
-  it("refuses frames from the phone while the host decides, and admit or refuse only then", () => {
+  it("refuses frames from the phone while the host decides, and admissions not its own", () => {
     const pair = makePair();
-    expect(() => pair.connector.admit()).toThrow(expect.objectContaining({ code: "unexpected" }));
+    expect(() => pair.connector.beginAdmission(new Admission())).toThrow(
+      expect.objectContaining({ code: "unexpected" }),
+    );
     const [hs2] = sends(pair.connector.receive(pair.phone.start()));
     const [confirm] = sends(pair.phone.receive(hs2!));
     pair.connector.receive(confirm!);

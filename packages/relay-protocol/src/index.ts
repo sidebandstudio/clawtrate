@@ -1,18 +1,23 @@
 export { fromBase64Url, secureRandomBytes, toBase64Url, type RandomBytes } from "./bytes.ts";
 export {
+  Admission,
   channelPrologue,
   EnrollmentOffer,
   Initiator,
   ReceiveBudget,
   Responder,
+  type AdmissionAttempt,
   type ChannelEvent,
   type ChannelOptions,
   type ChannelState,
+  type CommitResult,
   type GateCheck,
   type InitiatorOptions,
+  type OfferCandidate,
   type PhoneGate,
   type Refusal,
   type ResponderOptions,
+  type SettleResult,
 } from "./channel.ts";
 export { RelayProtocolError, type RelayProtocolErrorCode } from "./errors.ts";
 export {
@@ -57,7 +62,6 @@ export {
   type RelayToEndpoint,
 } from "./messages.ts";
 export {
-  CipherState,
   generateKeyPair,
   IKHandshake,
   keyPairFromSecret,
@@ -77,6 +81,7 @@ export {
   verifyRegisterProof,
   type ControlRegistrationOptions,
   type KeyClaims,
+  type OriginOptions,
   type RegisterProofFailureCode,
   type RegistrationSnapshot,
   type RegistrationState,

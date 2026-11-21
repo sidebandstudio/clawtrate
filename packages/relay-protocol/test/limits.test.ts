@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  channelPrologue,
   decodeRecord,
   encodeFrame,
   encodeRecord,
@@ -19,7 +20,7 @@ import {
   type ChannelRecord,
   type TransportKeys,
 } from "../src/index.ts";
-import { CipherState } from "../src/noise.ts";
+import { CipherState, IKHandshake } from "../src/noise.ts";
 import { deliver, makePair, openPair, RELAY_ID, TestGate, type Pair } from "./helpers.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -91,7 +92,7 @@ describe("reassembly bounds", () => {
     const budget = new ReceiveBudget(MAX_RECORD_DATA_BYTES + 10);
     const a = pairWith({ budget });
     const b = pairWith({ budget });
-    const [aPart, aEnd] = a.phone.sendText(TWO_RECORDS);
+    const [aPart] = a.phone.sendText(TWO_RECORDS);
     const [bPart] = b.phone.sendText(TWO_RECORDS);
     expect(a.connector.receive(aPart!)).toEqual([]);
     expect(budget.usedBytes).toBe(MAX_RECORD_DATA_BYTES);
@@ -100,14 +101,35 @@ describe("reassembly bounds", () => {
       expect.objectContaining({ code: "over_budget" }),
     );
     expect(b.connector.currentState).toBe("failed");
-    expect(a.connector.receive(aEnd!)).toEqual([{ type: "text", text: TWO_RECORDS }]);
-    expect(budget.usedBytes).toBe(0);
     // Ending a channel mid-message gives its share back.
-    const [again] = a.phone.sendText(TWO_RECORDS);
-    a.connector.receive(again!);
-    expect(budget.usedBytes).toBe(MAX_RECORD_DATA_BYTES);
     a.connector.abort();
     expect(budget.usedBytes).toBe(0);
+  });
+
+  it("reserves room for the joined copy before allocating it, and gives it back", () => {
+    const held = MAX_RECORD_DATA_BYTES + 1;
+    // Room for the held records but not for the joined copy as well.
+    const tight = new ReceiveBudget(2 * held - 1);
+    const a = pairWith({ budget: tight });
+    const [part, end] = a.phone.sendText(TWO_RECORDS);
+    a.connector.receive(part!);
+    expect(() => a.connector.receive(end!)).toThrow(
+      expect.objectContaining({ code: "over_budget" }),
+    );
+    expect(tight.usedBytes).toBe(0);
+    // Room for both: the message arrives and every byte comes back.
+    const enough = new ReceiveBudget(2 * held);
+    const b = pairWith({ budget: enough });
+    expect(deliver(b.connector, b.phone.sendText(TWO_RECORDS))).toEqual([
+      { type: "text", text: TWO_RECORDS },
+    ]);
+    expect(enough.usedBytes).toBe(0);
+    // A join that fails strict UTF-8 still gives its reservation back.
+    const c = pairWith({ budget: enough });
+    c.connector.receive(sealAs(c.phone, FULL_PART));
+    const bad = sealAs(c.phone, { kind: "text-end", data: Uint8Array.of(0xff) });
+    expect(() => c.connector.receive(bad)).toThrow(expect.objectContaining({ code: "bad_utf8" }));
+    expect(enough.usedBytes).toBe(0);
   });
 
   it("fails a message still unfinished after MAX_PARTIAL_MESSAGE_MS by the host's clock", () => {
@@ -133,9 +155,116 @@ describe("reassembly bounds", () => {
     const pair = pairWith({ clock: () => now });
     const [part, end] = pair.phone.sendText(TWO_RECORDS);
     pair.connector.receive(part!);
+    expect(pair.connector.partialMessageDeadline).toBe(MAX_PARTIAL_MESSAGE_MS);
     now = MAX_PARTIAL_MESSAGE_MS;
+    expect(pair.connector.expirePartialMessage()).toBe(false);
     expect(pair.connector.receive(end!)).toEqual([{ type: "text", text: TWO_RECORDS }]);
     expect(pair.connector.partialMessageSince).toBeNull();
+  });
+
+  it("checks the deadline on every record: a keep-alive after it fails the channel", () => {
+    const budget = new ReceiveBudget(10 * MAX_RECORD_DATA_BYTES);
+    let now = 0;
+    const pair = pairWith({ clock: () => now, budget });
+    pair.connector.receive(sealAs(pair.phone, FULL_PART));
+    now = MAX_PARTIAL_MESSAGE_MS + 1;
+    const ping = sealAs(pair.phone, { kind: "ping", data: new Uint8Array(0) });
+    expect(() => pair.connector.receive(ping)).toThrow(
+      expect.objectContaining({ code: "timed_out" }),
+    );
+    expect(pair.connector.bufferedBytes).toBe(0);
+    expect(budget.usedBytes).toBe(0);
+  });
+
+  it("lets the host's timer expire a quiet message at the same boundary", () => {
+    let now = 500;
+    const pair = pairWith({ clock: () => now });
+    expect(pair.connector.expirePartialMessage()).toBe(false);
+    pair.connector.receive(sealAs(pair.phone, FULL_PART));
+    now = 500 + MAX_PARTIAL_MESSAGE_MS;
+    expect(pair.connector.expirePartialMessage()).toBe(false);
+    now += 1;
+    expect(pair.connector.expirePartialMessage()).toBe(true);
+    expect(pair.connector.currentState).toBe("failed");
+    expect(pair.connector.bufferedBytes).toBe(0);
+    expect(pair.connector.expirePartialMessage()).toBe(false);
+  });
+
+  it("fails on a clock reading that is not whole milliseconds or that goes back", () => {
+    for (const reading of [Number.NaN, -1, 1.5]) {
+      const pair = pairWith({ clock: () => reading });
+      expect(() => pair.connector.receive(sealAs(pair.phone, FULL_PART)), String(reading)).toThrow(
+        expect.objectContaining({ code: "bad_time" }),
+      );
+      expect(pair.connector.partialMessageSince).toBeNull();
+    }
+    let now = 1_000;
+    const pair = pairWith({ clock: () => now });
+    pair.connector.receive(sealAs(pair.phone, FULL_PART));
+    now = 999;
+    expect(() =>
+      pair.connector.receive(sealAs(pair.phone, { kind: "text-end", data: Uint8Array.of(120) })),
+    ).toThrow(expect.objectContaining({ code: "bad_time" }));
+    // The host's expiry call fails closed the same way.
+    let reading = 0;
+    const timer = pairWith({ clock: () => reading });
+    timer.connector.receive(sealAs(timer.phone, FULL_PART));
+    reading = Number.NaN;
+    expect(() => timer.connector.expirePartialMessage()).toThrow(RelayProtocolError);
+    expect(timer.connector.currentState).toBe("failed");
+  });
+});
+
+describe("handshake state", () => {
+  function secretsOf(channel: Initiator | Responder) {
+    return IKHandshake.secretsForTests(
+      (channel as unknown as { handshake: IKHandshake }).handshake,
+    );
+  }
+  function wiped(channel: Initiator | Responder): void {
+    const secrets = secretsOf(channel);
+    expect(secrets.ephemeralSecret === null || secrets.ephemeralSecret.every((b) => b === 0)).toBe(
+      true,
+    );
+    expect(secrets.chainingKey.every((b) => b === 0)).toBe(true);
+    expect(secrets.cipherKeyed).toBe(false);
+    expect(secrets.holdsTransportKeys).toBe(false);
+  }
+
+  it("is wiped when a channel is aborted mid-handshake", () => {
+    const pair = makePair();
+    pair.connector.receive(pair.phone.start());
+    expect(secretsOf(pair.phone).chainingKey.some((b) => b !== 0)).toBe(true);
+    pair.phone.abort();
+    wiped(pair.phone);
+  });
+
+  it("is wiped once the handshake splits, and stays so through a normal close", () => {
+    const pair = makePair();
+    openPair(pair);
+    wiped(pair.phone);
+    wiped(pair.connector);
+    pair.connector.receive(pair.phone.close());
+    wiped(pair.phone);
+    wiped(pair.connector);
+  });
+
+  it("an authenticated answer that is malformed still wipes the split keys", () => {
+    const pair = makePair();
+    const hs1 = pair.phone.start();
+    // A connector that writes a valid message 2 carrying an answer no connector may give.
+    const responder = new IKHandshake({
+      initiator: false,
+      prologue: channelPrologue(RELAY_ID),
+      staticKey: pair.connectorKey,
+    });
+    responder.readMessage1(hs1.subarray(2));
+    const body = responder.writeMessage2(Uint8Array.of(1, 9));
+    expect(() => pair.phone.receive(encodeFrame({ type: "handshake2", body }))).toThrow(
+      expect.objectContaining({ code: "malformed" }),
+    );
+    wiped(pair.phone);
+    expect(keysOf(pair.phone)).toBeNull();
   });
 });
 

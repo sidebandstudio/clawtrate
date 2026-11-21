@@ -26,7 +26,7 @@
 // SOFTWARE.
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   canonicalRelayOrigin,
   EnrollmentOffer,
@@ -42,6 +42,7 @@ import {
   relayIdFromKey,
   toBase64Url,
   verifyRegisterProof,
+  type KeyClaims,
   type RegistrationSnapshot,
   type ReplayStore,
 } from "../src/index.ts";
@@ -288,9 +289,10 @@ describe("one control socket's registration", () => {
       clock: () => number;
       wallClock: () => number;
       replay: ReplayStore;
-      claims: MemoryKeyClaims | { claim: () => Promise<boolean> };
+      claims: KeyClaims;
       origin: string;
       restore: RegistrationSnapshot;
+      persist: (snapshot: RegistrationSnapshot) => void | Promise<void>;
     }> = {},
   ) {
     return new ControlRegistration({
@@ -348,7 +350,9 @@ describe("one control socket's registration", () => {
 
   it("compares the signed origin with the relay's canonical origin", async () => {
     expect(canonicalRelayOrigin("WSS://Relay.Example.TEST:443/")).toBe(AUDIENCE);
-    expect(canonicalRelayOrigin("ws://127.0.0.1:8787")).toBe("ws://127.0.0.1:8787");
+    expect(canonicalRelayOrigin("ws://127.0.0.1:8787", { allowLoopbackWs: true })).toBe(
+      "ws://127.0.0.1:8787",
+    );
     for (const bad of [
       "https://relay.example.test",
       "wss://relay.example.test/v1",
@@ -373,7 +377,7 @@ describe("one control socket's registration", () => {
 
   it("pins the relay id to the first key that registers it", async () => {
     const claims = new MemoryKeyClaims();
-    expect(claims.claim(relayId, new Uint8Array(32).fill(1))).toBe(true);
+    expect(claims.claim(relayId, new Uint8Array(32).fill(1), { live: true })).toBe(true);
     const registration = socket({ claims });
     expect(await registration.register(proofFor(registration))).toEqual({
       ok: false,
@@ -413,6 +417,117 @@ describe("one control socket's registration", () => {
     expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, code: "replayed" }]);
   });
 
+  it("expires a quiet challenge from the relay's timer, and then takes no attempt", async () => {
+    let now = 5_000;
+    const registration = socket({ clock: () => now });
+    expect(registration.expiresAtMs).toBe(65_000);
+    now = 65_000;
+    expect(registration.expire()).toBe(false);
+    now = 65_001;
+    expect(registration.expire()).toBe(true);
+    expect(registration.state).toBe("failed");
+    expect(registration.expire()).toBe(false);
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "already_used",
+    });
+  });
+
+  it("a store that outlasts the challenge cannot register: no key claim, no success", async () => {
+    let now = 5_000;
+    let release = (): void => {};
+    const store = new MemoryReplayStore();
+    const slow: ReplayStore = {
+      consume: (input) =>
+        new Promise((resolve) => {
+          release = () => resolve(store.consume(input));
+        }),
+    };
+    let claims = 0;
+    const counting: KeyClaims = { claim: () => (claims++, true) };
+    const registration = socket({ clock: () => now, replay: slow, claims: counting });
+    const pending = registration.register(proofFor(registration));
+    await Promise.resolve();
+    now = 5_000 + 60_001;
+    release();
+    expect(await pending).toEqual({ ok: false, code: "challenge_expired" });
+    expect(claims).toBe(0);
+    expect(registration.state).toBe("failed");
+  });
+
+  it("an abort while the key claim waits stops the claim from taking effect", async () => {
+    const pinned = new MemoryKeyClaims();
+    let release = (): void => {};
+    const waiting: KeyClaims = {
+      claim: (id, key, attempt) =>
+        new Promise((resolve) => {
+          release = () => resolve(pinned.claim(id, key, attempt));
+        }),
+    };
+    const registration = socket({ claims: waiting });
+    const pending = registration.register(proofFor(registration));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    registration.abort();
+    release();
+    expect(await pending).toEqual({ ok: false, code: "aborted" });
+    // Nothing was pinned: a later registration with another key could still claim the id.
+    expect(pinned.claim(relayId, new Uint8Array(32).fill(3), { live: true })).toBe(true);
+  });
+
+  it("stores verifying before any store is asked, and the outcome before it returns", async () => {
+    const seen: string[] = [];
+    const replay = new MemoryReplayStore();
+    const registration = socket({
+      persist: (snapshot) => void seen.push(snapshot.state),
+      replay: { consume: (input) => (seen.push("replay"), replay.consume(input)) },
+    });
+    expect((await registration.register(proofFor(registration))).ok).toBe(true);
+    expect(seen).toEqual(["verifying", "replay", "registered"]);
+    const failing = socket({ persist: () => Promise.reject(new Error("down")) });
+    expect(await failing.register(proofFor(failing))).toEqual({ ok: false, code: "store_failed" });
+    expect(failing.state).toBe("failed");
+  });
+
+  it("pins its origin when it starts; changing the options later changes nothing", async () => {
+    const options = {
+      relayId,
+      origin: "wss://Relay.Example.TEST:443",
+      clock: () => 5_000,
+      wallClock: () => NOW_MS,
+      replay: new MemoryReplayStore(),
+      claims: new MemoryKeyClaims(),
+    };
+    const registration = new ControlRegistration(options);
+    options.origin = "wss://other.example.test";
+    expect(registration.origin).toBe(AUDIENCE);
+    expect((await registration.register(proofFor(registration))).ok).toBe(true);
+  });
+
+  it("checks the origin as written, before normalizing it, and allows ws: only on loopback in tests", () => {
+    for (const bad of [
+      "wss://relay.example.test/./",
+      "wss://relay.example.test/a/..",
+      "wss://relay.example.test?",
+      "wss://relay.example.test#",
+      "wss://relay.example.test//",
+      "wss://relay.example.test%2f",
+      " wss://relay.example.test",
+    ]) {
+      expect(() => canonicalRelayOrigin(bad), bad).toThrow(RelayProtocolError);
+    }
+    expect(() => canonicalRelayOrigin("ws://relay.example.test")).toThrow(RelayProtocolError);
+    expect(() =>
+      canonicalRelayOrigin("ws://relay.example.test", { allowLoopbackWs: true }),
+    ).toThrow(RelayProtocolError);
+    expect(() => canonicalRelayOrigin("ws://127.0.0.1:8787")).toThrow(RelayProtocolError);
+    expect(canonicalRelayOrigin("ws://[::1]:8787", { allowLoopbackWs: true })).toBe(
+      "ws://[::1]:8787",
+    );
+    expect(canonicalRelayOrigin("wss://relay.example.test:8443/")).toBe(
+      "wss://relay.example.test:8443",
+    );
+  });
+
   it("survives hibernation as a snapshot; an attempt cut off by it is not resumed", async () => {
     const registration = socket();
     const snapshot = registration.snapshot();
@@ -437,7 +552,7 @@ describe("clock inputs", () => {
       expect(() => offer.matches(secret, time), String(time)).toThrow(
         expect.objectContaining({ code: "bad_time" }),
       );
-      expect(() => offer.redeem(secret, time), String(time)).toThrow(
+      expect(() => offer.spend(time), String(time)).toThrow(
         expect.objectContaining({ code: "bad_time" }),
       );
       expect(offer.used).toBe(false);
@@ -488,5 +603,32 @@ describe("clock inputs", () => {
     const message = new TextEncoder().encode(`clawtrate relay register proof\n${encoded}`);
     const proof = `${encoded}.${toBase64Url(ed25519.sign(message, secretKey))}`;
     expect(await verify(proof)).toEqual({ ok: false, code: "malformed_proof" });
+  });
+
+  it("refuses to sign an iat past the replay record's range, or a nonce that is not canonical", () => {
+    const largest = Math.floor(Number.MAX_SAFE_INTEGER / 1_000) - 61;
+    expect(() =>
+      createRegisterProof({ secretKey, audience: AUDIENCE, nonce, nowMs: largest * 1_000 }),
+    ).not.toThrow();
+    expect(() =>
+      createRegisterProof({ secretKey, audience: AUDIENCE, nonce, nowMs: (largest + 1) * 1_000 }),
+    ).toThrow(expect.objectContaining({ code: "bad_time" }));
+    for (const bad of [`${nonce}A`, nonce.slice(1), "", `${nonce.slice(0, 42)}B`, "a".repeat(43)]) {
+      if (bad === nonce) continue;
+      expect(
+        () => createRegisterProof({ secretKey, audience: AUDIENCE, nonce: bad, nowMs: NOW_MS }),
+        bad,
+      ).toThrow(expect.objectContaining({ code: "malformed" }));
+    }
+  });
+
+  it("checks a proof's type and length before trimming or splitting it", async () => {
+    const huge = " ".repeat(1_000_000);
+    const trim = vi.spyOn(String.prototype, "trim");
+    expect(await verify(huge)).toEqual({ ok: false, code: "malformed_proof" });
+    expect(trim).not.toHaveBeenCalled();
+    trim.mockRestore();
+    expect(await verify(7 as unknown as string)).toEqual({ ok: false, code: "missing_proof" });
+    expect(await verify("   ")).toEqual({ ok: false, code: "missing_proof" });
   });
 });

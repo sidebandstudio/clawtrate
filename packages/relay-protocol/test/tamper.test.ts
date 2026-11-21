@@ -32,7 +32,7 @@ describe("tampering", { timeout: 60_000 }, () => {
     const hs1 = pair.phone.start();
     let gateAsked = false;
     const gate = {
-      check: () => ((gateAsked = true), "eligible" as const),
+      check: () => ((gateAsked = true), "enrolled" as const),
     };
     let count = 0;
     for (const changed of flips(hs1)) {
