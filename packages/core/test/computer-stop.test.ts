@@ -117,4 +117,23 @@ describe("the Computer tab's Stop", () => {
     viewer.dispose();
     client.stop();
   });
+  it("F-145: Computer hears of a question's closure only once the transcript records it, so the bar sees no pending question", async () => {
+    const gateway = grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    const statuses: string[] = [];
+    vi.spyOn(
+      (client as unknown as { computer: ComputerViews }).computer,
+      "questionClosed",
+    ).mockImplementation(() => {
+      statuses.push(transcript().questions[0]?.status ?? "none");
+    });
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("question.requested", questionRecord("ask_1", "run-1"));
+    await until(() => transcript().questions.length === 1);
+    // Answered on another device.
+    gateway.emit("question.resolved", { id: "ask_1", status: "answered" });
+    await until(() => statuses.length > 0);
+    expect(statuses).toEqual(["answered"]);
+    client.stop();
+  });
 });

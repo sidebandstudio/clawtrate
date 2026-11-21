@@ -6239,7 +6239,8 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
-        this.noteQuestionClosed(id, payload.status);
+        // Read from the runs as they were, told once the transcript records the closure.
+        const closed = this.questionClosures(id, payload.status);
         if (this.waiting.onQuestionResolved(id)) this.publishTasks();
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
@@ -6260,6 +6261,7 @@ export class ClawtrateClient {
             );
           }
         }
+        for (const [key, code] of closed) this.computer.questionClosed(key, id, code);
         return;
       }
       default:
@@ -6269,8 +6271,13 @@ export class ClawtrateClient {
 
   // The Computer tab (`computer.ts`, `machine.ts`) ---------------------------------------
 
-  /** A question closed: an answer queued behind a release of that task's browser is removed. */
-  private noteQuestionClosed(id: string, status: unknown): void {
+  /**
+   * How a question closed, for each task that holds it, read from its run before the
+   * resolution is applied: an answer queued behind a release of that task's browser is removed,
+   * and the control bar learns the question went, once the transcript records it.
+   */
+  private questionClosures(id: string, status: unknown): Array<[string, ClosedCode]> {
+    const out: Array<[string, ClosedCode]> = [];
     for (const transcript of Object.values(this.state.transcripts)) {
       const question = transcript.questions.find((q) => q.id === id);
       if (!question) continue;
@@ -6290,8 +6297,9 @@ export class ClawtrateClient {
                   ? "cancelled"
                   : "dismissed"
                 : "cancelled";
-      this.computer.questionClosed(transcript.sessionKey, id, code);
+      out.push([transcript.sessionKey, code]);
     }
+    return out;
   }
 
   /**
