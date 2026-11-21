@@ -6047,10 +6047,12 @@ export class ClawtrateClient {
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
-    // The setup connection's first read of bots and tasks ends its setup: after it, the
-    // connection is the saved gateway's own.
+    // The setup connection's first complete read of bots and tasks ends its setup: after it,
+    // the connection is the saved gateway's own. A read that failed leaves setup on its failure
+    // screen, so the connection stays setup's, and every handshake from there, a retry or a
+    // reconnect included, asks for read alone; Back or another gateway ends it.
     const setup = this.isSetup(this.settings?.url);
-    if (setup) this.setupIntent = null;
+    if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
     // from then on the connection and its retries are the saved gateway's own.
     if (failures.length === 0 && this.setupCheck?.url === this.settings?.url)

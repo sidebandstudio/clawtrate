@@ -61,6 +61,47 @@ describe("a setup reconnect with a saved pairing", () => {
     client.stop();
   });
 
+  it("F-492: a setup whose bots failed to load keeps asking for read alone, on a reconnect and a retry", async () => {
+    const gateway = granting([READ_SCOPE, WRITE_SCOPE]);
+    const bots = gateway.handlers["agents.list"]!;
+    gateway.handlers["agents.list"] = () => {
+      throw new Error("fixture: the bots couldn't be read");
+    };
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE, WRITE_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectForSetup(URL);
+    await until(() => client.state.discovery.status === "error");
+    // The setup failure screen is up. The connection drops and reconnects by itself.
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+    );
+    expect((gateway.connects[1] as Connect).scopes).toEqual([READ_SCOPE]);
+    // And the screen's Try again, from a dropped connection, opens with read alone too.
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    gateway.refuseConnections = false;
+    await client.retryNow();
+    await until(
+      () => client.state.connection.status === "connected" && gateway.connects.length >= 3,
+    );
+    for (const sent of gateway.connects as Connect[]) expect(sent.scopes).toEqual([READ_SCOPE]);
+    expect(client.state.connection.canWrite).toBe(false);
+    // Once the bots are read, setup is over and an ordinary reconnect asks for what is held.
+    gateway.handlers["agents.list"] = bots;
+    gateway.dropAll();
+    await until(() => client.state.discovery.status === "ready");
+    const count = gateway.connects.length;
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length > count && client.state.connection.status === "connected",
+    );
+    expect((gateway.connects.at(-1) as Connect).scopes).toEqual([READ_SCOPE, WRITE_SCOPE]);
+    client.stop();
+  });
+
   it("F-492: a device that holds pairing alone asks for read alone", async () => {
     const gateway = granting([READ_SCOPE, PAIRING_SCOPE]);
     const storage = memoryStorage({
