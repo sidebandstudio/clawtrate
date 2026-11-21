@@ -4,6 +4,7 @@
 // The fixture answers with the engine itself and a scripted computer plugin.
 // Test names carry the parity rows they prove.
 import { expect, test, type Page } from "@playwright/test";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
 import {
   COMPUTER,
@@ -409,17 +410,55 @@ test.describe("the full view on the desktop", () => {
       );
     });
 
-  test("F-142: when the view ends while control is held, the still focused frame sends nothing typed or pasted", async ({
+  test("F-142: an ended view drops a queued scroll and ignores typing and paste while control is held", async ({
     page,
   }) => {
-    await openFixture(page, `${COMPUTER}&computer=controlended`, "light");
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
     await control(page);
     const frame = fullView(page).getByTestId("screen-frame");
     await frame.focus();
+    // End the view in the same browser turn that queued the scroll, before its timer fires.
+    const queued = await frame.evaluate((element) => {
+      const rect = element.querySelector("canvas")!.getBoundingClientRect();
+      const wheel = new WheelEvent("wheel", {
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        deltaY: 120,
+        cancelable: true,
+      });
+      element.dispatchEvent(wheel);
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      };
+      clawtrateFixture.setState((state) => {
+        const computer = state.computer!;
+        const pane = computer.panes["fixture-viewer"]!;
+        return {
+          ...state,
+          computer: {
+            ...computer,
+            panes: {
+              ...computer.panes,
+              "fixture-viewer": {
+                ...pane,
+                view: { ...pane.view!, status: "ended", end: "gateway-ended" },
+              },
+            },
+          },
+        };
+      });
+      return wheel.defaultPrevented;
+    });
+    expect(queued).toBe(true);
     await expect(frame.getByRole("button", { name: "Watch again" })).toBeVisible();
     await expect(controlBar(page)).toContainText("You have control");
-    await frame.focus();
+    await expect(frame).toBeFocused();
     await page.keyboard.type("unseen");
+    await frame.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "unseen paste");
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    });
     await page.waitForTimeout(300);
     expect(await sentOf(page, "computerInput")).toEqual([]);
   });

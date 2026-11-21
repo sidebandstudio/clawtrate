@@ -162,8 +162,8 @@ export function ScreenView(props: ScreenViewProps) {
 
   // Input only while this viewer holds the lease, the current view has a drawn picture, and the
   // picture has focus: a view that ended leaves the frame focused with no page to see.
-  const inputAllowed = () =>
-    granted && live && props.age.kind !== "none" && document.activeElement === frameRef.current;
+  const canSendInput = granted && live && props.age.kind !== "none";
+  const inputAllowed = () => canSendInput && document.activeElement === frameRef.current;
   const wheel = useRef<{ dy: number; dx: number; x: number; y: number; timer: number | null }>({
     dy: 0,
     dx: 0,
@@ -171,7 +171,7 @@ export function ScreenView(props: ScreenViewProps) {
     y: 0,
     timer: null,
   });
-  /** A scroll not yet sent is dropped once the picture loses focus or control ends. */
+  /** A queued scroll belongs to the focused picture that received it. */
   const dropWheel = () => {
     const w = wheel.current;
     if (w.timer !== null) window.clearTimeout(w.timer);
@@ -179,10 +179,8 @@ export function ScreenView(props: ScreenViewProps) {
     w.dx = 0;
     w.dy = 0;
   };
-  useEffect(() => {
-    if (!granted) dropWheel();
-  }, [granted]);
-  useEffect(() => {
+  useLayoutEffect(() => dropWheel, [canSendInput, view?.n]);
+  useLayoutEffect(() => {
     const element = frameRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
