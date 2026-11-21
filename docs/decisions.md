@@ -801,10 +801,24 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
 
 ## The website
 
-The website lives in `site/` as plain HTML, CSS and one script, with no build step and no dependencies, so any static host can serve the folder as it is. It loads nothing from another host: no analytics, no trackers, no third-party scripts. Figtree's Latin file is committed under `site/fonts/` with its OFL licence beside it, because a static folder has no bundler to take it from the npm package the app uses. The screens on the site are crops of the macOS visual baselines in `visual/baselines/`, never of a real gateway.
+The website lives in `site/` as plain HTML, CSS and one script, with no build step and no dependencies. It loads nothing from another host: no analytics, no trackers, no third-party scripts. Figtree's Latin file is committed under `site/fonts/` with its OFL licence beside it, because a static folder has no bundler to take it from the npm package the app uses. The screenshots use the app's fixture mode and sample data. Dark is the default; a visitor's choice of light is kept in `localStorage`, and each theme's screenshots are chosen in CSS so the first paint is right.
 
-- `site/download/mac/` sends visitors to the GitHub releases page until the first signed beta is published.
-- `site/install.sh` reads `updates/beta/latest-mac.json` from the site: `{"teamIdentifier", "arm64": {"version", "url", "sha256"}, "x86_64": {…}}`, one build per processor keyed by what `uname -m` prints. It takes the entry for this Mac and refuses a processor with no entry, downloads that zip over HTTPS, and refuses to install unless the SHA-256 matches, `codesign --verify --deep --strict` passes, the signature's `TeamIdentifier` is the feed's team, and `spctl --assess --type execute` accepts the app. It copies `Clawtrate.app` into `/Applications`, asks before replacing a copy that is there, and never uses `sudo`. `CLAWTRATE_FEED` and `CLAWTRATE_APPLICATIONS` point it at a stand-in feed and folder for testing.
+The site is published only together with the first signed beta, through the Site workflow (`.github/workflows/site.yml`), which copies `site/` and adds the newest published beta's `feed.json` and `latest-mac.json` under `updates/beta/`. From the same beta it must also:
+
+- fill `site/download/mac/index.html`, a template, replacing `__CLAWTRATE_BETA_VERSION__` with the beta's version, `__CLAWTRATE_ARM64_ZIP__` and `__CLAWTRATE_X64_ZIP__` with `latest-mac.json`'s `arm64` and `x86_64` addresses, and `__CLAWTRATE_RELEASE_PAGE__` with the release's tag page, and deploy nothing while a token is left;
+- deploy nothing while `site/install.sh` still holds the placeholder `APPLE_CLAWTRATE_TEAM_ID`, or names another team than the beta's `latest-mac.json`.
+
+`site/install.sh` is run as the site shows it: downloaded whole to a temporary file, with curl's exit status and an HTTP 200 checked, before `sh` runs it. Its body is one function called on its last line, so a cut-off download runs nothing. It:
+
+- pins Clawtrate's Developer ID team in `CLAWTRATE_TEAM_ID` and refuses to run while that is the placeholder;
+- reads `updates/beta/latest-mac.json` (`{"teamIdentifier", "arm64": {"version", "url", "sha256"}, "x86_64": {…}}`) as a direct HTTP 200, strictly: JSON with no repeated key, exactly these fields, the pinned team, one canonical beta version in both entries, lowercase 64-character digests, and each address exactly `https://github.com/sidebandstudio/clawtrate/releases/download/v<version>/Clawtrate-<version>-mac-<arm64|x64>.zip`;
+- takes the arm64 build on Apple silicon, also from a shell under Rosetta (`hw.optional.arm64`, `sysctl.proc_translated`), and the x86_64 build otherwise;
+- follows at most one redirect from the release address, and only to `https://release-assets.githubusercontent.com`, checked before the second request, as the app's updater does;
+- checks the SHA-256, then the archive before unpacking (only `Clawtrate.app`, no unsafe or repeated paths, links only where an Electron framework has them, and the AppleDouble entries `ditto --sequesterRsrc` writes) and the unpacked tree without following links (`Versions/Current` to `A`, a framework's top-level entries to `Versions/Current/<name>`, nothing else);
+- reads the app itself: bundle id `dev.clawtrate.desktop`, the feed's version, an executable for this processor; then `codesign --verify --deep --strict`, a readable signature with that identifier, a Developer ID Application authority and the pinned team, and `spctl` reporting `source=Notarized Developer ID`, as the release script checks each app;
+- installs under a lock, from a staging folder on the destination's volume, refusing a destination or an existing target that is not a real folder or not Clawtrate; it rechecks the installed copy before reporting success, and on any failure or INT, TERM or HUP it puts the previous copy back, or says where that copy is when it cannot.
+
+`CLAWTRATE_FEED`, `CLAWTRATE_RELEASES` and `CLAWTRATE_ASSETS` point it at stand-ins on `http://127.0.0.1` for tests, and `CLAWTRATE_APPLICATIONS` at another folder to install into.
 
 ## Not done yet
 
