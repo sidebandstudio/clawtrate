@@ -534,6 +534,16 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(page.locator("#b-section-title")).toHaveText("Machines");
   });
 
+  test("F-148: a first read that fails says so and can be read again", async ({ page }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=machinefirstfail`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    const failed = machine.getByTestId("computer-machine-failed");
+    await expect(failed).toContainText("Couldn't read this.");
+    await failed.getByRole("button", { name: "Check again" }).click();
+    await expect(failed).toHaveCount(0);
+    await expect(machine.getByTestId("computer-node")).toContainText("Connected");
+  });
+
   test("F-148: after a read that fails, or with the connection dropped, the facts are the last read at their time, never current", async ({
     page,
   }) => {

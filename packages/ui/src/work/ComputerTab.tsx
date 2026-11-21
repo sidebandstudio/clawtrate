@@ -934,36 +934,40 @@ function MachineSection({
       return next;
     });
   }, []);
+  // Each read's number: only the newest one's answer or failure is kept, by either path.
+  const reads = useRef(0);
   // "Check again" and "Prepare it again": the same read, and when it was made.
   const read = (manual: boolean, probe = false) => {
     if (!online) return;
+    const mine = ++reads.current;
     if (manual) setChecking(true);
     ask(probe).then(
       (answer) => {
+        setChecking(false);
+        if (mine !== reads.current) return;
         keep(answer);
         if (manual) setChecked(answer.readAt);
-        setChecking(false);
       },
       // Kept as it was, as the last read: a failed read is never shown as "not connected".
       () => {
-        setFailed(true);
         setChecking(false);
+        if (mine === reads.current) setFailed(true);
       },
     );
   };
   useEffect(() => {
     if (!online) return;
-    let gone = false;
+    const mine = ++reads.current;
     ask(false).then(
       (answer) => {
-        if (!gone) keep(answer);
+        if (mine === reads.current) keep(answer);
       },
       () => {
-        if (!gone) setFailed(true);
+        if (mine === reads.current) setFailed(true);
       },
     );
     return () => {
-      gone = true;
+      if (reads.current === mine) reads.current += 1;
     };
   }, [ask, keep, online]);
   // Times are read against when the facts were read.
@@ -989,6 +993,14 @@ function MachineSection({
           {connected
             ? `Couldn't read this again. As read at ${clockTime(facts.readAt)}.`
             : `Not connected to the gateway. As read at ${clockTime(facts.readAt)}.`}
+        </p>
+      )}
+      {failed && facts === null && connected && (
+        <p className="files-alert" role="alert" data-testid="computer-machine-failed">
+          Couldn't read this.
+          <button type="button" className="button" data-size="sm" onClick={() => read(true)}>
+            {checking ? "Checking…" : "Check again"}
+          </button>
         </p>
       )}
       {nodeIds.map((id) => {

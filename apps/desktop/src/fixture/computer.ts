@@ -6,7 +6,8 @@
 //   &computer=noplugin|unconfigured|unused|closed|ended|tabclosed|browsergone|
 //             draining|control|busy|unsettled|conflict|stuck|active|elsewhere|
 //             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching|
-//             conflict-window|conflict-ends|tabsunknown|laterquestion|complexlater|resized
+//             conflict-window|conflict-ends|tabsunknown|laterquestion|complexlater|resized|
+//             machinefirstfail (the first machine read fails as a whole, later ones answer)
 //             (complexlater: complexquestion with laterquestion's later answered card)
 //             (resized: typed text makes the page half as wide, in a frame that can't be decoded)
 //   &firstwatch=1     the one-time note before the first watch
@@ -62,6 +63,7 @@ export const COMPUTER_STATES = [
   "laterquestion",
   "complexlater",
   "resized",
+  "machinefirstfail",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
 
@@ -690,6 +692,8 @@ export function computerFixture(
       // `machinefail`: the first read answers, every later one fails as a whole.
       machineReads += 1;
       if (mode === "machinefail" && machineReads > 1) throw new Error("The gateway didn't answer.");
+      if (mode === "machinefirstfail" && machineReads === 1)
+        throw new Error("The gateway didn't answer.");
       if (probe) prepared = true;
       const otto = key.startsWith("agent:otto:");
       return {
