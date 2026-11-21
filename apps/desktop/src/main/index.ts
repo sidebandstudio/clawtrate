@@ -150,6 +150,13 @@ app.on("web-contents-created", (_event, contents) => {
  */
 function lockDownSession(): void {
   const ses = session.defaultSession;
+  // For a language Windows has no spell checker for, Chromium downloads a
+  // dictionary from Google's servers, and the filter below never sees that
+  // request. Asked of the app's own folder instead, it fails on this machine:
+  // the network service fetches only http, https, ws and wss. macOS ignores it.
+  ses.setSpellCheckerDictionaryDownloadURL(
+    `${pathToFileURL(join(RENDERER_DIR, "dictionaries")).href}/`,
+  );
   ses.webRequest.onBeforeRequest((details, callback) => {
     const allowed =
       isAppContent(details.url) ||
