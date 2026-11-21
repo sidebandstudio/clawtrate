@@ -766,3 +766,18 @@ a.b-choice:hover {
   color: var(--text-faint);
   text-align: center;
 }
+
+/* The prototype's stand-in for an event from outside the app (the owner
+   approving on the gateway's computer). Not product. */
+.s-proto-event {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong, var(--text-faint));
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.s-approval .scopes {
+  margin: 6px 0;
+}

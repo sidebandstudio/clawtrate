@@ -129,10 +129,19 @@
   // Each: the message, the detail, an optional checkbox that must be ticked,
   // the confirming button's words, and where it leads.
 
-  // The approve screens: over SSH on devbox (default), or on this computer
-  // for Clawtrate's own profile (?screen=approve-here, or route=here).
-  const approveLocal = screen === "approve-here" || params.get("route") === "here";
-  const approveCommand = () => `openclaw ${approveLocal ? "--profile clawtrate " : ""}devices approve ${REQUEST}`;
+  // Approving a request (setup.md section 9). The route: SSH on devbox (default),
+  // this computer (approve-here), or an address (approve-address). The flow: a
+  // write upgrade (default), admin (flow=admin) or a first pairing
+  // (approve-pairing). exact=1 draws the future "Approve from here", which needs
+  // an exact approval path that OpenClaw 2026.10.6 doesn't have.
+  const approveRoute = screen === "approve-here" ? "here" : screen === "approve-address" ? "address" : "ssh";
+  const approveFlow = screen === "approve-pairing" ? "pairing" : params.get("flow") === "admin" ? "admin" : "upgrade";
+  const approveCommand = () => `openclaw ${approveRoute === "here" ? "--profile clawtrate " : ""}devices approve ${REQUEST}`;
+  const ADDED = {
+    upgrade: ["Send messages and start tasks", "Answer approvals", "Answer questions"],
+    admin: ["Send messages and start tasks", "Answer approvals", "Answer questions", "Change the gateway's settings, bots and accounts. This is admin access."],
+    pairing: ["Read bots, tasks and conversations."],
+  };
 
   const HOST = {
     sshAccount: {
@@ -182,17 +191,21 @@
       confirm: "Set up",
       to: () => go("installing", { play: "1" }),
     },
-    // Approve from here (setup.md section 9): this device's own request, checked
-    // on the gateway's computer before the dialog opens and read back after.
+    // "Approve from here" (setup.md section 9), drawn only with exact=1: it needs
+    // an exact approval path the running OpenClaw proves. Confirming runs the
+    // host-result fixture in the page (approval controller below).
     approveRequest: {
-      message: `Approve this device's request on the ${approveLocal ? "Clawtrate gateway on this computer" : `default gateway on ${host}`}?`,
+      message:
+        approveFlow === "pairing"
+          ? `Pair this device with the default gateway on ${approveRoute === "here" ? "this computer" : full}?`
+          : `Approve this device's request on the ${approveRoute === "here" ? "Clawtrate gateway on this computer" : `default gateway on ${full}`}?`,
       detail:
-        `<p>Clawtrate on this Mac · <span class="s-device-inline">5AE2-3AFF</span></p>` +
-        `<p>It adds:</p><ul class="s-host-list"><li>Send messages and start tasks</li><li>Answer approvals</li><li>Answer questions</li></ul>` +
-        `<p>Clawtrate runs <code>${esc(approveCommand())}</code> on ${approveLocal ? "this computer" : host}, then checks what the gateway granted. ` +
-        `If it granted anything else, Clawtrate removes this device from the gateway and disconnects.</p>`,
-      confirm: "Approve",
-      to: () => go("approving", { play: "1", ...(approveLocal ? { route: "here" } : {}) }),
+        `<p>Profile: ${approveRoute === "here" ? "clawtrate" : "default"}${approveRoute === "here" ? "" : ` · ${full}, port 22`} · this device <span class="s-device-inline">5AE2-3AFF</span></p>` +
+        (approveFlow === "pairing" ? "" : `<p>It adds:</p>`) +
+        `<ul class="s-host-list" data-added>${ADDED[approveFlow].map((x) => `<li>${x}</li>`).join("")}</ul>` +
+        `<p>Clawtrate approves request e5eb4aa8 on ${approveRoute === "here" ? "this computer" : host}, then checks what the gateway granted.</p>`,
+      confirm: approveFlow === "pairing" ? "Pair" : "Approve",
+      onConfirm: () => CT.approval?.confirm(),
     },
     removeRoute: {
       message: "Remove devbox from Clawtrate?",
@@ -213,7 +226,10 @@
       `<h2 id="s-host-title" tabindex="-1">${d.message}</h2><div id="s-host-detail" class="s-host-detail">${d.detail}</div>` +
       (d.checkbox ? `<label class="s-check"><input type="checkbox" data-host-check /> <span>${d.checkbox}</span></label>` : "") +
       `</div></div><div class="s-host-buttons"><button type="button" class="button" data-size="sm" data-host-cancel>Cancel</button>` +
-      `<a class="button" data-variant="primary" data-size="sm" href="${d.to()}" data-host-confirm${d.checkbox && !d.optional ? ' aria-disabled="true"' : ""}>${d.confirm}</a></div></div></div>`
+      (d.onConfirm
+        ? `<button type="button" class="button" data-variant="primary" data-size="sm" data-host-confirm>${d.confirm}</button>`
+        : `<a class="button" data-variant="primary" data-size="sm" href="${d.to()}" data-host-confirm${d.checkbox && !d.optional ? ' aria-disabled="true"' : ""}>${d.confirm}</a>`) +
+      `</div></div></div>`
     );
   };
 
@@ -555,38 +571,6 @@
     (foot ? `<div class="s-mock-foot">${foot}</div>` : "") +
     `</div>`;
 
-  // The access bar while the gateway waits (section 9). Where Clawtrate can run a
-  // command on the gateway's computer it offers "Approve from here", with the
-  // command folded under it; on an address route it shows only the command.
-  const whereRun = () => (approveLocal ? "On this computer, approve this request for Clawtrate's profile:" : `On ${host}, approve this request for the default profile:`);
-  const foldedCommand = () =>
-    disclosure(`Or approve it on ${approveLocal ? "this computer" : host} yourself`, `<p class="s-hint s-left">${whereRun()}</p>` + command(approveCommand(), "Copy approve command"));
-  const waitRow = (extra = "") =>
-    `<div class="access-row"><span class="access-id">Request e5eb4aa8<span class="access-wait">checking again in 4s</span></span><span class="spacer"></span>` +
-    `<button type="button" class="button" data-variant="quiet" data-size="sm">Check now</button>` +
-    `<button type="button" class="button" data-variant="quiet" data-size="sm">Cancel request</button>${extra}</div>`;
-  const bar = (inner, tone = "") => `<div class="access-bar" role="status" data-s-title tabindex="-1"${tone ? ` data-tone="${tone}"` : ""}>${inner}</div>`;
-  const barText = (glyphName, html) => `<div class="access-row">${icon(glyphName)}<span class="shelf-text">${html}</span></div>`;
-
-  const accessRequested = () =>
-    bar(
-      barText("clock", "<b>Waiting for the gateway's owner.</b> If that's you, approve it from here.") +
-        `<div class="access-row s-approve-row"><button type="button" class="button" data-variant="primary" data-size="sm" data-host="approveRequest">Approve from here…</button></div>` +
-        foldedCommand() +
-        waitRow(),
-    );
-  const accessRequestedAddress = () =>
-    bar(
-      barText("clock", "<b>Waiting for the gateway's owner.</b> Run this on the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile:") +
-        `<div class="command command-line"><code>openclaw devices approve ${REQUEST}</code>${copyButton("Copy approve command", `openclaw devices approve ${REQUEST}`)}</div><p class="copy-status" aria-live="polite"></p>` +
-        waitRow(),
-    );
-  const approveOutcome = (lead, text, actionsHtml, { tone = "", folded = false } = {}) =>
-    bar(barText(tone === "danger" ? "warning" : "clock", `<b>${lead}</b>${text ? ` ${text}` : ""}`) + `<div class="access-row s-approve-row">${actionsHtml}</div>` + (folded ? foldedCommand() : ""), tone);
-  const barButton = (label, to, extra = {}, variant = "") =>
-    `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="sm" href="${go(to, { ...(approveLocal ? { route: "here" } : {}), ...extra })}">${label}</a>`;
-  const composerStub = (name = "Otto") => `<div class="s-mock-composer" aria-label="Message ${name}">Message ${name}</div>`;
-
   const gatewayRows = () =>
     `<ul class="s-rows" aria-label="Gateway">` +
     `<li><span class="s-row-text"><span class="s-row-title">Reached through</span><span class="s-row-sub">you@devbox.example over SSH · In use</span></span></li>` +
@@ -600,48 +584,9 @@
   const settings = (body) => mockApp() + dialog("settings-lite", "Gateway · devbox", body, "", "first");
 
   const OVER = {
-    approve: () => mockApp("", accessRequested()),
-    "approve-here": () => mockApp("", accessRequested()),
-    "approve-address": () => mockApp("", accessRequestedAddress()),
-    approving: () =>
-      mockApp(
-        "",
-        bar(
-          barText("clock", `<span data-approve-wait aria-busy="true">Approving on ${approveLocal ? "this computer" : host}…</span>`) +
-            `<p class="s-hint s-left">Request e5eb4aa8 · Clawtrate checks what the gateway granted before it keeps anything.</p>`,
-        ),
-      ),
-    approved: () =>
-      mockApp(
-        `<div class="status-strip" role="status" data-s-title tabindex="-1"><span class="status-dot" data-status="connected"></span>` +
-          `<span class="status-strip-text"><b>Access granted</b><span>· you can send, stop and answer</span></span></div>`,
-        composerStub(),
-      ),
-    "approve-stale": () => mockApp("", approveOutcome("This request is no longer waiting.", "Nothing was approved.", barButton("Request again", "approve"))),
-    "approve-early": () =>
-      mockApp("", approveOutcome("The gateway hasn't listed this request yet.", "Nothing was approved. Try again in a moment.", barButton("Try again", "approve"))),
-    "approve-mismatch": () =>
-      mockApp("", approveOutcome("The gateway's request doesn't match what you asked for,", "so Clawtrate approved nothing.", barButton("Request again", "approve"), { folded: true })),
-    "approve-failed": () =>
-      mockApp(
-        "",
-        approveOutcome(
-          `Couldn't approve on ${approveLocal ? "this computer" : host}.`,
-          "OpenClaw exited with code 1. Nothing was approved.",
-          `<button type="button" class="button" data-size="sm" data-host="approveRequest">Try again</button>`,
-          { folded: true },
-        ),
-      ),
-    "approve-differs": () =>
-      mockApp(
-        "",
-        approveOutcome(
-          "The gateway granted something other than what you approved,",
-          "so Clawtrate removed this device from the gateway and disconnected.",
-          barButton("Connect again", approveLocal ? "found" : "found-there", {}, "primary"),
-          { tone: "danger" },
-        ),
-      ),
+    approve: () => mockApp("", `<div data-approval></div>`),
+    "approve-here": () => mockApp("", `<div data-approval></div>`),
+    "approve-address": () => mockApp("", `<div data-approval></div>`),
     restoring: () =>
       mockApp(
         `<div class="status-strip" data-tone="warn" role="status" data-s-title tabindex="-1"><span class="status-dot"></span>` +
@@ -721,6 +666,10 @@
       command(`openclaw devices approve ${PHONE_REQUEST}`, "Copy approve command") +
       `<p class="waiting" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for approval, checking again in 4s</p>`,
 
+    // A first pairing on a gateway that asks before every device (section 7):
+    // the pairing screen, with the same approval panel as the access bar.
+    "approve-pairing": () => back("found-there") + mark() + title("Approve this device") + `<div data-approval></div>`,
+
     "iphone-done": () =>
       futureLabel +
       mark() +
@@ -768,7 +717,11 @@
       });
     }
     confirm.addEventListener("click", (event) => {
-      if (confirm.getAttribute("aria-disabled") === "true") event.preventDefault();
+      if (confirm.getAttribute("aria-disabled") === "true") return event.preventDefault();
+      if (HOST[op].onConfirm) {
+        close();
+        HOST[op].onConfirm();
+      }
     });
     const close = () => {
       scrim.remove();
@@ -808,6 +761,139 @@
     if (params.get("focus") !== "0") heading.focus({ preventScroll: true });
     live.textContent = heading.textContent;
   }
+  // The approval controller (setup.md section 9) --------------------------------
+  // Renders the waiting state, the read-back after an approval and its
+  // outcome, in the page. What a host would do is counted in CT.approvalLog, so
+  // the checks can assert that nothing was approved, saved or removed when it
+  // shouldn't be. Fixtures, chosen in the address and never by a click:
+  //   result=     the read-back after the owner's own approval: exact (default),
+  //               other, unread, gone, already, rejected, mismatch, identity,
+  //               different, listfail (with code=<n> when an exit code was recorded)
+  //   hostresult= the exact path's outcome, with exact=1: granted (default),
+  //               changed, refused, refused-granted, uncertain, readback
+  const panel = root.querySelector("[data-approval]");
+  if (panel) {
+    const where = approveRoute === "here" ? "this computer" : approveRoute === "ssh" ? host : null;
+    const exactPath = params.get("exact") === "1" && approveRoute !== "address";
+    const log = (CT.approvalLog = { approveCalls: 0, tokenSaved: false, removeCalls: 0, listReads: 0 });
+    const state = { phase: "waiting", outcome: null };
+    const live = document.getElementById("setup-live");
+    const act = (label, action, variant = "") =>
+      `<button type="button" class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="sm" data-act="${action}">${label}</button>`;
+    const asked = `<ul class="scopes" aria-label="Asked for">${ADDED[approveFlow].map((x) => `<li>${icon(approveFlow === "pairing" ? "read" : "check")}${x.replace(/\.$/, "")}</li>`).join("")}</ul>`;
+    const commandBlock = () =>
+      `<p class="s-hint s-left" data-where>` +
+      (approveRoute === "address"
+        ? "Run this on the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile:"
+        : approveRoute === "here"
+          ? "In Terminal on this computer, run this for Clawtrate's profile:"
+          : `On ${host}, run this for the default profile:`) +
+      `</p>` +
+      command(approveCommand(), "Copy approve command");
+    const granted = () =>
+      approveFlow === "pairing"
+        ? "<b>Paired, read-only.</b> Clawtrate can read your bots, tasks and conversations."
+        : approveFlow === "admin"
+          ? "<b>Admin access granted.</b> You can change this now."
+          : "<b>Access granted</b> · you can send, stop and answer";
+    // The read-back after an approval: what Clawtrate keeps (section 9).
+    const OUTCOMES = {
+      exact: { text: granted(), granted: true },
+      already: { text: `The gateway now shows the requested access. ${granted()}`, granted: true },
+      other: { tone: "danger", text: "<b>Clawtrate disconnected.</b> It couldn't confirm what this request granted. Review this device's access on the gateway before reconnecting.", actions: () => lookAgain() },
+      unread: { tone: "danger", text: "<b>Clawtrate disconnected.</b> It couldn't confirm what this request granted. Review this device's access on the gateway before reconnecting.", actions: () => lookAgain() },
+      gone: { text: "Clawtrate couldn't find this request in the gateway's pending list.", actions: () => act("Check again", "check") + act("Request again", "request") },
+      rejected: { text: "<b>The request was denied.</b> Nothing changed. This device keeps the access it had.", actions: () => act("Request again", "request") },
+      mismatch: { text: "The gateway's pending request for this device isn't the one Clawtrate asked for.", actions: () => act("Request again", "request") },
+      identity: { text: "Clawtrate couldn't confirm this gateway's identity or version.", actions: () => lookAgain() },
+      different: { tone: "danger", text: "This route now leads to a different gateway.", actions: () => `<a class="button" data-size="sm" href="${go("there")}">Review</a>` },
+      listfail: { text: `Couldn't read the gateway's requests on ${where || "the gateway's computer"}.${params.get("code") ? ` OpenClaw exited with code ${esc(params.get("code"))}.` : ""}`, actions: () => act("Check again", "check") },
+      // The exact path's own outcomes.
+      changed: { text: "This changed since you looked. Look again.", actions: () => act("Look again", "request") },
+      refused: { text: "Clawtrate did not approve this request.", actions: () => act("Request again", "request") },
+      "refused-granted": { text: `Clawtrate did not approve this request. The gateway now shows the requested access. ${granted()}`, granted: true },
+      uncertain: { text: `Couldn't confirm approval on ${where}. The outcome isn't known yet.`, actions: () => act("Check again", "recheck") },
+    };
+    const lookAgain = () => `<a class="button" data-size="sm" href="${go(approveRoute === "here" ? "found" : "found-there")}">Look again</a>`;
+    const render = () => {
+      let html = "";
+      if (state.phase === "waiting") {
+        const lead = approveRoute === "address" ? "Waiting for approval." : `Waiting for approval on ${where}.`;
+        html =
+          `<div class="access-row">${icon("clock")}<span class="shelf-text" data-approval-lead><b>${lead}</b></span></div>` +
+          (exactPath
+            ? `<p class="s-future" role="note">Future example: this needs an exact approval path that OpenClaw 2026.10.6 doesn't offer.</p>` +
+              `<div class="access-row s-approve-row"><button type="button" class="button" data-variant="primary" data-size="sm" data-host="approveRequest">Approve from here…</button></div>`
+            : "") +
+          commandBlock() +
+          (approveFlow === "pairing" ? asked : "") +
+          `<div class="access-row"><span class="access-id">Request e5eb4aa8<span class="access-wait">checking again in 4s</span></span><span class="spacer"></span>` +
+          act("Check now", "check", "quiet") +
+          act("Stop waiting", "stop", "quiet") +
+          `</div>` +
+          `<div class="s-proto-event"><span>Prototype, not product:</span> <button type="button" class="button" data-size="sm" data-act="owner">The owner approves on ${where || "the gateway's computer"}</button></div>`;
+      } else if (state.phase === "checking") {
+        html = `<div class="access-row">${icon("clock")}<span class="shelf-text" aria-busy="true" data-approval-busy>${state.busy}</span></div>`;
+      } else if (state.phase === "stopped") {
+        html = `<div class="access-row">${icon("clock")}<span class="shelf-text">Stopped waiting. The request may still be pending on the gateway.</span></div><div class="access-row s-approve-row">${act("Check again", "check")}</div>`;
+      } else {
+        const o = OUTCOMES[state.outcome];
+        html = `<div class="access-row">${icon(o.tone === "danger" ? "warning" : o.granted ? "check" : "clock")}<span class="shelf-text">${o.text}</span></div>` + (o.actions ? `<div class="access-row s-approve-row">${o.actions()}</div>` : "");
+        if (o.granted && approveFlow !== "pairing") html += `<div class="s-mock-composer" aria-label="Message Otto">Message Otto</div>`;
+      }
+      const tone = state.phase === "outcome" && OUTCOMES[state.outcome].tone;
+      panel.innerHTML = `<div class="access-bar s-approval" data-phase="${state.phase}"${state.outcome ? ` data-outcome="${state.outcome}"` : ""}${tone ? ` data-tone="${tone}"` : ""} role="status" data-s-title tabindex="-1">${html}</div>`;
+      CT.hydrate(panel);
+    };
+    const settle = (outcome) => {
+      state.phase = "outcome";
+      state.outcome = outcome;
+      if (OUTCOMES[outcome].granted) log.tokenSaved = true;
+      render();
+      live.textContent = panel.textContent.trim().split(/(?<=\.) /)[0];
+    };
+    const busy = (text, then, ms = 500) => {
+      state.phase = "checking";
+      state.busy = text;
+      render();
+      setTimeout(then, ms);
+    };
+    // The owner approved by the command: read the record, reconnect, then decide.
+    const afterOwner = () => {
+      log.listReads += 1;
+      busy(`Checking what this request granted on ${where || "the gateway"}…`, () => settle(OUTCOMES[params.get("result")] ? params.get("result") : "exact"));
+    };
+    CT.approval = {
+      state,
+      // The exact path: list again, approve once, read back.
+      confirm: () => {
+        log.listReads += 1;
+        const r = params.get("hostresult") || "granted";
+        if (r === "changed") return settle("changed");
+        log.approveCalls += 1;
+        busy(`Approving on ${where}…`, () =>
+          busy("Checking what the gateway granted…", () => {
+            if (r === "granted") return settle("exact");
+            if (r === "readback") return settle("other");
+            settle(r);
+          }),
+        );
+      },
+    };
+    panel.addEventListener("click", (event) => {
+      const a = event.target.closest("[data-act]")?.dataset.act;
+      if (!a) return;
+      if (a === "owner") afterOwner();
+      if (a === "stop") ((state.phase = "stopped"), render());
+      // Requests and checks read again; they never reissue an approval.
+      if (a === "request" || a === "check") ((log.listReads += 1), (state.phase = "waiting"), (state.outcome = null), render());
+      if (a === "recheck") ((log.listReads += 1), busy(`Checking on ${where}…`, () => settle("gone")));
+    });
+    render();
+    const heading = root.querySelector("[data-s-title]");
+    if (heading && params.get("focus") !== "0") heading.focus({ preventScroll: true });
+    if (heading) live.textContent = heading.textContent;
+  }
   if (params.get("host")) openHost(params.get("host"));
 
   // A wait reached through the flow plays on to what it leads to; reached from
@@ -818,15 +904,7 @@
     "connecting-here": "app",
     "connecting-there": "app",
     installing: "found",
-    approving: "approved",
   };
-  // Approving: the host's two steps, then the read-back's result.
-  if (id === "approving" && params.get("play") === "1") {
-    setTimeout(() => {
-      const wait = root.querySelector("[data-approve-wait]");
-      if (wait) wait.textContent = "Checking what the gateway granted…";
-    }, 1200);
-  }
   if (params.get("play") === "1" && id in NEXT) {
     setTimeout(() => {
       const to = NEXT[id];

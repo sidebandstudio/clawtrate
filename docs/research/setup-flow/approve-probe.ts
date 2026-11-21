@@ -22,6 +22,9 @@
 //   stricter   with a bot at "full", the gateway host's approvals file asks on a
 //              miss; the effective policy is read; the file is restored
 //   list       `agents.list` at operator.read: each bot's `defaultPermissionMode`
+//   exact      the candidates for an exact-id approval with no fallback and the
+//              profile's own credentials: `gateway call device.pair.approve
+//              --expect-url`, and `devices approve --url` with no token
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,11 +199,33 @@ async function listBots() {
   await op.close();
 }
 
+// Is there an exact-id approval with no fallback that uses the profile's own
+// credentials? Each candidate runs against one live interactive-tier request.
+async function exact() {
+  const client = await pairedClient();
+  void client.requestAccess("interactive").catch(() => {});
+  await settle(() => client.state.connection.upgrade.status === "pending", 10000);
+  const id = client.state.connection.upgrade.requestId;
+  say("request:", upgradeOf(client));
+  const show = (label: string, r: { status: number | null; out: string; err: string }) =>
+    say(`${label}: exit ${r.status}`, { stdout: r.out.trim().slice(0, 600), stderr: r.err.trim().slice(0, 600) });
+  show("gateway call gateway.identity.get --expect-url", run(["gateway", "call", "gateway.identity.get", "--expect-url", url, "--json"]));
+  show("gateway call device.pair.list --expect-url", run(["gateway", "call", "device.pair.list", "--expect-url", url, "--json"]));
+  show("gateway call device.pair.approve --expect-url", run(["gateway", "call", "device.pair.approve", "--params", JSON.stringify({ requestId: id }), "--expect-url", url, "--json"]));
+  show("devices approve --url, no token", run(["devices", "approve", id, "--url", url, "--json"]));
+  const still = list().pending?.find((p: any) => p.requestId === id);
+  say("still pending after the candidates:", Boolean(still), still ? { scopes: still.scopes } : null);
+  const rej = run(["devices", "reject", id, "--json"]);
+  say(`reject: exit ${rej.status}`);
+  client.stop();
+}
+
 const exp = positionals[0];
 if (exp === "approve") await approve();
 else if (exp === "supersede") await supersede();
 else if (exp === "exec") await exec();
 else if (exp === "stricter") await stricter();
 else if (exp === "list") await listBots();
+else if (exp === "exact") await exact();
 else throw new Error("experiment?");
 process.exit(0);
