@@ -3,7 +3,8 @@
 // hold only while every file the assembler loads is listed in the workflow's
 // push paths and none of them loads a package at run time.
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,9 +14,51 @@ const ASSEMBLER = "apps/desktop/packaging/site-feed.ts";
 const WORKFLOW = readFileSync(join(ROOT, ".github/workflows/site.yml"), "utf8");
 const yaml = createRequire(import.meta.url)("js-yaml") as { load: (text: string) => unknown };
 
+interface Step {
+  id?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+}
+
 interface Workflow {
   on: Record<string, { branches?: string[]; tags?: string[]; "branches-ignore"?: string[] } | null>;
-  jobs: Record<string, { if?: string; needs?: string; environment?: { name?: string } }>;
+  concurrency?: { group?: string };
+  jobs: Record<
+    string,
+    {
+      if?: string;
+      needs?: string;
+      environment?: { name?: string };
+      outputs?: Record<string, string>;
+      steps?: Step[];
+    }
+  >;
+}
+
+/**
+ * Whether the deploy job deploys only a beta GitHub still lists as published:
+ * a step before deploy-pages asks GitHub for the tag the build job assembled.
+ */
+function deploysWithoutRecheck(text: string): string[] {
+  const flow = yaml.load(text) as Workflow;
+  const problems: string[] = [];
+  const build = flow.jobs.build!;
+  const assemble = build.steps?.find((step) => step.run?.includes("site-feed.ts"));
+  if (!assemble?.id || build.outputs?.tag !== `\${{ steps.${assemble.id}.outputs.tag }}`)
+    problems.push("the build job does not pass on the tag it assembled");
+  const steps = flow.jobs.deploy!.steps ?? [];
+  const deploy = steps.findIndex((step) => step.uses?.startsWith("actions/deploy-pages@"));
+  const check = steps.findIndex(
+    (step) =>
+      step.env?.TAG === "${{ needs.build.outputs.tag }}" &&
+      /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$TAG"/.test(step.run ?? "") &&
+      step.run!.includes('"false true"') &&
+      step.run!.includes("exit 1"),
+  );
+  if (check < 0 || deploy < 0 || check > deploy)
+    problems.push("the deploy job does not recheck the beta before deploying");
+  return problems;
 }
 
 /**
@@ -38,7 +81,11 @@ function deploysOffMain(text: string): string[] {
   return problems;
 }
 
-/** The specifiers a file loads when it runs: `import type` and `export type` load nothing. */
+/**
+ * The specifiers a file loads when it runs: `import type` and `export type`
+ * load nothing; `import("…")` loads its literal, and an `import(` of anything
+ * else is reported as `<dynamic>`, which no check accepts.
+ */
 function runtimeImports(path: string): string[] {
   const text = readFileSync(path, "utf8");
   const found: string[] = [];
@@ -47,6 +94,8 @@ function runtimeImports(path: string): string[] {
   )) {
     if (!match[2]) found.push(match[3]!);
   }
+  for (const match of text.matchAll(/\bimport\s*\(\s*(?:(["'])([^"'`]+)\1\s*\))?/g))
+    found.push(match[2] ?? "<dynamic>");
   return found;
 }
 
@@ -79,6 +128,28 @@ const covered = (file: string, path: string) =>
   path.endsWith("/**") ? file.startsWith(path.slice(0, -2)) : file === path;
 
 describe("the Site workflow and the feed assembler", () => {
+  it("counts a dynamic import as a load, so a package loaded that way is caught", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-site-workflow-"));
+    try {
+      const entry = join(dir, "entry.ts");
+      writeFileSync(
+        entry,
+        'import { a } from "./a.ts";\nconst yaml = await import("js-yaml");\nawait import(name);\n',
+      );
+      writeFileSync(join(dir, "a.ts"), 'export const a = await import("./b.ts");\n');
+      writeFileSync(join(dir, "b.ts"), "export {};\n");
+      const found = loaded(relative(ROOT, entry));
+      expect(found.packages.map((each) => each.split(": ")[1])).toEqual(["js-yaml", "<dynamic>"]);
+      expect(found.files.map((file) => file.split("/").at(-1))).toEqual([
+        "a.ts",
+        "b.ts",
+        "entry.ts",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("runs the assembler with Node alone", () => {
     expect(WORKFLOW).toContain(`run: node ${ASSEMBLER} site _site`);
     expect(WORKFLOW).not.toMatch(/pnpm install|npm (ci|install)/);
@@ -101,6 +172,44 @@ describe("the Site workflow and the feed assembler", () => {
   it("deploys only from main, the one ref the github-pages environment allows", () => {
     expect(deploysOffMain(WORKFLOW)).toEqual([]);
     expect((yaml.load(WORKFLOW) as Workflow).jobs.deploy!.environment?.name).toBe("github-pages");
+  });
+
+  it("keys its queue by ref, so a dispatch elsewhere cannot replace a pending run on main", () => {
+    expect((yaml.load(WORKFLOW) as Workflow).concurrency?.group).toBe("site-${{ github.ref }}");
+  });
+
+  it("deploys an assembled beta only while GitHub still lists it published", () => {
+    expect(deploysWithoutRecheck(WORKFLOW)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "no recheck",
+      (text: string) =>
+        text.replace(
+          / {6}- name: Check the assembled beta is still published\n[\s\S]*?(?= {6}- id: deployment)/,
+          "",
+        ),
+    ],
+    [
+      "a recheck after the deploy",
+      (text: string) => {
+        const step =
+          / {6}- name: Check the assembled beta is still published\n[\s\S]*?(?= {6}- id: deployment)/.exec(
+            text,
+          )![0];
+        return `${text.replace(step, "")}${step}`;
+      },
+    ],
+    [
+      "no tag from the build job",
+      (text: string) => text.replace(/ {4}outputs:\n {6}tag: .*\n/, ""),
+    ],
+    ["a recheck that does not fail", (text: string) => text.replace("exit 1", "exit 0")],
+  ])("refuses a workflow with %s", (_name, change) => {
+    const changed = change(WORKFLOW);
+    expect(changed).not.toBe(WORKFLOW);
+    expect(deploysWithoutRecheck(changed)).not.toEqual([]);
   });
 
   it.each([

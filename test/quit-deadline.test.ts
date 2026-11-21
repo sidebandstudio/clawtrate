@@ -44,4 +44,16 @@ describe("a quit's deadline", () => {
     expect(asked).toHaveLength(1);
     expect(Date.now() - start).toBeLessThan(200);
   });
+
+  it("returns at the deadline though the disconnect never settles, so a forced quit can follow", async () => {
+    const start = Date.now();
+    const quit = await quitWithin(
+      () => undefined,
+      () => new Promise(() => undefined),
+      () => new Promise(() => undefined),
+      60,
+    );
+    expect(quit).toBe(false);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });

@@ -106,7 +106,9 @@ function kernelSaysSandboxed(pid: number): number {
 let browser: Browser;
 let page: Page;
 
-test.describe.configure({ mode: "serial" });
+// No retries: the relaunch test quits the app global setup started, which a
+// retry's beforeAll would connect to again. A failed run is rerun whole.
+test.describe.configure({ mode: "serial", retries: 0 });
 
 test.beforeAll(async () => {
   browser = await chromium.connectOverCDP(process.env.CLAWTRATE_PACKAGED_CDP!);
@@ -568,13 +570,28 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     { env: appEnv(), stdio: ["ignore", logFd, logFd] },
   );
   const next = gated.child;
-  const exited = new Promise((resolve) => next.once("exit", resolve));
-  const found = processIdentity(next.pid!);
-  if (found.state !== "alive") {
+  // A shell that cannot start emits `error` and may never emit `exit`: either ends the wait.
+  let spawnError: Error | undefined;
+  const exited = new Promise((resolve) => {
+    next.once("exit", resolve);
+    next.once("error", (error) => {
+      spawnError = error;
+      resolve(undefined);
+    });
+  });
+  // Until the record names it, a failure aborts the gate, so the app never starts.
+  try {
+    const found = processIdentity(next.pid!);
+    if (found.state !== "alive")
+      throw new Error(
+        `could not record the newer build's process${spawnError ? ` (${spawnError.message})` : ""}`,
+      );
+    recordSuccessor(RECORD, { pid: next.pid!, identity: found.identity });
+  } catch (error) {
     gated.abort();
-    throw new Error("could not record the newer build's process");
+    closeSync(logFd);
+    throw error;
   }
-  recordSuccessor(RECORD, { pid: next.pid!, identity: found.identity });
   gated.release();
   let second: Browser | undefined;
   try {
@@ -632,11 +649,32 @@ test("opens with the same pairing and tasks after a newer build takes its place"
       next.kill("SIGKILL");
       await exited;
     }
-    for (let i = 0; i < 50 && processesUsing(USER_DATA).length > 0; i += 1) await sleep(200);
-    const left = processesUsing(USER_DATA);
-    for (const pid of left) process.kill(pid, "SIGKILL");
-    closeSync(logFd);
+    // The quit asked for ends with code 0, as the run's teardown requires of the
+    // first app; a crash on the way out (SIGSEGV, another code) does not.
+    const status = { code: next.exitCode, signal: next.signalCode };
+    let left: number[];
+    const unsignalled: string[] = [];
+    try {
+      for (let i = 0; i < 50 && processesUsing(USER_DATA).length > 0; i += 1) await sleep(200);
+      left = processesUsing(USER_DATA);
+      for (const pid of left) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          // Gone since the listing: nothing to end.
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ESRCH") unsignalled.push(`${pid}: ${code ?? String(error)}`);
+        }
+      }
+    } finally {
+      closeSync(logFd);
+    }
     expect(outcome, "the newer build quits within 15 seconds").not.toBe("running");
+    expect(
+      status.code === 0,
+      `the newer build quits cleanly, not with ${JSON.stringify(status)}`,
+    ).toBe(true);
     expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
+    expect(unsignalled, "every helper left could be ended").toEqual([]);
   }
 });

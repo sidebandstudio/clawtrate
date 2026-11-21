@@ -6,19 +6,33 @@
 // has its own updates/beta/: that folder is only ever the generated feed. It
 // copies the source, reads the repository's releases from GitHub's API, takes
 // the newest published beta that carries both Mac zips, feed.json and
-// latest-mac.json, checks the two files against each other, the release's tag
-// and GitHub's size and digest of each zip, reads each zip from its release
-// address to check the SHA-512 the app will check, and writes them to
+// latest-mac.json, checks the two files against GitHub's digest of each, each
+// other and the release's tag, and each zip against GitHub's size and digest,
+// reads each zip from its release address, following only the redirect the app
+// follows, to check the SHA-512 the app will check, and writes them to
 // <output>/updates/beta/. From the same beta it fills the Mac download page
 // (download/mac/index.html, a template) and requires install.sh to pin that
 // beta's team. With no published beta, a template token left or another
 // team pinned, it fails, so the workflow deploys nothing and the last
-// deployment stays. The Site workflow runs it on every deploy, from main
+// deployment stays; it assembles in a temporary folder and copies the result
+// to <output> only once every check has passed. The Site workflow runs it on every deploy, from main
 // only; docs/development/releases.md has the flow.
 
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { GITHUB_RELEASE_ASSETS, releaseAssetRedirect } from "../src/main/update/address.ts";
 import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import {
   checkBetaFiles,
@@ -48,6 +62,7 @@ export interface ReleaseRow {
   }>;
 }
 
+/** One request, returning a redirect rather than following it. */
 export type Get = (url: string, headers: Record<string, string>) => Promise<Response>;
 
 /** The newest release that is published, a beta by its tag, and carries all four files. */
@@ -70,10 +85,47 @@ export function newestBeta(rows: readonly ReleaseRow[]): ReleaseRow | null {
   return best?.row ?? null;
 }
 
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * A release file from its download address, by the desktop updater's rule
+ * (`releaseAssetRedirect`): GitHub's one redirect to its asset host, and no
+ * redirect after it, so the site never serves a feed whose files the app
+ * would refuse to download.
+ */
+async function releaseFile(get: Get, url: string): Promise<Response> {
+  let response = await get(url, {});
+  if (REDIRECTS.has(response.status)) {
+    await response.body?.cancel();
+    const next = releaseAssetRedirect(
+      new URL(url),
+      response.headers.get("location") ?? undefined,
+      GITHUB_RELEASE_ASSETS,
+    );
+    if (!next) throw new Error(`${url} redirects elsewhere than GitHub's asset host.`);
+    response = await get(next.href, {});
+    if (REDIRECTS.has(response.status)) {
+      await response.body?.cancel();
+      throw new Error(`${url} redirects more than once.`);
+    }
+  }
+  if (!response.ok || !response.body) throw new Error(`${url} answered ${response.status}.`);
+  return response;
+}
+
+/** A release's JSON file as text, only if its bytes are the ones GitHub's digest names. */
+async function releaseJson(get: Get, tag: string, asset: ReleaseRow["assets"][number]) {
+  const response = await releaseFile(get, asset.browser_download_url);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (asset.digest !== `sha256:${createHash("sha256").update(bytes).digest("hex")}`)
+    throw new Error(`${asset.name} on ${tag} is not the file GitHub's digest names.`);
+  // Exactly these bytes are written back: invalid UTF-8 is refused and a BOM is kept.
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
 /** The size and base64 SHA-512 of what an address serves, read as a stream. */
 async function streamedSha512(get: Get, url: string): Promise<{ size: number; sha512: string }> {
-  const response = await get(url, {});
-  if (!response.ok || !response.body) throw new Error(`${url} answered ${response.status}.`);
+  const response = await releaseFile(get, url);
   const hash = createHash("sha512");
   let size = 0;
   for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
@@ -119,8 +171,8 @@ export async function writeSiteFeed(
   const asset = (name: string) => release.assets.find((candidate) => candidate.name === name)!;
   const files = checkBetaFiles(
     tag,
-    await text(get, asset(FEED_NAME).browser_download_url, {}),
-    await text(get, asset(LATEST_MAC_NAME).browser_download_url, {}),
+    await releaseJson(get, tag, asset(FEED_NAME)),
+    await releaseJson(get, tag, asset(LATEST_MAC_NAME)),
   );
   // Each architecture's entries name the zip GitHub holds: its size and digest
   // as GitHub reports them, and the SHA-512 of the bytes it serves, which is
@@ -186,62 +238,78 @@ export async function assembleSite(
   for (const required of [DOWNLOAD_PAGE, INSTALL_SCRIPT])
     if (!existsSync(join(source, required)))
       throw new Error(`${source}/${required} does not exist: there is no site to deploy.`);
-  mkdirSync(output, { recursive: true });
-  cpSync(source, output, { recursive: true });
-  const tag = await writeSiteFeed(output, get, token);
-  if (!tag)
-    throw new Error("No published beta: the download page cannot be filled, so nothing deploys.");
-  const latest = JSON.parse(
-    readFileSync(join(output, "updates", "beta", LATEST_MAC_NAME), "utf8"),
-  ) as LatestMac;
+  // Assembled aside, so a refusal leaves <output> as it was and a rerun can use it.
+  const work = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
+  try {
+    cpSync(source, work, { recursive: true });
+    const tag = await writeSiteFeed(work, get, token);
+    if (!tag)
+      throw new Error("No published beta: the download page cannot be filled, so nothing deploys.");
+    const latest = JSON.parse(
+      readFileSync(join(work, "updates", "beta", LATEST_MAC_NAME), "utf8"),
+    ) as LatestMac;
 
-  const page = join(output, DOWNLOAD_PAGE);
-  const filled = readFileSync(page, "utf8")
-    .replaceAll("__CLAWTRATE_BETA_VERSION__", tag.slice(1))
-    .replaceAll("__CLAWTRATE_ARM64_ZIP__", latest.arm64.url)
-    .replaceAll("__CLAWTRATE_X64_ZIP__", latest.x86_64.url)
-    .replaceAll(
-      "__CLAWTRATE_RELEASE_PAGE__",
-      `https://github.com/${REPOSITORY}/releases/tag/${tag}`,
-    );
-  writeFileSync(page, filled);
-  for (const file of filesUnder(output)) {
-    const left = TEMPLATE_TOKEN.exec(readFileSync(join(output, file), "latin1"));
-    if (left) throw new Error(`${file} still holds ${left[0]}, so nothing deploys.`);
+    const page = join(work, DOWNLOAD_PAGE);
+    const filled = readFileSync(page, "utf8")
+      .replaceAll("__CLAWTRATE_BETA_VERSION__", tag.slice(1))
+      .replaceAll("__CLAWTRATE_ARM64_ZIP__", latest.arm64.url)
+      .replaceAll("__CLAWTRATE_X64_ZIP__", latest.x86_64.url)
+      .replaceAll(
+        "__CLAWTRATE_RELEASE_PAGE__",
+        `https://github.com/${REPOSITORY}/releases/tag/${tag}`,
+      );
+    writeFileSync(page, filled);
+    for (const file of filesUnder(work)) {
+      const left = TEMPLATE_TOKEN.exec(readFileSync(join(work, file), "latin1"));
+      if (left) throw new Error(`${file} still holds ${left[0]}, so nothing deploys.`);
+    }
+
+    const pins = [
+      ...readFileSync(join(work, INSTALL_SCRIPT), "utf8").matchAll(
+        /^CLAWTRATE_TEAM_ID="([^"]*)"$/gm,
+      ),
+    ];
+    if (pins.length !== 1)
+      throw new Error(
+        `${INSTALL_SCRIPT} must pin CLAWTRATE_TEAM_ID exactly once, so nothing deploys.`,
+      );
+    const team = pins[0]![1]!;
+    if (team === TEAM_PLACEHOLDER)
+      throw new Error(
+        `${INSTALL_SCRIPT} still pins the placeholder ${TEAM_PLACEHOLDER}, so nothing deploys.`,
+      );
+    if (team !== latest.teamIdentifier)
+      throw new Error(
+        `${INSTALL_SCRIPT} pins team ${team}, but ${tag} is signed by ${latest.teamIdentifier}, so nothing deploys.`,
+      );
+    mkdirSync(output, { recursive: true });
+    cpSync(work, output, { recursive: true });
+    return tag;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
+}
 
-  const pins = [
-    ...readFileSync(join(output, INSTALL_SCRIPT), "utf8").matchAll(
-      /^CLAWTRATE_TEAM_ID="([^"]*)"$/gm,
-    ),
-  ];
-  if (pins.length !== 1)
-    throw new Error(
-      `${INSTALL_SCRIPT} must pin CLAWTRATE_TEAM_ID exactly once, so nothing deploys.`,
-    );
-  const team = pins[0]![1]!;
-  if (team === TEAM_PLACEHOLDER)
-    throw new Error(
-      `${INSTALL_SCRIPT} still pins the placeholder ${TEAM_PLACEHOLDER}, so nothing deploys.`,
-    );
-  if (team !== latest.teamIdentifier)
-    throw new Error(
-      `${INSTALL_SCRIPT} pins team ${team}, but ${tag} is signed by ${latest.teamIdentifier}, so nothing deploys.`,
-    );
-  return tag;
+/** The command: assembles the site and, in Actions, passes the beta's tag on to the deploy job. */
+export async function main(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv,
+  get: Get,
+): Promise<number> {
+  const [source, output] = argv;
+  if (!source || !output) {
+    console.error("usage: node apps/desktop/packaging/site-feed.ts <site source> <output folder>");
+    return 2;
+  }
+  const tag = await assembleSite(source, output, get, env.GITHUB_TOKEN);
+  // The deploy job checks this beta is still published before deploying it.
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `tag=${tag}\n`);
+  console.log(`The site, its Beta feed and its download page are from ${tag}.`);
+  return 0;
 }
 
 if (import.meta.main) {
-  const [source, output] = process.argv.slice(2);
-  if (!source || !output) {
-    console.error("usage: node apps/desktop/packaging/site-feed.ts <site source> <output folder>");
-    process.exit(2);
-  }
-  const tag = await assembleSite(
-    source,
-    output,
-    (url, headers) => fetch(url, { headers, signal: AbortSignal.timeout(60_000) }),
-    process.env.GITHUB_TOKEN,
+  process.exitCode = await main(process.argv.slice(2), process.env, (url, headers) =>
+    fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(60_000) }),
   );
-  console.log(`The site, its Beta feed and its download page are from ${tag}.`);
 }

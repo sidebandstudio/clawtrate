@@ -665,7 +665,8 @@ export async function prepare(
     if (interrupting) await new Promise(() => undefined);
     if (build.status !== 0) {
       // The log is electron-builder's and can name the identity and team; it is not printed.
-      const log = /Build log: (\S+)/.exec(build.stderr)?.[1];
+      // The rest of the line: a log folder's name can hold spaces.
+      const log = /Build log: (.+?)\r?$/m.exec(build.stderr)?.[1];
       stop(
         log
           ? `The build failed. Its log is ${log}; keep it private.`
@@ -679,6 +680,7 @@ export async function prepare(
       const receipt = JSON.parse(readFileSync(join(out, `${key}.json`), "utf8")) as {
         commit: string;
         packagerReadback: string;
+        sha512: string;
       };
       if (receipt.commit !== commit || receipt.packagerReadback !== "certificate")
         stop(`${key} was not signed with a certificate by this commit's build.`);
@@ -686,6 +688,10 @@ export async function prepare(
       // Verified as a private copy, which is what gets staged and recorded.
       const zip = join(temp, artifactName(version, key));
       copyFileSync(join(out, artifactName(version, key)), zip);
+      // The copy must be the zip the receipt describes, or the record would
+      // attribute another build to this commit.
+      if (sha("sha512", readFileSync(zip), "base64") !== receipt.sha512)
+        stop(`${artifactName(version, key)} is not the zip its build receipt names.`);
       const unpacked = join(temp, `verify-${key}`);
       const unpack = () => {
         rmSync(unpacked, { recursive: true, force: true });
@@ -900,9 +906,9 @@ export type SiteReading =
   | { kind: "absent" }
   | { kind: "inconclusive"; reason: string };
 
-export async function readSite(net: Net): Promise<SiteReading> {
+export async function readSite(net: Net, ms = net.requestMs): Promise<SiteReading> {
   // The configured address itself, with no redirect followed: a 404 elsewhere proves nothing.
-  const got = await download(net, BETA_FEED_URL, net.requestMs, false);
+  const got = await download(net, BETA_FEED_URL, ms, false);
   if (!got.ok)
     return got.status === 404 ? { kind: "absent" } : { kind: "inconclusive", reason: got.reason };
   const text = got.body.toString("utf8");
@@ -915,11 +921,18 @@ export async function readSite(net: Net): Promise<SiteReading> {
   };
 }
 
-/** Reads the site until `done` accepts a reading or the wait ends; returns the last reading. */
+/**
+ * Reads the site until `done` accepts a reading or the wait ends; returns the
+ * last reading. The first read is immediate, with its own deadline; each later
+ * one must answer, body included, before the wait ends.
+ */
 async function watchSite(net: Net, done: (reading: SiteReading) => boolean) {
   const deadline = Date.now() + net.waitMs;
-  for (;;) {
-    const reading = await readSite(net);
+  for (let first = true; ; first = false) {
+    const reading = await readSite(
+      net,
+      first ? net.requestMs : Math.max(1, Math.min(net.requestMs, deadline - Date.now())),
+    );
     if (done(reading)) return { done: true, reading };
     if (Date.now() + net.pollMs > deadline) return { done: false, reading };
     await new Promise((resolve) => setTimeout(resolve, net.pollMs));
@@ -1163,7 +1176,7 @@ export function dispatchSite(runner: Run): void {
   ]);
   if (started.status !== 0)
     stop(
-      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo ${REPOSITORY} --ref main), then check ${BETA_FEED_URL}.`,
+      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo ${REPOSITORY} --ref main) signed in with Actions write access, which starting a workflow needs, then check ${BETA_FEED_URL}.`,
     );
   console.log("Started the Site workflow on main.");
 }

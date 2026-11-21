@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkBetaFiles, makeLatestMac, releaseFolder } from "../packaging/beta-files.ts";
 import {
   assembleSite,
+  main,
   newestBeta,
   writeSiteFeed,
   type Get,
@@ -44,8 +45,20 @@ function files(version: string) {
   return { tag, feed, latest };
 }
 
-function row(version: string, extra: Partial<ReleaseRow> = {}): ReleaseRow {
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/** GitHub's row for a beta: each zip's digest is the 100 bytes', each JSON file's its own text's. */
+function row(
+  version: string,
+  extra: Partial<ReleaseRow> = {},
+  json: { feed?: string; latest?: string } = {},
+): ReleaseRow {
   const tag = `v${version}`;
+  const own = files(version);
+  const digests: Record<string, string> = {
+    "feed.json": sha256(json.feed ?? own.feed),
+    "latest-mac.json": sha256(json.latest ?? own.latest),
+  };
   return {
     tag_name: tag,
     draft: false,
@@ -58,7 +71,7 @@ function row(version: string, extra: Partial<ReleaseRow> = {}): ReleaseRow {
     ].map((name) => ({
       name,
       size: 100,
-      digest: `sha256:${SHA256}`,
+      digest: `sha256:${digests[name] ?? SHA256}`,
       state: "uploaded",
       browser_download_url: `${releaseFolder(tag)}${name}`,
     })),
@@ -141,6 +154,7 @@ describe("writing the site's feed", () => {
   function github(
     rows: ReleaseRow[],
     bodies: Record<string, string>,
+    redirects: Record<string, string> = {},
   ): { get: Get; asked: string[] } {
     const asked: string[] = [];
     const get: Get = async (url, headers) => {
@@ -149,6 +163,8 @@ describe("writing the site's feed", () => {
         expect(headers.authorization).toBe("Bearer made-up-token");
         return new Response(JSON.stringify(rows));
       }
+      if (redirects[url])
+        return new Response(null, { status: 302, headers: { location: redirects[url] } });
       // Every zip serves the same 100 bytes unless `bodies` says otherwise.
       const body = bodies[url] ?? (url.endsWith(".zip") ? ZIP : undefined);
       return body === undefined ? new Response("", { status: 404 }) : new Response(body);
@@ -184,9 +200,10 @@ describe("writing the site's feed", () => {
   it("fails the deploy, writing nothing, when the newest beta's files do not agree", async () => {
     const version = "0.1.1-beta.20261120.2";
     const { tag, feed } = files(version);
-    const { get } = github([row(version)], {
+    const other = files("0.1.1-beta.20261120.1").latest;
+    const { get } = github([row(version, {}, { latest: other })], {
       [`${releaseFolder(tag)}feed.json`]: feed,
-      [`${releaseFolder(tag)}latest-mac.json`]: files("0.1.1-beta.20261120.1").latest,
+      [`${releaseFolder(tag)}latest-mac.json`]: other,
     });
     await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow("does not match");
     expect(existsSync(join(site, "updates"))).toBe(false);
@@ -244,12 +261,13 @@ describe("writing the site's feed", () => {
     const version = "0.1.1-beta.20261120.2";
     const { tag, latest } = files(version);
     let { feed } = files(version);
-    const beta = row(version);
+    let beta = row(version);
     const bodies: Record<string, string> = {};
     if (change(beta, bodies, tag) === "feed") {
       const wrong = JSON.parse(feed);
       wrong.files["mac-x64"].sha512 = Buffer.alloc(64, 1).toString("base64");
       feed = JSON.stringify(wrong);
+      beta = row(version, {}, { feed });
     }
     bodies[`${releaseFolder(tag)}feed.json`] = feed;
     bodies[`${releaseFolder(tag)}latest-mac.json`] = latest;
@@ -258,6 +276,67 @@ describe("writing the site's feed", () => {
       `Clawtrate-${version}-mac-x64.zip on ${tag} is not the file its feed and latest-mac.json name.`,
     );
     expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  it.each(["feed.json", "latest-mac.json"])(
+    "fails the deploy, writing nothing, when the downloaded %s is not the file GitHub's digest names",
+    async (name) => {
+      const version = "0.1.1-beta.20261120.2";
+      const { tag, feed, latest } = files(version);
+      // GitHub's row names the current file; the download still answers with an earlier one.
+      const current = { feed: `${feed}\n`, latest: `${latest}\n` };
+      const { get } = github(
+        [
+          row(
+            version,
+            {},
+            name === "feed.json" ? { feed: current.feed } : { latest: current.latest },
+          ),
+        ],
+        {
+          [`${releaseFolder(tag)}feed.json`]: feed,
+          [`${releaseFolder(tag)}latest-mac.json`]: latest,
+        },
+      );
+      await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+        `${name} on ${tag} is not the file GitHub's digest names.`,
+      );
+      expect(existsSync(join(site, "updates"))).toBe(false);
+    },
+  );
+
+  describe("following GitHub's redirect as the app does", () => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, feed, latest } = files(version);
+    const zip = `${releaseFolder(tag)}Clawtrate-${version}-mac-x64.zip`;
+    const asset = "https://release-assets.githubusercontent.com/github-production-release-asset/1";
+    const bodies = {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: latest,
+    };
+
+    it("follows the one redirect to GitHub's asset host", async () => {
+      const { get, asked } = github([row(version)], { ...bodies, [asset]: ZIP }, { [zip]: asset });
+      expect(await writeSiteFeed(site, get, "made-up-token")).toBe(tag);
+      expect(asked).toContain(asset);
+    });
+
+    it.each<[string, Record<string, string>, string]>([
+      [
+        "a second redirect after the asset host",
+        { [zip]: asset, [asset]: `${asset}/again` },
+        `${zip} redirects more than once.`,
+      ],
+      [
+        "a redirect to another host",
+        { [zip]: "https://example.com/Clawtrate.zip" },
+        `${zip} redirects elsewhere than GitHub's asset host.`,
+      ],
+    ])("refuses, writing nothing, %s", async (_name, redirects, message) => {
+      const { get } = github([row(version)], { ...bodies, [`${asset}/again`]: ZIP }, redirects);
+      await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(message);
+      expect(existsSync(join(site, "updates"))).toBe(false);
+    });
   });
 
   it("refuses a site that has its own updates/beta, even with no beta to write", async () => {
@@ -401,6 +480,25 @@ describe("assembling the site", () => {
     await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
       `install.sh pins team OTHERTEAM1, but ${tag} is signed by TEAMID1234, so nothing deploys.`,
     );
+  });
+
+  it("passes the assembled beta's tag on to the deploy job, which rechecks it", async () => {
+    fixture();
+    const outputs = join(root, "github-output");
+    writeFileSync(outputs, "earlier=1\n");
+    expect(await main([source, output], { GITHUB_OUTPUT: outputs }, oneBeta)).toBe(0);
+    expect(readFileSync(outputs, "utf8")).toBe(`earlier=1\ntag=${tag}\n`);
+  });
+
+  it("leaves the output as it was when it refuses, so a rerun into it works", async () => {
+    fixture("OTHERTEAM1");
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      "install.sh pins team OTHERTEAM1",
+    );
+    expect(existsSync(output)).toBe(false);
+    fixture();
+    expect(await assembleSite(source, output, oneBeta, undefined)).toBe(tag);
+    expect(readFileSync(join(output, "updates/beta/feed.json"), "utf8")).toBe(files(version).feed);
   });
 
   it.each([

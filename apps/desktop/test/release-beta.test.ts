@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEnvironment,
@@ -576,7 +576,11 @@ const builds =
       writeFileSync(join(out, `Clawtrate-${version}-${key}.zip`), `zip of ${key}`);
       writeFileSync(
         join(out, `${key}.json`),
-        JSON.stringify({ commit: COMMIT, packagerReadback: signed }),
+        JSON.stringify({
+          commit: COMMIT,
+          packagerReadback: signed,
+          sha512: createHash("sha512").update(`zip of ${key}`).digest("base64"),
+        }),
       );
     }
     return ok();
@@ -663,7 +667,9 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
   });
 
   it("names a failed build's log without printing it, and removes the signing folder", async () => {
-    const log = join(place.root, "pack.log");
+    // A temporary folder's name can hold spaces; the whole path is named.
+    mkdirSync(join(place.root, "Release Builds"));
+    const log = join(place.root, "Release Builds", "pack.log");
     const { runner } = tools(() => {
       writeFileSync(log, "Signing with Developer ID Application: Example (TEAMID1234)\n");
       return fail(`Error: Packaging failed (exit 1). Build log: ${log}\n    at build`);
@@ -756,6 +762,19 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       return runner(command, args, options);
     };
     expect(await stopped(() => prepare(stapling, NOW, place))).toContain("does not unpack.");
+  });
+
+  it("refuses a zip that is not the one its build receipt names, before checking the app", async () => {
+    const { runner, calls } = tools((out, version) => {
+      const result = builds(place.appDir)(out, version);
+      // Another build's zip in place of the one the receipt describes.
+      writeFileSync(join(out, `Clawtrate-${version}-mac-arm64.zip`), "another zip");
+      return result;
+    });
+    expect(await stopped(() => prepare(runner, NOW, place))).toBe(
+      `Clawtrate-${VERSION}-mac-arm64.zip is not the zip its build receipt names.`,
+    );
+    expect(calls.some((call) => call.command === "ditto")).toBe(false);
   });
 
   it("refuses an app the packager did not sign with the certificate", async () => {
@@ -974,7 +993,7 @@ function github(
         target_commitish: args[args.indexOf("--target") + 1]!,
         body: args.includes("--notes") ? args[args.indexOf("--notes") + 1]! : null,
         assets: files.map((path, id) => {
-          const name = path.split("/").at(-1)!;
+          const name = basename(path);
           const bytes = readFileSync(path);
           return {
             id: 100 + id,
@@ -1124,7 +1143,7 @@ describe("publishing", () => {
     const hub = github(dir);
     hub.answers[DISPATCH] = fail("HTTP 403");
     expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
-      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main), then check ${BETA_FEED_URL}.`,
+      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main) signed in with Actions write access, which starting a workflow needs, then check ${BETA_FEED_URL}.`,
     );
   });
 
@@ -1425,6 +1444,29 @@ describe("withdrawing", () => {
     expect(await stopped(() => withdraw(hub(false).runner, VERSION, hanging))).toBe(
       `Could not tell what the site serves (no answer in time). Check ${BETA_FEED_URL} yourself.`,
     );
+  });
+
+  it("ends a read that would outlast the wait at the wait's end", async () => {
+    let reads = 0;
+    const slowAfterFirst: Net = {
+      // The first read answers at once with the withdrawn feed; later ones never answer.
+      get: (_url, signal) => {
+        reads += 1;
+        if (reads === 1) return Promise.resolve(new Response(feed(VERSION)));
+        return new Promise((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason)),
+        );
+      },
+      requestMs: 60_000,
+      waitMs: 300,
+      pollMs: 50,
+    };
+    const started = Date.now();
+    expect(await stopped(() => withdraw(hub(false).runner, VERSION, slowAfterFirst))).toBe(
+      `Could not tell what the site serves (no answer in time). Check ${BETA_FEED_URL} yourself.`,
+    );
+    expect(reads).toBe(2);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("refuses when the site still offers the version", async () => {
