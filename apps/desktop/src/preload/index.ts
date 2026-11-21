@@ -1,11 +1,12 @@
 // Exposes a narrow, typed IPC surface to the renderer. No Node or Electron
-// objects cross the bridge, only plain data, six functions and the platform name.
+// objects cross the bridge, only plain data, seven functions and the platform name.
 
 import type {
   DesktopUpdates,
   DesktopUpdateSnapshot,
   AttachmentInfo,
   BridgeCommand,
+  ChatLinkDelivery,
   ClawtrateState,
   HostInfo,
   SaveResult,
@@ -25,6 +26,8 @@ export type DesktopHostApi = {
   attach(file: { name: string; type: string; data: ArrayBuffer }): Promise<AttachmentInfo>;
   /** Save bytes the Work pane holds to a file the person chooses in the system's save dialog. */
   save(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /** Each Clawtrate link the app receives, validated by the main process, once. */
+  onChatLink(listener: (link: ChatLinkDelivery) => void): () => void;
 };
 
 function invokeUpdateTrack(
@@ -76,6 +79,16 @@ const api: DesktopHostApi = {
     return () => ipcRenderer.removeListener("clawtrate:state", handler);
   },
   setBadge: (count) => ipcRenderer.send("clawtrate:badge", count),
+  onChatLink(listener) {
+    // The link that opened the app may be waiting already; later ones are announced.
+    const take = () =>
+      void ipcRenderer
+        .invoke("clawtrate:link:take")
+        .then((link: ChatLinkDelivery | null) => link && listener(link));
+    ipcRenderer.on("clawtrate:link", take);
+    take();
+    return () => ipcRenderer.removeListener("clawtrate:link", take);
+  },
 };
 
 contextBridge.exposeInMainWorld("clawtrateHost", api);

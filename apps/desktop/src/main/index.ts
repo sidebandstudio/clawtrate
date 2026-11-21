@@ -2,6 +2,7 @@
 
 import {
   batchSnapshots,
+  CHAT_LINK_SCHEME,
   createBridgeSession,
   type BridgeSession,
   parseBridgeCommand,
@@ -30,6 +31,7 @@ import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
+import { LinkInbox, linkArgument } from "./links.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   keychainCheckName,
@@ -101,6 +103,13 @@ let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
 let closeSetup: () => Promise<void> = async () => {};
+/** Set once the IPC handlers are in place, so a window can be opened for a link. */
+let started = false;
+
+// A link waits here until the window takes it; the window is told one is waiting.
+const links = new LinkInbox(() => {
+  if (window && !window.isDestroyed()) window.webContents.send("clawtrate:link");
+});
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
 function hasSwitch(name: string): boolean {
@@ -543,6 +552,14 @@ async function main(): Promise<void> {
     if (window && !window.isDestroyed()) window.webContents.send("clawtrate:state", state);
   });
 
+  ipcMain.handle("clawtrate:link:take", () => links.take());
+  // macOS reads the scheme from the app's Info.plist (packaging/config.ts). Windows has no
+  // such declaration, so the packaged app registers itself for this user. A development
+  // build never does.
+  if (app.isPackaged && process.platform !== "darwin")
+    app.setAsDefaultProtocolClient(CHAT_LINK_SCHEME);
+
+  started = true;
   window = createWindow();
   if (process.env.CLAWTRATE_SCREENSHOT)
     void captureAndQuit(window, process.env.CLAWTRATE_SCREENSHOT);
@@ -573,14 +590,38 @@ app.on("before-quit", (event) => {
   runtime?.client.stop();
 });
 
-// One app per data folder: a second launch focuses the running window and exits.
+/** Bring the window forward, for a second launch or a link. */
+function bringForward(): void {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+/** A link from the system: held for the window, which comes forward, or opens if there is none. */
+function openLink(raw: string): void {
+  links.receive(raw);
+  if (!window && started) window = createWindow();
+  else bringForward();
+}
+
+// One app per data folder: a second launch focuses the running window and exits,
+// handing over the link it was started with, if any.
 if (app.requestSingleInstanceLock()) {
-  app.on("second-instance", () => {
-    if (!window) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+  // macOS: a link opened while the app runs, or the one that launched it, which
+  // can come before the window exists.
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    openLink(url);
   });
+  app.on("second-instance", (_event, argv) => {
+    const link = linkArgument(argv);
+    if (link === null) bringForward();
+    else openLink(link);
+  });
+  // Windows and Linux: the link the app was started with.
+  const launchLink = linkArgument(process.argv);
+  if (launchLink !== null) links.receive(launchLink);
   void main();
 } else {
   app.quit();

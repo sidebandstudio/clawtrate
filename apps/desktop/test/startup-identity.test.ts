@@ -2,6 +2,8 @@
 // Windows app gives itself the bundle id as its AppUserModelID before it
 // creates any window, so its taskbar button is the installer's shortcuts'
 // from the first window on. Other platforms and development builds do not.
+// A packaged app on Windows or Linux registers itself for Clawtrate links;
+// macOS reads the scheme from the app's Info.plist.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +49,8 @@ vi.mock("electron", () => {
     setName: () => calls.push("setName"),
     enableSandbox: () => calls.push("enableSandbox"),
     setAppUserModelId: (id: string) => calls.push(`setAppUserModelId ${id}`),
+    setAsDefaultProtocolClient: (scheme: string) =>
+      calls.push(`setAsDefaultProtocolClient ${scheme}`),
     getAppPath: () => "/app",
     getVersion: () => "1.0.0",
     getPath: () => dataDir,
@@ -134,6 +138,36 @@ describe("the AppUserModelID at startup", () => {
       vi.resetModules();
       const calls = await startUp(os, true);
       expect(calls.some((call) => call.startsWith("setAppUserModelId"))).toBe(false);
+    }
+  });
+});
+
+describe("Clawtrate links at startup", () => {
+  it("F-248: a packaged app registers for them on Windows and Linux, before its window", async () => {
+    for (const os of ["win32", "linux"] as const) {
+      recorded.calls.length = 0;
+      vi.resetModules();
+      const calls = await startUp(os, true);
+      const registered = calls.indexOf("setAsDefaultProtocolClient clawtrate");
+      expect(registered, os).toBeGreaterThanOrEqual(0);
+      expect(registered, os).toBeLessThan(calls.indexOf("window"));
+    }
+  });
+
+  it("F-248: macOS and development builds leave the system's registration alone", async () => {
+    for (const [os, packaged] of [
+      ["darwin", true],
+      ["darwin", false],
+      ["win32", false],
+      ["linux", false],
+    ] as const) {
+      recorded.calls.length = 0;
+      vi.resetModules();
+      const calls = await startUp(os, packaged);
+      expect(
+        calls.some((call) => call.startsWith("setAsDefaultProtocolClient")),
+        `${os}, packaged: ${packaged}`,
+      ).toBe(false);
     }
   });
 });

@@ -6,6 +6,7 @@ import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
+import type { ChatLinkDelivery } from "./chat-link.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInfo,
@@ -596,6 +597,12 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Each Clawtrate link the host receives from the system, as validated values or
+   * as invalid, never the raw link (docs/design/links.md). Absent where the host
+   * receives none: the web preview and the fixture mode.
+   */
+  onChatLink?(listener: (link: ChatLinkDelivery) => void): () => void;
 };
 
 /**
