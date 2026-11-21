@@ -263,13 +263,13 @@ export function processVerdict(
   if (!validPid(pid) || typeof identity !== "string" || identity === "") {
     return { state: "unknown", reason: "its record cannot identify a process" };
   }
+  const now = identify(pid);
+  if (now.state === "unknown") return { state: "unknown", reason: now.reason };
+  if (now.state === "exited") return { state: "dead" };
   // A start time recorded in a local time zone: neither a match nor a mismatch.
   if (LOCAL_IDENTITY.test(identity)) {
     return { state: "unknown", reason: "its record's start time is in a local time zone" };
   }
-  const now = identify(pid);
-  if (now.state === "unknown") return { state: "unknown", reason: now.reason };
-  if (now.state === "exited") return { state: "dead" };
   // A live process with another start time holds a reused PID: the recorded one is gone.
   return { state: now.identity === identity ? "alive" : "dead" };
 }
