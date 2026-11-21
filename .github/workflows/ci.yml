@@ -134,6 +134,7 @@ jobs:
           retention-days: 3
       # Unsigned: no signing variables are set, so the app is signed ad hoc and not notarized.
       - run: pnpm test:desktop-updates
+      - run: pnpm test:desktop
       - run: pnpm package:mac
 
   windows:
@@ -153,6 +154,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Unsigned: no signing variables are set.
       - run: pnpm test:desktop-updates
+      - run: pnpm test:desktop
       - run: pnpm package:win
       # For inspection only: unsigned, and never a release.
       - uses: actions/upload-artifact@v7
