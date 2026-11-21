@@ -12,6 +12,7 @@ export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./accounts.ts";
+export * from "./routines.ts";
 export {
   AdminNeededError,
   isActive as isSignInActive,
@@ -36,6 +37,7 @@ export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./file-paths.ts";
+export * from "./check-ins.ts";
 export { isStopNow } from "./stop-words.ts";
 export * from "./send-size.ts";
 export * from "./composer-menus.ts";
@@ -81,3 +83,11 @@ export {
 } from "./client.ts";
 export type * from "./desktop-updates.ts";
 export { noDesktopUpdates } from "./no-desktop-updates.ts";
+
+export {
+  MEMORY_NOTES_WRITABLE,
+  ROOT_MEMORY,
+  type MemoryDocument,
+  type MemoryFile,
+  type MemoryList,
+} from "./memory.ts";

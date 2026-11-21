@@ -25,6 +25,36 @@ describe("parseBridgeCommand", () => {
   });
 });
 
+describe("parseBridgeCommand for routines", () => {
+  it("takes a run by its start when it has no run id, and the calendar's dates", () => {
+    const session = "agent:marlow:cron:job-1:run:abc";
+    expect(
+      parseBridgeCommand({
+        type: "readRunConversation",
+        id: "job-1",
+        runId: null,
+        runAt: 1_795_045_912_353,
+        sessionKey: session,
+      }),
+    ).toEqual({
+      type: "readRunConversation",
+      id: "job-1",
+      runId: null,
+      runAt: 1_795_045_912_353,
+      sessionKey: session,
+    });
+    expect(() =>
+      parseBridgeCommand({ type: "readRunConversation", id: "job-1", runId: "", runAt: 1 }),
+    ).toThrow("invalid run id");
+    expect(parseBridgeCommand({ type: "readCalendarRuns", from: 1, to: 2, extra: 3 })).toEqual({
+      type: "readCalendarRuns",
+      from: 1,
+      to: 2,
+    });
+    expect(() => parseBridgeCommand({ type: "readCalendarRuns", from: -1, to: 2 })).toThrow();
+  });
+});
+
 describe("parseBridgeCommand for a reaction", () => {
   it("F-283: a reaction's direction is a boolean or absent; any other value is refused, never taken as add", () => {
     const base = {

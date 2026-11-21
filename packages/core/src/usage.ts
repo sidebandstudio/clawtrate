@@ -440,9 +440,9 @@ export type UsageSources = {
 // Routines ------------------------------------------------------------------------------------
 
 /** A routine a budget can be set for: one that runs in tasks of its own. */
-export type Routine = { id: string; name: string; botId: string };
+export type BudgetRoutine = { id: string; name: string; botId: string };
 /** Routines listed for the budget form. */
-export const MAX_ROUTINES = 64;
+export const MAX_BUDGET_ROUTINES = 64;
 
 /**
  * The session targets whose runs the gateway puts in a task of the routine's
@@ -456,9 +456,9 @@ export const MAX_ROUTINES = 64;
 const ownTask = (target: unknown) => target === "isolated" || target === "current";
 
 /** The routines in a `cron.list` answer that run in tasks of their own, so their usage can be counted apart. */
-export function routinesOf(result: unknown): Routine[] {
+export function routinesOf(result: unknown): BudgetRoutine[] {
   const jobs = asRecord(result)?.jobs;
-  const out: Routine[] = [];
+  const out: BudgetRoutine[] = [];
   for (const each of Array.isArray(jobs) ? jobs : []) {
     const job = asRecord(each);
     if (!job || typeof job.id !== "string" || !PLAIN_ID.test(job.id)) continue;
@@ -473,7 +473,7 @@ export function routinesOf(result: unknown): Routine[] {
       short(job.name, MAX_ROUTINE_NAME_CHARS) ??
       job.id;
     out.push({ id: job.id, name, botId });
-    if (out.length >= MAX_ROUTINES) break;
+    if (out.length >= MAX_BUDGET_ROUTINES) break;
   }
   return out;
 }

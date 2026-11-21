@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
@@ -16,7 +17,28 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
-import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import {
+  AccountsEngine,
+  AdminNeededError,
+  type CreateBotInput,
+  type CreatedBot,
+} from "./accounts-engine.ts";
+import {
+  dismissCheckInSave,
+  loadCheckIns,
+  saveCheckIn,
+  type CheckInDraft,
+  type CheckInsContext,
+  type CheckInRead,
+} from "./check-ins.ts";
+import {
+  RoutinesEngine,
+  type BotRoutines,
+  type CalendarRuns,
+  type RoutineRun,
+  type RunConversation,
+  type RunSelector,
+} from "./routines.ts";
 import {
   MachinesEngine,
   type ApprovalsFile,
@@ -153,9 +175,11 @@ import {
   RawTable,
   reconcileOutbox,
   historyQueuePairs,
+  MAX_QUEUE_ALIASES,
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
+  settleRunFromWait,
   settleUnboundStops,
   throughRunAliases,
   removeMessage,
@@ -212,6 +236,7 @@ import {
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
+  MAX_STEPS_PER_TASK,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
@@ -237,7 +262,7 @@ import {
   type UsageReport,
   type UsageReportRequest,
 } from "./usage-engine.ts";
-import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
+import { initialUsage, type BudgetChange, type BudgetRoutine } from "./usage.ts";
 import {
   archiveTask,
   deleteTask,
@@ -395,6 +420,10 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
+/** Recipient sessions with a read on their way at once, and reads of one session at once. */
+export const MAX_FOREIGN_READ_SESSIONS = MAX_TRACKED_TASKS * MAX_STEPS_PER_TASK;
+/** Reads of one session on their way at once: at most the runs a task's steps name. */
+export const MAX_FOREIGN_READS_PER_SESSION = MAX_STEPS_PER_TASK;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
@@ -767,6 +796,14 @@ export class ClawtrateClient {
   private readonly foreign = new Map<string, TaskActivity>();
   /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
   private readonly foreignRaw = new RawTable(0, 0);
+  /**
+   * Recipient reads on their way, by session, at most
+   * `MAX_FOREIGN_READ_SESSIONS` sessions and `MAX_FOREIGN_READS_PER_SESSION`
+   * reads of one: each read carries a token, and a deletion of the session
+   * cancels its reads' tokens, so an answer that predates the deletion is
+   * dropped whatever happened to other sessions meanwhile.
+   */
+  private readonly foreignReads = new Map<string, Set<{ cancelled: boolean }>>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -856,6 +893,12 @@ export class ClawtrateClient {
   private readonly fileTransfers = new FileTransfers(() => this.now());
   /** File lists and reads in flight (`MAX_FILE_READS`). */
   private fileReads = 0;
+  /** Changes with every hello and every close, so work started on one connection never runs on the next. */
+  private epoch = 0;
+  /** The gateway's identity as read on the connection of `epoch`, once asked. */
+  private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
+  /** Check-in reads begun; only the latest one's answer is shown. */
+  private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
     request: (method, params, options) => {
@@ -882,6 +925,16 @@ export class ClawtrateClient {
     now: () => this.now(),
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),
+  });
+  /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
+  private readonly routines = new RoutinesEngine({
+    request: (method, params) => {
+      if (!this.protocol) return Promise.reject(new NotSentError());
+      return this.protocol.request(method, params);
+    },
+    get: () => this.state.routines,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, routines: change(state.routines) })),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -3191,6 +3244,15 @@ export class ClawtrateClient {
       ...next,
       runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
     };
+    // The id pairs the session's turns were named by, newest kept, as a task's own are.
+    const aliasKeys = Object.keys(next.queueAliases);
+    if (aliasKeys.length > MAX_QUEUE_ALIASES)
+      next = {
+        ...next,
+        queueAliases: Object.fromEntries(
+          aliasKeys.slice(-MAX_QUEUE_ALIASES).map((key) => [key, next.queueAliases[key]!]),
+        ),
+      };
     this.foreign.delete(sessionKey);
     this.foreign.set(sessionKey, next);
     while (this.foreign.size > FOREIGN_SESSIONS) {
@@ -3215,20 +3277,24 @@ export class ClawtrateClient {
    */
   private retireForeign(rawKey: string): void {
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
-    if (!this.foreign.has(sessionKey)) return;
-    this.updateForeign(sessionKey, (activity, ctx) =>
-      activity.runs.some((run) => !isTerminal(run.state))
-        ? {
-            ...activity,
-            runs: activity.runs.map((run) =>
-              isTerminal(run.state)
-                ? run
-                : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
-            ),
-          }
-        : activity,
-    );
-    this.foreign.delete(sessionKey);
+    if (this.foreign.has(sessionKey)) {
+      this.updateForeign(sessionKey, (activity, ctx) =>
+        activity.runs.some((run) => !isTerminal(run.state))
+          ? {
+              ...activity,
+              runs: activity.runs.map((run) =>
+                isTerminal(run.state)
+                  ? run
+                  : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
+              ),
+            }
+          : activity,
+      );
+      this.foreign.delete(sessionKey);
+    }
+    // A deletion supersedes every read of this session on its way.
+    for (const token of this.foreignReads.get(sessionKey) ?? []) token.cancelled = true;
+    this.foreignReads.delete(sessionKey);
   }
 
   /** A run this task does not hold: a followed foreign session's, or another task's. */
@@ -3466,6 +3532,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * Two runs of the task still look active after a history read: one whose end a connection gap
+   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
+   * `operator.write`). A run it reports over settles as it reports; one it reports still going,
+   * or does not know, stays as it is.
+   */
+  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const first = transcript && activeRun(transcript);
+    if (!first || runningRunId(transcript, first.id) !== null) return;
+    if (!this.state.connection.canWrite || this.options.readOnly) return;
+    const incarnation = this.incarnations.get(key);
+    const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
+    await Promise.all(
+      asked.map(async (run) => {
+        let answer: RawRecord | null;
+        try {
+          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+        } catch (error) {
+          if (generation === this.generation)
+            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+          return;
+        }
+        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
+          return;
+        this.updateActivity(key, (activity, ctx) =>
+          settleRunFromWait(activity, run.id, answer, ctx),
+        );
+      }),
+    );
+  }
+
+  /**
    * Read the bot's workspace root, as the gateway names it
    * (`agents.files.list`, `operator.read`, its `workspace`), once a task's
    * history loads. A failed read leaves it unknown: an absolute path is then
@@ -3518,29 +3617,123 @@ export class ClawtrateClient {
       missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
     }
     for (const [sessionKey, ids] of missing) {
+      if (generation !== this.generation || !this.tracked(key)) return;
+      await this.readRecipientRuns(sessionKey, ids, generation, key);
+    }
+  }
+
+  private async readRecipientRuns(
+    sessionKey: string,
+    ids: Set<string>,
+    generation: number,
+    senderKey?: string,
+    terminal: {
+      phase: "end" | "error";
+      pairs: ReadonlyArray<readonly [string, string]>;
+    } | null = null,
+  ): Promise<void> {
+    // The read carries its own invalidation token: a deletion of this session
+    // cancels it, however many deletions of other sessions follow, and nothing
+    // else does. Admission stays within the map and per-session caps.
+    const token = { cancelled: false };
+    let tokens = this.foreignReads.get(sessionKey);
+    if (!tokens) {
+      if (this.foreignReads.size >= MAX_FOREIGN_READ_SESSIONS) return;
+      tokens = new Set();
+      this.foreignReads.set(sessionKey, tokens);
+    }
+    if (tokens.size >= MAX_FOREIGN_READS_PER_SESSION) return;
+    tokens.add(token);
+    try {
+      // What this read may settle was active before it was asked, so a run whose
+      // live start arrives while the request is pending outlives a stale answer.
+      const activeBefore = new Set(
+        (this.foreign.get(sessionKey)?.runs ?? [])
+          .filter((run) => ids.has(run.id) && !isTerminal(run.state))
+          .map((run) => run.id),
+      );
       let history: RawRecord | null;
       try {
         history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
       } catch {
-        continue;
+        return;
       }
-      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
-      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+      if (
+        generation !== this.generation ||
+        this.tracked(sessionKey) ||
+        (senderKey !== undefined && !this.tracked(senderKey)) ||
+        // A deletion of this session while the read was on its way supersedes it.
+        token.cancelled
+      )
+        return;
+      const aliases = Object.fromEntries([
+        ...(terminal?.pairs ?? []),
+        ...historyQueuePairs(history?.messages),
+      ]);
       const { messages, inFlight } = throughRunAliases(
         history?.messages,
         asRecord(history?.inFlightRun),
         aliases,
       );
-      const found = runsFromHistory(messages, inFlight, {
-        sessionKey,
-        now: this.now(),
-        raw: this.foreignRaw,
-      }).filter((run) => ids.has(run.id));
-      if (found.length === 0) continue;
-      this.updateForeign(sessionKey, (activity) => ({
-        ...activity,
-        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
-      }));
+      const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
+      const pendingInputs = asRecord(history?.pendingInputs)?.items;
+      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
+        ids.has(run.id),
+      );
+      const historyIds = new Set(found.map((run) => run.id));
+      // Ends history does not establish: a busy read leaves the newest rows' run
+      // open, and an end history holds only in its rows' shape is never a reply.
+      // A terminal row naming such a run must still settle it.
+      const inferred = new Set(
+        found
+          .filter((run) => !run.outcomeKnown || (busy && !isTerminal(run.state)))
+          .map((run) => run.id),
+      );
+      const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+      const ended = terminal
+        ? new Map([...ids].map((id) => [id, terminal.phase] as const))
+        : undefined;
+      this.updateForeign(sessionKey, (activity) => {
+        // A pair is one run: history under the gateway's id is the run the sender
+        // follows under the send's id. Renamed, never dropped: a foreign run keeps
+        // no steps, so nothing of a run still under way is lost with it.
+        const aliased = (terminal?.pairs ?? []).reduce((next, [gateway, client]) => {
+          if (gateway === client || next.queueAliases[gateway] === client) return next;
+          const shown = findRun(next, gateway);
+          const runs =
+            shown && !findRun(next, client)
+              ? next.runs.map((run) => (run === shown ? { ...run, id: client } : run))
+              : next.runs;
+          return { ...next, runs, queueAliases: { ...next.queueAliases, [gateway]: client } };
+        }, activity);
+        const followed = aliased.runs.filter((run) => ids.has(run.id));
+        const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
+        // A row said the run ended, but idle history cannot say how: settle it as
+        // vanished rather than leave the card working, unless a turn is in flight.
+        const runs = settleVanishedRuns(
+          merged,
+          activeBefore,
+          historyIds,
+          inFlightId,
+          ctx,
+          busy,
+          ended,
+          inferred,
+        );
+        const settled =
+          runs.length === merged.length && runs.every((run, i) => run === merged[i])
+            ? merged
+            : runs;
+        return {
+          ...aliased,
+          runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
+        };
+      });
+    } finally {
+      tokens.delete(token);
+      if (tokens.size === 0 && this.foreignReads.get(sessionKey) === tokens)
+        this.foreignReads.delete(sessionKey);
     }
   }
 
@@ -3872,6 +4065,34 @@ export class ClawtrateClient {
     }
   }
 
+  // Routines (`routines.ts`; automation.md sections 3 to 8), all at the read tier ----------
+
+  /** Read the routine list and the scheduler's state again. */
+  refreshRoutines(): Promise<void> {
+    if (this.state.connection.status !== "connected") return Promise.resolve();
+    return this.routines.load();
+  }
+
+  /** One bot's routines, for a list that keeps fewer than the gateway has; returned, not kept. */
+  readBotRoutines(botId: string): Promise<BotRoutines> {
+    return this.routines.botRoutines(botId);
+  }
+
+  /** A routine's runs, newest finished first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
+  readRoutineRuns(id: string): Promise<RoutineRun[]> {
+    return this.routines.runs(id);
+  }
+
+  /** Every routine's runs that started from `from` to `to`, for the calendar; returned, not kept. */
+  readCalendarRuns(from: number, to: number): Promise<CalendarRuns> {
+    return this.routines.calendarRuns(from, to);
+  }
+
+  /** One run's conversation, when the gateway keeps it; returned, not kept. */
+  readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
+    return this.routines.conversation(id, run);
+  }
+
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
 
   /** Read the accounts, sign-ins, bindings and catalogue the account screens show. */
@@ -3961,6 +4182,63 @@ export class ClawtrateClient {
 
   removeBotFallbacks(botId: string): Promise<void> {
     return this.accounts.removeFallbacks(botId);
+  }
+
+  // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
+
+  private checkInsContext(owner?: object | null): CheckInsContext {
+    return {
+      link: () => {
+        const protocol = this.protocol;
+        const epoch = this.epoch;
+        const alive = () =>
+          protocol !== null &&
+          this.protocol === protocol &&
+          this.epoch === epoch &&
+          this.state.connection.status === "connected";
+        return {
+          alive,
+          request: (method, params, options) =>
+            protocol && alive()
+              ? protocol.request(method, params, options)
+              : Promise.reject(new NotSentError()),
+        };
+      },
+      gateway: () => this.readGatewayIdentity(),
+      begin: () => {
+        const mine = (this.checkInReads += 1);
+        return () => mine === this.checkInReads;
+      },
+      get: () => this.state.checkIns,
+      set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
+      botIds: () => this.state.bots.map((bot) => bot.id),
+      admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+      checkNotWithdrawn: () => this.checkNotWithdrawn(owner),
+      now: () => this.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    };
+  }
+
+  /** Read the bots' check-ins: their heartbeat jobs, the scheduler and their own settings. */
+  refreshCheckIns(botId?: string): Promise<CheckInRead | null> {
+    if (this.state.connection.status !== "connected") return Promise.resolve(null);
+    return loadCheckIns(this.checkInsContext(), botId);
+  }
+
+  /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
+  saveCheckIn(
+    saveId: string,
+    botId: string,
+    draft: CheckInDraft,
+    owner?: object | null,
+  ): Promise<void> {
+    if (!this.state.connection.canAdmin)
+      return Promise.reject(new AdminNeededError("Changing check-ins"));
+    return saveCheckIn(this.checkInsContext(owner), saveId, botId, draft);
+  }
+
+  dismissCheckInSave(saveId: string): void {
+    dismissCheckInSave(this.checkInsContext(), saveId);
   }
 
   // Where a bot runs and Machines (`machines.ts`; controls.md sections 14 and 15) ----------
@@ -4062,6 +4340,37 @@ export class ClawtrateClient {
     } finally {
       this.fileReads -= 1;
     }
+  }
+
+  listMemory(botId: string) {
+    return this.wholeRead(() =>
+      listMemory((method, params) => this.request(method, params), botId),
+    );
+  }
+
+  readMemory(botId: string, path: string) {
+    return this.wholeRead(() =>
+      readMemory((method, params) => this.request(method, params), botId, path),
+    );
+  }
+
+  async writeMemory(
+    botId: string,
+    path: string,
+    gatewayId: string | null,
+    expectedHash: string | null,
+    content: string | null,
+  ) {
+    if (this.options.readOnly || !this.state.connection.canAdmin)
+      throw new Error("Changing memory requires admin access.");
+    await writeMemory(
+      (method, params) => this.request(method, params),
+      botId,
+      path,
+      gatewayId,
+      expectedHash,
+      content,
+    );
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
@@ -4672,6 +4981,7 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.attemptGreeted = true;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
@@ -4704,8 +5014,11 @@ export class ClawtrateClient {
       }),
       onClose: () => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
+        this.invalidateCheckIns();
+        this.routines.onClose();
         this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
@@ -4771,6 +5084,8 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
+    this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
@@ -4787,6 +5102,7 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
+    this.foreignReads.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -4795,9 +5111,17 @@ export class ClawtrateClient {
     this.attachmentContent.clear();
   }
 
+  private invalidateCheckIns(): void {
+    const checkIns = this.state.checkIns;
+    if (checkIns?.gatewayId)
+      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+  }
+
   private close(): void {
     this.generation += 1;
+    this.invalidateCheckIns();
     this.accounts.onClose();
+    this.routines.onClose();
     this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
@@ -4966,10 +5290,11 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) {
-        this.accounts.onHello();
-        this.usage.onHello();
-      }
+      if (generation !== this.generation) return;
+      this.accounts.onHello();
+      // Every connect reads the list again: runs that started or ended while away are in it.
+      if (this.state.connection.status === "connected") void this.routines.load();
+      this.usage.onHello();
     });
   }
 
@@ -4993,6 +5318,23 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
   }
 
+  private readGatewayIdentity(): Promise<string | null> {
+    const known = this.gatewayIdentity;
+    if (known?.epoch === this.epoch) return known.id;
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
+    void gatewayId.then((id) => {
+      if (id === null && this.gatewayIdentity?.id === gatewayId) this.gatewayIdentity = null;
+    });
+    this.gatewayIdentity = { epoch: this.epoch, id: gatewayId };
+    return gatewayId;
+  }
+
   /**
    * Every successful connect is a fresh projection: re-list, re-subscribe, reload
    * open transcripts. Bots and tasks load independently, so one failing read
@@ -5004,13 +5346,7 @@ export class ClawtrateClient {
     this.setDiscovery({ status: "loading", error: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
-    const gatewayId = this.request("gateway.identity.get", {}).then(
-      (result) => {
-        const id = asRecord(result)?.deviceId;
-        return typeof id === "string" && id ? id : null;
-      },
-      () => null,
-    );
+    const gatewayId = this.readGatewayIdentity();
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -5212,9 +5548,34 @@ export class ClawtrateClient {
     const row = asRecord(payload);
     const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
     const runId = typeof row?.runId === "string" ? capId(row.runId, MAX_ID_CHARS) : null;
-    if (!row || !key || !runId || !this.tracked(key)) return;
+    if (!row || !key || !runId) return;
     const clientRunId =
       typeof row.clientRunId === "string" ? capId(row.clientRunId, MAX_ID_CHARS) : null;
+    if (!this.tracked(key)) {
+      if (row.phase !== "end" && row.phase !== "error") return;
+      const sessionKey = capId(key, MAX_ID_CHARS);
+      const activity = this.foreign.get(sessionKey);
+      // A row naming a run id pair names one run: both ids are kept, so the
+      // read and the merge see the run whatever id it or history holds it under.
+      const pairs: Array<[string, string]> =
+        clientRunId && clientRunId !== runId ? [[runId, clientRunId]] : [];
+      const named = [runId, ...pairs.map(([, client]) => client)];
+      const ids = new Set(
+        named.filter((id) => {
+          const run = activity && findRun(activity, id);
+          return run
+            ? !isTerminal(run.state)
+            : [...this.recipients.values()].some((link) => link.runs.has(id));
+        }),
+      );
+      if (ids.size === 0) return;
+      for (const id of named) ids.add(id);
+      void this.readRecipientRuns(sessionKey, ids, this.generation, undefined, {
+        phase: row.phase === "error" ? "error" : "end",
+        pairs,
+      });
+      return;
+    }
     if (clientRunId && clientRunId !== runId) {
       this.updateActivity(key, (activity) => registerRunAlias(activity, runId, clientRunId));
     }
@@ -5457,6 +5818,7 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
+      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
@@ -5567,6 +5929,9 @@ export class ClawtrateClient {
         this.handleAgent(event);
         return;
       }
+      case "cron":
+        this.routines.onEvent(event.payload);
+        return;
       case "session.reaction": {
         // Someone, here or elsewhere, added or removed a reaction: the message's reactions now.
         const payload = asRecord(event.payload);
@@ -5835,7 +6200,7 @@ export class ClawtrateClient {
   }
 
   /** The routines a budget can be set for, read now and not kept. */
-  listRoutines(): Promise<Routine[]> {
+  listRoutines(): Promise<BudgetRoutine[]> {
     if (this.state.connection.status !== "connected")
       return Promise.reject(new Error("Not connected to the gateway."));
     return this.usage.listRoutines();

@@ -34,7 +34,7 @@ import {
   type BudgetCount,
   type BudgetPrefs,
   type DateRange,
-  type Routine,
+  type BudgetRoutine,
   type TaskUsage,
   type UsageFigure,
   type UsagePeriod,
@@ -545,7 +545,7 @@ export class UsageEngine {
   }
 
   /** The routines a budget can be set for, read now (`cron.list`, `operator.read`). */
-  async listRoutines(): Promise<Routine[]> {
+  async listRoutines(): Promise<BudgetRoutine[]> {
     return routinesOf(await this.ctx.request("cron.list", { limit: 100, includeDisabled: true }));
   }
 
