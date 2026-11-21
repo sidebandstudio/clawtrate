@@ -3,7 +3,6 @@
 // runner hides a limit read before it is set (it reads `undefined`), so the load runs in Node.
 
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const load = (file: string) =>
@@ -12,7 +11,7 @@ const load = (file: string) =>
     [
       "--input-type=module",
       "-e",
-      `await import(${JSON.stringify(pathToFileURL(new URL(file, import.meta.url).pathname).href)});`,
+      `await import(${JSON.stringify(new URL(file, import.meta.url).href)});`,
     ],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
