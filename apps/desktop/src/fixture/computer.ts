@@ -6,7 +6,8 @@
 //   &computer=noplugin|unconfigured|unused|closed|ended|tabclosed|browsergone|
 //             draining|control|busy|unsettled|conflict|stuck|active|elsewhere|
 //             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching|
-//             conflict-window|conflict-ends|tabsunknown|laterquestion
+//             conflict-window|conflict-ends|tabsunknown|laterquestion|resized
+//             (resized: typed text makes the page half as wide, in a frame that can't be decoded)
 //   &firstwatch=1     the one-time note before the first watch
 //   &takerace=grant   a grant that arrives after the take was cancelled
 //   &access=read      a read-only connection
@@ -58,6 +59,7 @@ export const COMPUTER_STATES = [
   "desktop",
   "tabsunknown",
   "laterquestion",
+  "resized",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
 
@@ -603,7 +605,8 @@ export function computerFixture(
       case "clawtrate-computer.input": {
         if (p.kind === "text") {
           typed += String(p.text);
-          for (const socket of sockets) void socket.frame();
+          for (const socket of sockets)
+            void (mode === "resized" ? socket.undrawable() : socket.frame());
         }
         return { ok: true };
       }
@@ -652,6 +655,25 @@ export function computerFixture(
     async frame(): Promise<void> {
       const bytes = await drawPage(shownTab, typed);
       if (this.readyState === 1) this.onmessage?.({ data: bytes.buffer });
+    }
+    /** A frame of a page half as wide whose picture can't be decoded: it is never drawn. */
+    async undrawable(): Promise<void> {
+      const header = new TextEncoder().encode(
+        JSON.stringify({
+          url: TABS[shownTab]!.url,
+          cssWidth: PAGE.width / 2,
+          cssHeight: PAGE.height / 2,
+          scrollX: 0,
+          scrollY: 0,
+          ts: Date.now() / 1000,
+        }),
+      );
+      const jpeg = [0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9];
+      const out = new Uint8Array(4 + header.length + jpeg.length);
+      new DataView(out.buffer).setUint32(0, header.length);
+      out.set(header, 4);
+      out.set(jpeg, 4 + header.length);
+      if (this.readyState === 1) this.onmessage?.({ data: out.buffer });
     }
   }
 

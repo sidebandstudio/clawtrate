@@ -27,13 +27,28 @@ function decode(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-function draw(canvas: HTMLCanvasElement, picture: ImageBitmap | null): void {
+/**
+ * The page size (CSS pixels) of the frame a canvas shows, as its frame's header gave it: a click is
+ * mapped with the picture on screen, not with a newer frame not yet drawn (`pagePoint`).
+ */
+export type PageSize = { width: number; height: number };
+export function drawnPage(canvas: HTMLCanvasElement): PageSize | null {
+  const width = Number(canvas.dataset.pageWidth);
+  const height = Number(canvas.dataset.pageHeight);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function draw(canvas: HTMLCanvasElement, picture: ImageBitmap | null, page: PageSize | null): void {
   const context = canvas.getContext("2d");
   if (!context) return;
-  if (!picture) {
+  if (!picture || !page) {
     context.clearRect(0, 0, canvas.width, canvas.height);
+    delete canvas.dataset.pageWidth;
+    delete canvas.dataset.pageHeight;
     return;
   }
+  canvas.dataset.pageWidth = String(page.width);
+  canvas.dataset.pageHeight = String(page.height);
   if (canvas.width !== picture.width || canvas.height !== picture.height) {
     canvas.width = picture.width;
     canvas.height = picture.height;
@@ -50,6 +65,7 @@ export function useFrames(
   // Only a frame that was decoded and drawn counts: one too large or undecodable is none.
   const [drawn, setDrawn] = useState<Drawn | null>(null);
   const picture = useRef<ImageBitmap | null>(null);
+  const page = useRef<PageSize | null>(null);
   const n = view && view.status !== "ended" ? view.n : null;
 
   useEffect(() => {
@@ -82,7 +98,8 @@ export function useFrames(
         }
         picture.current?.close();
         picture.current = decoded;
-        for (const canvas of shown) draw(canvas, decoded);
+        page.current = { width: frame.width, height: frame.height };
+        for (const canvas of shown) draw(canvas, decoded, page.current);
         setDrawn({ n, at: Date.now(), capturedAt: frame.capturedAt });
       }
     })();
@@ -91,7 +108,8 @@ export function useFrames(
       // Nothing of the picture remains.
       picture.current?.close();
       picture.current = null;
-      for (const canvas of shown) draw(canvas, null);
+      page.current = null;
+      for (const canvas of shown) draw(canvas, null, null);
     };
   }, [bridge, n]);
 
@@ -99,7 +117,7 @@ export function useFrames(
     () => ({
       attach(canvas) {
         canvases.current.add(canvas);
-        draw(canvas, picture.current);
+        draw(canvas, picture.current, page.current);
         return () => {
           canvases.current.delete(canvas);
         };

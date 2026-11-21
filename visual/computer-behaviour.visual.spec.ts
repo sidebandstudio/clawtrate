@@ -136,6 +136,39 @@ test.describe("the full view on the desktop", () => {
     expect((await sentOf(page, "computerInput")).length).toBe(before);
   });
 
+  test("F-142: a click is mapped with the picture on screen: a newer frame of a resized page that was never drawn changes nothing", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=resized`, "light");
+    await control(page);
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    // The page is now half as wide, in a frame that can't be decoded: the 1280-wide picture stays.
+    await page.keyboard.type("x");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                clawtrateFixture: {
+                  getState(): { computer?: { panes: Record<string, { view: { width: number } }> } };
+                };
+              }
+            ).clawtrateFixture.getState().computer?.panes["fixture-viewer"]?.view.width,
+        ),
+      )
+      .toBe(640);
+    const canvas = fullView(page).locator("canvas");
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(2);
+    const click = (await sentOf(page, "computerInput"))[1]!.input as { kind: string; x: number };
+    expect(click.kind).toBe("click");
+    // The middle of the 1280-wide picture on screen, not of the 640-wide page not yet drawn.
+    expect(Math.abs(click.x - 640)).toBeLessThanOrEqual(8);
+  });
+
   test("F-145: choosing an answer gives control back first; the answer goes once the release is confirmed, and the bot can carry on", async ({
     page,
   }) => {
