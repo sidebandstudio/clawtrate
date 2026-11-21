@@ -228,6 +228,71 @@ test("F-457 F-387: Disconnect keeps the pairing and what is on screen until Reco
   await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeVisible();
 });
 
+for (const action of [
+  {
+    label: "Reconnect",
+    type: "retry",
+    state: "Disconnected",
+    message: "Could not reconnect to this gateway.",
+  },
+  {
+    label: "Disconnect",
+    type: "suspend",
+    state: "Connected",
+    message: "Could not disconnect from this gateway.",
+  },
+]) {
+  test(`F-457: Settings reports a refused ${action.label} and keeps the gateway ${action.state}`, async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await page.keyboard.press("ControlOrMeta+,");
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    if (action.type === "retry") {
+      await dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+    }
+    const errors: Error[] = [];
+    page.on("pageerror", (error) => errors.push(error));
+    await page.evaluate(
+      (type) =>
+        (
+          window as unknown as { clawtrateFixture: { refuse(type: string): void } }
+        ).clawtrateFixture.refuse(type),
+      action.type,
+    );
+    const button = dialog.getByRole("button", { name: action.label, exact: true });
+    await button.click();
+    await expect(dialog.getByRole("alert")).toHaveText(action.message);
+    await expect(dialog.getByTestId("gateway-state")).toHaveText(action.state);
+    await expect(button).toBeEnabled();
+    expect(errors).toEqual([]);
+  });
+}
+
+test("a gateway that could not be forgotten keeps Settings open and says so", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { refuse(type: string): void } }
+    ).clawtrateFixture.refuse("disconnect"),
+  );
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Use another gateway" }).click();
+  await expect(dialog.getByTestId("forget-problem")).toHaveText("Could not forget this gateway.");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Connected");
+  // The command names the gateway Settings showed.
+  const forgets = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+    ).clawtrateFixture.sent.filter((command) => command.type === "disconnect"),
+  );
+  expect(forgets).toEqual([
+    { type: "disconnect", gatewayUrl: expect.stringMatching(/^wss?:\/\//) },
+  ]);
+});
+
 test("F-227 F-387 F-457: focus stays in Settings when Disconnect and Reconnect replace each other, and goes back to the gateway button", async ({
   page,
 }) => {
