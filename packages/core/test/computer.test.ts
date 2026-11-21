@@ -1044,6 +1044,36 @@ describe("handing back (F-145, section 18)", () => {
     expect(h.pane().control.status).toBe("ended");
     expect(h.answered).toEqual([]);
   });
+
+  it("F-150: after a drop, a lookup that couldn't see the browser settles nothing; a lease this connection holds is not the old one", async () => {
+    let answer: unknown = tabsAnswer();
+    const h = harness({ "clawtrate-computer.tabs": () => answer });
+    await granted(h);
+    h.env.online = false;
+    h.views.connectionLost();
+    answer = { ...tabsAnswer(), browser: "not-running", reason: "discovery_timeout", tabs: [] };
+    h.env.online = true;
+    h.views.reconnected();
+    h.views.hello(["clawtrate-computer.tabs"]);
+    await flush();
+    expect(h.pane().browser).toBe("unknown");
+    expect(h.pane().control.status).toBe("checking");
+    // Another viewer of this app took the tab on the new connection: the old lease ended.
+    answer = tabsAnswer({ state: "granted", mine: true });
+    await h.views.readTabs(h.viewer);
+    expect(h.pane().control.status).toBe("ended");
+    // So another tab can be taken.
+    answer = tabsAnswer({ state: "granted", mine: true }, [
+      { targetId: OTHER, url: "http://127.0.0.1:1/other", title: "Other", lease: null },
+    ]);
+    await h.views.readTabs(h.viewer);
+    h.views.choose(h.viewer, OTHER);
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take").at(-1)).toEqual({
+      sessionKey: KEY,
+      targetId: OTHER,
+    });
+  });
 });
 
 describe("leaving (section 17, How a view ends; section 18, Leaving while in control)", () => {

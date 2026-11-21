@@ -969,11 +969,22 @@ export class ComputerViews {
     // Read while connected: what the list says of the old lease settles a drop's "maybe held".
     if (!pane || (pane.control.status !== "checking" && pane.control.status !== "maybe-held"))
       return;
+    // A lookup that couldn't see the browser lists nothing, which says nothing of the lease.
+    if (pane.browser === "unknown") return;
     const tab = pane.tabs.find((each) => each.targetId === pane.control.targetId);
-    // A new connection never holds the old one's lease: none listed means it ended.
-    if (!tab?.lease) {
+    // A new connection never holds the old one's lease: none listed, or one this connection
+    // holds (another viewer of this app took the tab), means it ended.
+    if (!tab?.lease || tab.lease.holder !== "elsewhere") {
       live.lease = null;
       this.patchControl(live.viewer, { ...noControl, status: "ended" });
+      // The tab's holder, read while the old lease was still counted as this viewer's.
+      if (tab?.lease?.holder === "this-viewer")
+        this.patch(live.viewer, (p) => ({
+          ...p,
+          tabs: p.tabs.map((each) =>
+            each === tab ? { ...each, lease: { ...tab.lease!, holder: "this-device" } } : each,
+          ),
+        }));
     } else this.patchControl(live.viewer, { status: "maybe-held" });
   }
 
