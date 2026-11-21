@@ -23,3 +23,8 @@
     ${endif}
   ${endif}
 !macroend
+
+; Distinguish the signed setup container from the app and its uninstaller.
+!ifndef BUILD_UNINSTALLER
+  VIAddVersionKey /LANG=1033 "OriginalFilename" "ClawtrateSetup.exe"
+!endif
