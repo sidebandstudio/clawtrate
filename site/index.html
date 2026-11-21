@@ -91,9 +91,9 @@
               <button class="copy" type="button" data-copy>Copy</button>
             </div>
             <p class="cmd-note">
-              It downloads the installer whole before running it. The installer checks the download
-              and the app's signature before it installs, and asks before replacing a copy. No sudo.
-              <a href="install.sh">Read install.sh</a>
+              For a first install. It downloads the installer whole before running it, and the
+              installer checks the download and the app's signature before it installs. Later
+              updates come from Settings. No sudo. <a href="install.sh">Read install.sh</a>
             </p>
           </div>
         </div>
@@ -128,9 +128,7 @@
                   </button>
                   <button type="button" class="ui-btn ui-quiet" data-answer="deny">Deny</button>
                 </div>
-                <p class="card-foot" data-when="pending">
-                  This example request expires in 28 minutes.
-                </p>
+                <p class="card-foot" data-when="pending">Example expiry: 28 minutes.</p>
               </div>
               <p class="event" data-when="allowed">
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.5 3 3 6.5-7" /></svg>
@@ -371,10 +369,10 @@
               <li>Cards for bot-to-bot messages and T3 Code calls reported by your gateway</li>
               <li>A task's files in the Work pane beside the conversation</li>
               <li>Create a bot on an available provider account</li>
-              <li>Read bot memory and edit notes with the Clawtrate memory plugin</li>
+              <li>Read and edit a bot's root memory</li>
               <li>Per-bot usage tracking with weekly budget warnings</li>
               <li>Routines, run history, and a week calendar</li>
-              <li>Which machine each bot runs on, and per-machine approvals</li>
+              <li>Choose where each bot runs commands. Manage approvals on supported machines.</li>
               <li>A read-only mode for watching a gateway</li>
               <!--
                 Updates, written for a first signed build that includes #202 and #204.
@@ -390,13 +388,16 @@
             <h3>Being built</h3>
             <ul>
               <li>
-                <span>Setup for people new to OpenClaw</span>
+                <span>Plans for built-in OpenClaw setup</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/design/setup.md"
                   >Design</a
                 >
               </li>
               <li>
-                <span>Auto-detect OpenClaw on this Mac and connect without typing a token</span>
+                <span
+                  >Find a compatible OpenClaw gateway on this Mac and pair read-only without typing
+                  a token</span
+                >
                 <a href="https://github.com/sidebandstudio/clawtrate/pull/145">#145</a>
               </li>
               <li>
@@ -424,7 +425,7 @@
                 <a href="https://github.com/sidebandstudio/clawtrate/pull/143">#143</a>
               </li>
               <li>
-                <span>Notifications, search, and voice</span>
+                <span>Plans for notifications, search, and voice</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/roadmap.md"
                   >Roadmap</a
                 >
@@ -468,20 +469,21 @@
               <div class="faq-a" id="a3" role="region" aria-labelledby="q3" hidden>
                 <p>
                   The Mac beta is Developer ID signed and Apple-notarized. The Terminal installer
-                  checks the download and the app's signature before it installs.
+                  checks the download and the app's signature before it installs. It is for a first
+                  install and leaves an existing copy alone.
                 </p>
               </div>
             </li>
             <li>
               <button type="button" aria-expanded="false" aria-controls="a4" id="q4">
-                What does Clawtrate store?
+                Which sign-in details does Clawtrate keep?
               </button>
               <div class="faq-a" id="a4" role="region" aria-labelledby="q4" hidden>
                 <p>
-                  Your gateway's address, and the setup token until the gateway issues a device
-                  token. Then it keeps that device token and its own device key so it can reconnect.
-                  Provider passwords stay with the provider. Clawtrate passes any API key you enter
-                  to your gateway, which keeps it.
+                  Clawtrate keeps your gateway's address and its own device key. It keeps the setup
+                  token until the gateway issues a device token, then uses the device token to
+                  reconnect. Provider passwords stay with the provider. Clawtrate sends any API key
+                  you enter to your gateway to save.
                 </p>
               </div>
             </li>
@@ -503,11 +505,11 @@
               <div class="faq-a" id="a6" role="region" aria-labelledby="q6" hidden>
                 <!--
                   Written for a first signed build that includes #202 and #204. If it does not, use:
-                  "Settings checks the Beta track and downloads verified builds. Install a newer build from its Mac download."
+                  "Check for Beta updates in Settings. Install a newer build from its Mac download."
                 -->
                 <p>
-                  Settings checks the Beta track and downloads verified builds. After downloading an
-                  update in Settings, choose Restart to Update to install it in place.
+                  Check for Beta updates in Settings. When an update is available, choose Download.
+                  If Restart to Update appears, choose it, then confirm Restart.
                 </p>
               </div>
             </li>
