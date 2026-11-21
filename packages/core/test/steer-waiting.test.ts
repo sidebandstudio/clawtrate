@@ -244,16 +244,47 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
 });
 
 describe("a call of a run history only infers to have ended (F-468)", () => {
+  const event = (seq: number, stream: string, data: object) => ({
+    runId: "r-old",
+    seq,
+    stream,
+    ts: 1_000 + seq,
+    sessionKey: KEY,
+    data,
+  });
+  // History's rows of the run stop at its call, a later turn's rows follow, and the gateway has
+  // a turn of the task in flight: it infers the run's end, which the gateway has not said.
+  const rows = (content: object[]) => [
+    { role: "user", content: "First", __openclaw: { id: "u1", idempotencyKey: "r-old:user" } },
+    {
+      role: "assistant",
+      content,
+      stopReason: "toolUse",
+      __openclaw: { id: "a1", runId: "r-old" },
+    },
+    { role: "user", content: "Then", __openclaw: { id: "u2", idempotencyKey: "r-mid:user" } },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      stopReason: "stop",
+      __openclaw: { id: "a2", runId: "r-mid" },
+    },
+  ];
+  /** The live run after `events`, merged with such a history whose row of it holds `content`. */
+  function mergedOld(events: Array<[string, object]>, content: object[]) {
+    const ctx = { sessionKey: KEY, now: 5_000, raw: new RawTable() };
+    let activity = emptyActivity;
+    events.forEach(([stream, data], index) => {
+      activity = applyAgentEvent(activity, event(index + 1, stream, data), ctx).activity;
+    });
+    const history = runsFromHistory(rows(content), "r-queued", ctx, { busy: true });
+    return mergeHistoryRuns(activity.runs, history, ctx, true).runs.find(
+      (run) => run.id === "r-old",
+    )!;
+  }
+
   it("F-468: while the gateway runs another turn, history's inferred end leaves the live run's open call open, and its own result closes it", () => {
     const ctx = { sessionKey: KEY, now: 5_000, raw: new RawTable() };
-    const event = (seq: number, stream: string, data: object) => ({
-      runId: "r-old",
-      seq,
-      stream,
-      ts: 1_000 + seq,
-      sessionKey: KEY,
-      data,
-    });
     let activity = applyAgentEvent(
       emptyActivity,
       event(1, "lifecycle", { phase: "start" }),
@@ -264,25 +295,12 @@ describe("a call of a run history only infers to have ended (F-468)", () => {
       event(2, "tool", { phase: "start", name: "exec", toolCallId: "c1", args: { command: "ls" } }),
       ctx,
     ).activity;
-    // History's rows of the run stop at its call, a later turn's rows follow, and the gateway has
-    // a turn of the task in flight: it infers the run's end, which the gateway has not said.
-    const rows = [
-      { role: "user", content: "First", __openclaw: { id: "u1", idempotencyKey: "r-old:user" } },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "c1", name: "exec", arguments: { command: "ls" } }],
-        stopReason: "toolUse",
-        __openclaw: { id: "a1", runId: "r-old" },
-      },
-      { role: "user", content: "Then", __openclaw: { id: "u2", idempotencyKey: "r-mid:user" } },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Done." }],
-        stopReason: "stop",
-        __openclaw: { id: "a2", runId: "r-mid" },
-      },
-    ];
-    const history = runsFromHistory(rows, "r-queued", ctx, { busy: true });
+    const history = runsFromHistory(
+      rows([{ type: "toolCall", id: "c1", name: "exec", arguments: { command: "ls" } }]),
+      "r-queued",
+      ctx,
+      { busy: true },
+    );
     expect(history.find((run) => run.id === "r-old")?.steps[0]?.status).toBe("unknown");
     const runs = mergeHistoryRuns(activity.runs, history, ctx, true).runs;
     const old = runs.find((run) => run.id === "r-old")!;
@@ -303,5 +321,51 @@ describe("a call of a run history only infers to have ended (F-468)", () => {
       .find((run) => run.id === "r-old")!
       .steps.find((each) => each.id === "tool:c1");
     expect(step).toMatchObject({ status: "done", result: { text: "notes" } });
+  });
+
+  it("F-468: while the gateway runs another turn, history's inferred end keeps the live run's open reasoning that history does not hold", () => {
+    const old = mergedOld(
+      [
+        ["lifecycle", { phase: "start" }],
+        ["thinking", { delta: "Check the disk first." }],
+        ["tool", { phase: "start", name: "exec", toolCallId: "c1", args: { command: "df" } }],
+        ["tool", { phase: "result", name: "exec", toolCallId: "c1", isError: false, result: {} }],
+        ["thinking", { delta: "Now the logs." }],
+      ],
+      [
+        { type: "thinking", thinking: "Check the disk first." },
+        { type: "toolCall", id: "c1", name: "exec", arguments: { command: "df" } },
+      ],
+    );
+    expect(old.state).toBe("running");
+    expect(old.steps.map((step) => [step.kind, step.status])).toEqual([
+      ["reasoning", "done"],
+      ["tool", "done"],
+      ["reasoning", "running"],
+    ]);
+    expect(old.steps.at(-1)?.output?.text).toBe("Now the logs.");
+  });
+
+  it("F-468: while the gateway runs another turn, a live open call whose start the stream missed takes its arguments from history's inferred copy", () => {
+    const old = mergedOld(
+      [
+        ["lifecycle", { phase: "start" }],
+        [
+          "tool",
+          {
+            phase: "update",
+            name: "exec",
+            toolCallId: "c1",
+            partialResult: { content: [{ type: "text", text: "Filesystem" }] },
+          },
+        ],
+      ],
+      [{ type: "toolCall", id: "c1", name: "exec", arguments: { command: "df -h" } }],
+    );
+    const call = old.steps.find((step) => step.id === "tool:c1")!;
+    expect(call.status).toBe("running");
+    expect(call.output?.text).toBe("Filesystem");
+    expect(call.argsText?.text).toContain("df -h");
+    expect(call.args).not.toBeNull();
   });
 });
