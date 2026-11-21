@@ -322,9 +322,12 @@ export class SetupController implements SetupHost {
     ) {
       throw new Error("There is nothing to connect to. Look again.");
     }
-    // Setup's own earlier connection, one Back couldn't close included, is closed first.
+    // Setup's own earlier connection, one Back couldn't close included, is closed first. A
+    // cleanup is shared, so after it only the request whose attempt still stands goes on: two
+    // Connects that waited for the same cleanup never both reach the dialog.
+    const before = this.attempt;
     if (this.owned && !(await this.closeOwned())) return;
-    if (this.found !== found) return;
+    if (this.found !== found || this.attempt !== before) return;
     const attempt = (this.attempt += 1);
     const confirm = this.options.confirm;
     if (!confirm) {

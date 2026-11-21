@@ -282,6 +282,42 @@ describe("Back, when closing setup's connection fails", () => {
   });
 });
 
+describe("two Connects that wait for the same cleanup", () => {
+  it("F-492: only one reaches the dialog once the shared cleanup closes setup's connection", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(SCOPES, TOKEN) });
+    const bots = deferred<object>();
+    gateway.handlers["agents.list"] = () => bots.promise;
+    const storage = memoryStorage();
+    const remove = storage.delete;
+    let failing = true;
+    const closing = deferred<void>();
+    const deleteSetting = vi.fn(async (key: string) => {
+      if (key === "connection" && failing) throw new Error("fixture settings write failed");
+      if (key === "connection") await closing.promise;
+      return remove(key);
+    });
+    const confirm = vi.fn(async () => true);
+    const client = makeClient(gateway, { ...storage, delete: deleteSetting });
+    await withLocalSetup(client, async (setup) => {
+      (setup as unknown as { options: { confirm: typeof confirm } }).options.confirm = confirm;
+      await setup.connect();
+      await until(() => gateway.calls("agents.list").length > 0);
+      setup.cancel();
+      await until(() => setup.current.failure?.kind === "cleanup");
+      // Connect pressed twice: both wait for the one cleanup, which then succeeds.
+      failing = false;
+      const first = setup.connect();
+      const second = setup.connect();
+      await until(() => deleteSetting.mock.calls.length === 2);
+      closing.resolve();
+      await Promise.all([first, second]);
+      expect(deleteSetting).toHaveBeenCalledTimes(2);
+      expect(confirm).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
 describe("a saved pairing that went or came after the person agreed", () => {
   it("F-492: a pairing gone at the handshake sends nothing and goes back to the card for a new pairing", async () => {
     const gateway = new FakeGateway();
