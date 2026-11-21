@@ -182,6 +182,8 @@ function exceptionWords(
       return `Not in ${name}'s latest task's tools as the gateway listed them at ${clock(listedAt)}: ${list(e.tools)}`;
     case "unnamed":
       return `The gateway hasn't named this server's tools in ${name}'s latest task's listing`;
+    case "list-cut":
+      return `Unknown: ${list(e.lists.map((each) => LIST_WORDS[each](name)))} ${e.lists.length === 1 ? "is" : "are"} longer than this page reads, and the entries it couldn't read may deny these tools`;
     case "ask-every-call":
       return "The rules plugin asks before every tool call but a question: its rules file can't be read";
     case "fallback":

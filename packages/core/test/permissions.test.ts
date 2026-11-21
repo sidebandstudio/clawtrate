@@ -1001,6 +1001,28 @@ describe("a choice whose viewer goes away, or whose Ask doesn't take effect", ()
     expect(result.outcome).toBe("partial");
   });
 
+  it("a deny list cut at its bound leaves no line Allowed: the retained entries still deny, and the rest is Unknown", async () => {
+    const gw = new Gateway();
+    const every = gw.config.tools as Json;
+    // 256 entries are read; the 257th, cut, would deny reading files.
+    every.deny = [
+      "web_fetch",
+      "browser",
+      ...Array.from({ length: 254 }, (_, i) => `other_tool_${i}`),
+      "read",
+    ];
+    const view = await new PermissionsEngine(gw.ctx()).read("pip");
+    expect(view.listsCut).toEqual(["every-deny"]);
+    expect(line(view, "read")).toMatchObject({ value: "unknown" });
+    expect(line(view, "read").exceptions).toContainEqual({
+      kind: "list-cut",
+      lists: ["every-deny"],
+    });
+    expect(permissionGroups(view.lines).without.map((each) => each.id)).not.toContain("read");
+    // A line the entries read deny whole stays Never, set on the gateway.
+    expect(line(view, "browser")).toMatchObject({ value: "never", mark: "set" });
+  });
+
   it("an Ask a Never rule for every bot overrides is not said as saved", async () => {
     const gw = new Gateway();
     gw.scopes["*"] = {

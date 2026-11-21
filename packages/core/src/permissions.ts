@@ -539,7 +539,9 @@ export type LineException =
   /** The plugin's rules file is lost with no copy: it asks before every call but a question. */
   | { kind: "ask-every-call" }
   /** A tool server whose tools the gateway hasn't named in the latest task's listing. */
-  | { kind: "unnamed" };
+  | { kind: "unnamed" }
+  /** Deny lists not read whole: entries cut from them may name this line's tools. */
+  | { kind: "list-cut"; lists: ToolList[] };
 
 /** `entry`: an entry of the bot's deny list that names no tool the gateway lists now. */
 export type LineKind = "group" | "exec" | "question" | "server" | "plugin" | "tool" | "entry";
@@ -769,7 +771,20 @@ export function permissionLines(facts: PermissionFacts): {
   for (const entry of settings.botDeny)
     if (!named.some((tool) => entryNames(entry, tool, catalog)))
       defs.push({ id: `deny:${entry}`, kind: "entry", words: entry, tools: [entry] });
-  const lines = defs.slice(0, MAX_LINES).map((def) => lineOf(def, facts));
+  // A deny list not read whole may name any line's tools in the entries cut: a line the retained
+  // entries don't already make Never is Unknown, never Allowed or Asks first.
+  const denyCut = settings.cut.filter((each) => each === "every-deny" || each === "bot-deny");
+  const lines = defs.slice(0, MAX_LINES).map((def) => {
+    const line = lineOf(def, facts);
+    return denyCut.length > 0 &&
+      (line.value === "allowed" || line.value === "limited" || line.value === "asks")
+      ? {
+          ...line,
+          value: "unknown" as const,
+          exceptions: [...line.exceptions, { kind: "list-cut" as const, lists: denyCut }],
+        }
+      : line;
+  });
   return { lines, omitted: Math.max(0, defs.length - MAX_LINES) };
 }
 
