@@ -113,6 +113,10 @@ function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   ]);
 }
 
+/** `fileIdentity` within the look's limit on file checks: null when the file system doesn't answer. */
+export const boundedFileIdentity = (path: string): Promise<string | null> =>
+  withDeadline(fileIdentity(path), Date.now() + FILE_CHECK_MS).catch(() => null);
+
 /** Whether a path exists, followed through links. */
 const exists = (path: string) =>
   stat(path).then(
@@ -249,6 +253,21 @@ export async function lookHere(
     run({ program, args: [...profile.args, ...args], env: env(profile), cwd: world.cwd, ...limit });
 
   if (cancelled()) return null;
+  // The program's identity before anything runs it, under the file deadline: what Connect checks
+  // again is the file whose answers these are.
+  const identityNow = () =>
+    world.installed
+      ? Promise.resolve("stand-in")
+      : withDeadline(fileIdentity(program), Date.now() + FILE_CHECK_MS);
+  let programIdentity: string | null;
+  try {
+    programIdentity = await identityNow();
+  } catch (error) {
+    if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+    throw error;
+  }
+  if (cancelled()) return null;
+  active();
   options.onStep?.(1);
   const first = world.profiles[0];
   if (!first) return { look: { ...empty, outcome: "not-found" }, found: null };
@@ -312,7 +331,14 @@ export async function lookHere(
   const ports = looks.flatMap((look) => (look.kind === "status" ? [look.status.port] : []));
   const shared = new Set(ports.filter((port, index) => ports.indexOf(port) !== index));
   const identify = options.identify ?? processIdentity;
-  const programIdentity = world.installed ? "stand-in" : await fileIdentity(program);
+  // The same file still, or nothing found here is offered.
+  try {
+    if ((await identityNow()) !== programIdentity) programIdentity = null;
+  } catch (error) {
+    if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+    throw error;
+  }
+  if (cancelled()) return null;
   active();
   const results = considered.map((profile, index) => {
     const look = looks[index]!;
@@ -320,13 +346,16 @@ export async function lookHere(
       return { look: cantTell("endpoint", programVersion.text), found: null };
     return classify(profile, look, programVersion, program, programIdentity, identify);
   });
-  // A gateway that answers comes first, then a stopped one, then what the default profile gave.
+  // A gateway Connect can use comes first, then another that answers, then a stopped one, then
+  // what the default profile gave; between two alike, the default profile.
   const rank = (outcome: LookOutcome) =>
-    ["running", "untested", "too-old", "not-token"].includes(outcome)
+    outcome === "running"
       ? 0
-      : outcome === "stopped"
+      : ["untested", "too-old", "not-token"].includes(outcome)
         ? 1
-        : 2;
+        : outcome === "stopped"
+          ? 2
+          : 3;
   const chosen = [...results].sort((a, b) => rank(a.look.outcome) - rank(b.look.outcome))[0];
   if (!chosen) return { look: { ...empty, outcome: "not-found" }, found: null };
   return { look: { ...chosen.look, others }, found: chosen.found };

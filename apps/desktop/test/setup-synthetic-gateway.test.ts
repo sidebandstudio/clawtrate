@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { until } from "../../../packages/core/test/fake-gateway.ts";
 import { startSyntheticGateway, type SyntheticGateway } from "../src/setup/synthetic-gateway.ts";
 
@@ -64,5 +65,29 @@ describe("the synthetic gateway", () => {
       expect(app.state.bots, name).toEqual([]);
       app.stop();
     }
+  });
+
+  it("a peer that sends a frame that isn't an object, or breaks the protocol, loses its own socket and the host stays up", async () => {
+    const closed: number[] = [];
+    for (const send of [
+      (socket: WebSocket) => socket.send("null"),
+      (socket: WebSocket) => socket.send("[1]"),
+      // A text frame that isn't UTF-8: `ws` reports it as an error on that connection.
+      (socket: WebSocket) => socket.send(Buffer.from([0xff, 0xfe, 0xfd]), { binary: false }),
+    ]) {
+      const socket = new WebSocket(gateway.url);
+      socket.on("error", () => {});
+      await new Promise((resolve) => socket.once("open", resolve));
+      send(socket);
+      closed.push(await new Promise<number>((resolve) => socket.once("close", resolve)));
+    }
+    expect(closed.every((code) => code === 1008 || code === 1007 || code === 1006)).toBe(true);
+    // Still listening, and still pairs.
+    expect(gateway.ownsListener(gateway.port)).toBe(true);
+    const app = client("after");
+    await app.start();
+    await app.connectWithSetupCode(gateway.mint(Date.now()));
+    await until(() => app.state.connection.status === "connected", 10_000);
+    app.stop();
   });
 });

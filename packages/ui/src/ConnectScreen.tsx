@@ -20,6 +20,7 @@ import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
 import { gatewayLabel } from "./format.ts";
+import { followSetup, setupUnderWay } from "./screen.ts";
 import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
 
@@ -562,9 +563,15 @@ export function ConnectScreen({
   const settingUp = loadingBots || connection.status === "connecting";
   // The first question, when the host offers setup and no gateway is saved (docs/design/setup.md §3).
   // A setup the host has under way (another window, or a reload) opens where it stands.
-  const [view, setView] = useState<SetupView>(() =>
-    setup && (setup.phase !== "idle" || setup.there) ? "here" : "first",
-  );
+  const underWay = setupUnderWay(setup);
+  const [view, setView] = useState<SetupView>(() => (underWay ? "here" : "first"));
+  // …and one the host starts after this screen showed the first question, the same.
+  const [wasUnderWay, setWasUnderWay] = useState(underWay);
+  if (underWay !== wasUnderWay) {
+    setWasUnderWay(underWay);
+    const next = followSetup(view, wasUnderWay, underWay);
+    if (next !== view) setView(next);
+  }
   const setupOwns =
     setup !== undefined &&
     // The route's look after an approval Clawtrate couldn't confirm (§9 "Look again", "Review").
@@ -583,10 +590,22 @@ export function ConnectScreen({
   // Advanced: the address-and-token form as it was, with Back to the first question.
   const advancedBack =
     info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
+  // Advanced replaces the setup screens on the same screen, so focus moves here: to the
+  // address field going in, to the question's title coming back. Not on launch.
+  const card = useRef<HTMLDivElement>(null);
+  const lastView = useRef(view);
+  useEffect(() => {
+    const from = lastView.current;
+    lastView.current = view;
+    if (from === view) return;
+    if (view === "advanced") card.current?.querySelector<HTMLElement>("input")?.focus();
+    else if (from === "advanced")
+      card.current?.querySelector<HTMLElement>("[data-s-title]")?.focus();
+  }, [view]);
   return (
     <main className="connect" inert={inert}>
       <div className="connect-drag" />
-      <div className="connect-card">
+      <div className="connect-card" ref={card}>
         {mismatch ? (
           <>
             <header className="connect-brand">

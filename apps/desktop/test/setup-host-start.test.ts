@@ -7,7 +7,7 @@
 import { ClawtrateClient } from "@clawtrate/core";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   FakeGateway,
   helloOk,
@@ -21,6 +21,9 @@ import { desktopStartup, webStartup } from "../src/setup/startup.ts";
 import { resolveSetupLaunch } from "../src/setup/sandbox.ts";
 import { vi } from "vitest";
 import * as fake from "./fixtures/sandbox.ts";
+
+// Every fake home and run folder goes, whether the test passed or not.
+afterEach(() => fake.removeBases());
 
 /** Another gateway this device was connected to before: never one a sandboxed start reopens. */
 const SAVED = "ws://127.0.0.1:19940";

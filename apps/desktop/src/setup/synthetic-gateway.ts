@@ -75,6 +75,8 @@ export async function startSyntheticGateway(): Promise<SyntheticGateway> {
 
   server.on("connection", (socket) => {
     let connected = false;
+    // A peer's protocol error ends that peer's socket, never the host.
+    socket.on("error", () => socket.terminate());
     socket.send(
       JSON.stringify({
         type: "event",
@@ -87,6 +89,11 @@ export async function startSyntheticGateway(): Promise<SyntheticGateway> {
       try {
         frame = JSON.parse(String(data)) as Frame;
       } catch {
+        socket.close(1008, "bad frame");
+        return;
+      }
+      // `null`, a number or an array parses too: only an object is a frame.
+      if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
         socket.close(1008, "bad frame");
         return;
       }

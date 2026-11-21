@@ -15,9 +15,19 @@ vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof FsPromises>();
   const hangs = (path: unknown) => String(path).includes("/hangs/");
   const held = (path: unknown) => String(path).includes("/held/");
+  // A program under "flaky" is found as an executable file, then never answers again.
+  const flaky = new Map<string, number>();
+  const stops = (path: string) => {
+    if (!path.includes("/flaky/")) return null;
+    const seen = (flaky.get(path) ?? 0) + 1;
+    flaky.set(path, seen);
+    return seen === 1
+      ? Promise.resolve({ isFile: () => true, mode: 0o755 })
+      : new Promise(() => {});
+  };
   return {
     ...fs,
-    stat: (path: string) => (hangs(path) ? new Promise(() => {}) : fs.stat(path)),
+    stat: (path: string) => (hangs(path) ? new Promise(() => {}) : (stops(path) ?? fs.stat(path))),
     lstat: (path: string) =>
       held(path)
         ? gate.opened.then(() => {
@@ -51,6 +61,23 @@ it("a program search that never answers ends the look as can't tell, within the 
   const run = vi.fn();
   const started = Date.now();
   const result = await lookHere(world({ candidates: ["/hangs/openclaw"] }), run);
+  expect(result?.look).toMatchObject({ outcome: "cant-tell", reason: "timeout" });
+  expect(Date.now() - started).toBeLessThan(FILE_CHECK_MS + 1_000);
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("a program file that stops answering when its identity is read ends the look as can't tell, and starts nothing", async () => {
+  const run = vi.fn();
+  const started = Date.now();
+  const result = await lookHere(
+    world({
+      candidates: ["/flaky/openclaw"],
+      profiles: [
+        { name: "default", args: [], stateDir: "/nowhere/.openclaw", required: true, env: {} },
+      ],
+    }),
+    run,
+  );
   expect(result?.look).toMatchObject({ outcome: "cant-tell", reason: "timeout" });
   expect(Date.now() - started).toBeLessThan(FILE_CHECK_MS + 1_000);
   expect(run).not.toHaveBeenCalled();

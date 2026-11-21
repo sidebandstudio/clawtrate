@@ -11,6 +11,7 @@ import {
   ClawtrateClient,
   ROUTE_IDENTITY_CHANGED,
   ROUTE_IDENTITY_UNREAD,
+  ROUTE_NOT_SAVED,
   SETUP_PAIRING_GONE,
 } from "../src/client.ts";
 import {
@@ -332,6 +333,72 @@ describe("a routed connection's gateway", () => {
     await sleep(200);
     expect(gateway.sockets.length).toBe(sockets);
     expect(storage.data.get(ROUTE_TOKEN)).toBe(SAVED_TOKEN);
+  });
+
+  it("whose token can't be saved after its gateway said who it is ends the attempt with a fixed error", async () => {
+    const { storage, client } = setup();
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === ROUTE_TOKEN) throw new Error("disk full");
+      return set(key, value);
+    };
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      code: { bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_NOT_SAVED);
+    expect(storage.data.has(ROUTE_TOKEN)).toBe(false);
+    expect(storage.data.has("connection")).toBe(false);
+  });
+
+  it("lets go of what it held for a hello once that connection closes before its gateway said who it is", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], "token-2") });
+    let answer: (value: unknown) => void = () => {};
+    gateway.handlers["gateway.identity.get"] = () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      });
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => gateway.requests.some((r) => r.method === "gateway.identity.get"));
+    const held = () => (client as unknown as { routeHeldWrites: unknown[] }).routeHeldWrites;
+    expect(held()).toHaveLength(1);
+    client.holdRoute(ROUTE);
+    expect(held()).toEqual([]);
+    answer({ deviceId: "gateway-1", publicKey: "key" });
+    await sleep(100);
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+  });
+});
+
+describe("forgetting a route", () => {
+  it("is decided in the connection queue: a Connect to another route queued first stays connected", async () => {
+    const OTHER = "ssh-fedcba9876543210fedcba98";
+    const { storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    storage.data.set(`deviceToken:route:${OTHER}:device-1:operator`, SAVED_TOKEN);
+    await client.start();
+    await client.connectRoute({ url: "ws://c0000000000000001.ssh.invalid", route: ROUTE });
+    await until(() => client.state.connection.status === "connected");
+    // Connect to the other route is queued; the first route is forgotten right after.
+    const connecting = client.connectRoute({
+      url: "ws://c0000000000000002.ssh.invalid",
+      route: OTHER,
+    });
+    const forgetting = client.forgetRoute(ROUTE);
+    await Promise.all([connecting, forgetting]);
+    await until(() => client.state.connection.status === "connected");
+    expect(client.route).toBe(OTHER);
+    expect((await client.savedSettings())?.route).toBe(OTHER);
   });
 });
 

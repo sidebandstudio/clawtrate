@@ -87,6 +87,9 @@ function appEnv(): Record<string, string> {
 
 type Launched = { app: ElectronApplication; page: Page; log: () => string; data: string };
 
+/** Every app this file launched and hasn't closed: closed after each check, passed or failed. */
+const running = new Set<ElectronApplication>();
+
 /**
  * Launches the development build with its own data folder and, unless told
  * not to, a sandbox of `scenario` for this file's instance. `answer` is the
@@ -114,10 +117,22 @@ async function launch(
   if (process.platform === "linux") args.push("--no-sandbox");
   if (file !== null) args.push(`--clawtrate-setup-sandbox=${file}`);
   const app = await _electron.launch({ executablePath: ELECTRON!, args, env: appEnv(), cwd: dir });
+  running.add(app);
+  try {
+    return await ready(app, options.answer ?? 0, data);
+  } catch (error) {
+    // A launch that didn't come up is closed here, before its folders are removed.
+    running.delete(app);
+    await app.close().catch(() => {});
+    throw error;
+  }
+}
+
+/** The app's output kept, its dialog answered with `answer`, and its first screen up. */
+async function ready(app: ElectronApplication, answer: number, data: string): Promise<Launched> {
   let output = "";
   app.process().stdout?.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
   app.process().stderr?.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
-  const answer = options.answer ?? 0;
   // The host's own dialog, answered as the person would; the questions it asked are kept.
   await app.evaluate(({ dialog }, response) => {
     const asked: string[] = [];
@@ -138,6 +153,7 @@ async function launch(
 
 async function close(launched: Launched): Promise<void> {
   const pid = launched.app.process().pid;
+  running.delete(launched.app);
   await launched.app.close();
   // The app and every helper it started are gone.
   if (pid !== undefined) expect(() => process.kill(pid, 0)).toThrow();
@@ -202,6 +218,12 @@ test.beforeAll(async () => {
     cwd: ROOT,
     stdio: "ignore",
   });
+});
+
+// A check that failed before its own close leaves no app running into the suite's cleanup.
+test.afterEach(async () => {
+  for (const app of running) await app.close().catch(() => {});
+  running.clear();
 });
 
 test.afterAll(() => {

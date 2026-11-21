@@ -24,7 +24,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import type { SetupHost, SetupOffer } from "./setup.ts";
+import { MAX_DESTINATION_CHARS, type SetupHost, type SetupOffer } from "./setup.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -1084,7 +1084,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: command.type };
     case "setupThere": {
       // Bounded here; the host validates it against the destination pattern.
-      if (typeof command.destination !== "string" || command.destination.length > 320)
+      if (
+        typeof command.destination !== "string" ||
+        command.destination.length > MAX_DESTINATION_CHARS
+      )
         throw new Error("That isn't an SSH host or alias Clawtrate can use.");
       return { type: "setupThere", destination: command.destination };
     }

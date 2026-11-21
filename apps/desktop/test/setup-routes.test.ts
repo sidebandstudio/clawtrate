@@ -3,7 +3,7 @@
 // point, what the found card says from the LOOK's facts, and the approve
 // command for a route's account, SSH port and profile.
 
-import { approvalForPlace } from "@clawtrate/core";
+import { approvalForPlace, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -49,7 +49,8 @@ import { tempDir, testSeal } from "./ssh/harness.ts";
  * The installed OpenClaw CLI's own choice of where `gateway status` probes
  * for a bind mode (`pickProbeHostForBind`): that one self-contained function's
  * source, read from its package and evaluated alone, so none of the package's
- * module code runs. Null where no OpenClaw is installed.
+ * module code runs. Null where no OpenClaw is installed, or another version than the one
+ * `docs/decisions.md` names.
  */
 const probeHostOfInstalledCli:
   ((bind: string, tailnet: string | null, custom?: string) => string) | null = (() => {
@@ -58,6 +59,13 @@ const probeHostOfInstalledCli:
     // A wrapper script names its package's entry; an npm link resolves into the package.
     const entry = /"([^"]+)\/dist\/entry\.js"/.exec(readFileSync(bin, "utf8").slice(0, 4096));
     const dist = entry ? `${entry[1]}/dist` : join(dirname(realpathSync(bin)), "dist");
+    // Only the version the decisions name: another one's probe says nothing about it.
+    const version = (
+      JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")) as {
+        version?: unknown;
+      }
+    ).version;
+    if (version !== TESTED_OPENCLAW_VERSION) return null;
     for (const name of readdirSync(dist)) {
       if (!name.endsWith(".mjs")) continue;
       const text = readFileSync(join(dist, name), "utf8");
@@ -174,6 +182,26 @@ describe("the route store", () => {
     private_ = false;
     expect(cached.getToken(one.key, "device-1", "operator")).toBeNull();
     expect(cached.hasToken(one.key)).toBe(false);
+  });
+
+  it("a read refused while the folder can't be proven private caches nothing: a later write keeps the routes saved", async () => {
+    const dir = fresh("clawtrate-routes-refused-");
+    const one = record();
+    const writer = new RouteStore(dir, { seal: testSeal });
+    writer.put(one);
+    await routedStorage(memoryStorage(), writer).set(tokenKey(one.key), TOKEN);
+    let private_ = false;
+    const store = new RouteStore(dir, { seal: testSeal, folderIsPrivate: () => private_ });
+    expect(store.list()).toEqual([]);
+    private_ = true;
+    store.put(record({ id: "r999999999999", endpoint: "you@[elsewhere.example]:22" }));
+    expect(
+      store
+        .list()
+        .map((each) => each.id)
+        .sort(),
+    ).toEqual(["r0123456789ab", "r999999999999"]);
+    expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
   });
 
   it.skipIf(process.platform !== "darwin")(
@@ -503,6 +531,31 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
     });
   });
 
+  it("a leaf whose ACL lets another account list, search or read it isn't private; the same entry on a folder above it is ordinary", () => {
+    for (const right of ["list", "search", "read"]) {
+      const root = fresh("clawtrate-leaf-acl-");
+      mkdirSync(join(root, "app", "data"), { recursive: true, mode: 0o700 });
+      const leaf = join(root, "app", "data");
+      const entryOn =
+        (where: string) =>
+        (path: string): AclReading =>
+          path === where
+            ? {
+                kind: "entries",
+                entries: [{ principal: "user:someone", allow: true, rights: [right] }],
+              }
+            : { kind: "none" };
+      expect(ensurePrivateDir(leaf, { root, readAcl: entryOn(leaf) }), right).toMatchObject({
+        ok: false,
+        reason: "acl",
+        at: leaf,
+      });
+      expect(ensurePrivateDir(leaf, { root, readAcl: entryOn(join(root, "app")) }).ok, right).toBe(
+        true,
+      );
+    }
+  });
+
   it("reads a folder's access control list with the flags of the system actually running, whatever platform a caller simulates", () => {
     // On Linux, GNU ls has no `-e`: a simulated macOS must not make the real reading fail.
     const root = fresh("clawtrate-acl-system-");
@@ -553,6 +606,20 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
       }),
     ).toMatchObject({ ok: true, verified: "windows-unverified" });
     expect(made).toEqual(["D:\\Clawtrate\\gateway"]);
+    // A folder Windows can't make (a file in its place) is the folder error, not a throw.
+    expect(
+      chooseDataDir("D:\\Clawtrate\\gateway", {
+        platform: "win32",
+        mkdir: () => {
+          throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      dir: "D:\\Clawtrate\\gateway",
+      reason: "unverifiable",
+      at: "D:\\Clawtrate\\gateway",
+    });
   });
 
   it.skipIf(process.platform !== "darwin")(
@@ -680,6 +747,20 @@ describe("what the found card says over SSH", () => {
     const foreign = sshLook(facts({ gateways: [gateway({ listenerPids: [7, 8] })] }));
     expect(foreign.found).toBeNull();
     expect(foreign.look.outcome).toBe("cant-tell");
+  });
+
+  it("reads each profile's own status: a stopped default beside Clawtrate's profile running on the same port is no Start", () => {
+    const both = sshLook(
+      facts({
+        gateways: [
+          gateway(provenStopped),
+          gateway({ profile: "clawtrate", configPath: "~/.openclaw-clawtrate/openclaw.json" }),
+        ],
+      }),
+    );
+    expect(both.stopped).toBeNull();
+    expect(both.look).toMatchObject({ outcome: "running", profile: "clawtrate", port: 18789 });
+    expect(both.found?.service.profile).toBe("clawtrate");
   });
 
   it("treats an unknown listener state as unknown: stopped only from a free port, a failed RPC, a loaded stopped service and a compatible CLI", () => {

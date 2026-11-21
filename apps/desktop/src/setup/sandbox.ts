@@ -603,7 +603,16 @@ export function sandboxOpener(options: {
   log?: (line: string) => void;
 }): { open: () => Promise<Opened | SetupRefusedError>; close: () => Promise<void> } {
   let gateway: Promise<SyntheticGateway> | null = null;
-  const pairingGateway = () => (gateway ??= options.startGateway());
+  // Shared while it starts and once it listens; a start that failed is tried again next time.
+  const pairingGateway = () => {
+    if (gateway) return gateway;
+    const starting = options.startGateway();
+    gateway = starting;
+    starting.catch(() => {
+      if (gateway === starting) gateway = null;
+    });
+    return starting;
+  };
   let baseline: ValidatedSandbox | null = options.sandbox ?? null;
   // Once the description is seen gone or changed, this run refuses from then on, whatever
   // is put at that path later.
@@ -652,7 +661,9 @@ export function sandboxOpener(options: {
   const close = async () => {
     const started = gateway;
     gateway = null;
-    if (started) await (await started).close();
+    // A start that failed left nothing to close.
+    const server = await started?.catch(() => null);
+    if (server) await server.close();
   };
   return { open, close };
 }

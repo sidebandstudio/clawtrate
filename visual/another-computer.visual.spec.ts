@@ -189,8 +189,10 @@ test.describe("behaviour", () => {
     page,
   }) => {
     await openFixture(page, "setup=there-resume", "light");
-    await expect(page.getByText("Opening the SSH forward")).toBeVisible();
-    await expect(page.getByText("Connecting with the saved device token")).toBeVisible();
+    // The step list's own rows: the step under way is also said in a hidden live region.
+    const steps = page.getByTestId("setup-step-list");
+    await expect(steps.getByText("Opening the SSH forward")).toBeVisible();
+    await expect(steps.getByText("Connecting with the saved device token")).toBeVisible();
     await expect(page.getByText(/one-time code/)).toHaveCount(0);
     await openFixture(page, "setup=there-resume-failed", "light");
     await page.getByRole("button", { name: "Remove you@devbox.example from Clawtrate…" }).click();

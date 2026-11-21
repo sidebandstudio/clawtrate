@@ -225,6 +225,12 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         `  User ${t.world.localUser}`,
         `  IdentityFile ${t.userKey}`,
         "  IdentitiesOnly yes",
+        "Host devbox-local",
+        "  HostName localhost",
+        `  Port ${sshd.port}`,
+        `  User ${t.world.localUser}`,
+        `  IdentityFile ${t.userKey}`,
+        "  IdentitiesOnly yes",
         "Host stranger",
         "  HostName 127.0.0.1",
         `  Port ${sshd.port}`,
@@ -1154,6 +1160,139 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     expect(h.routes.list().map((each) => each.id)).toEqual([record!.id]);
     // The live route is still the app's.
     expect(h.client.state.connection.status).toBe("connected");
+    await h.remote.closeAll();
+  });
+
+  it("F-495: another alias for the live route's endpoint, with its own sign-in settings, is looked at with those settings, and the live route stays", async () => {
+    const h = host();
+    await connected(h);
+    // "stranger" leads to the same account, host and port with a key that isn't authorized there.
+    await h.remote.there("stranger");
+    if (h.setup().phase === "key") await h.remote.trustKey();
+    expect(h.setup().phase).toBe("failed");
+    expect(h.setup().there!.failure).toMatchObject({ kind: "sign-in-refused" });
+    expect(h.client.state.connection.status).toBe("connected");
+    await h.remote.closeAll();
+  });
+
+  it("F-496: a pairing the gateway accepted stays when Back is pressed while the bots load, and the next Connect reuses it", async () => {
+    const h = host();
+    await lookOnDevbox(h);
+    // The bots never load: Connect waits on its last step.
+    const agents = h.fake.handlers["agents.list"];
+    h.fake.handlers["agents.list"] = () => new Promise(() => {});
+    try {
+      await h.remote.connect();
+      await until(() => h.client.state.connection.status === "connected", 30_000);
+      const key = h.client.route!;
+      await until(() => h.routes.byKey(key)?.identity === "gateway-identity-1", 10_000);
+      h.remote.cancel();
+      await until(() => h.client.state.connection.status === "idle", 10_000);
+      expect(h.routes.byKey(key)).toMatchObject({ identity: "gateway-identity-1" });
+      expect(h.routes.hasToken(key)).toBe(true);
+    } finally {
+      h.fake.handlers["agents.list"] = agents!;
+    }
+    await h.remote.there("devbox");
+    expect(h.setup().look?.access).toBe("paired");
+    await h.remote.closeAll();
+  });
+
+  it("F-498: a saved pairing with no gateway identity recorded beside it is not restored by itself: the found card, and Pair asks again", async () => {
+    const h = host();
+    await connected(h);
+    await h.remote.closeAll();
+    const [record] = h.routes.list();
+    h.routes.put({ ...record!, identity: null });
+    expect(h.routes.hasToken(record!.key)).toBe(true);
+    const again = host({ dir: h.dir, storage: h.storage });
+    await again.client.start();
+    await again.remote.resume();
+    expect(again.setup().phase).toBe("found");
+    expect(again.client.state.connection.status).not.toBe("connected");
+    expect(again.fake.sockets).toEqual([]);
+    await again.remote.closeAll();
+  });
+
+  it("F-496: Back while a failed first forward closes stays where it went: the failure isn't shown after it", async () => {
+    const h = host();
+    await lookOnDevbox(h);
+    const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+    onSpawn = (args) => {
+      if (args.includes("-L")) stub.setStatus("default", stopped);
+    };
+    const r = h.remote as unknown as { letGoPending: () => Promise<void> };
+    const letGo = r.letGoPending.bind(h.remote);
+    let backed = false;
+    r.letGoPending = async () => {
+      // The person goes Back just as the failed forward is let go.
+      if (!backed) {
+        backed = true;
+        h.remote.cancel();
+      }
+      return letGo();
+    };
+    try {
+      await h.remote.connect();
+      expect(backed).toBe(true);
+      expect(h.setup().phase).toBe("found");
+      expect(h.setup().there?.failure ?? null).toBeNull();
+    } finally {
+      onSpawn = null;
+      stub.setStatus("default", running());
+      await h.remote.closeAll();
+    }
+  });
+
+  it("F-496: the cleanup of a Connect whose gateway couldn't say who it is never lets go of a Connect started meanwhile", async () => {
+    const h = host();
+    await lookOnDevbox(h);
+    const identity = h.fake.handlers["gateway.identity.get"]!;
+    h.fake.handlers["gateway.identity.get"] = () => {
+      throw new Error("no identity");
+    };
+    const r = h.remote as unknown as {
+      retireIdentity: (...args: unknown[]) => Promise<void>;
+      pending: unknown;
+    };
+    const retire = r.retireIdentity.bind(h.remote);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let first: unknown = null;
+    r.retireIdentity = async (...args: unknown[]) => {
+      first = r.pending;
+      await retire(...args);
+      await gate;
+    };
+    await h.remote.connect();
+    await until(() => h.setup().phase === "failed", 30_000);
+    expect(h.setup().there?.failure?.kind ?? h.setup().failure?.kind).toBe("identity-unread");
+    h.fake.handlers["gateway.identity.get"] = identity;
+    const second = h.remote.connect();
+    await until(() => r.pending !== null && r.pending !== first, 30_000);
+    release();
+    await second;
+    await until(() => h.setup().phase === "done", 30_000);
+    await until(() => h.setup().route?.phase === "up", 10_000);
+    await h.remote.closeAll();
+  });
+
+  it("F-496: Connect to another computer while a route is live pairs through its own channel's hello and keeps its own token", async () => {
+    const h = host();
+    await connected(h);
+    const first = h.client.route!;
+    const connects = h.fake.connects.length;
+    await h.remote.there("devbox-local");
+    if (h.setup().phase === "key") await h.remote.trustKey();
+    expect(h.setup().phase, JSON.stringify(h.setup().there?.failure)).toBe("found");
+    await h.remote.connect();
+    await until(() => h.setup().phase === "done", 30_000);
+    const second = h.client.route!;
+    expect(second).not.toBe(first);
+    // The new route went live on its own hello, not on what the store still said of the first.
+    expect(h.fake.connects.length).toBeGreaterThan(connects);
+    expect(h.routes.hasToken(second)).toBe(true);
+    expect(h.remote.allows(h.client.state.connection.gatewayUrl!)).toBe(true);
     await h.remote.closeAll();
   });
 

@@ -6,10 +6,12 @@
 
 import type * as ChildProcess from "node:child_process";
 import type * as Http from "node:http";
+import type * as Https from "node:https";
 import type * as Net from "node:net";
+import type * as Tls from "node:tls";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProgramRequest } from "../src/setup/programs.ts";
 import type { Scenario } from "../src/setup/sandbox.ts";
 import type { SyntheticGateway } from "../src/setup/synthetic-gateway.ts";
@@ -31,6 +33,8 @@ vi.mock("node:child_process", async (original) => {
     execFile: count("execFile", real.execFile),
     execFileSync: count("execFileSync", real.execFileSync),
     exec: count("exec", real.exec),
+    execSync: count("execSync", real.execSync),
+    fork: count("fork", real.fork),
   };
 });
 vi.mock("node:net", async (original) => {
@@ -48,6 +52,30 @@ vi.mock("node:net", async (original) => {
     createServer: (...args: Parameters<typeof real.createServer>) => {
       opened.sockets.push("net.createServer");
       return real.createServer(...args);
+    },
+  };
+});
+vi.mock("node:tls", async (original) => {
+  const real = await original<typeof Tls>();
+  return {
+    ...real,
+    connect: (...args: Parameters<typeof real.connect>) => {
+      opened.sockets.push("tls.connect");
+      return real.connect(...args);
+    },
+  };
+});
+vi.mock("node:https", async (original) => {
+  const real = await original<typeof Https>();
+  return {
+    ...real,
+    request: (...args: Parameters<typeof real.request>) => {
+      opened.sockets.push("https.request");
+      return real.request(...args);
+    },
+    get: (...args: Parameters<typeof real.get>) => {
+      opened.sockets.push("https.get");
+      return real.get(...args);
     },
   };
 });
@@ -79,6 +107,9 @@ const { startSyntheticGateway } = await import("../src/setup/synthetic-gateway.t
 const fake = await import("./fixtures/sandbox.ts");
 
 const PROFILE = "clawtrate-dev-su1-test";
+
+// Every fake home, run record and checkout goes, whether the test passed or not.
+afterEach(() => fake.removeBases());
 
 /** A proven run of this checkout's, its sandbox, and a pairing gateway that is never a real one. */
 function sandbox(scenario?: Scenario) {
@@ -297,7 +328,7 @@ describe("the stand-in for openclaw", () => {
 });
 
 describe("a sandboxed setup, from the look to Connect", () => {
-  function controller(scenario?: Scenario) {
+  function controller(scenario?: Scenario, answer: () => Promise<boolean> = async () => true) {
     const s = sandbox(scenario);
     const gateway = new FakeGateway();
     const logs: string[] = [];
@@ -315,7 +346,7 @@ describe("a sandboxed setup, from the look to Connect", () => {
       stopPrograms: () => {},
       confirm: async (confirmation) => {
         dialogs.push(confirmation.message);
-        return true;
+        return answer();
       },
       log: (line) => logs.push(line),
     });
@@ -367,6 +398,27 @@ describe("a sandboxed setup, from the look to Connect", () => {
     await c.setup.look();
     await c.setup.connect();
     expect(c.dialogs).toHaveLength(1);
+    expect(c.minted).toEqual(["code"]);
+    await until(() => c.gateway.connects.length > 0);
+    c.client.stop();
+  });
+
+  it("the pairing scenario makes no code and opens no socket while the host's dialog waits", async () => {
+    let approve: (yes: boolean) => void = () => {};
+    const c = controller("pairing", () => new Promise<boolean>((resolve) => (approve = resolve)));
+    c.gateway.connectReply = () => ({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "x" },
+    });
+    await c.setup.look();
+    const connecting = c.setup.connect();
+    await until(() => c.dialogs.length === 1);
+    expect(c.setup.current.phase).toBe("confirming");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(c.minted).toEqual([]);
+    expect(c.gateway.sockets).toHaveLength(0);
+    approve(true);
+    await connecting;
     expect(c.minted).toEqual(["code"]);
     await until(() => c.gateway.connects.length > 0);
     c.client.stop();

@@ -123,6 +123,7 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
 
   it("clears every OPENCLAW_ variable the login left before OpenClaw runs, so no inherited profile, state, config or port applies", () => {
     rmSync(join(home, "env"), { force: true });
+    rmSync(join(home, "calls"), { force: true });
     const script = remoteScript("code", values());
     const out = run(script.text, {
       OPENCLAW_PROFILE: "work",
@@ -131,13 +132,17 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
       OPENCLAW_GATEWAY_PORT: "18999",
     });
     expect(out.status).toBe(0);
+    // The stand-in ran: an empty log below is one it wrote with nothing in it.
+    expect(calls()).toHaveLength(1);
     const seen = () =>
       existsSync(join(home, "env")) ? readFileSync(join(home, "env"), "utf8") : "";
     expect(seen()).toBe("");
     // The LOOK clears them the same way.
     rmSync(join(home, "env"), { force: true });
+    rmSync(join(home, "calls"), { force: true });
     const look = lookScript();
     expect(run(look.text, { OPENCLAW_PROFILE: "work" }).status).toBe(0);
+    expect(calls().length).toBeGreaterThan(0);
     expect(seen()).toBe("");
   });
 

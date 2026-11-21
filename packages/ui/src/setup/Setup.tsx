@@ -66,41 +66,49 @@ type StepState = "waiting" | "running" | "done" | "failed";
 
 /** The step list (§2 "New components"), with the elapsed time on a step running past 10 s. */
 function Steps({ steps, current, failed }: { steps: string[]; current: number; failed?: boolean }) {
-  // Seconds on the running step, counted from when it started.
+  // Seconds on the running step, measured from when it started: time the window spent
+  // suspended counts too, which counting the timer's calls would miss.
   const [timed, setTimed] = useState({ step: current, seconds: 0 });
   if (timed.step !== current) setTimed({ step: current, seconds: 0 });
   useEffect(() => {
     if (failed) return;
+    const at = Date.now();
     const timer = setInterval(
-      () => setTimed((value) => ({ ...value, seconds: value.seconds + 1 })),
+      () => setTimed({ step: current, seconds: Math.floor((Date.now() - at) / 1000) }),
       1000,
     );
     return () => clearInterval(timer);
-  }, [failed]);
-  const elapsed = timed.seconds;
+  }, [current, failed]);
+  const elapsed = timed.step === current ? timed.seconds : 0;
   return (
-    <ol className="s-steps" aria-label="Steps" data-testid="setup-step-list">
-      {steps.map((text, index) => {
-        const state: StepState =
-          index < current ? "done" : index > current ? "waiting" : failed ? "failed" : "running";
-        return (
-          <li
-            key={text}
-            data-state={state}
-            aria-current={state === "running" ? "step" : undefined}
-            aria-label={`${text}, ${state}`}
-          >
-            <span className="s-step-mark" aria-hidden="true">
-              {state === "done" ? <CheckIcon /> : state === "failed" ? <CloseIcon /> : null}
-            </span>
-            <span>{text}</span>
-            <span className="s-step-time">
-              {state === "running" && elapsed >= 10 ? `${elapsed} s` : ""}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+    <>
+      {/* The step under way, said when it changes; never its seconds. */}
+      <p className="visually-hidden" aria-live="polite" data-testid="setup-step-live">
+        {failed ? "" : (steps[current] ?? "")}
+      </p>
+      <ol className="s-steps" aria-label="Steps" data-testid="setup-step-list">
+        {steps.map((text, index) => {
+          const state: StepState =
+            index < current ? "done" : index > current ? "waiting" : failed ? "failed" : "running";
+          return (
+            <li
+              key={text}
+              data-state={state}
+              aria-current={state === "running" ? "step" : undefined}
+              aria-label={`${text}, ${state}`}
+            >
+              <span className="s-step-mark" aria-hidden="true">
+                {state === "done" ? <CheckIcon /> : state === "failed" ? <CloseIcon /> : null}
+              </span>
+              <span>{text}</span>
+              <span className="s-step-time">
+                {state === "running" && elapsed >= 10 ? `${elapsed} s` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </>
   );
 }
 
@@ -723,7 +731,8 @@ export function SetupFlow({
   };
   const lookHere = () => {
     onView("here");
-    void send({ type: "setupLook" });
+    // A look the host never started (this window's commands refused) shows no progress.
+    send({ type: "setupLook" }).catch(() => onView("first"));
   };
   const advanced = () => {
     if (view === "here" || setup.there) void send({ type: "setupReset" });
@@ -738,9 +747,11 @@ export function SetupFlow({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || view === "first") return;
     event.preventDefault();
+    // As each screen's Back: a refused sandbox's goes to the first question.
     if (
       (view === "here" || view === "another") &&
-      (setup.phase === "connecting" || setup.phase === "failed") &&
+      (setup.phase === "connecting" ||
+        (setup.phase === "failed" && setup.failure?.kind !== "refused")) &&
       setup.look
     )
       backFromConnect();

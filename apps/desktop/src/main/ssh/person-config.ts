@@ -318,13 +318,15 @@ function includedFiles(raw: string, world: SshWorld): string[] {
     if (notThere(error)) return [];
     throw new Unreadable();
   }
-  return (
-    names
-      // File names match as they are spelt, and a pattern matches no dotfile, as glob(3) does.
-      .filter((name) => globMatch(last, name, true) && !name.startsWith("."))
-      .sort()
-      .map((name) => `${dirname(path)}/${name}`)
-  );
+  const files = names
+    // File names match as they are spelt, and a pattern matches no dotfile, as glob(3) does.
+    .filter((name) => globMatch(last, name, true) && !name.startsWith("."))
+    .sort()
+    .map((name) => `${dirname(path)}/${name}`);
+  // Each match as the file system walks it: a link among them that leads out of home refuses all.
+  if (files.some((file) => !insideHome(file, world.home, world.platform)))
+    throw new IncludeRefused();
+  return files;
 }
 
 type Walk = { files: number; refusal: [RefusalCategory, string] | null };

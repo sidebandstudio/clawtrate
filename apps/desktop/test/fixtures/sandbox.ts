@@ -4,7 +4,7 @@
 // counts what is read and a process lookup that counts what is asked.
 // Nothing here starts a program or opens a socket.
 
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeFiles, SANDBOX_FILE, type SandboxFiles } from "../../src/setup/sandbox.ts";
@@ -16,9 +16,19 @@ export const STARTED = "Mon Nov 16 21:27:01 2026";
 
 export const runId = (digit: string) => digit.repeat(48);
 
+/** Every base folder made since the last `removeBases`. */
+const bases: string[] = [];
+
 /** A base folder, by its canonical path, under the system's temporary folder. */
 export function base(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-sandbox-test-")));
+  const made = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-sandbox-test-")));
+  bases.push(made);
+  return made;
+}
+
+/** Removes every base folder made so far, with what is in it: each test's `afterEach`. */
+export function removeBases(): void {
+  for (const made of bases.splice(0)) rmSync(made, { recursive: true, force: true });
 }
 
 /** A file layer that records every content read and every lookup. */
