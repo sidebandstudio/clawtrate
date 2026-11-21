@@ -419,6 +419,13 @@ describe("versions", () => {
       ),
     ).toBe(4);
   });
+
+  it("counts only whole beta tags, not one whose run Number() would still read", () => {
+    expect(nextRun(["v0.1.1-beta.20261120.1e12"], "0.1.1", "20261120")).toBe(1);
+    expect(
+      nextRun(["v0.1.1-beta.20261120.1e12", "v0.1.1-beta.20261120.3"], "0.1.1", "20261120"),
+    ).toBe(4);
+  });
 });
 
 /** codesign, spctl and stapler as they answer for a notarized, stapled Developer ID app. */

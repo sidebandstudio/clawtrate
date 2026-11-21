@@ -311,7 +311,8 @@ export function nextRun(tags: readonly string[], base: string, day: string): num
   const prefix = `v${base}-beta.${day}.`;
   let highest = 0;
   for (const tag of tags) {
-    if (!tag.startsWith(prefix)) continue;
+    // Only a whole beta tag counts: `….1e12` is not one, though Number() reads it.
+    if (!tag.startsWith(prefix) || !isBetaTag(tag)) continue;
     const run = Number(tag.slice(prefix.length));
     if (Number.isSafeInteger(run)) highest = Math.max(highest, run);
   }

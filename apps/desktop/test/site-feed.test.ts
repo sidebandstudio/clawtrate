@@ -278,6 +278,27 @@ describe("writing the site's feed", () => {
     expect(existsSync(join(site, "updates"))).toBe(false);
   });
 
+  it("fails the deploy when the served zip matches the feed's SHA-512 but not latest-mac.json's SHA-256", async () => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, latest } = files(version);
+    const zip = `${releaseFolder(tag)}Clawtrate-${version}-mac-x64.zip`;
+    // GitHub's digest and latest-mac.json name the 100 bytes of ZIP; the feed and
+    // the download are another 100 bytes, so the app and install.sh cannot both verify it.
+    const other = "y".repeat(100);
+    const changed = JSON.parse(files(version).feed);
+    changed.files["mac-x64"].sha512 = createHash("sha512").update(other).digest("base64");
+    const feed = JSON.stringify(changed);
+    const { get } = github([row(version, {}, { feed })], {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: latest,
+      [zip]: other,
+    });
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+      `Clawtrate-${version}-mac-x64.zip on ${tag} is not the file its feed and latest-mac.json name.`,
+    );
+    expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
   it.each(["feed.json", "latest-mac.json"])(
     "fails the deploy, writing nothing, when the downloaded %s is not the file GitHub's digest names",
     async (name) => {

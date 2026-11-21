@@ -9,7 +9,8 @@
 // latest-mac.json, checks the two files against GitHub's digest of each, each
 // other and the release's tag, and each zip against GitHub's size and digest,
 // reads each zip from its release address, following only the redirect the app
-// follows, to check the SHA-512 the app will check, and writes them to
+// follows, to check the SHA-512 the app will check and the SHA-256
+// install.sh will check, both of the same download, and writes them to
 // <output>/updates/beta/. From the same beta it fills the Mac download page
 // (download/mac/index.html, a template) and requires install.sh to pin that
 // beta's team. With no published beta, a template token left or another
@@ -123,16 +124,24 @@ async function releaseJson(get: Get, tag: string, asset: ReleaseRow["assets"][nu
   return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
-/** The size and base64 SHA-512 of what an address serves, read as a stream. */
-async function streamedSha512(get: Get, url: string): Promise<{ size: number; sha512: string }> {
+/**
+ * The size, base64 SHA-512 (what the app checks) and hex SHA-256 (what
+ * install.sh checks) of what an address serves, read once as a stream.
+ */
+async function streamedDigests(
+  get: Get,
+  url: string,
+): Promise<{ size: number; sha512: string; sha256: string }> {
   const response = await releaseFile(get, url);
-  const hash = createHash("sha512");
+  const sha512 = createHash("sha512");
+  const sha256 = createHash("sha256");
   let size = 0;
   for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-    hash.update(chunk);
+    sha512.update(chunk);
+    sha256.update(chunk);
     size += chunk.length;
   }
-  return { size, sha512: hash.digest("base64") };
+  return { size, sha512: sha512.digest("base64"), sha256: sha256.digest("hex") };
 }
 
 async function text(get: Get, url: string, headers: Record<string, string>): Promise<string> {
@@ -193,8 +202,10 @@ export async function writeSiteFeed(
       zip.digest !== `sha256:${sha256}`
     )
       throw new Error(mismatch);
-    const served = await streamedSha512(get, zip.browser_download_url);
-    if (served.size !== entry.size || served.sha512 !== entry.sha512) throw new Error(mismatch);
+    // One download must satisfy both: the app's SHA-512 and install.sh's SHA-256.
+    const served = await streamedDigests(get, zip.browser_download_url);
+    if (served.size !== entry.size || served.sha512 !== entry.sha512 || served.sha256 !== sha256)
+      throw new Error(mismatch);
   }
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, FEED_NAME), files.feed);
