@@ -80,7 +80,7 @@ describe("replies in a thread", () => {
     expect(messageReplyOf({ ...run, anchorItemId: null } as Run, t)).toBeNull();
   });
 
-  it("F-067: a progress row and two assistant rows for distinct parents never enter the wrong thread", () => {
+  it("F-067: a progress row and two assistant rows for distinct parents each appear only in their own thread", () => {
     // One run of the bot's: a progress row, an answer the gateway delivered to A, one to B.
     const items = mapHistory([
       { role: "user", content: "Root A", __openclaw: { id: "A" } },
@@ -100,9 +100,10 @@ describe("replies in a thread", () => {
       },
     ]);
     const t = transcript({ items });
-    // While assistant membership needs a reference on each row, no bot bubble is threaded.
-    for (const parent of ["A", "B"]) {
-      expect(repliesTo(t, parent).history.filter((item) => item.role === "assistant")).toEqual([]);
-    }
+    const thread = (parent: string) => repliesTo(t, parent).history.map((reply) => reply.text);
+    expect(thread("A")).toEqual(["A only"]);
+    expect(thread("B")).toEqual(["B only"]);
+    expect(thread("m0")).toEqual([]);
+    expect(repliesTo(t, "A").count).toBe(1);
   });
 });
