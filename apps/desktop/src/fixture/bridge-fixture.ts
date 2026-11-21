@@ -3,7 +3,7 @@
 // everything in memory, and never opens a socket or makes a request.
 
 import { holdableTimers } from "./timers.ts";
-import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
+import { fixtureRoutines, routineCommands, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
   applyQuestionResolved,
@@ -606,6 +606,7 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
     const checkIn = checkInCommand(command, () => state, set);
@@ -623,7 +624,7 @@ export function createFixtureBridge(
         throw new Error("Changing memory requires admin access.");
       return memory(command);
     }
-    const routine = routineCommand(command, () => state, now, routineParams, set);
+    const routine = routineCommand(command, () => state, set);
     if (routine) {
       sent.push(command);
       return routine;
