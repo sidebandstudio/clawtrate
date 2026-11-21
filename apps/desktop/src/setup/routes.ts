@@ -24,6 +24,7 @@ import {
   constants,
   fstatSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readdirSync,
   readSync,
@@ -31,11 +32,12 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { MAX_SSH_ROUTE_RECORDS, ROUTE_KEY, type KeyValueStore } from "@clawtrate/core";
 
-import { ensurePrivateDir } from "./private-dir.ts";
+import { ensurePrivateDir, readAclWithLs, type AclReading } from "./private-dir.ts";
 
 /** What identifies an SSH route and what Remove needs, never a forward's local address. */
 export type SshRouteRecord = {
@@ -135,6 +137,8 @@ export type RouteStoreOptions = {
   onEvict?: (record: SshRouteRecord) => void;
   /** For tests: the rename that puts a whole file in place. */
   rename?: (from: string, to: string) => void;
+  /** For tests: reads the route file's access control list; the default runs `/bin/ls`. */
+  readAcl?: (path: string, platform: NodeJS.Platform) => AclReading;
 };
 
 export class RouteStore {
@@ -170,14 +174,17 @@ export class RouteStore {
       this.cache = empty;
       return empty;
     }
-    const text = readPrivateFile(this.path);
+    const text = readPrivateFile(this.path, this.options.readAcl);
     let parsed: unknown;
     try {
       parsed = text === null ? null : JSON.parse(text);
     } catch {
       parsed = null;
     }
-    const shape = parsed as Partial<FileShape> | null;
+    const shape = parsed as { version?: unknown; routes?: unknown } | null;
+    // A store of an earlier draft kept its tokens unsealed: removed, in this proven folder, and
+    // the person pairs again.
+    if (shape?.version === 1) rmSync(this.path, { force: true });
     const routes: Stored[] = [];
     if (shape && shape.version === 2 && Array.isArray(shape.routes)) {
       for (const each of shape.routes.slice(0, MAX_ROUTES)) {
@@ -273,11 +280,23 @@ export class RouteStore {
   }
 
   /** Whether the route has a token kept, for this device. */
+  /**
+   * The folder is proven again before any token is read, cached or not: one
+   * that stopped being private gives no token, and its cache goes.
+   */
+  private tokensReadable(): boolean {
+    if (this.folderIsPrivate()) return true;
+    this.cache = null;
+    return false;
+  }
+
   hasToken(key: string): boolean {
+    if (!this.tokensReadable()) return false;
     return this.load().routes.some((each) => each.key === key && each.token !== null);
   }
 
   getToken(key: string, deviceId: string, role: string): string | null {
+    if (!this.tokensReadable()) return null;
     const route = this.load().routes.find((each) => each.key === key);
     const token = route?.token;
     if (!token || token.deviceId !== deviceId || token.role !== role) return null;
@@ -325,7 +344,46 @@ function safeList(dir: string): string[] {
  * this account's with one link, closed to group and others, and small. Null
  * when there is none; anything else is not this store's and is not read.
  */
-function readPrivateFile(path: string): string | null {
+/**
+ * Whether the file the descriptor holds is this account's alone, its access
+ * control list included: the list is read by path (macOS shows none through a
+ * descriptor) and holds for the descriptor only while that path names the
+ * same file, by device and inode, before and after it is read, in a folder
+ * already proven private. An entry that allows anyone else anything, or one
+ * that can't be read, is not owner-only.
+ */
+function ownerOnlyAcl(
+  fd: number,
+  path: string,
+  readAcl: (path: string, platform: NodeJS.Platform) => AclReading,
+): boolean {
+  const held = fstatSync(fd);
+  const same = () => {
+    try {
+      const now = lstatSync(path);
+      return now.dev === held.dev && now.ino === held.ino;
+    } catch {
+      return false;
+    }
+  };
+  if (!same()) return false;
+  const reading = readAcl(path, process.platform);
+  if (!same()) return false;
+  let me: string;
+  try {
+    me = userInfo().username;
+  } catch {
+    return false;
+  }
+  if (reading.kind === "none") return true;
+  if (reading.kind !== "entries") return false;
+  return !reading.entries.some((entry) => entry.allow && entry.principal !== `user:${me}`);
+}
+
+function readPrivateFile(
+  path: string,
+  readAcl: (path: string, platform: NodeJS.Platform) => AclReading = readAclWithLs,
+): string | null {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -343,6 +401,8 @@ function readPrivateFile(path: string): string | null {
       info.size > MAX_ROUTE_FILE_BYTES
     )
       return null;
+    // Its access control list too, on macOS and Linux, for the file this descriptor holds.
+    if (process.platform !== "win32" && !ownerOnlyAcl(fd, path, readAcl)) return null;
     const buffer = Buffer.alloc(info.size);
     let offset = 0;
     while (offset < buffer.length) {

@@ -143,6 +143,66 @@ const TOKEN = '{"token":"plain-device-token-1"}';
 const tokenKey = (key: string) => `deviceToken:route:${key}:device-1:operator`;
 
 describe("the route store", () => {
+  it("reads its file only when the file's own access control list is owner-only, and proves its folder again before any token, cached or not", async () => {
+    const dir = fresh("clawtrate-routes-acl-");
+    const writer = new RouteStore(dir, { seal: testSeal });
+    const one = record();
+    writer.put(one);
+    await routedStorage(memoryStorage(), writer).set(tokenKey(one.key), TOKEN);
+    // An entry that lets everyone read the file: nothing read from it.
+    const everyone = (): AclReading => ({
+      kind: "entries",
+      entries: [{ principal: "group:everyone", allow: true, rights: ["read"] }],
+    });
+    const opened = new RouteStore(dir, { seal: testSeal, readAcl: everyone });
+    expect(opened.list()).toEqual([]);
+    expect(opened.getToken(one.key, "device-1", "operator")).toBeNull();
+    // An unreadable list is not owner-only either; none is.
+    expect(
+      new RouteStore(dir, { seal: testSeal, readAcl: () => ({ kind: "unreadable" }) }).list(),
+    ).toEqual([]);
+    expect(
+      new RouteStore(dir, { seal: testSeal, readAcl: () => ({ kind: "none" }) }).list(),
+    ).toHaveLength(1);
+    // A folder that stops being private gives no token, though the store had it cached.
+    let private_ = true;
+    const cached = new RouteStore(dir, { seal: testSeal, folderIsPrivate: () => private_ });
+    expect(cached.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+    private_ = false;
+    expect(cached.getToken(one.key, "device-1", "operator")).toBeNull();
+    expect(cached.hasToken(one.key)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "a route file with a real macOS ACL entry for anyone else isn't read",
+    async () => {
+      const dir = fresh("clawtrate-routes-macacl-");
+      const writer = new RouteStore(dir, { seal: testSeal });
+      writer.put(record());
+      execFileSync("/bin/chmod", ["+a", "group:everyone allow read", writer.path]);
+      expect(new RouteStore(dir, { seal: testSeal }).list()).toEqual([]);
+      execFileSync("/bin/chmod", ["-N", writer.path]);
+      expect(new RouteStore(dir, { seal: testSeal }).list()).toHaveLength(1);
+    },
+  );
+
+  it("a store an earlier draft left with unsealed tokens (version 1) is removed, and the person pairs again", () => {
+    const dir = fresh("clawtrate-routes-v1-");
+    const path = join(dir, "routes.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        routes: [{ ...record(), token: { deviceId: "device-1", role: "operator", value: TOKEN } }],
+      }),
+      { mode: 0o600 },
+    );
+    const routes = new RouteStore(dir, { seal: testSeal });
+    expect(routes.list()).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+    expect(holding(dir, "plain-device-token-1")).toEqual([]);
+  });
+
   it("keeps one sealed token per route, only for a route it has a record of, and in its own file alone", async () => {
     const dir = fresh("clawtrate-routes-");
     const routes = new RouteStore(dir, { seal: testSeal });

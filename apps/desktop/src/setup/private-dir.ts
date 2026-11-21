@@ -109,7 +109,7 @@ export function readAclWithLs(path: string, platform: NodeJS.Platform): AclReadi
   }
   const lines = text.split("\n").filter((line) => line !== "");
   const first = lines[0];
-  if (!first || !/^d[rwxsStT-]{9}[@+.]?\s/.test(first)) return { kind: "unreadable" };
+  if (!first || !/^[-d][rwxsStT-]{9}[@+.]?\s/.test(first)) return { kind: "unreadable" };
   if (platform !== "darwin") return first[10] === "+" ? { kind: "present" } : { kind: "none" };
   const entries: AclEntry[] = [];
   for (const line of lines.slice(1)) {
