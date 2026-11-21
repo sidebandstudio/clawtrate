@@ -44,6 +44,7 @@ export * from "./file-paths.ts";
 export * from "./check-ins.ts";
 export { isStopNow } from "./stop-words.ts";
 export * from "./send-size.ts";
+export * from "./chat-link.ts";
 export * from "./composer-menus.ts";
 export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
