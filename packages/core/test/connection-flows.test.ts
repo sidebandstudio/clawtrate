@@ -432,6 +432,46 @@ describe("connecting", () => {
     client.stop();
   });
 
+  it.each(["Connect", "Reconnect"])(
+    "F-457: Stop keeps a pending %s and the request queued behind it from opening a socket",
+    async (action) => {
+      const gateway = new FakeGateway();
+      const storage = orderedStorage();
+      storage.data.set("connection", JSON.stringify({ url: URL, suspended: true }));
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      await client.start();
+      const release = storage.holdAnswer("connection");
+      const pending = action === "Connect" ? client.connect({ url: OTHER_URL }) : client.retryNow();
+      await until(() => !savedSettings(storage)?.suspended);
+      const queued = action === "Connect" ? client.retryNow() : client.connect({ url: OTHER_URL });
+      client.stop();
+      release();
+      try {
+        await Promise.all([pending, queued]);
+        expect(gateway.sockets).toHaveLength(0);
+        await client.retryNow();
+        expect(gateway.sockets).toHaveLength(1);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it("F-457: stopping during startup leaves the saved gateway closed", async () => {
+    const gateway = new FakeGateway();
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL }) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const starting = client.start();
+    client.stop();
+    try {
+      await starting;
+      expect(gateway.sockets).toHaveLength(0);
+      expect(savedSettings(storage)?.url).toBe(URL);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a Reconnect that could not be saved fails again on the next try, and opens nothing", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({

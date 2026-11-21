@@ -815,6 +815,8 @@ export class ClawtrateClient {
   private pairingSeen: string | null = null;
   /** The last change to the selected gateway; the next one starts once it has settled. */
   private connectionChanges: Promise<void> = Promise.resolve();
+  /** A host stop cancels socket opens requested before it, including ones still saving settings. */
+  private stops = 0;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -1023,6 +1025,7 @@ export class ClawtrateClient {
 
   /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
   async start(): Promise<void> {
+    const stops = this.stops;
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
@@ -1031,7 +1034,9 @@ export class ClawtrateClient {
       if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
-    this.settings = await this.savedSettings();
+    const settings = await this.savedSettings();
+    if (stops !== this.stops) return;
+    this.settings = settings;
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
       return;
@@ -1041,6 +1046,7 @@ export class ClawtrateClient {
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
+    const stops = this.stops;
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
@@ -1049,7 +1055,7 @@ export class ClawtrateClient {
       await this.saveSettings({ url, token });
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.pairingSeen = null;
-      await this.open();
+      if (stops === this.stops) await this.open();
     });
   }
 
@@ -1087,14 +1093,15 @@ export class ClawtrateClient {
    * reconnects at once, keeping what is already on screen.
    */
   async retryNow(): Promise<void> {
+    const stops = this.stops;
     // The reload runs outside the queue: it changes nothing saved.
     const reload = await this.changeConnection(async () => {
-      if (!this.settings) return null;
+      if (!this.settings || stops !== this.stops) return null;
       if (this.protocol?.connected && this.state.connection.status === "connected") {
         return this.generation;
       }
       if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
-      await this.open();
+      if (stops === this.stops) await this.open();
       return null;
     });
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
@@ -1119,6 +1126,7 @@ export class ClawtrateClient {
 
   /** Stop without forgetting anything. Used when the host process exits. */
   stop(): void {
+    this.stops += 1;
     this.close();
   }
 
