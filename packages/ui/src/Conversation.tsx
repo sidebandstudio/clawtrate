@@ -103,6 +103,13 @@ function useReading(): ReadingContext {
 /** How close to the end counts as "reading the latest", in pixels. */
 const NEAR_BOTTOM_PX = 96;
 
+/** How long after the reader's own wheel, touch or key a scroll of the transcript is theirs. */
+const READER_SCROLL_MS = 500;
+/** Keys whose default action scrolls the transcript, and where they do something else. */
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+const EDITABLE = "input, textarea, select, [contenteditable]:not([contenteditable=false])";
+const PRESSABLE = "button, summary, a[href], [role=button], [role=tab], [role=menuitem]";
+
 type Caret = { node: Node; offset: number };
 
 /** The text position under a point, from whichever caret API the engine has. */
@@ -141,11 +148,30 @@ function useHoldPlace(
   scroller: RefObject<HTMLDivElement | null>,
   following: RefObject<boolean>,
   toEnd: () => void,
+  /** Set to take the place from the layout as it is now, after a scroll the page measured in it. */
+  retakeRef: RefObject<(() => void) | null>,
 ) {
   useLayoutEffect(() => {
     const element = scroller.current;
     if (!element) return;
-    let place: { block: Element; caret: Caret | null; top: number } | null = null;
+    const content = element.firstElementChild;
+    type Held = { block: Element; caret: Caret | null; top: number };
+    let place: Held | null = null;
+    // The layout the place was last taken from: the scroll position then, the place, and
+    // where the drawn blocks within two views' height of the reading line were.
+    let taken: {
+      scrollTop: number;
+      reach: number;
+      place: Held | null;
+      drawn: { block: Element; top: number; bottom: number }[];
+    } = { scrollTop: 0, reach: 0, place: null, drawn: [] };
+    // The scroller's and its content's sizes when the observer was last told of them.
+    const sizes = () => {
+      const outer = element.getBoundingClientRect();
+      const inner = content?.getBoundingClientRect();
+      return `${outer.width} ${outer.height} ${inner?.width} ${inner?.height}`;
+    };
+    let told = "";
 
     /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
     const frame = () => {
@@ -154,30 +180,84 @@ function useHoldPlace(
       const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
       return { top: box.top, line: box.top + band };
     };
-    const drawnAt = (held: NonNullable<typeof place>) =>
+    const drawnAt = (held: Held) =>
       (held.caret ? caretTop(held.caret) : null) ??
       (held.block.isConnected ? held.block.getBoundingClientRect().top : null);
 
     const record = () => {
       const { top, line } = frame();
+      const reach = 2 * element.clientHeight;
+      const drawn: (typeof taken)["drawn"] = [];
       // The finest block at or below the line that is drawn: the rows of a folded
       // group are laid out but hidden, so they cannot hold a place.
-      const block = [...element.querySelectorAll(TEXT_BLOCKS)].find(
-        (node) =>
-          !node.querySelector(TEXT_BLOCKS) &&
-          node.checkVisibility() &&
-          node.getBoundingClientRect().bottom > line + 1,
-      );
-      if (!block) {
+      let block: Element | null = null;
+      let rect: DOMRect | null = null;
+      for (const node of element.querySelectorAll(TEXT_BLOCKS)) {
+        if (node.querySelector(TEXT_BLOCKS) || !node.checkVisibility()) continue;
+        const box = node.getBoundingClientRect();
+        if (!block && box.bottom > line + 1) [block, rect] = [node, box];
+        if (box.bottom > line - reach)
+          drawn.push({ block: node, top: box.top - top, bottom: box.bottom - top });
+        if (box.top > line + reach) break;
+      }
+      taken = { scrollTop: element.scrollTop, reach, place: null, drawn };
+      if (!block || !rect) {
         place = null;
         return;
       }
-      const rect = block.getBoundingClientRect();
       const found = caretAt(rect.left + 2, Math.max(line + 2, rect.top + 2));
       const caret = found && block.contains(found.node) ? found : null;
       const held = { block, caret, top: 0 };
       held.top = (drawnAt(held) ?? rect.top) - top;
-      place = held;
+      place = taken.place = held;
+    };
+
+    // When the reader last scrolled by hand, and whether they are pressing on the scroller
+    // itself: its scrollbar, or the middle button's autoscroll.
+    let handled = -Infinity;
+    let pressed = false;
+    const byHand = () => {
+      handled = performance.now();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!SCROLL_KEYS.has(event.key) || !target) return;
+      if (target !== document.body && !element.contains(target)) return;
+      if (target.closest(EDITABLE) || (event.key === " " && target.closest(PRESSABLE))) return;
+      byHand();
+    };
+    const onPress = (event: PointerEvent) => {
+      if (event.target === element || event.button === 1) pressed = true;
+    };
+    const onRelease = () => {
+      if (pressed) byHand();
+      pressed = false;
+    };
+
+    // The browser dispatches an update's scroll events before it reports that update's
+    // resizes. A scroll in the same update as a resize the observer has not been told of
+    // yet sees a layout that has already moved, and a place taken from it would leave the
+    // observer nothing to correct (#269). A reader who scrolls by hand scrolls the layout
+    // they last saw, so their place is the one in that layout under the reading line once
+    // moved by their scroll, and the observer holds it through the resize; a scroll further
+    // than the blocks kept moves the place last taken with it. Any other scroll was put
+    // where it is by the page, measured in the layout as it is now, and takes the place
+    // from it.
+    const onScroll = () => {
+      const last = taken.place;
+      const byReader = pressed || performance.now() - handled < READER_SCROLL_MS;
+      if (!last || !byReader || sizes() === told) return record();
+      const moved = element.scrollTop - taken.scrollTop;
+      const { top, line } = frame();
+      const at =
+        Math.abs(moved) <= taken.reach
+          ? taken.drawn.find((each) => each.bottom - moved > line - top + 1)
+          : undefined;
+      place =
+        !at || at.block === last.block
+          ? { ...last, top: last.top - moved }
+          : { block: at.block, caret: null, top: at.top - moved };
     };
 
     // Watching the content too covers late reflows, such as fonts arriving, and every
@@ -189,16 +269,33 @@ function useHoldPlace(
         if (now !== null) element.scrollTop += now - frame().top - place.top;
       }
       record();
+      told = sizes();
     });
     record();
+    told = sizes();
     observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
-    element.addEventListener("scroll", record, { passive: true });
+    if (content) observer.observe(content);
+    element.addEventListener("scroll", onScroll, { passive: true });
+    element.addEventListener("wheel", byHand, { passive: true });
+    element.addEventListener("touchmove", byHand, { passive: true });
+    element.addEventListener("pointerdown", onPress);
+    window.addEventListener("pointerup", onRelease);
+    window.addEventListener("pointercancel", onRelease);
+    // After React's own handlers, so a key the page handled is known to be.
+    window.addEventListener("keydown", onKey);
+    retakeRef.current = record;
     return () => {
       observer.disconnect();
-      element.removeEventListener("scroll", record);
+      element.removeEventListener("scroll", onScroll);
+      element.removeEventListener("wheel", byHand);
+      element.removeEventListener("touchmove", byHand);
+      element.removeEventListener("pointerdown", onPress);
+      window.removeEventListener("pointerup", onRelease);
+      window.removeEventListener("pointercancel", onRelease);
+      window.removeEventListener("keydown", onKey);
+      retakeRef.current = null;
     };
-  }, [scroller, following, toEnd]);
+  }, [scroller, following, toEnd, retakeRef]);
 }
 
 /**
@@ -252,6 +349,8 @@ function TranscriptView({
   // the reader did not make (the content grew under a followed end) keeps
   // following; only the reader moving up stops it.
   const following = useRef(true);
+  // The page's own scrolls take the reader's place from the layout they measured (useHoldPlace).
+  const retakeRef = useRef<(() => void) | null>(null);
   const followTop = useRef<number | null>(null);
   // The transcript's floor (its ::after) keeps the scrollable area at least one
   // view below where the end was put, so the browser never clamps the scroll
@@ -270,6 +369,7 @@ function TranscriptView({
     element.style.setProperty("--follow-floor", "0px");
     element.scrollTop = element.scrollHeight;
     pinAt(element.scrollTop);
+    retakeRef.current?.();
   }, [pinAt]);
 
   // What the reader has just opened stays in view (section 18): following the
@@ -303,6 +403,7 @@ function TranscriptView({
     const over = lineTop() - line.getBoundingClientRect().top;
     if (over <= 0) return;
     element.scrollTop -= over;
+    retakeRef.current?.();
     pinAt(null);
     following.current = false;
     setAtEnd(false);
@@ -334,7 +435,7 @@ function TranscriptView({
     if (atEnd) follow();
   }, [contentSize, atEnd, follow]);
 
-  useHoldPlace(scroller, following, follow);
+  useHoldPlace(scroller, following, follow, retakeRef);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.

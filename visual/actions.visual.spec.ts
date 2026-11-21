@@ -52,6 +52,30 @@ async function setState(page: Page, change: string, arg?: unknown) {
   );
 }
 
+// History now shows a bubble between the second and third read of "Read 3 files": the fold splits in two.
+const SPLIT_FOLD = `const key = "agent:otto:disk-space";
+  const t = state.transcripts[key];
+  const items = t.items.map((item) => {
+    const at = item.blocks.findIndex((b) => b.kind === "tool-call" && b.name === "read" && b.argumentsText.includes("energy-bills"));
+    if (at === -1) return item;
+    const blocks = [...item.blocks];
+    blocks.splice(at + 1, 0, { kind: "text", text: "The bills are in. Two more files to read." });
+    return { ...item, blocks };
+  });
+  return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`;
+// A later update grows that bubble: a second paragraph.
+const SECOND_PARAGRAPH = `const key = "agent:otto:disk-space";
+  const t = state.transcripts[key];
+  const items = t.items.map((item) => ({
+    ...item,
+    blocks: item.blocks.map((b) =>
+      b.kind === "text" && b.text === "The bills are in. Two more files to read."
+        ? { ...b, text: b.text + "\\n\\nThe gas bill is the larger one, by about a third." }
+        : b,
+    ),
+  }));
+  return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`;
+
 /** Scroll so an element's top is at the reading line, the same way every time. */
 async function atReadingLine(target: Locator) {
   await settle(target.page());
@@ -80,6 +104,215 @@ async function atReadingLine(target: Locator) {
       { message: "place the opened summary at the reading line for the screenshot" },
     )
     .toBeLessThanOrEqual(1);
+}
+
+/** Scroll the transcript to `top` and wait for the browser's own scroll event for it. */
+async function scrollTranscript(page: Page, top: number) {
+  await transcript(page).evaluate(
+    (scroller, to) =>
+      new Promise<void>((resolve, reject) => {
+        const onScroll = (event: Event) => {
+          if (!event.isTrusted) return;
+          clearTimeout(timer);
+          scroller.removeEventListener("scroll", onScroll);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          scroller.removeEventListener("scroll", onScroll);
+          reject(new Error(`no scroll event within 5 s for the scroll to ${to}`));
+        }, 5000);
+        scroller.addEventListener("scroll", onScroll);
+        const from = scroller.scrollTop;
+        scroller.scrollTop = to;
+        if (scroller.scrollTop === from) {
+          clearTimeout(timer);
+          scroller.removeEventListener("scroll", onScroll);
+          reject(new Error(`the scroll to ${to} left scrollTop at ${from}`));
+        }
+      }),
+    top,
+  );
+}
+
+/**
+ * The reader turns the wheel over the transcript by `by` pixels, and the fixture's state
+ * changes as the wheel event is handled, before the browser scrolls for it: the browser
+ * then dispatches the scroll event in the same update as the transcript's resize, after
+ * the changed layout is in place and before the resize is reported (#269). The frames
+ * `watchReadingLine` records start here. Fails unless the browser delivered them in that
+ * order and the wheel scrolled by `by`; returns the content's height after the change,
+ * once its resize has been reported.
+ */
+async function wheelWithChange(page: Page, by: number, change: string): Promise<number> {
+  const box = (await transcript(page).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  type Told = { order: string[]; scrolledAt: number | null; resized: number; by: number };
+  await transcript(page).evaluate((scroller, source) => {
+    (window as unknown as { wheelTold: Promise<Told> }).wheelTold = new Promise<Told>(
+      (resolve, reject) => {
+        const content = scroller.firstElementChild!;
+        const from = content.getBoundingClientRect().height;
+        const was = scroller.scrollTop;
+        // Made now: the page's own policy forbids making it in the wheel's handler.
+        const apply = new Function("state", source) as (s: ClawtrateState) => ClawtrateState;
+        const order: string[] = [];
+        let scrolledAt: number | null = null;
+        let by = 0;
+        // Not passive, so the browser scrolls for the wheel after it, in a later update. The
+        // change comes in a task of its own, between that update and the one with the scroll.
+        const onWheel = () => {
+          window.removeEventListener("wheel", onWheel, { capture: true });
+          order.push("wheel");
+          setTimeout(() => {
+            const watched = (
+              window as unknown as { readingLine: { samples: number[]; heights: number[] } }
+            ).readingLine;
+            watched.samples = [];
+            watched.heights = [];
+            const fixture = (
+              window as unknown as {
+                clawtrateFixture: {
+                  setState: (f: (s: ClawtrateState) => ClawtrateState) => void;
+                };
+              }
+            ).clawtrateFixture;
+            fixture.setState(apply);
+            order.push("change");
+          });
+        };
+        const onScroll = (event: Event) => {
+          if (!event.isTrusted || scrolledAt !== null) return;
+          scrolledAt = content.getBoundingClientRect().height;
+          by = scroller.scrollTop - was;
+          order.push("scroll");
+        };
+        // Made after the conversation's observer, so it is told after the conversation's correction.
+        const observer = new ResizeObserver((entries) => {
+          const resized = entries[0]!.borderBoxSize[0]!.blockSize;
+          if (resized === from) return;
+          order.push("resize");
+          done();
+          resolve({ order, scrolledAt, resized, by });
+        });
+        const done = () => {
+          clearTimeout(timer);
+          observer.disconnect();
+          window.removeEventListener("wheel", onWheel, { capture: true });
+          scroller.removeEventListener("scroll", onScroll);
+        };
+        const timer = setTimeout(() => {
+          done();
+          reject(new Error(`no resize within 5 s of the wheel; events: ${order}`));
+        }, 5000);
+        window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+        scroller.addEventListener("scroll", onScroll);
+        observer.observe(content);
+      },
+    );
+  }, change);
+  await page.mouse.wheel(0, by);
+  const {
+    order,
+    scrolledAt,
+    resized,
+    by: scrolled,
+  } = await page.evaluate(() => (window as unknown as { wheelTold: Promise<Told> }).wheelTold);
+  expect(order, "the scroll event is dispatched before the resize is reported").toEqual([
+    "wheel",
+    "change",
+    "scroll",
+    "resize",
+  ]);
+  expect(
+    Math.abs(scrolledAt! - resized),
+    `the scroll event sees the changed layout: ${scrolledAt}px, reported ${resized}px`,
+  ).toBeLessThan(0.5);
+  expect(Math.abs(scrolled - by), `the wheel scrolled by ${scrolled}`).toBeLessThanOrEqual(1);
+  return resized;
+}
+
+/**
+ * In one task, the fixture's state changes and the page then scrolls the transcript so `text`
+ * is at the reading line, measured in the changed layout, as the page's own scrolls are: the
+ * browser dispatches that scroll event in the same update as the transcript's resize, after
+ * the changed layout is in place and before the resize is reported. The frames
+ * `watchReadingLine` records start here. Fails unless the browser delivered them in that
+ * order; returns the content's height after the change, once its resize has been reported.
+ */
+async function pageScrollWithChange(page: Page, change: string, text: string): Promise<number> {
+  const told = await transcript(page).evaluate(
+    (scroller, [source, find]) => {
+      const apply = new Function("state", source) as (s: ClawtrateState) => ClawtrateState;
+      return new Promise<{ order: string[]; scrolledAt: number | null; resized: number }>(
+        (resolve, reject) => {
+          const content = scroller.firstElementChild!;
+          const from = content.getBoundingClientRect().height;
+          const order: string[] = [];
+          let scrolledAt: number | null = null;
+          const onScroll = (event: Event) => {
+            if (!event.isTrusted || scrolledAt !== null) return;
+            scrolledAt = content.getBoundingClientRect().height;
+            order.push("scroll");
+          };
+          const observer = new ResizeObserver((entries) => {
+            const resized = entries[0]!.borderBoxSize[0]!.blockSize;
+            if (resized === from) return;
+            order.push("resize");
+            done();
+            resolve({ order, scrolledAt, resized });
+          });
+          const done = () => {
+            clearTimeout(timer);
+            observer.disconnect();
+            scroller.removeEventListener("scroll", onScroll);
+          };
+          const timer = setTimeout(() => {
+            done();
+            reject(new Error(`no resize within 5 s of the change; events: ${order}`));
+          }, 5000);
+          scroller.addEventListener("scroll", onScroll);
+          observer.observe(content);
+          const watched = (
+            window as unknown as { readingLine: { samples: number[]; heights: number[] } }
+          ).readingLine;
+          watched.samples = [];
+          watched.heights = [];
+          (
+            window as unknown as {
+              clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+            }
+          ).clawtrateFixture.setState(apply);
+          // React commits the change in a microtask; the page scrolls once it has, before the
+          // browser's next update.
+          const scrollWhenCommitted = (tries: number) => {
+            if (content.getBoundingClientRect().height !== from) return scrollToTarget();
+            if (tries > 0) return void queueMicrotask(() => scrollWhenCommitted(tries - 1));
+            done();
+            reject(new Error("the change was not committed before the browser's next update"));
+          };
+          const scrollToTarget = () => {
+            const target = [...scroller.querySelectorAll(".bubble p")].find((each) =>
+              each.textContent!.startsWith(find),
+            )!;
+            const band = Number.parseFloat(getComputedStyle(content).paddingTop) || 0;
+            scroller.scrollTop +=
+              target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+          };
+          scrollWhenCommitted(50);
+        },
+      );
+    },
+    [change, text] as const,
+  );
+  expect(told.order, "the scroll event is dispatched before the resize is reported").toEqual([
+    "scroll",
+    "resize",
+  ]);
+  expect(
+    Math.abs(told.scrolledAt! - told.resized),
+    `the scroll event sees the changed layout: ${told.scrolledAt}px, reported ${told.resized}px`,
+  ).toBeLessThan(0.5);
+  return told.resized;
 }
 
 // Baselines ---------------------------------------------------------------------------
@@ -1010,37 +1243,12 @@ test.describe("action cards", () => {
     await watchReadingLine(page);
     // History now shows a bubble between the second and third read: the fold splits in two.
     const unsplit = await transcriptHeight(page);
-    await setState(
-      page,
-      `const key = "agent:otto:disk-space";
-       const t = state.transcripts[key];
-       const items = t.items.map((item) => {
-         const at = item.blocks.findIndex((b) => b.kind === "tool-call" && b.name === "read" && b.argumentsText.includes("energy-bills"));
-         if (at === -1) return item;
-         const blocks = [...item.blocks];
-         blocks.splice(at + 1, 0, { kind: "text", text: "The bills are in. Two more files to read." });
-         return { ...item, blocks };
-       });
-       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
-    );
+    await setState(page, SPLIT_FOLD);
     await expect(page.getByText("The bills are in.")).toBeVisible();
     const split = await waitForTranscriptResize(page, unsplit, "the split");
     await waitForFrameAt(page, split, "the split");
     // A later update grows the same bubble above the mark: a second paragraph.
-    await setState(
-      page,
-      `const key = "agent:otto:disk-space";
-       const t = state.transcripts[key];
-       const items = t.items.map((item) => ({
-         ...item,
-         blocks: item.blocks.map((b) =>
-           b.kind === "text" && b.text === "The bills are in. Two more files to read."
-             ? { ...b, text: b.text + "\\n\\nThe gas bill is the larger one, by about a third." }
-             : b,
-         ),
-       }));
-       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
-    );
+    await setState(page, SECOND_PARAGRAPH);
     await expect(page.getByText("The gas bill is the larger one")).toBeVisible();
     const grown = await waitForTranscriptResize(page, split, "the second paragraph");
     await waitForFrameAt(page, grown, "the second paragraph");
@@ -1071,6 +1279,135 @@ test.describe("action cards", () => {
     await expect(parts).toHaveCount(2);
     await expect(parts.nth(0)).toHaveAttribute("open", "");
     await expect(parts.nth(1).locator(".fold-rows .step").nth(1)).toHaveAttribute("open", "");
+  });
+
+  test("the reading line holds when the reader's scroll arrives in the same update as a change above it (#269)", async ({
+    page,
+  }) => {
+    // Short enough that the reading line can sit mid-transcript, with the reader not at the end.
+    await page.setViewportSize({ width: 1440, height: 520 });
+    await open(page, "actions-long");
+    const reads = cards(page).filter({
+      has: page.locator(':scope > summary[aria-label^="Read 3 files"]'),
+    });
+    await line(reads).click();
+    const row = reads.locator(".fold-rows .step").nth(3);
+    const closed = await transcriptHeight(page);
+    await line(row).click();
+    await expect(row.locator(".step-body")).toBeVisible();
+    await waitForTranscriptResize(page, closed, "opening the row");
+    // Where the reader is going: the bubble after the fold at the reading line.
+    const marker = page.getByText("The house loses most heat through the loft.");
+    const offset = (target: Locator) =>
+      target.evaluate((element) => {
+        const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+        const band =
+          Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+        return {
+          offset: element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band,
+          scrollTop: scroller.scrollTop,
+          below: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+        };
+      });
+    const start = await offset(marker);
+    const onMarker = start.scrollTop + Math.round(start.offset);
+    await scrollTranscript(page, onMarker);
+    const placed = await offset(marker);
+    expect(Math.abs(placed.offset), "the marker is at the reading line").toBeLessThanOrEqual(1);
+    expect(placed.below, "the reader is above the follow threshold").toBeGreaterThan(96);
+    const held = await markReadingLine(page, marker);
+    // The reader is more than a view further up, above where the fold will split.
+    const bills = line(reads.locator(".fold-rows .step").nth(1));
+    await expect(bills).toHaveAccessibleName(/energy-bills/);
+    const view = await transcript(page).evaluate((scroller) => scroller.clientHeight);
+    await scrollTranscript(page, onMarker - Math.round(1.25 * view));
+    expect(
+      (await offset(bills)).offset,
+      "the bills' row is below the reading line",
+    ).toBeGreaterThan(0);
+
+    // They flick back down to the marker, and in the same update the fold splits above it.
+    // The marker is where their scroll put it in every frame from then on.
+    await watchReadingLine(page);
+    const split = await wheelWithChange(
+      page,
+      onMarker - (await offset(marker)).scrollTop,
+      SPLIT_FOLD,
+    );
+    await waitForFrameAt(page, split, "the split");
+    let { samples, heights, now } = await readingLineSamples(page);
+    expect(
+      heights.some((each) => Math.abs(each - split) < 0.5),
+      `a frame drawn at ${split}px, after the split; frames at ${heights.join(" ")}`,
+    ).toBe(true);
+    expect(
+      Math.max(...[...samples, now].map((top) => Math.abs(top - held.top))),
+      `the marker, from ${held.top}, after the split: ${[...samples, now].map((top) => top.toFixed(1)).join(" ")}`,
+    ).toBeLessThanOrEqual(1);
+    await expect(page.getByText("The bills are in.")).toBeVisible();
+
+    // A little further down, then back up to the marker as the bubble above it grows.
+    const back = (await offset(marker)).scrollTop;
+    await scrollTranscript(page, back + 60);
+    await watchReadingLine(page);
+    const grown = await wheelWithChange(page, -60, SECOND_PARAGRAPH);
+    await waitForFrameAt(page, grown, "the second paragraph");
+    ({ samples, heights, now } = await readingLineSamples(page));
+    expect(
+      heights.some((each) => Math.abs(each - grown) < 0.5),
+      `a frame drawn at ${grown}px, after the second paragraph; frames at ${heights.join(" ")}`,
+    ).toBe(true);
+    expect(
+      Math.max(...[...samples, now].map((top) => Math.abs(top - held.top))),
+      `the marker, from ${held.top}, after the second paragraph: ${[...samples, now].map((top) => top.toFixed(1)).join(" ")}`,
+    ).toBeLessThanOrEqual(1);
+    await expect(page.getByText("The gas bill is the larger one")).toBeVisible();
+  });
+
+  test("a scroll the page makes in the same update as a change above, measured in the changed layout, stays where the page put it (#269)", async ({
+    page,
+  }) => {
+    // The page's own scrolls, such as a card's return restoring its place or Find bringing a
+    // match into view, are measured in the layout as it is: only the reader's own scroll keeps
+    // the place from the layout before the change.
+    await page.setViewportSize({ width: 1440, height: 520 });
+    await open(page, "actions-long");
+    const reads = cards(page).filter({
+      has: page.locator(':scope > summary[aria-label^="Read 3 files"]'),
+    });
+    await line(reads).click();
+    const row = reads.locator(".fold-rows .step").nth(3);
+    const closed = await transcriptHeight(page);
+    await line(row).click();
+    await expect(row.locator(".step-body")).toBeVisible();
+    await waitForTranscriptResize(page, closed, "opening the row");
+    const marker = page.getByText("The house loses most heat through the loft.");
+    const top = await marker.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+      return (
+        scroller.scrollTop +
+        element.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        band
+      );
+    });
+    await scrollTranscript(page, Math.round(top));
+    const held = await markReadingLine(page, marker);
+    // Further up, above where the fold will split; then the split, and the page's scroll back.
+    await scrollTranscript(page, Math.round(top) - 200);
+    await watchReadingLine(page);
+    const split = await pageScrollWithChange(page, SPLIT_FOLD, "The house loses most heat");
+    await waitForFrameAt(page, split, "the split");
+    const { samples, heights, now } = await readingLineSamples(page);
+    expect(
+      heights.some((each) => Math.abs(each - split) < 0.5),
+      `a frame drawn at ${split}px, after the split; frames at ${heights.join(" ")}`,
+    ).toBe(true);
+    expect(
+      Math.max(...[...samples, now].map((each) => Math.abs(each - held.top))),
+      `the marker, from ${held.top}: ${[...samples, now].map((each) => each.toFixed(1)).join(" ")}`,
+    ).toBeLessThanOrEqual(1);
   });
 
   test("F-430: at phone width the sentence wraps to at most two lines, the detail is below it, and the state word is whole", async ({
