@@ -29,6 +29,8 @@ export type SshLook = {
     profile: "default" | "clawtrate";
     port: number;
     label: GatewayStatus["service"];
+    /** The stopped service's configuration file, as its status named it: Start starts that one. */
+    configPath: string;
   } | null;
   program: ProgramPlace | null;
   /** The program file's checksum, which CODE and START check before they run it. */
@@ -153,7 +155,12 @@ export function sshLook(facts: LookFacts): SshLook {
         port: status.port,
       },
       found: null,
-      stopped: { profile: status.profile, port: status.port!, label: status.service },
+      stopped: {
+        profile: status.profile,
+        port: status.port!,
+        label: status.service,
+        configPath: status.configPath!,
+      },
       program,
       programSum: facts.programSum,
     };

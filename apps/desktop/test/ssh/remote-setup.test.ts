@@ -83,7 +83,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
   let account: string;
   /** Every `ssh` the transports started, with its arguments. */
   const started: Array<{ args: readonly string[]; pid: number | undefined }> = [];
+  /** Told of every `ssh` as it starts, for a case that acts at a moment of the flow. */
+  let onSpawn: ((args: readonly string[]) => void) | null = null;
   const spawn: Spawn = (file, args, env) => {
+    onSpawn?.(args);
     const child = defaultSpawn(file, args, env);
     started.push({ args, pid: child.pid });
     return child;
@@ -727,6 +730,71 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         .slice(lateCalls)
         .some((call) => call.startsWith("qr ")),
     ).toBe(false);
+  });
+
+  it("F-496 F-497: a consent holds only until its action starts: a deadline passing while the facts are read again, or a stopped service whose configuration changed, runs nothing there", async () => {
+    // Pair: the clock passes the dialog's lifetime during the LOOK that reads its facts again.
+    let clock = Date.now();
+    let armed = false;
+    const h = host({
+      now: () => clock,
+      answer: (question) => {
+        if (question.confirm === "Pair" || question.confirm === "Start") armed = true;
+        return { confirmed: true, checked: false };
+      },
+    });
+    await lookOnDevbox(h);
+    onSpawn = (args) => {
+      if (armed && args.includes("/bin/sh")) {
+        armed = false;
+        clock += 3 * 60_000;
+      }
+    };
+    try {
+      const calls = stub.calls().length;
+      await h.remote.connect();
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(
+        stub
+          .calls()
+          .slice(calls)
+          .some((call) => call.startsWith("qr ")),
+      ).toBe(false);
+      // Start: the same, between its re-read and START.
+      const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+      stub.setStatus("default", stopped);
+      await lookOnDevbox(h);
+      const before = stub.calls().length;
+      await h.remote.start();
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(stub.calls().slice(before)).not.toContain("gateway start");
+      // Start: the stopped service's configuration file changes while the dialog is open.
+      onSpawn = null;
+      const g = host({
+        answer: (question) => {
+          if (question.confirm === "Start")
+            stub.setStatus(
+              "default",
+              statusJson({
+                port: gateway.port,
+                home: t.home,
+                running: false,
+                configPath: `${t.home}/.openclaw/elsewhere.json`,
+              }),
+            );
+          return { confirmed: true, checked: false };
+        },
+      });
+      stub.setStatus("default", stopped);
+      await lookOnDevbox(g);
+      const changed = stub.calls().length;
+      await g.remote.start();
+      expect(g.setup().failure?.kind).toBe("changed");
+      expect(stub.calls().slice(changed)).not.toContain("gateway start");
+    } finally {
+      onSpawn = null;
+      stub.setStatus("default", running());
+    }
   });
 
   it("F-498: a forward that drops comes back by itself, the strip says restoring until the gateway answered there with the route's identity, then that it is back", async () => {

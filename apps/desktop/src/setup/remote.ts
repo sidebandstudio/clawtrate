@@ -152,13 +152,17 @@ type Consent = {
   op: "pair" | "start";
   route: Route;
   at: number;
+  /** After this the consent is spent: checked on the answer and again right before CODE or START. */
+  deadline: number;
+  /** The attempt it was given for: another one since, and it starts nothing. */
+  attempt: number;
   fingerprint: string;
   program: string;
   programSum: string;
   version: string | null;
   /** Pair: the running service. Start: the stopped one. */
   service: GatewayService | null;
-  stopped: { profile: string; port: number; label: string | null } | null;
+  stopped: { profile: string; port: number; label: string | null; configPath: string } | null;
 };
 
 /** The route the app is connected through: its record, prepared route, forward and watchers. */
@@ -685,12 +689,20 @@ export class RemoteSetup {
 
   // Consent snapshots ---------------------------------------------------------
 
-  private snapshot(op: Consent["op"], route: Route, found: SshLook): Consent | null {
+  private snapshot(
+    op: Consent["op"],
+    route: Route,
+    found: SshLook,
+    attempt: number,
+  ): Consent | null {
     if (!this.fingerprint || !found.program || !found.programSum) return null;
+    const at = this.now();
     return {
       op,
       route,
-      at: this.now(),
+      at,
+      deadline: at + OPERATION_LIFETIME_MS,
+      attempt,
       fingerprint: this.fingerprint,
       program: found.program,
       programSum: found.programSum,
@@ -701,9 +713,24 @@ export class RemoteSetup {
             profile: found.stopped.profile,
             port: found.stopped.port,
             label: found.stopped.label?.label ?? null,
+            configPath: found.stopped.configPath,
           }
         : null,
     };
+  }
+
+  /**
+   * Whether a consent still holds at the moment its action starts: within its
+   * lifetime, for this attempt and this prepared route. Checked right before
+   * CODE or START, after every wait since the answer.
+   */
+  private stillHolds(consent: Consent, attempt: number): boolean {
+    return (
+      attempt === this.attempt &&
+      consent.attempt === attempt &&
+      this.route === consent.route &&
+      this.now() <= consent.deadline
+    );
   }
 
   /**
@@ -715,7 +742,7 @@ export class RemoteSetup {
   private async recheck(consent: Consent, attempt: number): Promise<SshLook | null> {
     if (this.consent !== consent) return null;
     this.consent = null;
-    if (this.now() - consent.at > OPERATION_LIFETIME_MS) return null;
+    if (this.now() > consent.deadline) return null;
     const transport = this.transport();
     if ("refused" in transport || this.route !== consent.route) return null;
     const check = await transport.checkHostKey(consent.route);
@@ -742,7 +769,8 @@ export class RemoteSetup {
         !now ||
         now.profile !== was.profile ||
         now.port !== was.port ||
-        (now.label?.label ?? null) !== was.label
+        (now.label?.label ?? null) !== was.label ||
+        now.configPath !== was.configPath
       )
         return null;
     }
@@ -778,7 +806,7 @@ export class RemoteSetup {
     // A route with a recorded identity and no token is paired again, with its own dialog.
     const access = look.access === "paired" && this.options.routes.hasToken(key) ? "paired" : "new";
     const where = `the ${service.service.profile} gateway on ${route.accountWithPort}`;
-    const consent = this.snapshot("pair", route, found);
+    const consent = this.snapshot("pair", route, found, attempt);
     this.consent = consent;
     this.publish({
       ...this.state,
@@ -836,6 +864,11 @@ export class RemoteSetup {
     };
     // Step 1: the code, made there with the program the dialog named, unless this route is paired.
     let code: { bootstrapToken: string; expiresAtMs: number } | null = null;
+    // The consent holds until the action starts: its deadline and attempt, checked here last.
+    if (!this.stillHolds(consent, attempt)) {
+      if (attempt === this.attempt) this.failSetup("changed");
+      return;
+    }
     if (access === "new") {
       const made = await transport.runScript(route, "code", {
         profile: service.service.profile,
@@ -1205,7 +1238,7 @@ export class RemoteSetup {
       throw new Error("There is nothing to start. Look again.");
     const attempt = (this.attempt += 1);
     const label = stopped.label?.label ?? "service";
-    const consent = this.snapshot("start", route, found);
+    const consent = this.snapshot("start", route, found, attempt);
     this.consent = consent;
     const answer = await this.askSafely({
       message: `Start OpenClaw on ${route.accountWithPort}?`,
@@ -1223,6 +1256,11 @@ export class RemoteSetup {
     if (attempt !== this.attempt) return;
     if (!fresh?.stopped || !fresh.program || !fresh.programSum) {
       this.failSetup("changed");
+      return;
+    }
+    // The consent holds until START runs: its deadline and attempt, checked here last.
+    if (!this.stillHolds(consent, attempt)) {
+      if (attempt === this.attempt) this.failSetup("changed");
       return;
     }
     const ran = await transport.runScript(route, "start", {
