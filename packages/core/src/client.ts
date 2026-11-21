@@ -895,8 +895,8 @@ export class ClawtrateClient {
   private setupIntent: {
     url: string;
     reuse: boolean;
-    /** A new pairing the gateway refused its code for: no Retry may go on without a new consent. */
-    refused?: boolean;
+    /** A rejected code can recheck for a saved pairing. A changed pairing needs fresh consent. */
+    refusal?: "invalid-code" | "pairing-changed";
   } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
@@ -1424,6 +1424,7 @@ export class ClawtrateClient {
     // The reload runs outside the queue: it changes nothing saved.
     const reload = await this.changeConnection(async () => {
       if (!this.settings || stops !== this.stops) return null;
+      if (this.setupIntent?.refusal === "pairing-changed") return null;
       if (this.protocol?.connected && this.state.connection.status === "connected") {
         return this.generation;
       }
@@ -5529,7 +5530,7 @@ export class ClawtrateClient {
         // A new pairing's code the gateway refused is used up for good: a Retry after it sends
         // no pairing saved since, and nothing else, and the card asks for a new consent.
         const refused =
-          setup && this.setupIntent?.reuse === false && this.setupIntent.refused === true;
+          setup && this.setupIntent?.reuse === false && this.setupIntent.refusal === "invalid-code";
         if ((newPairing || refused) && token) {
           this.pairingAppeared();
           throw new Error("a saved pairing appeared");
@@ -5992,7 +5993,7 @@ export class ClawtrateClient {
     // A refused code ends this new pairing, apart from the code being used: a Retry can't reuse
     // a pairing saved in the meantime (the plan asks for a new consent instead).
     if (setup && code === "AUTH_BOOTSTRAP_TOKEN_INVALID" && this.setupIntent?.reuse === false)
-      this.setupIntent = { ...this.setupIntent, refused: true };
+      this.setupIntent = { ...this.setupIntent, refusal: "invalid-code" };
 
     const mismatch = protocolMismatch(details);
     if (mismatch) {
@@ -7303,14 +7304,18 @@ export class ClawtrateClient {
     return url !== undefined && this.setupIntent?.url === url;
   }
 
+  private endChangedPairing(): void {
+    if (this.setupIntent) this.setupIntent.refusal = "pairing-changed";
+    this.close();
+    this.dropSetupCredentials();
+  }
+
   /**
    * A new setup pairing found this device's saved pairing for its address:
    * nothing is sent, its code goes, and the card asks for consent to reuse it.
    */
   private pairingAppeared(): void {
-    this.close();
-    this.dropSetupCredentials();
-    this.setupIntent = null;
+    this.endChangedPairing();
     this.setConnection({
       status: "error",
       retryAt: null,
@@ -7324,8 +7329,7 @@ export class ClawtrateClient {
 
   /** A setup reuse found no saved token for its gateway: nothing is sent, the person consents again. */
   private pairingGone(): void {
-    this.close();
-    this.setupIntent = null;
+    this.endChangedPairing();
     this.setConnection({
       status: "error",
       retryAt: null,

@@ -210,10 +210,19 @@ describe("a setup plan against the consent given, after its last wait", () => {
       last.resolve(true);
       const expected = change === "appears" ? SETUP_PAIRING_APPEARED : SETUP_PAIRING_GONE;
       await until(() => client.state.connection.error?.code === expected);
+      const attempts = gateway.sockets.length;
+      await client.retryNow();
       await sleep(100);
+      expect(gateway.sockets).toHaveLength(attempts);
+      expect(client.state.connection.error?.code).toBe(expected);
       expect(gateway.connects).toHaveLength(0);
       expect(JSON.stringify(gateway.connects as Connect[])).not.toContain(CODE);
       expect(JSON.stringify(client.state)).not.toContain(CODE);
+      // The person confirms the pairing that is now on the card.
+      if (change === "appears") await client.connectForSetup(URL);
+      else await client.connectWithSetupCode(code());
+      await until(() => client.state.connection.status === "connected");
+      expect(gateway.connects).toHaveLength(1);
       client.stop();
     });
   }
