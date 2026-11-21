@@ -743,8 +743,10 @@ export function routineCommands(now: number, params: RoutineParams) {
         if (!routine) return Promise.reject(new Error("unknown routine"));
         if (!command.sessionKey)
           return Promise.resolve({ status: "none", reason: "no-session", error: null });
+        // As the history read: the routine there when a held read resumes, if any.
         return answer(command.id, () => {
-          const ran = runsOf(routine).find((each) => each.runId === command.runId);
+          const now = find(command.id);
+          const ran = now && runsOf(now).find((each) => each.runId === command.runId);
           return conversation(ran, ran && transcripts.get(ran.runId));
         });
       }

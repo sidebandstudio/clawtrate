@@ -405,6 +405,38 @@ describe("the fixture's routine host", () => {
     expect(await read).toEqual([]);
   });
 
+  it("a conversation read held while its routine is removed and made again seeds no history from the removed one", async () => {
+    vi.useFakeTimers();
+    const key = "draft-held";
+    const id = `routine-${key}`;
+    const { ask, send } = host({ hold: id });
+    const create = (name: string) =>
+      ask({
+        type: "createRoutine",
+        input: { ...fields(name), botId: "otto" },
+        key,
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    await create("First");
+    const started = await ask<{ runId: string }>({ type: "runRoutineNow", id } as BridgeCommand);
+    const read = send({
+      type: "readRunConversation",
+      id,
+      runId: started.runId,
+      runAt: 0,
+      sessionKey: "agent:otto:cron:held",
+    } as BridgeCommand);
+    await ask({ type: "removeRoutine", id } as BridgeCommand);
+    await create("Second");
+    releaseRoutineReads();
+    await vi.runAllTimersAsync();
+    await read;
+    const after = send<RoutineRun[]>({ type: "readRoutineRuns", id } as BridgeCommand);
+    releaseRoutineReads();
+    await vi.runAllTimersAsync();
+    expect(await after).toEqual([]);
+  });
+
   it("two edits out at once to different fields both stand, as the gateway's patches do", async () => {
     vi.useFakeTimers();
     const { send, routines } = host();
