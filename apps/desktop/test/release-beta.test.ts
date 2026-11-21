@@ -1676,3 +1676,15 @@ describe("stopping a release while it builds", () => {
     }
   }, 60_000);
 });
+
+describe("the beta's release notes", () => {
+  it("say an existing OpenClaw is connected with its address and token under Advanced, and why", () => {
+    const notes = releaseNotes("0.2.0-beta.1", "0123456789abcdef", [
+      { name: "Clawtrate-0.2.0-beta.1-mac-arm64.zip", sha256: "a".repeat(64) },
+    ]);
+    expect(notes).toContain("asks for your gateway's address and token under Advanced");
+    expect(notes).toContain("running OpenClaw's own program before you agree");
+    // Nothing offers a connection without typing on an existing install.
+    expect(notes).not.toMatch(/without typing|automatically|one click/i);
+  });
+});

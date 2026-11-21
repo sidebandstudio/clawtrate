@@ -63,3 +63,13 @@ it("F-492: a start identity is the same in any time zone, and one recorded in a 
   expect(processVerdict(4343, "Mon Nov 16 21:27:01 2026", identify).state).toBe("unknown");
   expect(processVerdict(4343, "Mon Nov 16 16:27:01 2026", identify).state).toBe("unknown");
 });
+
+it.each(["absent", "zombie"] as const)(
+  "an older run can be cleaned up when its recorded PID is %s",
+  async (how) => {
+    const { processVerdict } = await import("../src/state-guard.ts");
+    expect(
+      processVerdict(4343, "Mon Nov 16 21:27:01 2026", () => ({ state: "exited", how })),
+    ).toEqual({ state: "dead" });
+  },
+);

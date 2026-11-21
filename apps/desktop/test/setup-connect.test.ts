@@ -828,6 +828,63 @@ describe("the programs setup starts", () => {
     }
   }, 20_000);
 
+  it("F-492: a group whose program finished is forgotten, so quitting never signals its id, reused or not", async () => {
+    const runner = loose();
+    const done = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", "exit 0"],
+      timeoutMs: 5000,
+      maxBytes: 4096,
+    });
+    expect(done.exitCode).toBe(0);
+    // Its id now belongs to someone else's group: every signal to it would land there.
+    const sent: Array<[number, unknown]> = [];
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      sent.push([pid, signal]);
+      return true;
+    });
+    try {
+      expect(runner.groupsLeft()).toBe(0);
+      await runner.stopAllAndWait();
+    } finally {
+      kill.mockRestore();
+    }
+    expect(sent.filter(([pid, signal]) => pid < 0 && signal !== 0)).toEqual([]);
+  });
+
+  it("F-492: a running group is signalled only while its leader has the start time it started with", async () => {
+    let started = "2026-11-21T10:00:00Z";
+    const runner = new ProgramRunner({
+      check: () => {},
+      graceMs: 300,
+      identify: () => ({ state: "alive", identity: started }),
+    });
+    void runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["5"],
+      timeoutMs: 60_000,
+      maxBytes: 4096,
+    });
+    await until(() => runner.running().length === 1);
+    const leader = runner.running()[0]!;
+    // Another process by that PID, as far as its start time says: not this runner's to signal.
+    started = "2026-11-21T10:05:00Z";
+    const sent: Array<[number, unknown]> = [];
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      sent.push([pid, signal]);
+      return true;
+    });
+    try {
+      await runner.stopAllAndWait();
+    } finally {
+      kill.mockRestore();
+    }
+    expect(sent.filter(([pid]) => pid === -leader)).toEqual([]);
+    process.kill(leader, "SIGKILL");
+  });
+
   it("F-492: an output a worker kept open past the program's end is refused, not parsed", async () => {
     const runner = loose();
     const result = await runner.run({
