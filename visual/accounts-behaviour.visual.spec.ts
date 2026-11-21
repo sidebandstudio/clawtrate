@@ -103,7 +103,7 @@ test("F-034: shapes and colours are radio groups of one tab stop; arrows move an
   await expect(page.getByRole("radio", { name: "pebble" })).toHaveAttribute("aria-checked", "true");
 });
 
-test("F-472: the Account step: subscriptions first, the gateway's choice last; Create waits for a choice; arrows choose", async ({
+test("F-472: the Account step: subscriptions first, the gateway's choice last; Next waits for a choice; arrows choose", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
@@ -118,8 +118,8 @@ test("F-472: the Account step: subscriptions first, the gateway's choice last; C
   );
   // An account kept by one bot is not offered to a bot that does not exist yet.
   await expect(group.getByRole("radio", { name: /Pip's key/ })).toHaveCount(0);
-  // Nothing chosen: Create waits, and says why.
-  await expect(page.getByTestId("create")).toBeDisabled();
+  // Nothing chosen: Next waits, and says why.
+  await expect(page.getByTestId("account-next")).toBeDisabled();
   await expect(page.getByText("Choose an account, or let the gateway choose.")).toBeVisible();
   // One tab stop, the first row when none is chosen; arrows move and choose.
   await radios.first().focus();
@@ -129,7 +129,7 @@ test("F-472: the Account step: subscriptions first, the gateway's choice last; C
   await expect(group.locator('[role="radio"][tabindex="0"]')).toHaveCount(1);
   await page.keyboard.press("End");
   await expect(radios.last()).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByTestId("create")).toBeEnabled();
+  await expect(page.getByTestId("account-next")).toBeEnabled();
   // The model and effort follow, for the default model's provider.
   await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
   await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
@@ -164,6 +164,8 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   await page.getByRole("menuitemradio", { name: "grok-build-0.1" }).click();
   await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Not offered");
   await expect(page.getByTestId("effort-select")).toBeDisabled();
+  await page.getByTestId("account-next").click();
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
   await page.getByTestId("create").click();
   await expect(newBot(page)).toHaveCount(0);
   const create = (await sent(page)).find((each) => each.type === "createBot");
@@ -173,6 +175,7 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
     provider: "xai",
     model: "grok-build-0.1",
     effort: null,
+    approvals: "ask",
   });
   expect(String(create!.avatar)).toMatch(/^data:image\/png;base64,/);
   await expect(
@@ -180,7 +183,7 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   ).toBeVisible();
 });
 
-test("F-472: below admin the rows show but cannot be chosen, and the access bar takes Create's place; what was chosen survives the request", async ({
+test("F-472: below admin the rows show but cannot be chosen, and the access bar takes Next's place; what was chosen survives the request", async ({
   page,
 }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}&access=write&admin=grant`, "light");
@@ -592,33 +595,33 @@ test("F-490 F-476: an account only another bot keeps is no account for this bot,
   await expect(page.getByTestId("locked-note")).toHaveCount(0);
 });
 
-test("F-472: Create and Save take only a choice the list shows now: a failed read, or an account gone, disables them", async ({
+test("F-472: Next and Save take only a choice the list shows now: a failed read, or an account gone, disables them", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
-  await expect(page.getByTestId("create")).toBeEnabled();
+  await expect(page.getByTestId("account-next")).toBeEnabled();
   await change(
     page,
     `return { ...state, accounts: { ...state.accounts, status: "error", error: "timed out" } };`,
   );
   await expect(page.getByText("Couldn't load the gateway's accounts.")).toBeVisible();
   await expect(page.getByRole("radio", { name: /^OpenAI · Home/ })).toHaveCount(0);
-  await expect(page.getByTestId("create")).toBeDisabled();
+  await expect(page.getByTestId("account-next")).toBeDisabled();
   await expect(page.getByTestId("choice-gone")).toBeVisible();
   // Read again, and the account is gone from the gateway.
   await change(
     page,
     `return { ...state, accounts: { ...state.accounts, status: "ready", error: null, accounts: state.accounts.accounts.filter((a) => a.id !== "openai:home") } };`,
   );
-  await expect(page.getByTestId("create")).toBeDisabled();
+  await expect(page.getByTestId("account-next")).toBeDisabled();
   await expect(page.getByTestId("choice-gone")).toHaveText(
     "The account chosen is no longer on the gateway. Choose another, or let the gateway choose.",
   );
   await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
-  await expect(page.getByTestId("create")).toBeEnabled();
+  await expect(page.getByTestId("account-next")).toBeEnabled();
   await page.keyboard.press("Escape");
   // Change account: the same rule for Save.
   await page.keyboard.press("ControlOrMeta+\\");
@@ -710,6 +713,8 @@ test("F-034: a bot written whose first task did not land is said to exist, unfin
   await page.getByRole("textbox", { name: "Name" }).fill("Viral");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByTestId("account-next").click();
+  await page.getByRole("radio", { name: "Run without routine approvals" }).click();
   await page.getByTestId("create").click();
   const note = page.getByTestId("create-partial");
   await expect(note).toContainText(

@@ -38,7 +38,7 @@ function canFocus(element: HTMLElement | null): element is HTMLElement {
 export const GRANTED_FOR_MS = 4000;
 
 export function Shell({
-  state,
+  state: given,
   info,
   theme,
   onTheme,
@@ -64,6 +64,10 @@ export function Shell({
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
   onCaughtUp?: (caughtUp: boolean) => void;
 }) {
+  // On a gateway whose reads confirmed an unused implicit `main`, the rail lists no bot and the
+  // conversation is the first-bot prompt (bots.md section 3).
+  const prompt = given.accounts.firstBot.status === "prompt";
+  const state = useMemo(() => (prompt ? { ...given, bots: [] } : given), [given, prompt]);
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
 
@@ -557,6 +561,13 @@ export function Shell({
                 caughtUp={caughtUp}
                 toggleRef={toggleRef}
                 inert={drawerOpen || inert}
+                firstBot={state.accounts.firstBot}
+                policy={state.accounts.policy}
+                onNewBot={openNewBot}
+                onReviewSettings={() => {
+                  setPanel(true);
+                  setWorkTab("settings");
+                }}
               />
             </WorkLinksContext.Provider>
           </OpenTaskContext.Provider>

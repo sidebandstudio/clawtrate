@@ -120,6 +120,8 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await accountStep(page);
       await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+      await page.getByTestId("account-next").click();
+      await page.getByRole("radio", { name: "Ask before acting" }).click();
       await page.getByTestId("create").click();
       await expect(page.getByTestId("create-failed")).toBeVisible();
     },
@@ -130,6 +132,8 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await accountStep(page);
       await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+      await page.getByTestId("account-next").click();
+      await page.getByRole("radio", { name: "Ask before acting" }).click();
       await page.getByTestId("create").click();
       await expect(page.getByTestId("create-partial")).toBeVisible();
     },
@@ -140,6 +144,8 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await accountStep(page);
       await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+      await page.getByTestId("account-next").click();
+      await page.getByRole("radio", { name: "Ask before acting" }).click();
       await page.getByTestId("create").click();
       await expect(page.getByText("Still creating. What you entered is kept.")).toBeVisible();
     },

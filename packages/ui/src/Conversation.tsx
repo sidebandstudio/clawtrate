@@ -3,7 +3,9 @@ import type {
   Bot,
   ConnectionState,
   DiscoveryState,
+  FirstBotState,
   HostInfo,
+  NewBotPolicy,
   Run,
   Task,
   Transcript,
@@ -20,6 +22,7 @@ import {
   type RefObject,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
+import { FirstBotPrompt, PolicyNote } from "./bots/FirstBot.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
@@ -758,6 +761,10 @@ export function Conversation({
   caughtUp,
   inert = false,
   granted,
+  firstBot,
+  policy,
+  onNewBot,
+  onReviewSettings,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -787,6 +794,14 @@ export function Conversation({
   inert?: boolean;
   /** Access arrived a moment ago. */
   granted: boolean;
+  /** Whether the gateway's reads confirmed an unused implicit `main` (bots.md section 3). */
+  firstBot: FirstBotState;
+  /** The command setting of the bot Create last made, as read (controls.md section 10). */
+  policy: NewBotPolicy | null;
+  /** Open New bot from the first-bot prompt. */
+  onNewBot: () => void;
+  /** Open the bot's settings in the Work pane. */
+  onReviewSettings: () => void;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -961,10 +976,20 @@ export function Conversation({
     (transcript.outbox.length > 0 ||
       transcript.runs.some((run) => run.state !== "queued" && run.state !== "cancelled"));
 
+  // The note of a new bot's command setting, and its composer closed until it reads back.
+  const ownPolicy = bot && policy?.botId === bot.id ? policy : null;
+  const held = ownPolicy !== null && ownPolicy.status !== "confirmed";
   let body: ReactNode;
   if (!bot) {
     body =
-      discovery.status === "loading" ? (
+      firstBot.status === "prompt" ? (
+        <FirstBotPrompt
+          firstBot={firstBot}
+          connection={connection}
+          info={info}
+          onNewBot={onNewBot}
+        />
+      ) : discovery.status === "loading" ? (
         <EmptyState title="Loading" body="Loading this gateway's bots." busy />
       ) : (
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
@@ -1118,8 +1143,21 @@ export function Conversation({
       </header>
       {body}
       {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
+      {ownPolicy && (
+        <PolicyNote
+          policy={ownPolicy}
+          canAdmin={connection.canAdmin}
+          onReviewSettings={onReviewSettings}
+        />
+      )}
       {task && bot && interactive && (
         <Composer
+          held={held}
+          onSent={
+            ownPolicy && !held
+              ? () => void send({ type: "dismissBotPolicy", botId: bot.id }).catch(() => {})
+              : undefined
+          }
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}
           bot={bot}
           gateway={connection.gatewayUrl}

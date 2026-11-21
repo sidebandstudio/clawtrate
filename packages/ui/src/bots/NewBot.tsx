@@ -1,13 +1,13 @@
 // New bot (bots.md sections 3 and 4): the picture and the name, then the
-// Account step, then Create. Connecting an account opens inside the same
-// dialog. What was entered is kept until the app quits, through a sign-in
-// and a request for access; Create clears it.
+// Account step, then the Approvals step and Create. Connecting an account
+// opens inside the same dialog. What was entered is kept until the app quits,
+// through a sign-in and a request for access; Create clears it.
 
-import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
+import type { AccountsState, Bot, CommandChoice, ConnectionState, HostInfo } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
-import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
+import { BackIcon, CheckIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
@@ -15,6 +15,7 @@ import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.ts
 import { ModelPair } from "./ModelPair.tsx";
 import { recall, remember } from "./memory.ts";
 import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
+import { CHOICE_ROWS, chooseLine, fileLine, inheritsLine, machineLine } from "./policy-words.ts";
 
 export const BODIES: BodyName[] = [
   "pebble",
@@ -36,6 +37,8 @@ type Draft = {
   account: string | null;
   model: string | null;
   effort: string | null;
+  /** The Approvals step's choice; nothing is chosen at first. */
+  approvals: CommandChoice | null;
 };
 
 const freshDraft = (): Draft => ({
@@ -45,10 +48,12 @@ const freshDraft = (): Draft => ({
   account: null,
   model: null,
   effort: null,
+  approvals: null,
 });
 
+type Step = "look" | "account" | "connect" | "approvals";
 /** Kept until the app quits: closing the dialog does not lose what was entered. */
-type Kept = { draft: Draft; step: "look" | "account" | "connect" };
+type Kept = { draft: Draft; step: Step };
 const KEPT = "new-bot";
 
 /** The size of the picture New bot sends: the drawn character, rasterised. */
@@ -114,10 +119,11 @@ export function NewBot({
   onCreated: (botId: string) => void;
 }) {
   const bridge = useBridge();
-  const [draft, setDraftState] = useState<Draft>(() => recall<Kept>(KEPT)?.draft ?? freshDraft());
-  const [step, setStepState] = useState<"look" | "account" | "connect">(
-    () => recall<Kept>(KEPT)?.step ?? "look",
-  );
+  const [draft, setDraftState] = useState<Draft>(() => ({
+    ...freshDraft(),
+    ...recall<Kept>(KEPT)?.draft,
+  }));
+  const [step, setStepState] = useState<Step>(() => recall<Kept>(KEPT)?.step ?? "look");
   const [announcer, announce] = useAnnouncer();
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -129,7 +135,7 @@ export function NewBot({
       remember(KEPT, { draft: next, step: recall<Kept>(KEPT)?.step ?? step });
       return next;
     });
-  const setStep = (next: "look" | "account" | "connect") => {
+  const setStep = (next: Step) => {
     remember(KEPT, { draft, step: next });
     setStepState(next);
     requestAnimationFrame(() => {
@@ -190,9 +196,13 @@ export function NewBot({
     draft.account === GATEWAY_CHOICE ||
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
-  const busy = creation?.status === "creating" || creation?.status === "checking";
+  const latest = useRef(accounts);
+  latest.current = accounts;
+  const busy = creation?.status === "creating";
+  const unconfirmed = creation?.status === "unconfirmed" ? creation : null;
+  const accountReady = !!draft.account && listedChoice && !!provider && !!draft.model;
   const create = async () => {
-    if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
+    if (!accountReady || !draft.approvals || busy || unconfirmed) return;
     announce("Creating the bot");
     try {
       const { botId, missing } = await bridge.invoke({
@@ -200,9 +210,10 @@ export function NewBot({
         name: draft.name.trim(),
         avatar: await pictureOf(previewRef.current?.querySelector("svg")),
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
-        provider,
-        model: draft.model,
+        provider: provider!,
+        model: draft.model!,
         effort: draft.effort,
+        approvals: draft.approvals,
       });
       remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
@@ -214,9 +225,27 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce("Could not create the bot");
+      announce(
+        latest.current.creation?.status === "unconfirmed"
+          ? `Clawtrate couldn't confirm whether ${name} was created`
+          : "Could not create the bot",
+      );
     }
   };
+  // What the gateway's approvals file settles, read when the Approvals step opens on admin.
+  const [approvalsFile, setApprovalsFile] = useState<{ blocks: boolean } | null>(null);
+  const fileName = draft.name.trim();
+  useEffect(() => {
+    if (step !== "approvals" || !admin) return;
+    let live = true;
+    bridge.invoke({ type: "readApprovalsFile", name: fileName }).then(
+      (read) => live && setApprovalsFile(read),
+      () => live && setApprovalsFile(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, step, admin, fileName]);
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
     if (!partial?.botId) return;
@@ -492,12 +521,177 @@ export function NewBot({
       />
     ) : (
       <>
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          disabled={!accountReady}
+          onClick={() => setStep("approvals")}
+          data-testid="account-next"
+        >
+          Next
+        </button>
+        {!draft.account && (
+          <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
+            Choose an account, or let the gateway choose.
+          </p>
+        )}
+        {draft.account && !listedChoice && (
+          <p
+            className="b-hint"
+            role="status"
+            style={{ textAlign: "center", margin: 0 }}
+            data-testid="choice-gone"
+          >
+            {accounts.status === "ready"
+              ? "The account chosen is no longer on the gateway. Choose another, or let the gateway choose."
+              : "The gateway's accounts aren't loaded, so the account chosen can't be used. Try again, or let the gateway choose."}
+          </p>
+        )}
+      </>
+    );
+  } else if (step === "approvals") {
+    head = (
+      <header className="b-head">
+        {back("Back to the account", () => setStep("account"))}
+        <h2 id="create-title" tabIndex={-1}>
+          Approvals
+        </h2>
+        {close}
+      </header>
+    );
+    const choose = (approvals: CommandChoice) => setDraft((was) => ({ ...was, approvals }));
+    const values = CHOICE_ROWS.map((row) => row.value);
+    body = (
+      <>
+        <span
+          className="b-preview"
+          style={{ ["--avatar-create" as string]: "56px", marginBottom: 10 }}
+          aria-hidden="true"
+          ref={previewRef}
+        >
+          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
+        </span>
+        <p className="b-lead">When {name} wants to run a command:</p>
+        {/* The choices are never shown below admin; the access bar takes their place. */}
+        {admin && (
+          <>
+            <div
+              role="radiogroup"
+              aria-label="Approvals"
+              data-testid="approvals"
+              onKeyDown={(event) => {
+                const row = (event.target as HTMLElement).closest<HTMLElement>("[data-value]");
+                const at = values.indexOf(row?.dataset.value as CommandChoice);
+                if (at < 0) return;
+                if (event.key === " " || event.key === "Enter") {
+                  // Space or Enter chooses the row; focus stays on it.
+                  event.preventDefault();
+                  choose(values[at]!);
+                  return;
+                }
+                let next: number | null = null;
+                if (event.key === "ArrowDown" || event.key === "ArrowRight")
+                  next = (at + 1) % values.length;
+                else if (event.key === "ArrowUp" || event.key === "ArrowLeft")
+                  next = (at - 1 + values.length) % values.length;
+                else if (event.key === "Home") next = 0;
+                else if (event.key === "End") next = values.length - 1;
+                if (next === null) return;
+                event.preventDefault();
+                event.currentTarget
+                  .querySelector<HTMLElement>(`[data-value="${values[next]}"]`)
+                  ?.focus();
+                choose(values[next]!);
+              }}
+            >
+              <ul className="b-choices">
+                {CHOICE_ROWS.map((row, index) => {
+                  const checked = draft.approvals === row.value;
+                  // One tab stop: the chosen row, or the first while nothing is chosen.
+                  const stop = draft.approvals === null ? index === 0 : checked;
+                  return (
+                    <li key={row.value}>
+                      <button
+                        type="button"
+                        className="b-choice"
+                        role="radio"
+                        aria-checked={checked}
+                        tabIndex={stop ? 0 : -1}
+                        data-value={row.value}
+                        data-b-focus={stop ? "" : undefined}
+                        aria-labelledby={`b-approvals-${row.value}`}
+                        aria-describedby={`b-approvals-${row.value}-line`}
+                        onClick={() => choose(row.value)}
+                      >
+                        <span className="b-choice-text">
+                          <span className="b-choice-title" id={`b-approvals-${row.value}`}>
+                            {row.title}
+                          </span>
+                          <span
+                            className="b-choice-sub b-wrap"
+                            id={`b-approvals-${row.value}-line`}
+                          >
+                            {row.line(name)}
+                          </span>
+                        </span>
+                        <CheckIcon className="b-tick" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <p className="b-hint">{machineLine(name)}</p>
+            <p
+              className="b-hint"
+              data-tone={approvalsFile?.blocks ? "warn" : undefined}
+              data-testid="approvals-file"
+            >
+              {fileLine(approvalsFile?.blocks === true)}
+            </p>
+          </>
+        )}
+      </>
+    );
+    foot = granted ? (
+      <GrantedBar />
+    ) : !admin ? (
+      <AdminBar
+        connection={connection}
+        info={info}
+        need="Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask."
+      />
+    ) : (
+      <>
         {creation?.status === "failed" && (
           <Note tone="danger" testId="create-failed">
             <p>
-              <b>Could not create the bot.</b>{" "}
-              {creation.uncertain ? creation.error : "Please try again."}
+              <b>Could not create the bot.</b> Please try again.
             </p>
+          </Note>
+        )}
+        {unconfirmed && (
+          <Note tone="warn" testId="create-unconfirmed">
+            <p>
+              <b>Clawtrate couldn't confirm whether {unconfirmed.name} was created.</b> Review the
+              gateway's bot list.
+            </p>
+            <div className="b-actions">
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                data-size="sm"
+                onClick={() => {
+                  void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+                  onClose();
+                }}
+              >
+                Review bots
+              </button>
+            </div>
           </Note>
         )}
         {partial && (
@@ -533,40 +727,41 @@ export function NewBot({
             </div>
           </Note>
         )}
-        <button
-          type="button"
-          className="button"
-          data-variant="primary"
-          data-size="lg"
-          disabled={busy || partial !== null || !draft.account || !listedChoice || !draft.model}
-          onClick={() => void create()}
-          data-testid="create"
-        >
-          {busy ? "Creating…" : "Create"}
-        </button>
-        {!draft.account && !busy && (
-          <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
-            Choose an account, or let the gateway choose.
+        {draft.approvals && !unconfirmed && !partial && (
+          <p className="b-hint" style={{ margin: 0 }} data-testid="inherits">
+            {inheritsLine(name)}
           </p>
         )}
-        {draft.account && !listedChoice && !busy && (
+        {/* Not offered again from an attempt whose outcome isn't known. */}
+        {!unconfirmed && (
+          <button
+            type="button"
+            className="button"
+            data-variant="primary"
+            data-size="lg"
+            disabled={busy || partial !== null || !accountReady || !draft.approvals}
+            onClick={() => void create()}
+            data-testid="create"
+          >
+            {busy ? "Creating…" : "Create"}
+          </button>
+        )}
+        {!draft.approvals && !busy && (
           <p
             className="b-hint"
-            role="status"
             style={{ textAlign: "center", margin: 0 }}
-            data-testid="choice-gone"
+            data-testid="choose-line"
           >
-            {accounts.status === "ready"
-              ? "The account chosen is no longer on the gateway. Choose another, or let the gateway choose."
-              : "The gateway's accounts aren't loaded, so the account chosen can't be used. Try again, or let the gateway choose."}
+            {chooseLine(name)}
           </p>
         )}
-        {creation?.status === "checking" && (
+        {draft.approvals && !accountReady && !busy && (
           <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
-            Checking whether {name} was created…
+            The account chosen can't be used now. Go back and choose another, or let the gateway
+            choose.
           </p>
         )}
-        {creation?.status === "creating" && creation.slow && (
+        {busy && creation.slow && (
           <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
             Still creating. What you entered is kept.
           </p>
