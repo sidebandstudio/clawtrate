@@ -394,20 +394,17 @@ export interface RegistrationSnapshot {
 export type RegistrationCommit = "committed" | "cancelled";
 
 /**
- * Keeps one control socket's registration across hibernation. The contract a relay's store
- * must meet:
+ * Keeps one control socket's registration across hibernation. The full contract, and what the
+ * host does when a socket cannot be restored safely, is in the package README. In short:
  * - `persist` stores a snapshot that is not a success (`challenged`, `verifying`, `failed`), in
  *   the order it is called; it never stores `registered`.
- * - `commitRegistered` is the only way a success is stored. In one operation, ordered against
- *   every other write for the same socket, it reads `attempt.live`: when that is false it stores
- *   nothing and returns `cancelled`; when true it stores the snapshot and returns `committed`.
- *   Reading `live` may end the attempt (an abort or an expiry that came first); it then reads false.
- * - Restore uses the latest snapshot stored, never an older one, and `registered` only for a
- *   committed success. A store that stages a success before committing it restores the staged
- *   state as `failed`, as it does any state other than these four.
- * - A store that cannot answer throws or rejects, and the registration fails (`store_failed`).
- *   When a commit fails with its outcome unknown, the store restores the socket as `failed`, so
- *   the connector registers again on a fresh connection.
+ * - `commitRegistered` is synchronous and is the only way a success is stored. It takes its own
+ *   copy of the snapshot, then reads `attempt.live` as the last thing before it writes, with no
+ *   callback or wait between: false stores nothing and returns `cancelled`, true stores the
+ *   copy and returns `committed`. Its return is the registration's completion point.
+ * - `cancelled` means only that the liveness reading prevented publication. A store that cannot
+ *   answer, or cannot confirm a write, throws or rejects; the registration then fails with
+ *   `store_failed`, and the host discards the socket's stored record.
  * `MemoryRegistrationStore` is the reference implementation, for tests and a single Node process.
  */
 export interface RegistrationStore {
@@ -415,7 +412,34 @@ export interface RegistrationStore {
   commitRegistered(
     snapshot: RegistrationSnapshot,
     attempt: { readonly live: boolean },
-  ): RegistrationCommit | Promise<RegistrationCommit>;
+  ): RegistrationCommit;
+}
+
+const REGISTRATION_STATES: readonly RegistrationState[] = [
+  "challenged",
+  "verifying",
+  "registered",
+  "failed",
+];
+
+/** A plain, checked copy of a snapshot: each field read once. */
+function copySnapshot(snapshot: RegistrationSnapshot): RegistrationSnapshot {
+  const copy: RegistrationSnapshot = {
+    nonce: snapshot.nonce,
+    issuedAtMs: snapshot.issuedAtMs,
+    lastReadingMs: snapshot.lastReadingMs,
+    state: snapshot.state,
+  };
+  if (
+    fromBase64UrlOfLength(copy.nonce, REGISTER_NONCE_BYTES) === null ||
+    !isMillis(copy.issuedAtMs) ||
+    !isMillis(copy.lastReadingMs) ||
+    copy.lastReadingMs < copy.issuedAtMs ||
+    !REGISTRATION_STATES.includes(copy.state)
+  ) {
+    fail("malformed", "The registration snapshot is not valid.");
+  }
+  return copy;
 }
 
 export class MemoryRegistrationStore implements RegistrationStore {
@@ -427,19 +451,22 @@ export class MemoryRegistrationStore implements RegistrationStore {
   }
 
   persist(snapshot: RegistrationSnapshot): void {
-    if (snapshot.state === "registered") {
+    const copy = copySnapshot(snapshot);
+    if (copy.state === "registered") {
       fail("unexpected", "A success is stored only by commitRegistered.");
     }
-    this.#latest = { ...snapshot };
+    this.#latest = copy;
   }
 
   commitRegistered(
     snapshot: RegistrationSnapshot,
     attempt: { readonly live: boolean },
   ): RegistrationCommit {
-    if (snapshot.state !== "registered") fail("unexpected", "Only a success is committed.");
+    // Copied and checked first, so nothing the snapshot runs comes after the liveness reading.
+    const copy = copySnapshot(snapshot);
+    if (copy.state !== "registered") fail("unexpected", "Only a success is committed.");
     if (!attempt.live) return "cancelled";
-    this.#latest = { ...snapshot };
+    this.#latest = copy;
     return "committed";
   }
 }
@@ -463,7 +490,7 @@ export interface ControlRegistrationOptions extends OriginOptions {
    * Keeps the registration across hibernation. `verifying` is stored before any other store is
    * asked and stays stored while the success is prepared; the success is stored only by
    * `commitRegistered`, and a failure is stored before it is returned. A failure to store fails
-   * the attempt.
+   * the attempt with `store_failed`. `abort()` and `expire()` store nothing: see the README.
    */
   readonly store?: RegistrationStore;
   /** A registration restored after hibernation, instead of a fresh challenge. */
@@ -480,8 +507,10 @@ export interface ControlRegistrationOptions extends OriginOptions {
  *   overlaps the first, gets `already_used`.
  * - The attempt is bound to this object's one in-flight token. After every await it checks
  *   that the token is still current and the challenge still in time: before the key claim,
- *   before the success is committed and before it is returned. The key claim and the commit
- *   are told whether the attempt is live. The first clock failure is the attempt's cause.
+ *   before the success is committed. The key claim and the commit are told whether the attempt
+ *   is live. The first clock failure, whether the attempt's or the timer's, is its cause.
+ * - A committed success is complete when `commitRegistered` returns, in the same turn: an abort
+ *   or expiry before that cancels it, and a socket that ends after it is torn down as usual.
  * - `expire()` ends a challenge that ran out with no proof; the relay calls it from a timer,
  *   since a quiet socket sends nothing. `abort()` ends the registration when the socket goes.
  */
@@ -562,6 +591,8 @@ export class ControlRegistration {
     if (!this.#open()) return false;
     const failure = this.#readClock();
     if (failure === null || !this.#open()) return false;
+    // The attempt in flight, if any, reports what the timer saw, not a plain abort.
+    if (this.#state === "verifying") this.#clockFailure = failure;
     this.#end();
     return true;
   }
@@ -582,32 +613,14 @@ export class ControlRegistration {
     try {
       await store?.persist(this.snapshot());
       result = await this.#verify(token, proof);
-      if (result.ok && store) {
-        // Anything that ended the attempt since the proof checked out wins over storing it.
-        const lost = this.#check(token);
-        if (lost !== null) {
-          result = { ok: false, code: lost };
-        } else {
-          const outcome = await store.commitRegistered(
-            { ...this.snapshot(), state: "registered" },
-            this.#view(token),
-          );
-          if (outcome !== "committed") {
-            result = { ok: false, code: this.#check(token) ?? "store_failed" };
-          }
-        }
-      }
     } catch {
       result = { ok: false, code: "store_failed" };
     }
     if (result.ok) {
-      // The last check; nothing waits between it and the success becoming visible.
-      const lost = this.#check(token);
-      if (lost === null) {
-        this.#attempt = null;
-        this.#state = "registered";
-        return result;
-      }
+      // From here to completion nothing waits. Anything that ended the attempt since the proof
+      // checked out wins over storing it.
+      const lost = this.#check(token) ?? this.#complete(token, store);
+      if (lost === null) return result;
       result = { ok: false, code: lost };
     }
     if (this.#attempt === token) this.#end();
@@ -618,6 +631,36 @@ export class ControlRegistration {
       return { ok: false, code: "store_failed" };
     }
     return result;
+  }
+
+  /**
+   * Publishes the success and completes the registration in one step: null once the state is
+   * `registered`, or else why not. `cancelled` counts only when the liveness reading ended the
+   * attempt; a store that throws, answers anything else (a promise included), or cancels an
+   * attempt still live, or commits one that ended, is `store_failed`.
+   */
+  #complete(token: object, store: RegistrationStore | undefined): RegisterProofFailureCode | null {
+    if (store) {
+      let outcome: unknown;
+      try {
+        outcome = store.commitRegistered(
+          { ...this.snapshot(), state: "registered" },
+          this.#view(token),
+        );
+      } catch {
+        return "store_failed";
+      }
+      const current = this.#attempt === token && this.#state === "verifying";
+      if (outcome === "cancelled" && !current) return this.#cause();
+      if (outcome !== "committed" || !current) {
+        // What a promise publishes, and when, is not known here; its failure is not reported.
+        if (outcome instanceof Promise) outcome.then(undefined, () => {});
+        return "store_failed";
+      }
+    }
+    this.#attempt = null;
+    this.#state = "registered";
+    return null;
   }
 
   async #verify(token: object, proof: string): Promise<RegisterProofResult> {
@@ -675,13 +718,16 @@ export class ControlRegistration {
    */
   #check(token: object): "aborted" | "bad_clock" | "challenge_expired" | null {
     const clock = this.#readClock();
-    if (this.#attempt !== token || this.#state !== "verifying") {
-      return this.#clockFailure ?? "aborted";
-    }
+    if (this.#attempt !== token || this.#state !== "verifying") return this.#cause();
     if (clock === null) return null;
     this.#clockFailure = clock;
     this.#end();
     return clock;
+  }
+
+  /** Why an ended attempt ended: the first clock failure seen, or else an abort. */
+  #cause(): "aborted" | "bad_clock" | "challenge_expired" {
+    return this.#clockFailure ?? "aborted";
   }
 
   /** Null for a reading in time; a reading that is not whole milliseconds or went back is bad. */
