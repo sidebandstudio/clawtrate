@@ -978,7 +978,7 @@
   function shareSheet() {
     const bot = listedBot();
     const why = params.get("gw") === "none" ? "nogateway" : params.get("gone") === "1" ? "unlisted" : !canSend ? "no-write" : down ? "unreachable" : null;
-    const sendTo = why ? go("share-cant", { why }) : params.get("lost") === "1" ? go("share-unsure") : go("share-sent", { said: `Sent to ${BOTS[bot]}` });
+    const sendTo = why ? go("share-cant", { why }) : params.get("lost") === "1" ? go("share-unsure", { to: bot }) : go("share-sent", { to: bot, said: `Sent to ${BOTS[bot]}` });
     return (
       other() +
       sheet(
@@ -989,8 +989,8 @@
           `<div class="d-actions">${bot ? act("Send", sendTo, { variant: "primary", size: "md", attrs: "data-share-send data-keep-note" }) : `<button type="button" class="button" data-variant="primary" data-size="md" disabled data-share-send>Send</button>`}</div>` +
           proto(
             link("The reply will be lost", go("share", { lost: "1" }), { attrs: "data-keep-note" }),
-            bot && !why ? link("The task is made, the message refused", go("share-msgfail"), { attrs: "data-keep-note" }) : "",
-            bot && !why ? link("Only the task is confirmed", go("share-taskonly"), { attrs: "data-keep-note" }) : "",
+            bot && !why ? link("The task is made, the message refused", go("share-msgfail", { to: bot }), { attrs: "data-keep-note" }) : "",
+            bot && !why ? link("Only the task is confirmed", go("share-taskonly", { to: bot }), { attrs: "data-keep-note" }) : "",
             link("No gateway saved", go("share", { gw: "none" }), { attrs: "data-keep-note" }),
             link("The bot is no longer listed", go("share", { gone: "1" }), { attrs: "data-keep-note" }),
           ),
@@ -1159,10 +1159,11 @@
 
   const root = document.getElementById("device-root");
   let id = Object.hasOwn(SCREENS, screenId) ? screenId : "mac-off";
-  // A submitted share keeps its recorded destination and outcome whatever the bot list says now; only a share
-  // with no destination at all opens the unsent draft. New sends still need a listed bot.
-  if (!toBot() && ["share-sent", "share-msgfail", "share-taskonly", "share-task", "share-unsure"].includes(id)) id = "share-draft";
-  if (!listedBot() && id === "siri-sent") id = "siri-confirm";
+  if (!listedBot()) {
+    // A submitted share keeps the recipient it was sent to, even after the list changes.
+    if (!Object.hasOwn(BOTS, params.get("to")) && ["share-sent", "share-msgfail", "share-taskonly", "share-task", "share-unsure"].includes(id)) id = "share-draft";
+    if (id === "siri-sent") id = "siri-confirm";
+  }
   root.dataset.screen = id;
   if (phoneScreen && !params.get("width")) {
     CT.settings.width = "phone";

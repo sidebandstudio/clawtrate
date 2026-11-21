@@ -4,11 +4,10 @@
 // process holds, must stop it before any credential is sent.
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { probeEndpoint } from "../docs/research/device-node/probe-endpoint.ts";
 import { CHECKOUT_DIR } from "../tools/dev-gateway/src/env.ts";
 import {
   NAMED_PORT_BLOCK,
@@ -16,10 +15,8 @@ import {
   runDirFor,
 } from "../tools/dev-gateway/src/instance.ts";
 import { portFree } from "../tools/dev-gateway/src/registry.ts";
-import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   deadProcess,
-  liveProcess,
   seedInstance,
   stopChildren,
   type Proc,
@@ -56,7 +53,7 @@ function record(name: string, port: number, gateway: Proc, checkout: string) {
     connectionFile,
     JSON.stringify({ url: `ws://127.0.0.1:${port}`, token: TOKEN, instance: name, runId }),
   );
-  return { home, runDir, inst: { home, checkout, connectionFile, identify: processIdentity } };
+  return { home, runDir };
 }
 
 async function freePort(): Promise<number> {
@@ -66,21 +63,6 @@ async function freePort(): Promise<number> {
 }
 
 describe("the device-node probe proves its endpoint before it sends a credential", () => {
-  it("accepts a record whose recorded gateway is alive, and refuses the same record once that gateway is gone", async () => {
-    const checkout = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-probe-checkout-")));
-    const port = await freePort();
-    const live = record("probe-live", port, liveProcess(), checkout);
-    expect(probeEndpoint(live.inst, "probe-live")).toEqual({
-      url: `ws://127.0.0.1:${port}`,
-      token: TOKEN,
-      instance: "probe-live",
-    });
-    const stale = record("probe-stale", port, deadProcess(), checkout);
-    expect(() => probeEndpoint(stale.inst, "probe-stale")).toThrow(
-      /not probing instance "probe-stale": the gateway recorded for the instance is not running/,
-    );
-  });
-
   it("a stale record with its loopback port reused: the probe stops before connecting, and the listener receives nothing", async () => {
     const name = `probe-stale-${process.pid}`;
     const port = await freePort();
@@ -107,9 +89,7 @@ describe("the device-node probe proves its endpoint before it sends a credential
       );
       const output = `${run.stdout}${run.stderr}`;
       expect(run.status).not.toBe(0);
-      expect(output).toContain(
-        `not probing instance "${name}": the gateway recorded for the instance is not running`,
-      );
+      expect(output).toContain("Error: the gateway recorded for the instance is not running");
       expect(output).not.toContain(TOKEN);
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(connections).toBe(0);

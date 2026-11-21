@@ -3,9 +3,9 @@
 //   pnpm dev-gateway start --instance <name> --no-seed   (or --default-local-pairing for `local`)
 //   node docs/research/device-node/node-probe.ts <experiment> --instance <name>
 //
-// It acts only on a named development instance this checkout started. Before
-// every connection it proves that the instance's live gateway owns the address
-// and token in the tool's own run files (`probe-endpoint.ts`), and it runs
+// It acts only on a named development instance this checkout started, reads
+// that instance's address and token from verified run files, checks the IPv4
+// listener with lsof before each connection, and runs
 // `openclaw` only through the tool's guarded runner (so always with
 // `--profile clawtrate-dev-<name>`). It never prints a token.
 //
@@ -38,14 +38,14 @@
 //             that adds X-Forwarded-For
 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { connect as netConnect } from "node:net";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { openInstance, recordedStartOptions } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
-import { probeEndpoint } from "./probe-endpoint.ts";
+import { probeEndpoint, probeTarget } from "./probe-endpoint.ts";
 
 const requireFromTool = createRequire(new URL("../../../tools/dev-gateway/package.json", import.meta.url));
 const { GatewayClient } = (await import(
@@ -60,15 +60,9 @@ const { values, positionals } = parseArgs({
 const experiment = positionals[0];
 if (!values.instance) throw new Error("--instance <name> is required; the default instance is never probed");
 const inst = openInstance(values.instance);
-const instanceName = values.instance;
-const connection = probeEndpoint(inst, instanceName);
-/** Proven again before each connection: a gateway that stopped meanwhile stops the probe before its token is sent. */
-const proveEndpoint = () => {
-  const now = probeEndpoint(inst, instanceName);
-  if (now.url !== connection.url || now.token !== connection.token) throw new Error("the instance's gateway changed during the probe");
-};
-const gatewayPort = Number(new URL(connection.url).port);
-const url = `ws://127.0.0.1:${gatewayPort}`;
+const connection = probeEndpoint(inst);
+const { url } = connection;
+const gatewayPort = Number(new URL(url).port);
 
 /** The only commands the stand-in node ever declares. None is a command the gateway or a bot knows. */
 const PROBE_COMMANDS = [
@@ -104,6 +98,7 @@ function identity(): Identity {
 }
 
 function runOpenclaw(args: string[]) {
+  connection.recheck();
   const result = inst.runner.runSync(args);
   return { status: result.status, out: `${result.stdout}${result.stderr}` };
 }
@@ -126,7 +121,7 @@ type ConnectOptions = {
   scopes?: string[];
   commands?: string[];
   permissions?: Record<string, boolean>;
-  port?: number;
+  proxy?: Server;
   /** Send the shared token. Off: the device token alone, as Clawtrate connects once paired. */
   shared?: boolean;
   /** A setup code's bootstrap token, sent in place of the shared token. */
@@ -141,7 +136,6 @@ type ConnectOptions = {
  */
 const tokenStore = new Map<string, { token: string; scopes: string[] }>();
 function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refused: Record<string, unknown> }> {
-  proveEndpoint();
   return new Promise((resolve) => {
     let settled = false;
     const events: Frame[] = [];
@@ -152,9 +146,10 @@ function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refuse
       clearTimeout(timer);
       resolve(value);
     };
+    const target = probeTarget(connection, options.proxy);
     const node = options.role === "node";
     const client = new GatewayClient({
-      url: options.port ? `ws://127.0.0.1:${options.port}` : url,
+      url: target.url,
       ...(options.bootstrap ? { bootstrapToken: options.bootstrap } : options.shared === false ? {} : { token: connection.token }),
       clientName: node ? "node-host" : "gateway-client",
       mode: node ? "node" : "ui",
@@ -169,6 +164,7 @@ function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refuse
       maxProtocol: 4,
       deviceIdentity: options.id,
       hostDeps: {
+        beforeConnect: target.beforeConnect,
         signDevicePayload: (pem: string, payload: string) =>
           sign(null, Buffer.from(payload), createPrivateKey(pem)).toString("base64url"),
         publicKeyRawBase64UrlFromPem: (pem: string) =>
@@ -899,6 +895,12 @@ async function local() {
   // The same through a loopback proxy that adds the header every reverse proxy adds.
   const server = createServer();
   server.on("upgrade", (req, socket, head) => {
+    try {
+      connection.recheck();
+    } catch {
+      socket.destroy();
+      return;
+    }
     const upstream = netConnect(gatewayPort, "127.0.0.1", () => {
       const headers = { ...req.headers, "x-forwarded-for": "192.0.2.10" };
       const lines = [`${req.method} ${req.url} HTTP/1.1`, ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`)];
@@ -909,8 +911,7 @@ async function local() {
     upstream.on("error", () => socket.destroy());
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  const proxyPort = (server.address() as { port: number }).port;
-  const proxied = await node("N-proxied", identity(), { port: proxyPort });
+  const proxied = await node("N-proxied", identity(), { proxy: server });
   say("node with commands through the proxy:", "conn" in proxied ? { hello: proxied.conn.hello } : proxied.refused);
   if ("conn" in proxied) await proxied.conn.close();
   say("node.pair.list:", pendingSummary(await admin.request("node.pair.list", {})));
