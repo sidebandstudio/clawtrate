@@ -27,3 +27,12 @@ it("propagates other debugging port read errors immediately", async () => {
   });
   await expect(debuggingPort("profile", new ChildProcess())).rejects.toBe(denied);
 });
+
+it("waits while Chromium's debugging port file is empty or partly written", async () => {
+  vi.mocked(readFileSync)
+    .mockReturnValueOnce("")
+    .mockReturnValueOnce("420")
+    .mockReturnValueOnce("42000\n/devtools/browser/fixture");
+  await expect(debuggingPort("profile", new ChildProcess())).resolves.toBe(42000);
+  expect(readFileSync).toHaveBeenCalledTimes(3);
+});
