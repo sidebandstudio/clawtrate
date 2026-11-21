@@ -179,6 +179,7 @@ import {
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
+  settleRunFromWait,
   settleUnboundStops,
   throughRunAliases,
   removeMessage,
@@ -3531,6 +3532,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * Two runs of the task still look active after a history read: one whose end a connection gap
+   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
+   * `operator.write`). A run it reports over settles as it reports; one it reports still going,
+   * or does not know, stays as it is.
+   */
+  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const first = transcript && activeRun(transcript);
+    if (!first || runningRunId(transcript, first.id) !== null) return;
+    if (!this.state.connection.canWrite || this.options.readOnly) return;
+    const incarnation = this.incarnations.get(key);
+    const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
+    await Promise.all(
+      asked.map(async (run) => {
+        let answer: RawRecord | null;
+        try {
+          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+        } catch (error) {
+          if (generation === this.generation)
+            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+          return;
+        }
+        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
+          return;
+        this.updateActivity(key, (activity, ctx) =>
+          settleRunFromWait(activity, run.id, answer, ctx),
+        );
+      }),
+    );
+  }
+
+  /**
    * Read the bot's workspace root, as the gateway names it
    * (`agents.files.list`, `operator.read`, its `workspace`), once a task's
    * history loads. A failed read leaves it unknown: an absolute path is then
@@ -5784,6 +5818,7 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
+      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
