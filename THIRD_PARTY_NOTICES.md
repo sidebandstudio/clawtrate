@@ -6,10 +6,12 @@ Code ported into this repository from other projects, and the notices their lice
 
 Source: https://github.com/pingdotgg/t3code, commit `18d1c4db`. Licence: MIT.
 
-| File in this repository                               | Ported from                                                                                    |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `packages/relay-protocol/src/register-proof.ts`       | `packages/shared/src/dpop.ts`, `infra/relay/src/auth/DpopProofs.ts`                            |
-| `packages/relay-protocol/test/register-proof.test.ts` | `packages/shared/src/dpop.test.ts`, `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts` |
+| File in this repository                               | Ported from                                                                                                          |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `packages/relay-protocol/src/register-proof.ts`       | `packages/shared/src/dpop.ts`, `infra/relay/src/auth/DpopProofs.ts`                                                  |
+| `packages/relay-protocol/test/register-proof.test.ts` | `packages/shared/src/dpop.test.ts`, `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts`                       |
+| `services/relay/src/core/store.ts`                    | `infra/relay/src/auth/DpopProofs.ts`, `infra/relay/src/environments/EnvironmentLinker.ts`                            |
+| `services/relay/test/store.test.ts`                   | `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts`, `infra/relay/src/environments/EnvironmentLinker.test.ts` |
 
 ```
 MIT License
