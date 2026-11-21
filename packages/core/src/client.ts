@@ -6275,7 +6275,9 @@ export class ClawtrateClient {
       const question = transcript.questions.find((q) => q.id === id);
       if (!question) continue;
       const run = question.runId ? findRun(transcript, question.runId) : undefined;
-      const runOver = run !== undefined && run.state !== "running" && run.state !== "waiting";
+      // Only a run that has ended ended it; one still stopping has a Stop the gateway hasn't
+      // confirmed, and the question it cancels was cancelled.
+      const runOver = run !== undefined && isTerminal(run.state);
       const code: ClosedCode =
         status === "answered"
           ? "answered"
@@ -6284,7 +6286,9 @@ export class ClawtrateClient {
             : runOver
               ? "run-ended"
               : status === "cancelled"
-                ? "dismissed"
+                ? run?.state === "stopping"
+                  ? "cancelled"
+                  : "dismissed"
                 : "cancelled";
       this.computer.questionClosed(transcript.sessionKey, id, code);
     }

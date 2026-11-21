@@ -2,10 +2,11 @@
 // every run of the task by its own id, as archive and delete do, and a viewer that goes away
 // while it waits for write access takes it with it, as the conversation's Stop does.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import type { ComputerViews } from "../src/computer.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 describe("the Computer tab's Stop", () => {
@@ -72,6 +73,25 @@ describe("the Computer tab's Stop", () => {
     await stopping;
     await sleep(30);
     expect(gateway.calls("chat.abort")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-145: a question cancelled while its run is stopping was cancelled; the run has not ended yet", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
+    const { client, transcript } = await openTask({ gateway });
+    const closed = vi.spyOn(
+      (client as unknown as { computer: ComputerViews }).computer,
+      "questionClosed",
+    );
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("question.requested", questionRecord("ask_1", "run-1"));
+    await until(() => transcript().questions.length === 1);
+    await client.stopRun(KEY, "run-1");
+    await until(() => transcript().runs[0]?.state === "stopping");
+    gateway.emit("question.resolved", { id: "ask_1", status: "cancelled" });
+    await until(() => closed.mock.calls.length > 0);
+    expect(closed).toHaveBeenCalledWith(KEY, "ask_1", "cancelled");
     client.stop();
   });
 });
