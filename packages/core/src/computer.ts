@@ -583,6 +583,8 @@ type Live = {
   conflictAfter: number;
   /** Counts each time this viewer was done with a tab (`closeTarget`): a Check sent before is retired. */
   closed: number;
+  /** The latest read of the old lease's own task after a drop (`recoverLease`); older ones settle nothing. */
+  recoverAsked: number;
 };
 
 export type ComputerFrame = {
@@ -749,12 +751,17 @@ export class ComputerViews {
       answering: null,
       conflictAfter: 0,
       closed: 0,
+      recoverAsked: 0,
     };
     live.shown = true;
     this.lives.set(viewer, live);
-    // Read after leaving: the hand-back leaving started is the one kept.
+    // Read after leaving: the hand-back leaving started is the one kept, and so is a lease a
+    // drop left unknown: it stays this viewer's until a read of its own task settles it.
     const left = this.pane(viewer);
-    const kept = left?.control.outOfSight ? left.control : noControl;
+    const recovering =
+      live.lease !== null &&
+      (left?.control.status === "maybe-held" || left?.control.status === "checking");
+    const kept = left?.control.outOfSight || recovering ? left!.control : noControl;
     this.write((state) => ({
       ...state,
       panes: {
@@ -982,6 +989,11 @@ export class ComputerViews {
     // Read while connected: what the list says of the old lease settles a drop's "maybe held".
     if (!pane || (pane.control.status !== "checking" && pane.control.status !== "maybe-held"))
       return;
+    // The pane shows another task now: only a read of the lease's own task says anything of it.
+    if (live.lease && live.lease.key !== pane.key) {
+      void this.recoverLease(live);
+      return;
+    }
     // A lookup that couldn't see the browser lists nothing, which says nothing of the lease.
     if (pane.browser === "unknown") return;
     const tab = pane.tabs.find((each) => each.targetId === pane.control.targetId);
@@ -999,6 +1011,40 @@ export class ComputerViews {
           ),
         }));
     } else this.patchControl(live.viewer, { status: "maybe-held" });
+  }
+
+  /**
+   * After a drop, with the pane on another task since: the old lease's own task is read and
+   * settles it as `afterTabs` would. A refusal, or a lookup that couldn't see the browser,
+   * settles nothing; the next tab read asks again.
+   */
+  private async recoverLease(live: Live): Promise<void> {
+    const lease = live.lease;
+    if (!lease || !this.ctx.online() || !this.ctx.canWrite()) return;
+    const asked = ++live.recoverAsked;
+    let answer: RawRecord | null;
+    try {
+      answer = asRecord(
+        await this.ctx.request("clawtrate-computer.tabs", { sessionKey: lease.key }),
+      );
+    } catch {
+      return;
+    }
+    const now = this.pane(live.viewer)?.control;
+    if (asked !== live.recoverAsked || live.lease !== lease) return;
+    if (!now || (now.status !== "checking" && now.status !== "maybe-held")) return;
+    const reason = str(answer?.reason);
+    if (answer?.browser !== "running" && reason && reason !== "browser_unavailable") return;
+    const raw = Array.isArray(answer?.tabs) ? answer.tabs : [];
+    const tab = raw.map(asRecord).find((each) => str(each?.targetId) === lease.targetId);
+    const held = asRecord(tab?.lease);
+    // A new connection never holds the old one's lease: only another holder keeps it unknown.
+    if (held && (held.state === "draining" || held.state === "granted") && held.mine !== true)
+      this.patchControl(live.viewer, { status: "maybe-held" });
+    else {
+      live.lease = null;
+      this.patchControl(live.viewer, { ...noControl, status: "ended" });
+    }
   }
 
   /** Show another tab of the bot's browser in the tile: the view of the old one ends first. */

@@ -1910,3 +1910,48 @@ describe("closing edits: tab choice, competing takes, confirmation in time, hand
     expect(words.stopUnconfirmedLine).toBe("The gateway didn't confirm the stop.");
   });
 });
+
+describe("lease recovery across a task switch (F-150, section 18)", () => {
+  it("F-150: switching task while a drop's lease is being checked keeps it, settles it from its own task, then Take asks again", async () => {
+    let oldRead!: (value: unknown) => void;
+    let hold = false;
+    let lease: unknown = null;
+    const h = harness({
+      "clawtrate-computer.tabs": (p) =>
+        hold && p.sessionKey === KEY
+          ? new Promise((resolve) => (oldRead = resolve))
+          : tabsAnswer(p.sessionKey === KEY ? lease : null),
+    });
+    await granted(h);
+    h.env.online = false;
+    h.views.connectionLost();
+    h.env.online = true;
+    h.views.reconnected();
+    hold = true;
+    h.views.hello(["clawtrate-computer.tabs"]);
+    await flush();
+    expect(h.pane().control.status).toBe("checking");
+    // Another task before the old task's read answers: the new task's list says nothing of it.
+    hold = false;
+    lease = { state: "granted", mine: false };
+    h.views.show(h.viewer, "agent:marlow:other");
+    await flush();
+    oldRead(tabsAnswer(null));
+    await flush();
+    expect(h.pane().key).toBe("agent:marlow:other");
+    expect(h.pane().control).toMatchObject({ status: "maybe-held", key: KEY });
+    expect(
+      h.calls("clawtrate-computer.tabs").filter((p) => p.sessionKey === KEY).length,
+    ).toBeGreaterThan(1);
+    // The old task's own read says the lease is gone: Take is offered again, and asks.
+    lease = null;
+    await h.views.readTabs(h.viewer);
+    await flush();
+    expect(h.pane().control.status).toBe("ended");
+    await h.views.watch(h.viewer);
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take").at(-1)).toMatchObject({
+      sessionKey: "agent:marlow:other",
+    });
+  });
+});
