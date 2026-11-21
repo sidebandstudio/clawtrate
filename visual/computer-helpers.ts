@@ -1,5 +1,5 @@
 // Shared by the Computer tab's visual and behaviour checks.
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { OTTO_DISK } from "./fixture.ts";
 
 /** Juniper's research task with the Work pane open on Computer. */
@@ -17,18 +17,28 @@ export const tileReady = (page: Page) =>
     computerPanel(page).getByRole("button", { name: "Watch Juniper's browser" }),
   ).toBeVisible();
 
+/**
+ * The canvas shows a decoded frame: its first pixel is opaque. A canvas before its first frame is
+ * 300 px wide and blank, so its width says nothing.
+ */
+export const painted = (canvas: Locator) =>
+  expect
+    .poll(() =>
+      canvas
+        .evaluate(
+          (element: HTMLCanvasElement) =>
+            element.getContext("2d")?.getImageData(0, 0, 1, 1).data[3] ?? 0,
+        )
+        .catch(() => 0),
+    )
+    .toBeGreaterThan(0);
+
 /** Watch, and wait for the first frame to be drawn. */
 export async function watch(page: Page) {
   await tileReady(page);
   await computerPanel(page).getByRole("button", { name: "Watch Juniper's browser" }).click();
   await expect(computerPanel(page).locator(".screen[data-state=live] canvas")).toBeVisible();
-  await expect
-    .poll(() =>
-      computerPanel(page)
-        .locator(".screen canvas")
-        .evaluate((canvas: HTMLCanvasElement) => canvas.width),
-    )
-    .toBeGreaterThan(0);
+  await painted(computerPanel(page).locator(".screen canvas"));
 }
 
 /** Watch, then open the full view. */
@@ -38,13 +48,7 @@ export async function openFull(page: Page) {
     .getByRole("button", { name: "Open Juniper's browser full window" })
     .click();
   await expect(fullView(page)).toBeVisible();
-  await expect
-    .poll(() =>
-      fullView(page)
-        .locator("canvas")
-        .evaluate((canvas: HTMLCanvasElement) => canvas.width),
-    )
-    .toBeGreaterThan(0);
+  await painted(fullView(page).locator("canvas"));
 }
 
 /** From the full view: Take control, and wait for the answer the scene's plugin gives. */
