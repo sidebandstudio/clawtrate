@@ -1718,8 +1718,11 @@ export class ComputerViews {
   async check(viewer: string): Promise<void> {
     const live = this.lives.get(viewer);
     const lease = live?.lease;
-    const checked = this.pane(viewer)?.control.status;
+    const control = this.pane(viewer)?.control;
+    const checked = control?.status;
     if (!live || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
+    // Leaving the tab since retires the Check: a tab out of sight is not renewed again.
+    const outOfSight = control!.outOfSight;
     const sentAt = this.ctx.now();
     try {
       const answer = asRecord(
@@ -1732,7 +1735,8 @@ export class ComputerViews {
           RENEW_DEADLINE_MS,
         ),
       );
-      if (live.lease !== lease || this.pane(viewer)?.control.status !== checked) return;
+      const now = this.pane(viewer)?.control;
+      if (live.lease !== lease || now?.status !== checked || now.outOfSight !== outOfSight) return;
       if (answer?.leaseRenewed === true) {
         // Too late to count, or already confirmed by a later request: the line stays as it is.
         if (!this.confirm(live, lease, sentAt)) return;
