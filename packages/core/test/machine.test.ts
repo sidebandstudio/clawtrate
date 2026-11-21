@@ -185,6 +185,38 @@ describe("the machine (F-147, section 16)", () => {
     expect((await readMachine(unlisted, "otto", [], 10_000)).nodes["media-box"]).toBe("not-listed");
   });
 
+  it("F-148: a node is matched by its id first; a name is used only when no id matches and one node has it", async () => {
+    const node = (nodeId: string, displayName: string, connected: boolean) => ({
+      nodeId,
+      displayName,
+      connected,
+    });
+    const listing = (nodes: unknown[]) => async (method: string) =>
+      method === "node.list" ? { nodes } : method === "config.get" ? { config: {} } : {};
+    // An offline node named like the connected node's id comes first in the list.
+    const named = await readMachine(
+      listing([node("old-box", "media-box", false), node("media-box", "Media box", true)]),
+      "otto",
+      ["media-box"],
+      10_000,
+    );
+    expect(named.nodes["media-box"]).toMatchObject({ nodeId: "media-box", connected: true });
+    const byName = await readMachine(
+      listing([node("n-1", "attic", true)]),
+      "otto",
+      ["attic"],
+      10_000,
+    );
+    expect(byName.nodes["attic"]).toMatchObject({ nodeId: "n-1" });
+    const shared = await readMachine(
+      listing([node("n-1", "attic", true), node("n-2", "attic", false)]),
+      "otto",
+      ["attic"],
+      10_000,
+    );
+    expect(shared.nodes["attic"]).toBe("not-listed");
+  });
+
   it("F-150: the gateway's own desktop is read without preparing it, and named only when it is configured", async () => {
     const asked: unknown[] = [];
     const request = async (method: string, params: unknown) => {

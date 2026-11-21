@@ -289,9 +289,14 @@ export async function readMachine(
           .map(nodeRecord)
           .filter((each): each is NodeRecord => each !== null)
       : null;
+  // By id first: a name only when no node has that id and exactly one node has that name.
+  const byName = (id: string) => {
+    const matches = listed!.filter((n) => n.name === id);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
   for (const id of [...wanted].slice(0, 8)) {
     records[id] = listed
-      ? (listed.find((n) => n.nodeId === id || n.name === id) ?? "not-listed")
+      ? (listed.find((n) => n.nodeId === id) ?? byName(id) ?? "not-listed")
       : "unknown";
   }
   const d = desktop.status === "fulfilled" ? asRecord(desktop.value) : null;
