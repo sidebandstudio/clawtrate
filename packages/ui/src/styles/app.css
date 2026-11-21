@@ -2736,6 +2736,12 @@ textarea {
   margin-top: var(--space-4);
 }
 
+.settings-actions > .form-error {
+  order: 1;
+  flex-basis: 100%;
+  margin-top: 0;
+}
+
 .settings-note {
   margin: 12px 0 0;
   font-size: var(--text-sm);

@@ -35,7 +35,16 @@ import {
   RoutinesEngine,
   type BotRoutines,
   type CalendarRuns,
+  type GatewayHooks,
+  type NewRoutine,
+  type Routine,
+  type RoutineFields,
+  type RoutineRevision,
+  type RoutineRemove,
   type RoutineRun,
+  type RoutineRunNow,
+  type RoutineSaveCheck,
+  type RoutineWrite,
   type RunConversation,
   type RunSelector,
 } from "./routines.ts";
@@ -220,6 +229,7 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
+import { validateGatewayUrl } from "./gateway-url.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -297,6 +307,8 @@ import {
 
 /** A read-only connection's scopes. Every connect asks for these until write access is approved. */
 export const REQUESTED_SCOPES = ["operator.read"] as const;
+/** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
+export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 /**
  * Client capabilities advertised in `connect`. `tool-events` is the only one
  * the live run view needs: without it the gateway sends no tool lifecycle
@@ -400,6 +412,12 @@ const SESSION_LIST_PARAMS = {
   excludeSubagents: true,
 };
 const HISTORY_LIMIT = 200;
+
+/** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
+function holdsInput(history: RawRecord | null): boolean {
+  const items = asRecord(history?.pendingInputs)?.items;
+  return Array.isArray(items) && items.some((item) => asRecord(item)?.state !== "cancelled");
+}
 
 /** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
 function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
@@ -636,13 +654,7 @@ function isMissingScope(error: unknown): boolean {
   );
 }
 
-export function validateGatewayUrl(raw: string): string {
-  const url = new URL(raw.trim());
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error("The gateway URL must start with ws:// or wss://");
-  }
-  return url.toString().replace(/\/$/, "");
-}
+export { validateGatewayUrl };
 
 export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
   return {
@@ -788,6 +800,9 @@ export class ClawtrateClient {
   private nextIncarnation = 0;
   private readonly afterRunning = new Set<string>();
   private readonly afterAgain = new Set<string>();
+  /** Tasks whose runs' `agent.wait` check is on its way, and the runs each last checked. */
+  private readonly endChecking = new Set<string>();
+  private readonly endChecked = new Map<string, string>();
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -811,6 +826,10 @@ export class ClawtrateClient {
   private changedDuringBootstrap = false;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
+  /** The last change to the selected gateway; the next one starts once it has settled. */
+  private connectionChanges: Promise<void> = Promise.resolve();
+  /** A host stop cancels socket opens requested before it, including ones still saving settings. */
+  private stops = 0;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -935,6 +954,10 @@ export class ClawtrateClient {
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    identity: () => this.state.connection.gatewayId,
+    withdrawn: (owner) => this.withdrawnOwners.has(owner),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -998,13 +1021,28 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
+  /** Written first: settings the host could not save are never the ones in use. */
   private async saveSettings(settings: ConnectionSettings): Promise<void> {
-    this.settings = settings;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+    this.settings = settings;
+  }
+
+  /**
+   * Run one change to the selected gateway and its saved settings after the
+   * previous one has settled, so each reads and writes what the last one left.
+   */
+  private changeConnection<T>(change: () => Promise<T>): Promise<T> {
+    const run = this.connectionChanges.then(change);
+    this.connectionChanges = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
   }
 
   /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
   async start(): Promise<void> {
+    const stops = this.stops;
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
@@ -1013,7 +1051,9 @@ export class ClawtrateClient {
       if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
-    this.settings = await this.savedSettings();
+    const settings = await this.savedSettings();
+    if (stops !== this.stops) return;
+    this.settings = settings;
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
       return;
@@ -1023,31 +1063,45 @@ export class ClawtrateClient {
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
-    const url = validateGatewayUrl(options.url);
-    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-    const token = options.token?.trim() || null;
-    if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
-    this.settings = { url, token };
-    this.pairingSeen = null;
-    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
-    await this.open();
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      const url = validateGatewayUrl(options.url);
+      if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      const token = options.token?.trim() || null;
+      const switched = this.settings?.url !== url;
+      await this.saveSettings({ url, token });
+      if (switched) this.abandonAccessRequest("Switched to another gateway.");
+      this.pairingSeen = null;
+      if (stops === this.stops) await this.open();
+    });
   }
 
-  /** Close the connection and forget the gateway. The device key and any device token remain. */
-  async disconnect(): Promise<void> {
-    this.abandonAccessRequest("Disconnected from the gateway.");
-    this.close();
-    this.settings = null;
-    this.pairingSeen = null;
-    this.rows = new Map();
-    this.raw.clear();
-    this.retained.clear();
-    this.forgetGatewayState();
-    await this.host.storage.delete(SETTINGS_KEY);
-    this.store.set({
-      ...initialState,
-      turnLimitMinutes: this.turnLimitMs / 60_000,
-      connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+  /**
+   * Close the connection and forget the gateway. The device key and any device
+   * token remain. With `gatewayUrl`, only that gateway is forgotten: the address
+   * the person saw, which another viewer may have changed since.
+   */
+  async disconnect(gatewayUrl?: string): Promise<void> {
+    return this.changeConnection(async () => {
+      if (!this.settings) return;
+      if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
+        throw new Error(GATEWAY_CHANGED_MESSAGE);
+      }
+      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
+      await this.host.storage.delete(SETTINGS_KEY);
+      this.abandonAccessRequest("Disconnected from the gateway.");
+      this.close();
+      this.settings = null;
+      this.pairingSeen = null;
+      this.rows = new Map();
+      this.raw.clear();
+      this.retained.clear();
+      this.forgetGatewayState();
+      this.store.set({
+        ...initialState,
+        turnLimitMinutes: this.turnLimitMs / 60_000,
+        connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
+      });
     });
   }
 
@@ -1056,13 +1110,18 @@ export class ClawtrateClient {
    * reconnects at once, keeping what is already on screen.
    */
   async retryNow(): Promise<void> {
-    if (!this.settings) return;
-    if (this.protocol?.connected && this.state.connection.status === "connected") {
-      await this.bootstrap(this.generation, null);
-      return;
-    }
-    if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
-    await this.open();
+    const stops = this.stops;
+    // The reload runs outside the queue: it changes nothing saved.
+    const reload = await this.changeConnection(async () => {
+      if (!this.settings || stops !== this.stops) return null;
+      if (this.protocol?.connected && this.state.connection.status === "connected") {
+        return this.generation;
+      }
+      if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+      if (stops === this.stops) await this.open();
+      return null;
+    });
+    if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
 
   /**
@@ -1070,18 +1129,21 @@ export class ClawtrateClient {
    * pairing and what is on screen. `retryNow` reconnects.
    */
   async suspend(): Promise<void> {
-    if (!this.settings) return;
-    // Saved, so a restart does not reconnect by itself.
-    await this.saveSettings({ ...this.settings, suspended: true });
-    // The connection stops: writes waiting for access fail, as on any lost connection.
-    // Runs are kept as they are and reconciled with history after Reconnect.
-    this.abandonAccessRequest("Disconnected from the gateway.");
-    this.close();
-    this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+    return this.changeConnection(async () => {
+      if (!this.settings) return;
+      // Saved, so a restart does not reconnect by itself.
+      await this.saveSettings({ ...this.settings, suspended: true });
+      // The connection stops: writes waiting for access fail, as on any lost connection.
+      // Runs are kept as they are and reconciled with history after Reconnect.
+      this.abandonAccessRequest("Disconnected from the gateway.");
+      this.close();
+      this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
+    });
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
   stop(): void {
+    this.stops += 1;
     this.close();
   }
 
@@ -1147,6 +1209,7 @@ export class ClawtrateClient {
   private releaseTask(key: string): void {
     this.retained.delete(key);
     this.incarnations.delete(key);
+    this.endChecked.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -3377,24 +3440,23 @@ export class ClawtrateClient {
    */
   private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
     const incarnation = this.incarnations.get(key);
+    const epoch = this.epoch;
+    const currentConnection = () => generation === this.generation && epoch === this.epoch;
     let answer: unknown;
     let before: Transcript["reactions"];
     try {
-      if (this.selfId === null) await this.readSelf(generation);
+      if (this.selfId === null) await this.readSelf(currentConnection);
+      if (!currentConnection()) return;
       // What the list will replace: an event, a change of this person's or a new history page
       // after it was asked for is newer than the list, and the list then gives way to it.
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
+      if (currentConnection())
         this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
       return;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]!.reactions !== before) {
       // Changed while the list was on its way: ask again, a few times, rather than go back.
@@ -3440,16 +3502,19 @@ export class ClawtrateClient {
     return slashRows(skills, metadata);
   }
 
-  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
-  private async readSelf(generation: number): Promise<void> {
+  /**
+   * Who this connection acts for (`users.self`), for which reactions are the person's own.
+   * `current` says whether the answer still applies when it arrives.
+   */
+  private async readSelf(current: () => boolean): Promise<void> {
     try {
       const answer = asRecord(await this.request("users.self", {}));
-      if (generation !== this.generation) return;
+      if (!current()) return;
       const id = asRecord(answer?.profile)?.id;
       this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
     } catch {
       // A refusal on an earlier connection says nothing of a later one's identity.
-      if (generation === this.generation) this.selfId = null;
+      if (current()) this.selfId = null;
     }
   }
 
@@ -3471,17 +3536,22 @@ export class ClawtrateClient {
     if (typeof emoji !== "string" || !emoji || emoji.length > 64)
       throw new Error("Choose one emoji.");
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
-    const generation = this.generation;
-    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    // A scope upgrade reconnects to the same address and keeps the opening of the task.
+    const url = this.settings?.url;
     const incarnation = this.incarnations.get(key);
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
-    if (this.selfId === null) await this.readSelf(generation);
+    if (this.settings?.url !== url) throw new Error("That message is no longer shown here.");
+    // From the identity read through the write, a new connection can act for a different person.
+    const generation = this.generation;
+    const epoch = this.epoch;
+    const sameConnection = () => generation === this.generation && epoch === this.epoch;
+    if (this.selfId === null) await this.readSelf(sameConnection);
     // After every wait, immediately before the write: its viewer is still here, and the same
     // opening of the task still shows the message.
     this.checkNotWithdrawn(options.owner);
     const now = this.state.transcripts[key];
     if (
-      generation !== this.generation ||
+      !sameConnection() ||
       this.incarnations.get(key) !== incarnation ||
       !now ||
       !shownMessageIds(now).has(messageId)
@@ -3500,18 +3570,14 @@ export class ClawtrateClient {
         }),
       );
     } catch (error) {
-      this.noteMissingScope(error);
+      if (sameConnection()) this.noteMissingScope(error);
       throw error;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!sameConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]?.reactions !== before) {
       // Something newer changed them: the gateway's list says what is true now.
-      void this.readReactions(key, generation);
+      void this.readReactions(key, this.generation);
       return;
     }
     this.applyReactions(key, messageId, answer?.reactions);
@@ -3532,36 +3598,52 @@ export class ClawtrateClient {
   }
 
   /**
-   * Two runs of the task still look active after a history read: one whose end a connection gap
-   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * Two runs of the task still look active, after a history read or from live events alone: one
+   * whose end this client missed, beside the one the gateway runs now. Stop names neither until
    * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
    * `operator.write`). A run it reports over settles as it reports; one it reports still going,
-   * or does not know, stays as it is.
+   * or does not know, stays as it is. One check at a time per task, and one per set of runs
+   * until the next history read, so answers that change nothing ask nothing more.
    */
-  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+  private async settleEndedRuns(key: string): Promise<void> {
     const transcript = this.state.transcripts[key];
     const first = transcript && activeRun(transcript);
     if (!first || runningRunId(transcript, first.id) !== null) return;
     if (!this.state.connection.canWrite || this.options.readOnly) return;
-    const incarnation = this.incarnations.get(key);
     const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
-    await Promise.all(
-      asked.map(async (run) => {
-        let answer: RawRecord | null;
-        try {
-          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
-        } catch (error) {
-          if (generation === this.generation)
-            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
-          return;
-        }
-        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
-          return;
-        this.updateActivity(key, (activity, ctx) =>
-          settleRunFromWait(activity, run.id, answer, ctx),
-        );
-      }),
-    );
+    const runIds = asked.map((run) => run.id).join("\u0000");
+    if (this.endChecking.has(key) || this.endChecked.get(key) === runIds) return;
+    this.endChecking.add(key);
+    this.endChecked.set(key, runIds);
+    const generation = this.generation;
+    const incarnation = this.incarnations.get(key);
+    try {
+      await Promise.all(
+        asked.map(async (run) => {
+          let answer: RawRecord | null;
+          try {
+            answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+          } catch (error) {
+            if (generation === this.generation)
+              this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+            return;
+          }
+          if (
+            !answer ||
+            generation !== this.generation ||
+            this.incarnations.get(key) !== incarnation
+          )
+            return;
+          this.updateActivity(key, (activity, ctx) =>
+            settleRunFromWait(activity, run.id, answer, ctx),
+          );
+        }),
+      );
+    } finally {
+      this.endChecking.delete(key);
+    }
+    // Runs that started while this check was on its way are asked now, unless they are the same set.
+    void this.settleEndedRuns(key);
   }
 
   /**
@@ -3676,8 +3758,7 @@ export class ClawtrateClient {
         aliases,
       );
       const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlight !== null || holdsInput(history);
       const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
         ids.has(run.id),
       );
@@ -4091,6 +4172,84 @@ export class ClawtrateClient {
   /** One run's conversation, when the gateway keeps it; returned, not kept. */
   readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
     return this.routines.conversation(id, run);
+  }
+
+  // Changing routines (automation.md sections 9 and 10): `operator.admin`, checked by the engine.
+
+  /** A new routine; `key` is its draft's, the same for every try of that draft. */
+  createRoutine(
+    input: NewRoutine,
+    key: string,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    return this.routines.create(input, key, owner, gateway);
+  }
+
+  /** One routine as the gateway has it now. */
+  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
+    return this.routines.readOne(id, gateway);
+  }
+
+  /** What the gateway shows of a create whose answer never came, by its draft's key. */
+  checkRoutineCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkCreate(key, input, gateway);
+  }
+
+  /** What the gateway shows of an edit whose answer never came. */
+  checkRoutineUpdate(
+    id: string,
+    sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkUpdate(id, sent, gateway);
+  }
+
+  updateRoutine(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    if (jsonTextLength(id) > MAX_ID_CHARS)
+      return Promise.resolve({ status: "refused", error: "That routine id is too long." });
+    return this.routines.update(id, original, edit, expected, owner, gateway);
+  }
+
+  setRoutineEnabled(
+    id: string,
+    enabled: boolean,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineWrite> {
+    return this.routines.setEnabled(id, enabled, owner, listedOn);
+  }
+
+  runRoutineNow(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRunNow> {
+    return this.routines.runNow(id, owner, listedOn);
+  }
+
+  removeRoutine(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRemove> {
+    return this.routines.remove(id, owner, listedOn);
+  }
+
+  /** The gateway's inbound hooks, read with admin; null below it. */
+  readGatewayHooks(): Promise<GatewayHooks | null> {
+    return this.routines.hooks();
   }
 
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
@@ -4613,6 +4772,7 @@ export class ClawtrateClient {
     });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
+    void this.settleEndedRuns(key);
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -4849,7 +5009,6 @@ export class ClawtrateClient {
 
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
-    const paired = stored !== null;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
@@ -4868,7 +5027,7 @@ export class ClawtrateClient {
         status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
-        paired,
+        // Not paired yet: only a hello says so, since a saved token may be one the gateway refuses.
         requestedScopes:
           stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
@@ -4971,13 +5130,24 @@ export class ClawtrateClient {
       }),
       onConnectHello: async (hello, context) => {
         await lifecycle.acceptHello(hello, context.plan);
-        // Only this connection may drop this gateway's bootstrap secret.
-        if (generation !== this.generation || this.settings?.url !== settings.url) return;
-        if (hello.auth.deviceToken && this.settings?.token) {
-          // Paired: drop the bootstrap secret, the device token replaces it.
-          this.settings = { ...this.settings, token: null };
-          await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
-        }
+        // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
+        await this.changeConnection(async () => {
+          // Only this connection may drop this gateway's bootstrap secret.
+          const current = this.settings;
+          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!current.token) return;
+          // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
+          const paired =
+            Boolean(hello.auth.deviceToken) ||
+            (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
+          if (!paired) return;
+          try {
+            await this.saveSettings({ ...current, token: null });
+          } catch {
+            // The settings keep the secret, so the next hello tries again; this one goes on.
+            this.log("warn", "Could not remove the shared gateway token from this device.");
+          }
+        });
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
@@ -5103,6 +5273,7 @@ export class ClawtrateClient {
     this.spawnedBy.clear();
     this.foreign.clear();
     this.foreignReads.clear();
+    this.endChecked.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -5211,10 +5382,14 @@ export class ClawtrateClient {
       };
     }
 
-    if (code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH") {
+    const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
+    if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
-      // next attempt can pair again with a bootstrap token.
-      void tokenStore.clear(this.tokenParams(deviceId));
+      // next attempt can pair again with a bootstrap token. The gateway's refusal
+      // stays on screen whether or not the host could remove it.
+      void (async () => tokenStore.clear(this.tokenParams(deviceId)))().catch(() =>
+        this.log("warn", "Could not remove the rejected device token from this device."),
+      );
     }
 
     const pause = shouldPauseGatewayReconnect({ details: error.details });
@@ -5222,6 +5397,7 @@ export class ClawtrateClient {
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
       error: { code, message: error.message, hint },
+      ...(refused ? { paired: false } : {}),
     });
     // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
     if (pause)
@@ -5344,9 +5520,17 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The last gateway's identity goes with the connection it came from, so a
+    // write waits for this one's read (routines.ts `blocked`).
+    this.setConnection({ gatewayId: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
     const gatewayId = this.readGatewayIdentity();
+    // Applied here too, so a bot list that fails or is slow to read does not
+    // keep the identity back.
+    void gatewayId.then((id) => {
+      if (id !== null && generation === this.generation) this.setConnection({ gatewayId: id });
+    });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -5356,9 +5540,11 @@ export class ClawtrateClient {
         if (generation === this.generation) {
           // A read asked later, after a bot was created, may have answered first.
           const newest = this.newestBots(botsIssued);
+          // Only a read that found the identity writes it: an older refresh whose
+          // read failed must not clear what a newer one on this connection confirmed.
           this.store.update((state) => ({
             ...state,
-            connection: { ...state.connection, gatewayId: id },
+            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }
@@ -5742,9 +5928,7 @@ export class ClawtrateClient {
       const scratch = new RawTable();
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy =
-        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlightId !== null || holdsInput(history);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
@@ -5808,6 +5992,8 @@ export class ClawtrateClient {
       };
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
+      // A read is news of its own: the runs it leaves active are asked again.
+      this.endChecked.delete(key);
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
@@ -5818,7 +6004,6 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
-      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
