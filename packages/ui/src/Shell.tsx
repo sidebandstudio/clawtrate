@@ -639,7 +639,9 @@ export function Shell({
             interactive={interactive}
             onShowStep={showStep}
             onShowQuestion={showQuestion}
-            onRequestAccess={info.readOnly ? null : () => void send({ type: "requestAccess" })}
+            onRequestAccess={
+              info.readOnly ? null : () => void send({ type: "requestAccess" }).catch(() => {})
+            }
             onOpenMachines={() => onOpenSettings("machines")}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}

@@ -176,14 +176,14 @@ export function ScreenView(props: ScreenViewProps) {
       // As keys and clicks: only while in control and the picture has focus.
       if (!inputAllowed()) return;
       event.preventDefault();
+      // Over the letterbox there is no page: nothing is scrolled.
       const point = pagePoint(event.clientX, event.clientY);
+      if (!point) return;
       const w = wheel.current;
       w.dy += event.deltaY;
       w.dx += event.deltaX;
-      if (point) {
-        w.x = point.x;
-        w.y = point.y;
-      }
+      w.x = point.x;
+      w.y = point.y;
       if (w.timer !== null) return;
       w.timer = window.setTimeout(() => {
         w.timer = null;
@@ -370,7 +370,7 @@ export function ScreenView(props: ScreenViewProps) {
           </span>
           {!holding && watching && <span className="screen-mode">Watching</span>}
         </div>
-        {!holding && (
+        {!holding && control.status !== "checking" && control.status !== "maybe-held" && (
           <button
             type="button"
             className="button"
