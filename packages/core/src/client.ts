@@ -3626,6 +3626,8 @@ export class ClawtrateClient {
     } finally {
       this.endChecking.delete(key);
     }
+    // Runs that started while this check was on its way are asked now, unless they are the same set.
+    void this.settleEndedRuns(key);
   }
 
   /**
@@ -5177,6 +5179,7 @@ export class ClawtrateClient {
     this.spawnedBy.clear();
     this.foreign.clear();
     this.foreignReads.clear();
+    this.endChecked.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();

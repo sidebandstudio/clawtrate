@@ -308,12 +308,10 @@ describe("Stop with no one current run (F-097)", () => {
     gateway.emit("agent", agentEvent("third", 1, "lifecycle", { phase: "start" }));
     await until(() => run(task, "third")?.state === "running");
     expect(waits()).toBe(2);
+    // Once it answers, the three are asked about, once: the gateway says each is still going.
     answer.resolve();
-    await sleep(10);
-    // The next change asks about the three, once: the gateway says each is still going.
-    gateway.emit("agent", agentEvent("third", 2, "assistant", { text: "Working" }));
     await until(() => waits() === 5);
-    gateway.emit("agent", agentEvent("third", 3, "assistant", { text: "Working on it" }));
+    gateway.emit("agent", agentEvent("third", 2, "assistant", { text: "Working" }));
     await sleep(10);
     expect(waits()).toBe(5);
     expect(task.transcript().runs.map((each) => each.state)).toEqual([
