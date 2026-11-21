@@ -55,7 +55,7 @@ export const SETTINGS_WORDS = {
   noAddress: "None yet",
   state: "State",
   device: "This device",
-  scopes: "Granted scopes",
+  scopes: "Scopes in use",
   noScopes: "None while not connected",
   noneGranted: "None granted",
   server: "Gateway",

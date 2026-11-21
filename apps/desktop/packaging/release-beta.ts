@@ -784,6 +784,8 @@ export function releaseNotes(
     "Install it from https://clawtrate.dev, or choose Check for Updates in a beta already installed.",
     "Apple silicon takes the arm64 zip and Intel Macs the x64 zip. Both are signed with a Developer ID and notarized by Apple.",
     "",
+    "If OpenClaw is already on your Mac, Clawtrate asks for your gateway's address and token under Advanced. It doesn't connect to it by itself yet: that would mean running OpenClaw's own program before you agree, and that program can change its installation when it starts.",
+    "",
     "SHA-256:",
     "",
     ...files.map((file) => `- \`${file.name}\`: \`${file.sha256}\``),

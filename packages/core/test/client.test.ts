@@ -66,8 +66,8 @@ describe("requested scopes (B1)", () => {
     const { client, storage } = await connected(gateway);
     expect(JSON.parse(storage.data.get(tokenKey(URL_A))!)).toEqual({
       token: "issued-token",
-      grantedScopes: ["operator.read", "operator.write"],
-      // Granted at pairing is not the same as meant to hold: the client still holds read only.
+      // A grant wider than the request is stored as the request: the client holds read only.
+      grantedScopes: ["operator.read"],
       heldScopes: ["operator.read"],
     });
     gateway.dropAll();
@@ -174,7 +174,7 @@ describe("pairing instructions (A3)", () => {
 });
 
 describe("a saved gateway at start", () => {
-  it("is reopened by default, and with resume false is kept but not reopened until the person reconnects", async () => {
+  it("reopens by default and stays offline when offered as a choice", async () => {
     const gateway = new FakeGateway();
     const storage = memoryStorage();
     const first = new ClawtrateClient(testHost(gateway, storage), FAST);
@@ -183,8 +183,8 @@ describe("a saved gateway at start", () => {
     first.stop();
     const opened = gateway.sockets.length;
 
-    const kept = new ClawtrateClient(testHost(gateway, storage), { ...FAST, resume: false });
-    await kept.start();
+    const kept = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await kept.start({ resume: "disconnected" });
     expect(kept.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL_A });
     await sleep(50);
     expect(gateway.sockets).toHaveLength(opened);
@@ -212,9 +212,9 @@ describe("a saved gateway at start", () => {
       return restore.promise;
     };
     const gateway = new FakeGateway();
-    const client = new ClawtrateClient(testHost(gateway, storage), { ...FAST, resume: false });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
     try {
-      const starting = client.start();
+      const starting = client.start({ resume: "disconnected" });
       await reading.promise;
       const connecting = client.connect({ url: URL_B, token: "new" });
       await Promise.resolve();

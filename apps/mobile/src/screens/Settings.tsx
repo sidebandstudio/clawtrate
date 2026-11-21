@@ -1,6 +1,6 @@
 // Settings, a sheet over the shell, with the desktop's Gateway pane in its words
 // (`presentation/gateway-state.ts`): the address, the state and its dot, this
-// device, the scopes the gateway granted, the gateway's version, the error when
+// device, the scopes the connection can use, the gateway's version, the error when
 // there is one; Disconnect, which keeps the pairing, Reconnect, and Use another
 // gateway, which forgets this one.
 

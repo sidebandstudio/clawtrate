@@ -37,7 +37,7 @@ export function startRuntime(): Runtime {
   const { host, devGateway, secrets, installedBefore, markInstalled } = createIosHost();
   // A gateway saved by an earlier install of the app is kept, not reopened: the
   // welcome screen offers it as a choice.
-  const client = new ClawtrateClient(host, { readOnly: true, resume: installedBefore });
+  const client = new ClawtrateClient(host, { readOnly: true });
   const session = createBridgeSession(client);
   runtime = {
     client,
@@ -50,7 +50,7 @@ export function startRuntime(): Runtime {
     },
     redact: secrets.redact,
   };
-  void client.start().catch((error: unknown) => {
+  void client.start({ resume: installedBefore ? true : "disconnected" }).catch((error: unknown) => {
     console.error(
       `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
     );
