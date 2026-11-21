@@ -911,6 +911,14 @@ export class ClawtrateClient {
     lifecycle: GatewayBrowserDeviceAuthLifecycle;
   } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
+  /**
+   * Each choice of gateway (a connect of any kind, or a disconnect), numbered as
+   * it is asked: `selectionAsked` when queued, `selectionApplied` once it ran.
+   * `selectionReady` is the one whose bots and tasks were last read in full.
+   */
+  private selectionAsked = 0;
+  private selectionApplied = 0;
+  private selectionReady = -1;
   /** The generation of the connection opened as the host's setup connection, while it lasts. */
   private setupGeneration: number | null = null;
   private settings: ConnectionSettings | null = null;
@@ -1236,7 +1244,9 @@ export class ClawtrateClient {
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
@@ -1264,7 +1274,9 @@ export class ClawtrateClient {
     setup: SetupEndpointCheck = {},
   ): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
@@ -1292,7 +1304,9 @@ export class ClawtrateClient {
    */
   async connectForSetup(url: string, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const target = validateGatewayUrl(url);
       if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
@@ -1303,6 +1317,23 @@ export class ClawtrateClient {
       this.setupIntent = { url: target, reuse: true };
       if (stops === this.stops) await this.open();
     });
+  }
+
+  /**
+   * The number the next choice of gateway will get: read just before a connect
+   * call, it names that connect's selection.
+   */
+  nextSelection(): number {
+    return this.selectionAsked + 1;
+  }
+
+  /** Whether `selection` is the gateway chosen now, and its bots and tasks were read in full. */
+  readyFor(selection: number): boolean {
+    return (
+      this.selectionApplied === selection &&
+      this.selectionReady === selection &&
+      this.state.discovery.status === "ready"
+    );
   }
 
   /** Whether this device has a saved pairing for the gateway at `url`: `new` without one. */
@@ -1329,14 +1360,21 @@ export class ClawtrateClient {
    * token remain. With `gatewayUrl`, only that gateway is forgotten: the address
    * the person saw, which another viewer may have changed since.
    */
-  async disconnect(gatewayUrl?: string): Promise<void> {
+  async disconnect(gatewayUrl?: string, selection?: number): Promise<void> {
+    const asked = ++this.selectionAsked;
     return this.changeConnection(async () => {
       if (!this.settings) return;
       if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
         throw new GatewayChangedError();
       }
-      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
+      // A cleanup for one selection never ends a later one, even of the same address.
+      if (selection !== undefined && this.selectionApplied !== selection) {
+        throw new GatewayChangedError();
+      }
+      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
+      // and stays the selection it was.
       await this.host.storage.delete(SETTINGS_KEY);
+      this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
       this.setupCode = null;
@@ -6067,6 +6105,7 @@ export class ClawtrateClient {
    * keeps the other's result and any data shown before it.
    */
   private async bootstrap(generation: number, resync: CaughtUp["reason"] | null): Promise<void> {
+    const selection = this.selectionApplied;
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
@@ -6143,6 +6182,7 @@ export class ClawtrateClient {
         error: this.scrub(`Could not load ${failures.join("; ")}`),
       });
     } else {
+      this.selectionReady = selection;
       this.setDiscovery({
         status: "ready",
         error: null,
