@@ -188,6 +188,7 @@ export function Settings({
   accounts,
   checkIns,
   bots,
+  waitingMessages,
   initialSection,
   updateReading,
   onClose,
@@ -197,6 +198,7 @@ export function Settings({
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
+  waitingMessages: string;
   /** The section to open on; otherwise the one shown last. */
   initialSection: Section | null;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
@@ -204,7 +206,6 @@ export function Settings({
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const initialUpdates = initialSection === "updates";
   const [section, setSectionState] = useState<Section>(
     () => initialSection ?? recall<Section>(SHOWN_LAST) ?? "gateway",
   );
@@ -309,7 +310,7 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({
-    refreshOnOpen: !initialUpdates || section !== "updates",
+    refreshOnOpen: section !== "updates",
     accounts,
     bots,
     connection,
@@ -481,7 +482,7 @@ export function Settings({
                       title: "Updates",
                       back: toNav,
                       foot: null,
-                      body: <Updates {...updateReading} />,
+                      body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
                     }
                   : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (

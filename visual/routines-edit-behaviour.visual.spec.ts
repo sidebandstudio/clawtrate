@@ -245,16 +245,32 @@ test.describe("1440", () => {
         await editor(page).getByLabel("Name").fill("Morning digest, short");
       } else await fillNew(page, "In doubt");
       await save(page).click();
+      // Each check is held until released, so its answer can't come before the connection changes.
+      await page.evaluate(() => {
+        const w = window as unknown as {
+          releaseCheck: () => void;
+          clawtrateFixture: { invoke: (command: { type: string }) => Promise<unknown> };
+        };
+        const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+        w.clawtrateFixture.invoke = (command) =>
+          command.type === "checkRoutineCreate" || command.type === "checkRoutineUpdate"
+            ? new Promise((resolve) => (w.releaseCheck = () => resolve(invoke(command))))
+            : invoke(command);
+      });
+      const releaseCheck = () =>
+        page.evaluate(() => (window as unknown as { releaseCheck(): void }).releaseCheck());
       const note = editor(page).getByTestId("editor-unknown");
       await note.getByRole("button", { name: "Check now" }).click();
       // A new connection's hello arrives while the check is out; who it is isn't read yet.
       await setConnection(page, { connectedAt: Date.now() + 5_000, gatewayId: null });
+      await releaseCheck();
       await expect(note).toContainText("Couldn't check: Another gateway is connected now.");
       await expect(note).not.toContainText("now reads as you typed it");
       await expect(note).not.toContainText("no routine from this form");
       // The gateway the save went to is back: the same check now confirms it.
       await setConnection(page, { gatewayId });
       await note.getByRole("button", { name: "Check again" }).click();
+      await releaseCheck();
       if (edit)
         await expect(note).toContainText("Morning digest, short now reads as you typed it.");
       else await expect(editor(page)).toHaveCount(0);
