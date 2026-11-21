@@ -151,6 +151,16 @@ it("F-231: names the running and selected tracks and shows choices only with two
   ).toContain("The next check asks the Beta source.");
 });
 
+it("F-231: names the host it checks, but not as where a download comes from", () => {
+  // A Beta download starts at GitHub, not at the feed's host.
+  const offered = render(
+    { kind: "offered", version: "1.1.0", releaseDate: "2026-10-01", offerId: "opaque" },
+    { selectedTrack: "nightly" },
+  );
+  expect(offered.html).toContain("Downloads Clawtrate 1.1.0, only when you choose to.");
+  expect(offered.html).not.toContain("beta.example");
+});
+
 it.each([
   ["preferences-not-read", "Couldn't read the saved update settings."],
   ["last-check-not-saved", "Couldn't save the time of the last check."],

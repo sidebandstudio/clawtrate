@@ -27,6 +27,10 @@ it("accepts a stable version or the calculated nightly and rejects mismatched in
     ["other", "0.1.0"],
   ] as const)
     expect(() => pick(track, value)).toThrow();
+  // The track's identifier stays nightly; what a maintainer reads says Beta.
+  expect(() => pick("nightly", "0.1.1-beta.20261119.4")).toThrow(
+    "The requested beta differs from the date and run number.",
+  );
   for (const [base, run] of [
     ["bad", "1"],
     ["0.1.0", "01"],

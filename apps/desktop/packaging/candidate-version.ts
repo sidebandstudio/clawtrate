@@ -20,7 +20,7 @@ export function candidateVersion(
 ) {
   const version = track === "nightly" ? nightlyVersion(current, date, run) : requested;
   if (track === "nightly" && requested && requested !== version)
-    throw new Error("The requested nightly differs from the date and run number.");
+    throw new Error("The requested beta differs from the date and run number.");
   const parsed = parseVersion(version);
   if (!parsed || versionTrack(parsed) !== track) throw new Error("Version does not match track.");
   return version;

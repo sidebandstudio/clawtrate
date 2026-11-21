@@ -199,7 +199,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
   expect(server.requests).toEqual(["/stable"]);
   await expect(page.locator("#update-source")).toHaveText(
-    "Downloads Clawtrate 1.1.0 from 127.0.0.1, only when you choose to.",
+    "Downloads Clawtrate 1.1.0, only when you choose to.",
   );
   const download = page.getByRole("button", { name: "Download", exact: true });
   await download.focus();

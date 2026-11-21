@@ -283,7 +283,7 @@ export function Updates({
             </div>
             <p id="update-source" className="b-hint update-source">
               {state.kind === "offered"
-                ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.`
+                ? `Downloads Clawtrate ${state.version}, only when you choose to.`
                 : `Checks ${source} for a newer build, only when you choose to.`}
             </p>
           </>
