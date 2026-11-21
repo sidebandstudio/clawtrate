@@ -107,6 +107,7 @@ export function runUpdatePowerShell(
   script: string,
   values: Record<string, string>,
   timeout: number,
+  signal?: AbortSignal,
 ) {
   const shell = join(
     process.env.SystemRoot ?? "C:\\Windows",
@@ -120,6 +121,7 @@ export function runUpdatePowerShell(
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     {
       env: { ...process.env, ...values },
+      ...(signal && { signal }),
       windowsHide: true,
       timeout,
     },
