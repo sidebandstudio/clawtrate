@@ -776,8 +776,8 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
     const texts = (await sentOf(page, "computerInput"))
       .map((each) => (each.input as { text?: string }).text)
       .filter((text): text is string => text !== undefined);
-    expect(texts.at(-1)).toBe("rejected");
-    expect(texts.filter((text) => text.includes("d"))).toEqual(["rejected"]);
+    // The first keystroke refused, then the whole held text once, in order: nothing else.
+    expect(texts).toEqual(["r", "rejected"]);
   });
 
   test("F-142: the phone field sends nothing once the view has ended, though control is held; Give back control stays", async ({
