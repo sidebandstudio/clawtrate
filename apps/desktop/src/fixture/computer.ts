@@ -19,7 +19,9 @@
 
 import {
   ComputerViews,
+  RawTable,
   browserUse,
+  finishRun,
   newRun,
   readCommandPlace,
   type ClawtrateState,
@@ -495,10 +497,10 @@ export function computerFixture(
           stopError: "The gateway refused to stop this run.",
         }));
       else
-        setTimeout(
-          () => update((run) => ({ ...run, state: "stopped", endedAt: Date.now() })),
-          1200,
-        );
+        setTimeout(() => {
+          const ctx = { sessionKey: key, now: Date.now(), raw: new RawTable() };
+          update((run) => finishRun(run, "stopped", ctx));
+        }, 1200);
       return { runIds, aborted: null };
     },
     log: () => {},

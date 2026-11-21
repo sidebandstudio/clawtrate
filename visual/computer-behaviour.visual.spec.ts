@@ -679,10 +679,10 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(page.getByTestId("computer-button")).toHaveCount(0);
   });
 
-  test("F-149: after three refusals for the same reason the tab offers to stop the bot in this task, after a confirmation that says what keeps going", async ({
+  test("F-149: after three refusals the viewer can stop the active run, wait for its end and take control", async ({
     page,
   }) => {
-    await openFixture(page, `${COMPUTER}&computer=stuck`, "light");
+    await openFixture(page, `${COMPUTER}&computer=active`, "light");
     await openFull(page);
     await take(page);
     for (let i = 0; i < 2; i++) {
@@ -708,6 +708,12 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(line).toHaveText("Stopping Juniper's runs in this task…");
     await expect(line).toHaveText("Stopped Juniper's runs in this task.");
     expect(await sentOf(page, "computerStopTask")).toHaveLength(1);
+    await expect(page.getByRole("tab", { name: "Computer", exact: true })).toBeVisible();
+    await computerPanel(page)
+      .getByRole("button", { name: "Open Juniper's browser full window" })
+      .click();
+    await controlBar(page).getByRole("button", { name: "Try again" }).click();
+    await expect(controlBar(page)).toContainText("You have control");
   });
 
   test("F-149: a stop the gateway refuses says so, keeps the run as it was and offers Stop again; it never says Stopped", async ({
