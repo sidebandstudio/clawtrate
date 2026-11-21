@@ -147,10 +147,12 @@ export function NewBot({
     });
   };
 
-  // The accounts are read when the dialog opens.
+  // The accounts are read when the dialog opens, and again when the connection comes back while
+  // it is open (a grant of admin access reconnects): a read asked while offline reads nothing.
+  const online = connection.status === "connected";
   useEffect(() => {
-    void bridge.send({ type: "refreshAccounts" }).catch(() => {});
-  }, [bridge]);
+    if (online) void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+  }, [bridge, online]);
 
   // The gateway's default model names an account: it is chosen at first (section 4).
   const named = defaultAccount(accounts);
@@ -183,6 +185,10 @@ export function NewBot({
     });
   }
 
+  // "Let the gateway choose" chosen before the accounts were read takes the default model once
+  // they are: until then the gateway's default model isn't known.
+  if (draft.account === GATEWAY_CHOICE && draft.model === null && gw) choose(GATEWAY_CHOICE);
+
   // Once, when the accounts arrive and nothing is chosen yet.
   const [autoChosen, setAutoChosen] = useState(false);
   if (!autoChosen && draft.account === null && named && shared.some((a) => a.id === named)) {
@@ -196,8 +202,6 @@ export function NewBot({
     draft.account === GATEWAY_CHOICE ||
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
-  const latest = useRef(accounts);
-  latest.current = accounts;
   const busy = creation?.status === "creating";
   const unconfirmed = creation?.status === "unconfirmed" ? creation : null;
   const accountReady = !!draft.account && listedChoice && !!provider && !!draft.model;
@@ -225,13 +229,18 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce(
-        latest.current.creation?.status === "unconfirmed"
-          ? `Clawtrate couldn't confirm whether ${name} was created`
-          : "Could not create the bot",
-      );
+      // Announced from the outcome the state names, below.
     }
   };
+  // How a Create ended, said once as it ends: refused, or a reply that settled nothing.
+  const outcome = creation?.status ?? null;
+  const [lastOutcome, setLastOutcome] = useState(outcome);
+  if (outcome !== lastOutcome) {
+    setLastOutcome(outcome);
+    if (lastOutcome === "creating" && outcome === "failed") announce("Could not create the bot");
+    if (lastOutcome === "creating" && outcome === "unconfirmed")
+      announce(`Clawtrate couldn't confirm whether ${creation!.name} was created`);
+  }
   // What the gateway's approvals file settles, read when the Approvals step opens on admin.
   const [approvalsFile, setApprovalsFile] = useState<{ blocks: boolean } | null>(null);
   const fileName = draft.name.trim();

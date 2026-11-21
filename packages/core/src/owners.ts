@@ -58,7 +58,6 @@ import {
 } from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
-  MAX_BOTS,
   APPROVAL_OUTCOME,
   MAX_CREATIONS,
   MAX_FILE_NAME_CHARS,

@@ -601,15 +601,22 @@ describe("creating a bot: the one Create sequence (bots.md section 3, controls.m
   it("a hash that changed before step 3 stops it: nothing more is written, the list is read again, the composer stays closed; Write it again repeats step 3 alone", async () => {
     const { client, fake, accounts } = await accountsClient();
     const patch = fake.gateway.handlers["config.patch"]!;
-    let seen = 0;
-    fake.gateway.handlers["config.patch"] = (params) => {
-      seen += 1;
-      // Another client changes the config between step 3's read and its write.
-      if (seen === 2) {
+    const get = fake.gateway.handlers["config.get"]!;
+    // Reads of the config after step 2's write: the first is its read-back, the second step 3's
+    // read before writing. Another client changes the config just after that second read.
+    let afterStep2 = -1;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params);
+      if (afterStep2 >= 0 && ++afterStep2 === 2) {
         fake.config.ui = { changedBy: "another client" };
         fake.revision += 1;
       }
-      return patch(params);
+      return answer;
+    };
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      if (afterStep2 < 0) afterStep2 = 0;
+      return answer;
     };
     const lists = () => fake.gateway.calls("agents.list").length;
     const before = lists();

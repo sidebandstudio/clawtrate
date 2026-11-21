@@ -524,7 +524,7 @@ Every tool in the installed package's catalog (`tools.catalog` with plugins), wi
 
 ### What can run
 
-Only one bot, Otto (`SHELL_BOT`), may run shell commands, and only after a person approves each one. For every other bot, and every bot created later, exec is denied by the global policy, and the gateway refuses the call ("exec denied: host=gateway security=deny") without asking anyone.
+Only one seeded bot, Otto (`SHELL_BOT`), may run shell commands, and only after a person approves each one. For every other seeded bot, and every bot created later without a command setting of its own, exec is denied by the global policy, and the gateway refuses the call ("exec denied: host=gateway security=deny") without asking anyone. A bot made with Clawtrate's New bot gets the setting chosen there: with "Ask before acting" it asks as Otto does; with "Run without routine approvals" the scripted model's commands below would run without asking, so the checks never send one to such a bot.
 
 Otto's policy is `mode: "ask"`, which the gateway resolves to security `allowlist`, ask `on-miss`, ask fallback `deny`. Otto's allowlist starts empty, so every command asks. An approval request reaches only a connection with `operator.approvals` and the approval caps; with none connected, or when the request expires, the fallback denies it. "Allow always" adds an allowlist entry bound to Otto, the exact arguments and the working directory, in the instance's own state database. After that the same command in the same folder runs without asking, until the instance is started over (every start deletes the state). A command run with per-call `ask: "always"` cannot be allowed always.
 
