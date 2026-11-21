@@ -158,6 +158,20 @@ const MORE: Scene[] = [
     },
   },
   {
+    name: "runs-on-unanswered",
+    rows: "F-046",
+    query: `${PANE}&access=admin&mwrite=unanswered`,
+    ready: async (page) => {
+      await runsOnReady(page);
+      await page.getByTestId("runs-on-machine").click();
+      await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+      await expect(page.getByTestId("runs-on-save-note")).toBeVisible();
+      await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+        "Otto's command machine: The gateway's machine",
+      );
+    },
+  },
+  {
     name: "machines-override",
     rows: "F-156",
     query: `${PANE}&access=admin&override=1&machine=shared`,

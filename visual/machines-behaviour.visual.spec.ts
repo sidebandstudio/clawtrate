@@ -238,7 +238,7 @@ test("F-046: the Runs on row is drawn from its own read while the account read h
   );
 });
 
-test("F-046: a refused save says what the gateway answered, and the setting shown stays as it was", async ({
+test("F-046: a refused save says nothing was saved and what the gateway answered, and the setting shown stays as it was", async ({
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin&mwrite=refused`, "light");
@@ -246,12 +246,33 @@ test("F-046: a refused save says what the gateway answered, and the setting show
   await page.getByTestId("runs-on-machine").click();
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
-    /The gateway answered: invalid config/,
+    "Nothing was saved. The gateway answered: invalid config: agents.entries.otto.tools.exec.node",
   );
-  await expect(announcer(page)).toHaveText("Save not confirmed");
+  await expect(announcer(page)).toHaveText("Couldn't save");
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
     "Otto's command machine: media-box · Connected",
   );
+});
+
+test("F-046: a save whose answer never came says it couldn't be confirmed and what reading it back shows, never saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unanswered`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "Read back afterwards, Otto's command machine setting is the gateway's machine.",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+  // The page reads again and shows the stored setting, still without saying it was saved.
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: The gateway's machine",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({

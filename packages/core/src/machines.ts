@@ -13,6 +13,7 @@
 // read apart; none is inferred from another.
 
 import { parseModelRef } from "./accounts.ts";
+import { isCertainRefusal } from "./accounts-engine.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** Paired machines kept in one answer; past it, `nodesOmitted` counts the rest. */
@@ -226,18 +227,28 @@ export function choiceOf(levels: ApprovalLevels): DefaultsChoice | null {
   return null;
 }
 
-/** A write the gateway answered. `active` is what `config.get` reported after it. */
-export type ConfigSave = {
-  place: CommandPlace;
+/** How a save ended. Only `saved` says the gateway answered that it stored the change. */
+export type ConfigSave =
+  | {
+      status: "saved";
+      /** What `config.get` reported after the write. */
+      place: CommandPlace;
+      /**
+       * `applied`: the read-back revision is the one this write's receipt names, and the
+       * gateway reports it active. `failed`: the gateway answered that it persisted the
+       * change but didn't apply it. `pending`: anything else.
+       */
+      active: "applied" | "pending" | "failed";
+      /** The gateway's words when it answered with a persisted-change refusal, in any state. */
+      message: string | null;
+    }
+  /** The gateway refused it, in `message`, with an answer that establishes nothing was saved. */
+  | { status: "refused"; message: string }
   /**
-   * `applied`: the read-back revision is the one this write's receipt names, and the
-   * gateway reports it active. `failed`: the gateway answered that it persisted the
-   * change but didn't apply it. `pending`: anything else.
+   * Sent, with no answer that settles it: it may or may not have landed. `place` is the
+   * setting read back afterwards, or null when that read failed too.
    */
-  active: "applied" | "pending" | "failed";
-  /** The gateway's words when it answered with a persisted-change refusal, in any state. */
-  message: string | null;
-};
+  | { status: "unknown"; message: string; place: CommandPlace | null };
 
 // Reading ---------------------------------------------------------------------------------
 
@@ -832,6 +843,8 @@ export class MachinesEngine {
    * `.node` in one `config.patch` with the revision the page showed
    * (`baseHash`), then read back by `config.get`. Answers what was stored and
    * whether the gateway reports it active; throws unless the stored setting agrees.
+   * A refusal is answered in the gateway's words; a save no answer settles is
+   * answered with what reading the setting back shows, never as saved.
    */
   async setCommandMachine(
     botId: string,
@@ -843,6 +856,14 @@ export class MachinesEngine {
       target.host === "node"
         ? { host: "node", node: target.nodeId }
         : { host: "gateway", node: null };
+    const readBack = async () => {
+      const [read, { nodes }] = await Promise.all([
+        this.config(),
+        // The list only names the machine; without it the stored id is shown, and the save stands.
+        this.ctx.request("node.list", {}).then(readNodes, () => ({ nodes: [], omitted: 0 })),
+      ]);
+      return { ...read, place: readCommandPlace(read.config, botId, nodes) };
+    };
     // The revision this write saved: from its receipt, or from the saved config a refusal carries.
     let savedHash: string | null;
     let message: string | null = null;
@@ -855,16 +876,19 @@ export class MachinesEngine {
     } catch (error) {
       // The gateway can persist a change and not apply it; it says so with the saved config.
       const persisted = asRecord(rec(rec(error).details).persistedConfig);
-      if (persisted === null) throw this.refused("where its commands run", error);
+      if (persisted === null) {
+        if (isCertainRefusal(error)) return { status: "refused", message: errorText(error) };
+        // A lost reply, or an answer the gateway can give after writing the file.
+        const place = await readBack().then(
+          (read) => read.place,
+          () => null,
+        );
+        return { status: "unknown", message: errorText(error), place };
+      }
       savedHash = str(persisted.hash, MAX_REASON_CHARS);
       message = errorText(error);
     }
-    const [{ config, hash, raw }, { nodes }] = await Promise.all([
-      this.config(),
-      // The list only names the machine; without it the stored id is shown, and the save stands.
-      this.ctx.request("node.list", {}).then(readNodes, () => ({ nodes: [], omitted: 0 })),
-    ]);
-    const place = readCommandPlace(config, botId, nodes);
+    const { hash, raw, place } = await readBack();
     const agrees =
       place.ownHost === target.host &&
       (target.host === "node" ? place.ownNode === target.nodeId : place.ownNode === null);
@@ -881,7 +905,7 @@ export class MachinesEngine {
         : message?.startsWith("config.patch persisted but was not applied to the active Gateway")
           ? "failed"
           : "pending";
-    return { place, active, message };
+    return { status: "saved", place, active, message };
   }
 
   /**

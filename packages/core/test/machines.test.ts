@@ -1,6 +1,7 @@
 // Where a bot runs and Settings, Machines (machines.ts) against answers shaped
 // as OpenClaw 2026.10.6 gave them on a development instance (docs/decisions.md,
 // "Where a bot runs and Machines"). Machines and devices have invented names.
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import {
   choiceOf,
@@ -105,7 +106,10 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     }),
     "config.patch": (params) => {
       if (params.baseHash !== `c${configHash}`)
-        throw new Error("config changed since last load; re-run config.get and retry");
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "config changed since last load; re-run config.get and retry",
+        });
       if (!ignore.has("config.patch")) {
         config = merge(config, JSON.parse(params.raw as string) as Json);
         configHash += 1;
@@ -191,12 +195,14 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
   const request = async (method: string, params: unknown) => {
     calls.push([method, params as Json]);
     const message = refuse.get(method);
-    if (message) {
-      const error = new Error(message) as Error & { details?: unknown };
-      if (message.startsWith("missing scope: "))
-        error.details = { missingScope: message.slice("missing scope: ".length) };
-      throw error;
-    }
+    if (message)
+      throw new GatewayProtocolRequestError({
+        code: "INVALID_REQUEST",
+        message,
+        ...(message.startsWith("missing scope: ")
+          ? { details: { missingScope: message.slice("missing scope: ".length) } }
+          : {}),
+      });
     const handler = handlers[method];
     if (!handler) throw new Error(`unknown method ${method}`);
     return handler(params as Json);
@@ -304,7 +310,10 @@ describe("where a bot runs: the engine", () => {
         { host: "node", nodeId: NODE },
         shown.configHash,
       ),
-    ).rejects.toThrow("The gateway answered: config changed since last load");
+    ).resolves.toEqual({
+      status: "refused",
+      message: "config changed since last load; re-run config.get and retry",
+    });
     expect(gw.calls.filter(([m]) => m === "config.patch").map(([, p]) => p.baseHash)).toEqual([
       "c1",
       "c1",
@@ -322,8 +331,12 @@ describe("where a bot runs: the engine", () => {
     expect(JSON.parse(patch.raw as string)).toEqual({
       agents: { entries: { otto: { tools: { exec: { host: "node", node: NODE } } } } },
     });
-    expect(save).toMatchObject({ active: "applied", message: null });
-    expect(save.place).toMatchObject({ ownHost: "node", ownNode: NODE });
+    expect(save).toMatchObject({
+      status: "saved",
+      active: "applied",
+      message: null,
+      place: { ownHost: "node", ownNode: NODE },
+    });
     gw.ignore.add("apply");
     const pending = await engine(gw, { admin: true }).setCommandMachine(
       "otto",
@@ -388,7 +401,7 @@ describe("where a bot runs: the engine", () => {
     const raced = await save(later);
     const read = (await later.request("config.get", {})) as { hash: string };
     expect(read.hash).toBe("c3");
-    expect(raced.active).toBe("pending");
+    expect(raced).toMatchObject({ status: "saved", active: "pending" });
     // A receipt that names no revision is never applied.
     const bare = gateway();
     const plain = bare.handlers["config.patch"]!;
@@ -396,7 +409,7 @@ describe("where a bot runs: the engine", () => {
       plain(params);
       return { ok: true };
     };
-    expect((await save(bare)).active).toBe("pending");
+    expect(await save(bare)).toMatchObject({ status: "saved", active: "pending" });
   });
 
   it("F-046: a saved node the list doesn't have is the stored id, not the gateway's machine", async () => {
@@ -406,7 +419,7 @@ describe("where a bot runs: the engine", () => {
       { host: "node", nodeId: NODE },
       "c1",
     );
-    expect(save.place).toMatchObject({ host: "node", nodeSelector: NODE, node: null });
+    expect(save).toMatchObject({ place: { host: "node", nodeSelector: NODE, node: null } });
   });
 
   it("F-046: a confirmed save stands when the machine list can't be read; the stored id is shown", async () => {
@@ -443,12 +456,64 @@ describe("where a bot runs: the engine", () => {
     expect(gw.calls).toEqual([]);
   });
 
-  it("F-046: the gateway's refusal is shown in its own words", async () => {
+  it("F-046: a refusal is answered in the gateway's own words, as nothing saved", async () => {
     const gw = gateway();
     gw.refuse.set("config.patch", "invalid config: agents.entries.otto.tools.exec.host");
     await expect(
       engine(gw, { admin: true }).setCommandMachine("otto", { host: "gateway" }, "c1"),
-    ).rejects.toThrow("Couldn't save where its commands run. The gateway answered: invalid config");
+    ).resolves.toEqual({
+      status: "refused",
+      message: "invalid config: agents.entries.otto.tools.exec.host",
+    });
+    expect(gw.calls.map(([method]) => method)).toEqual(["config.patch"]);
+  });
+
+  /** A gateway whose `config.patch` answer is lost: `lands` says whether the change was written first. */
+  function unanswered(lost: Error, lands: boolean) {
+    const gw = gateway();
+    const patch = gw.handlers["config.patch"]!;
+    gw.handlers["config.patch"] = (params) => {
+      if (lands) patch(params);
+      throw lost;
+    };
+    return gw;
+  }
+  const CLOSED = new Error("gateway closed (1006): ");
+
+  it("F-046: a save whose answer never came is read back, and answered as unconfirmed with what the gateway stores", async () => {
+    const gw = unanswered(CLOSED, false);
+    expect(await save(gw)).toEqual({
+      status: "unknown",
+      message: "gateway closed (1006): ",
+      place: expect.objectContaining({ ownHost: null, ownNode: null }),
+    });
+    expect(gw.calls.map(([method]) => method)).toEqual(["config.patch", "config.get", "node.list"]);
+    // An answer the gateway can give after it wrote the file settles nothing either.
+    const written = unanswered(
+      new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "config write failed" }),
+      true,
+    );
+    expect(await save(written)).toMatchObject({
+      status: "unknown",
+      place: { ownHost: "node", ownNode: NODE },
+    });
+    // When the read fails too, nothing is said about the setting.
+    const unread = unanswered(CLOSED, true);
+    unread.refuse.set("config.get", "gateway closed (1006): ");
+    expect(await save(unread)).toEqual({
+      status: "unknown",
+      message: "gateway closed (1006): ",
+      place: null,
+    });
+  });
+
+  it("F-046: saved and applied needs the receipt: a lost answer is unconfirmed even when its setting reads back active", async () => {
+    const gw = unanswered(CLOSED, true);
+    const result = await save(gw);
+    const read = (await gw.request("config.get", {})) as Record<string, unknown>;
+    expect(read.appliedConfigHash).toBe(read.configRevisionHash);
+    expect(result).toMatchObject({ status: "unknown", place: { ownHost: "node", ownNode: NODE } });
+    expect(result).not.toHaveProperty("active");
   });
 
   it("F-047: the inventory names accounts, tool servers and, with admin only, secrets; none is a permission", async () => {

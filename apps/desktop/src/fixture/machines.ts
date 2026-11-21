@@ -14,7 +14,7 @@
 //            never answers, or fails
 //   devices=noscope   no device access
 //   override=1        media-box's file has an entry for Otto that asks every time
-//   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
+//   mwrite=refused|conflict|unanswered|unconfirmed|pending|notapplied   how a change goes
 //   mslow=<bot>       that bot's placement read never answers
 //   plugins=none      the settings hold no plugin entries to inspect
 //   pairing=grant     a request for device access is approved after a moment
@@ -370,17 +370,31 @@ export function machineCommands(now: number, params: MachineParams) {
       case "setCommandMachine":
         return later(300, (): ConfigSave => {
           if (!admin(state)) throw new Error("Changing where a bot runs needs admin access.");
+          if (params.write === "refused")
+            return {
+              status: "refused",
+              message: "invalid config: agents.entries.otto.tools.exec.node",
+            };
+          if (params.write === "conflict" || command.baseHash !== `c${revision}`)
+            return {
+              status: "refused",
+              message: "config changed since last load; re-run config.get and retry",
+            };
           refuse();
-          if (command.baseHash !== `c${revision}`)
-            throw new Error(
-              "Couldn't save where its commands run. The gateway answered: config changed since last load; re-run config.get and retry",
-            );
           revision += 1;
           w.exec[command.botId] =
             command.host === "node"
               ? { host: "node", node: command.nodeId }
               : { host: "gateway", node: null };
+          // The change landed and its answer was lost: what reading it back shows is all there is.
+          if (params.write === "unanswered")
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: place(command.botId),
+            };
           return {
+            status: "saved",
             place: place(command.botId),
             active:
               params.write === "pending"
