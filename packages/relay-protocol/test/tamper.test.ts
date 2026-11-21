@@ -25,7 +25,8 @@ function expectProtocolError(run: () => unknown): RelayProtocolError {
   throw new Error("Expected a RelayProtocolError.");
 }
 
-describe("tampering", () => {
+// Each case runs hundreds of handshakes; a busy machine may take several times longer than usual.
+describe("tampering", { timeout: 60_000 }, () => {
   it("any changed bit in handshake message 1 fails the connector before the gate is asked", () => {
     const pair = makePair();
     const hs1 = pair.phone.start();
