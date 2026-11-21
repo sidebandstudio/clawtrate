@@ -183,6 +183,8 @@ export function Composer({
   onAnnounce,
   focusRef,
   limits,
+  held = false,
+  onSent,
 }: {
   bot: Bot;
   /** The gateway's address: drafts are kept per gateway and per task. */
@@ -200,6 +202,10 @@ export function Composer({
   focusRef: React.RefObject<HTMLTextAreaElement | null>;
   /** What the gateway said one message may carry; Clawtrate's own ceilings until it has. */
   limits: SendLimits | null;
+  /** Closed: a new bot whose command setting has not read back as chosen (controls.md section 10). */
+  held?: boolean;
+  /** A message went out from here. */
+  onSent?: (() => void) | undefined;
 }) {
   const ceilings = limits ?? DEFAULT_LIMITS;
   const bridge = useBridge();
@@ -289,7 +295,7 @@ export function Composer({
   const pending = (file: Attached) => !file.info && refusalOf(file) === null;
   const uploading = files.some(pending);
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
-  const canSend = hasContent && !refused && !uploading;
+  const canSend = hasContent && !refused && !uploading && !held;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
 
   const stop = useCallback(
@@ -384,6 +390,7 @@ export function Composer({
         // A pending question holds every message, however it was sent.
         if (view.mode === "hold") onAnnounce("Held until you answer");
         else if (how === "queue" || view.stopping) onAnnounce("Queued");
+        onSent?.();
       } catch (error) {
         setTextState((current) => {
           const back = current.trim() ? `${words}\n${current}` : words;
@@ -418,6 +425,7 @@ export function Composer({
       view,
       stop,
       runId,
+      onSent,
     ],
   );
 
@@ -809,7 +817,7 @@ export function Composer({
     typeof document !== "undefined" && document.documentElement.dataset.input === "touch";
 
   return (
-    <footer className="composer" data-testid="composer">
+    <footer className="composer" data-testid="composer" data-held={held || undefined}>
       <div className="composer-inner">
         <div className="composer-shelf" aria-label="Waiting to send">
           {rows}
@@ -947,6 +955,7 @@ export function Composer({
               value={text}
               placeholder={view.placeholder}
               aria-label={view.placeholder}
+              disabled={held}
               data-testid="composer-input"
               onChange={(event) => {
                 setText(event.target.value);

@@ -11,3 +11,8 @@ export function remember(key: string, value: unknown): void {
 export function recall<T>(key: string): T | null {
   return (kept.get(key) as T | undefined) ?? null;
 }
+
+/** Forget every value kept under a key that starts with `prefix`. */
+export function forgetAll(prefix: string): void {
+  for (const key of [...kept.keys()]) if (key.startsWith(prefix)) kept.delete(key);
+}

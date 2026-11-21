@@ -56,6 +56,25 @@ function mergePatch(base: unknown, patch: unknown): unknown {
   return out;
 }
 
+/** The paths of lists a merge patch would shorten or change by removing entries. */
+function removedLists(base: unknown, patch: unknown, path: string[]): string[] {
+  if (patch === null || typeof patch !== "object") return [];
+  if (Array.isArray(patch)) {
+    if (!Array.isArray(base)) return [];
+    const kept = patch.map((each) => JSON.stringify(each));
+    return base.some((each) => !kept.includes(JSON.stringify(each))) ? [path.join(".")] : [];
+  }
+  const from = base && typeof base === "object" && !Array.isArray(base) ? (base as Json) : {};
+  return Object.entries(patch as Json).flatMap(([key, value]) =>
+    // Deleting a list is removing its entries too: it needs its path named.
+    value === null
+      ? Array.isArray(from[key]) && (from[key] as unknown[]).length > 0
+        ? [[...path, key].join(".")]
+        : []
+      : removedLists(from[key], value, [...path, key]),
+  );
+}
+
 export const CHOICES = {
   device: "dev-signin/acme-device-code",
   browser: "dev-signin/acme-browser",
@@ -123,6 +142,27 @@ export class AccountsGateway {
   failStatusFor: string | null = null;
   /** Echo what was typed back in a refusal, as a careless gateway might. */
   echoTyped = false;
+  /** The gateway machine's approvals file, as `exec.approvals.get` answers it. */
+  approvalsFile: Json = { version: 1, defaults: {}, agents: {} };
+  /** The global command mode, `tools.exec.mode`, for bots without their own. */
+  globalMode = "deny";
+
+  /** The label `agents.list` reports, from the bot's mode or the global one (research §2.2). */
+  reportedPolicy(botId: string): string | null {
+    const entries = ((this.config.agents as Json | undefined)?.entries ?? {}) as Record<
+      string,
+      Json
+    >;
+    const own = ((entries[botId]?.tools as Json | undefined)?.exec as Json | undefined)?.mode;
+    const mode = typeof own === "string" ? own : this.globalMode;
+    return mode === "ask"
+      ? "guarded"
+      : mode === "full"
+        ? "full"
+        : mode === "deny"
+          ? "read-only"
+          : null;
+  }
 
   constructor() {
     const g = this.gateway;
@@ -136,11 +176,25 @@ export class AccountsGateway {
       g.handlers[method] = () => [];
     g.handlers["agents.list"] = () => ({
       defaultId: "main",
-      agents: this.bots.map((bot) => ({ id: bot.id, identity: { name: bot.name } })),
+      agents: this.bots.map((bot) => {
+        const label = this.reportedPolicy(bot.id);
+        return {
+          id: bot.id,
+          identity: { name: bot.name },
+          ...(label ? { defaultPermissionMode: label } : {}),
+        };
+      }),
+    });
+    g.handlers["exec.approvals.get"] = () => ({
+      path: "/s/exec-approvals.json",
+      exists: true,
+      hash: "a1",
+      file: this.approvalsFile,
     });
     g.handlers["config.get"] = () => ({
       config: JSON.parse(JSON.stringify(this.config)) as Json,
       hash: `h${this.revision}`,
+      valid: true,
       configRevisionHash: `r${this.revision}`,
       appliedConfigHash: `r${this.revision}`,
     });
@@ -153,6 +207,17 @@ export class AccountsGateway {
       }
       if (baseHash !== `h${this.revision}`)
         throw new GatewayError({ code: "INVALID_REQUEST", message: "config changed" });
+      // As the gateway does (bots.md section 20, row 37): a patch that removes entries from a
+      // list is refused unless that list's path is in `replacePaths`.
+      const replacePaths = (params as { replacePaths?: string[] }).replacePaths ?? [];
+      const removed = removedLists(this.config, JSON.parse(raw), []).filter(
+        (path) => !replacePaths.includes(path),
+      );
+      if (removed.length > 0)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `config.patch would remove entries from ${removed.join(", ")}`,
+        });
       this.config = mergePatch(this.config, JSON.parse(raw)) as Json;
       this.revision += 1;
       return { ok: true };
@@ -190,9 +255,11 @@ export class AccountsGateway {
       const { name, model, avatar } = params as { name: string; model?: string; avatar?: string };
       const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       this.bots.push({ id, name });
-      const entries = (this.config.agents as Json).entries as Json;
+      const agents = (this.config.agents ??= {}) as Json;
+      const entries = (agents.entries ??= {}) as Json;
       entries[id] = {
         name,
+        workspace: `/w/${id}`,
         agentDir: `/s/agents/${id}/agent`,
         ...(model ? { model } : {}),
         ...(avatar ? { identity: { avatar } } : {}),

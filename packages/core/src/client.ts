@@ -23,6 +23,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import type { FirstBotState } from "./new-bot.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -930,6 +931,17 @@ export class ClawtrateClient {
     bots: () =>
       this.state.bots.map((bot) => ({ id: bot.id, name: bot.name, isDefault: bot.isDefault })),
     connected: () => this.state.connection.status === "connected",
+    connection: () => ({
+      epoch: this.epoch,
+      generation: this.generation,
+      gateway: this.state.connection.gatewayUrl
+        ? { id: this.state.connection.gatewayId, url: this.state.connection.gatewayUrl }
+        : null,
+    }),
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+    },
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
     createMainTask: async (botId) => {
@@ -1045,6 +1057,8 @@ export class ClawtrateClient {
     const stops = this.stops;
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
+    // New bots whose command setting an earlier run couldn't confirm: still held.
+    await this.accounts.restore();
     // A turn limit the person chose earlier, unless the host was given one.
     if (this.options.turnLimitMs === undefined) {
       const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
@@ -1602,6 +1616,9 @@ export class ClawtrateClient {
   sendMessage(key: string, text: string, options: SendOptions = {}): string {
     const transcript = this.state.transcripts[key];
     if (!transcript) throw new Error("Open the task before sending to it.");
+    const target = botIdFromSessionKey(key);
+    const notYet = target === null ? null : this.accounts.heldBack(target);
+    if (notYet) throw new Error(notYet);
     const body = text.trim();
     const attachments = options.attachments ?? [];
     this.checkOutboxRoom(key);
@@ -1949,6 +1966,8 @@ export class ClawtrateClient {
     if (!body) throw new Error("The message is empty.");
     if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
       throw new Error("The message is too long.");
+    const held = this.accounts.heldBack(botId);
+    if (held) throw new Error(held);
     const label = options.label?.trim() || null;
     // Kept as asked, never cut: a cut field would ask the gateway something else on a later ask.
     if (
@@ -2015,6 +2034,9 @@ export class ClawtrateClient {
       // Switching gateways while access settled dropped it: it is never asked of another gateway.
       if (this.creations.get(creation.id)?.status !== "creating")
         throw new Error("Switched to another gateway.");
+      // Checked again as it goes: a new bot's setting may have come into doubt while access settled.
+      const notYet = this.accounts.heldBack(creation.botId);
+      if (notYet) throw new Error(notYet);
       creation.gatewayBootId = this.gatewayBootId;
       this.putCreation(creation);
       sent = true;
@@ -2221,6 +2243,8 @@ export class ClawtrateClient {
       this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
       return;
     }
+    // Not asked again of a new bot whose setting is in doubt: it stays to be checked.
+    if (this.accounts.heldBack(creation.botId)) return;
     try {
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       if (this.creations.get(id)?.status !== "checking") return;
@@ -2299,6 +2323,16 @@ export class ClawtrateClient {
         this.updateActivity(key, (activity) =>
           updateMessage(activity, messageId, { status: "held", runId: currentRun?.id ?? null }),
         );
+        return;
+      }
+    }
+    // A new bot whose command setting hasn't read back as chosen gets nothing, a retry included:
+    // the message stays unsent and can be sent again.
+    {
+      const target = botIdFromSessionKey(key);
+      const notYet = target === null ? null : this.accounts.heldBack(target);
+      if (notYet) {
+        this.failDelivery(key, messageId, new Error(notYet), true);
         return;
       }
     }
@@ -4316,13 +4350,49 @@ export class ClawtrateClient {
     return this.accounts.createBot(input);
   }
 
+  /** Read the new bots' settings again, for the notes in their first tasks. */
+  refreshBotPolicies(): Promise<void> {
+    return this.accounts.refreshPolicies();
+  }
+
   /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
   finishBot(botId: string): Promise<CreatedBot> {
     return this.accounts.finishBot(botId);
   }
 
-  dismissBotCreation(): void {
-    this.accounts.dismissCreation();
+  /** Forget a creation that has settled; with `attempt`, only that attempt's. */
+  dismissBotCreation(attempt: string | null = null): void {
+    this.accounts.dismissCreation(attempt);
+  }
+
+  /** "Write it again": the new bot's command policy, for its id alone, never Create. */
+  retryBotPolicy(botId: string): Promise<void> {
+    return this.accounts.retryPolicy(botId);
+  }
+
+  /** The new bot's first message went out: its note is done. */
+  dismissBotPolicy(botId: string): void {
+    this.accounts.dismissPolicy(botId);
+  }
+
+  /** Whether the gateway's approvals file blocks commands for a bot of this name. */
+  readApprovalsFile(name: string): Promise<{ blocks: boolean }> {
+    return this.accounts.approvalsFile(name);
+  }
+
+  /** The first-bot prompt's check of the current gateway, again, before New bot opens. */
+  async recheckFirstBot(): Promise<FirstBotState> {
+    if (this.state.connection.status !== "connected") {
+      this.accounts.firstBotFailed();
+      return { status: "roster", mainPolicy: null };
+    }
+    try {
+      await this.refreshBots();
+    } catch {
+      // A failed read leaves no prompt from an earlier one (`refreshBots`).
+      return { status: "roster", mainPolicy: null };
+    }
+    return this.state.accounts.firstBot;
   }
 
   changeBotAccount(
@@ -4456,13 +4526,24 @@ export class ClawtrateClient {
     return this.machines.removeDevice(deviceId);
   }
 
-  /** Read the bot list again, after a bot was created. */
-  private async refreshBots(): Promise<void> {
+  /** Read the bot list again, after a bot was created; the gateway's answer, as it came. */
+  private async refreshBots(): Promise<unknown> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
-    const result = await this.request("agents.list", {});
-    if (generation !== this.generation || !this.newestBots(issued)) return;
+    let result: unknown;
+    try {
+      result = await this.request("agents.list", {});
+    } catch (error) {
+      // No first-bot prompt stands on a roster that can't be read now; a newer read that answered
+      // first stands.
+      if (generation === this.generation && issued >= this.botsShown)
+        this.accounts.firstBotFailed();
+      throw error;
+    }
+    if (generation !== this.generation || !this.newestBots(issued)) return result;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    await this.accounts.checkFirstBot(result);
+    return result;
   }
 
   /**
@@ -5547,6 +5628,8 @@ export class ClawtrateClient {
             ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
+          // Whether the app opens on the first-bot prompt: its own reads, after the bots show.
+          if (newest) void this.accounts.checkFirstBot(result);
         }
         return result;
       }),
@@ -5558,6 +5641,7 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
+      if (botsIssued >= this.botsShown) this.accounts.firstBotFailed();
     }
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
@@ -5629,6 +5713,9 @@ export class ClawtrateClient {
 
   private publishTasks(): void {
     const tasksByBot = groupTasks(this.rows.values());
+    // A task for `main` shows it is used: the first-bot prompt that read it unused goes.
+    if ((tasksByBot.main?.length ?? 0) > 0 && this.state.accounts.firstBot.status === "prompt")
+      this.accounts.firstBotFailed();
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
     for (const tasks of Object.values(tasksByBot)) {
@@ -6279,12 +6366,17 @@ export class ClawtrateClient {
     botId: string,
     options: { label?: string | null; owner?: object } = {},
   ): Promise<string> {
+    // A new bot's first task comes from Create, after step 2 reads back; none is made before.
+    const held = this.accounts.taskHeldBack(botId);
+    if (held) throw new Error(held);
     const ctx = this.actionContext(options.owner ?? null);
     return this.listCreated(await newTask(ctx, botId, options.label ?? null));
   }
 
   /** A bot's replacement first task, "Main", after its last unarchived task went (F-424). */
   async newMainTask(botId: string, options: { owner?: object } = {}): Promise<string> {
+    const held = this.accounts.taskHeldBack(botId);
+    if (held) throw new Error(held);
     return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
   }
 

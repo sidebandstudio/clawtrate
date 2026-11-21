@@ -193,10 +193,10 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   await create.getByRole("button", { name: "Next" }).click();
   const account = dialog("Account");
   await expect(account.getByText("Choose the account Second runs on.")).toBeVisible();
-  // Below admin the rows are shown but cannot be chosen; the access bar takes Create's place.
+  // Below admin the rows are shown but cannot be chosen; the access bar takes Next's place.
   const bar = account.getByTestId("admin-bar");
   await expect(bar).toContainText("Admin access needed.");
-  await expect(account.getByRole("button", { name: "Create" })).toHaveCount(0);
+  await expect(account.getByTestId("account-next")).toHaveCount(0);
   await bar.getByRole("button", { name: "Request admin access" }).click();
   await expect(bar).toContainText("Waiting for the gateway's owner.", { timeout: 15_000 });
   await approve();
@@ -213,8 +213,11 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   await home.click();
   await expect(home).toHaveAttribute("aria-checked", "true");
   await shots("account-step");
-  await account.getByRole("button", { name: "Create" }).click();
-  await expect(account).toHaveCount(0, { timeout: 30_000 });
+  await account.getByTestId("account-next").click();
+  const approvals = dialog("Approvals");
+  await approvals.getByRole("radio", { name: "Ask before acting" }).click();
+  await approvals.getByRole("button", { name: "Create" }).click();
+  await expect(approvals).toHaveCount(0, { timeout: 30_000 });
 
   // Stored on the account, with an empty fallback list, and the picture chosen.
   const created = entry(await config(), "second")!;
@@ -249,8 +252,11 @@ test("F-472: a bot created with Let the gateway choose is stored with no account
   const choose = account.getByRole("radio", { name: /^Let the gateway choose/ });
   await expect(choose).toContainText("No fixed account.");
   await choose.click();
-  await account.getByRole("button", { name: "Create" }).click();
-  await expect(account).toHaveCount(0, { timeout: 30_000 });
+  await account.getByTestId("account-next").click();
+  const approvals = dialog("Approvals");
+  await approvals.getByRole("radio", { name: "Ask before acting" }).click();
+  await approvals.getByRole("button", { name: "Create" }).click();
+  await expect(approvals).toHaveCount(0, { timeout: 30_000 });
   // The gateway's default model, without an account, and no fallbacks.
   expect(entry(await config(), "chooser")!.model).toEqual({
     primary: "scripted/dev-1",

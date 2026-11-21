@@ -18,15 +18,26 @@
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
-//   create=failed|slow|checking|partial   how New bot's Create goes
+//   create=failed|slow|unconfirmed|partial|refused|denied   how New bot's Create goes
+//   policy=unconfirmed|refused|restrictive|gone|nolabel|checking   what a created bot's command
+//                             setting reads back as (default: as chosen, with the label it gives;
+//                             refused: unconfirmed, and Write it again is refused)
+//   approvalsfile=blocks|viral   the gateway's approvals file blocks commands for a new bot
+//                             (viral: only for a bot named Viral); its answer is one a test can hold
+//   firstbot=read-only|guarded|full|none   the gateway's only agent is an unused implicit main,
+//                             which reports that default command policy (none: no label)
 //   admin=grant               a request for admin access is approved after a moment, or on
 //                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
 
 import {
+  CHOICE_REFUSALS,
   ADMIN_SCOPES,
+  emptyActivity,
   INTERACTIVE_SCOPES,
   initialAccountsState,
+  type NewBotPolicy,
+  type ReportedPolicy,
   type AccountsState,
   type BotBinding,
   type BridgeCommand,
@@ -54,6 +65,12 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  /** What a created bot's command setting reads back as. */
+  policy: string | null;
+  /** The gateway's approvals file blocks commands for a new bot. */
+  approvalsFile: "blocks" | "viral" | null;
+  /** The first-bot prompt, and what the implicit main reports (`none`: nothing). */
+  firstBot: ReportedPolicy | "none" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -73,6 +90,15 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    policy: params.get("policy"),
+    approvalsFile:
+      params.get("approvalsfile") === "blocks" || params.get("approvalsfile") === "viral"
+        ? (params.get("approvalsfile") as "blocks" | "viral")
+        : null,
+    firstBot:
+      (["read-only", "guarded", "full", "none"] as const).find(
+        (each) => each === params.get("firstbot"),
+      ) ?? null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -94,6 +120,9 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  policy: null,
+  approvalsFile: null,
+  firstBot: null,
 };
 
 const MINUTE = 60_000;
@@ -381,7 +410,19 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     ],
     bindings,
   };
-  return withLock(state, params, now);
+  return withLock(
+    {
+      ...state,
+      firstBot: params.firstBot
+        ? {
+            status: "prompt",
+            mainPolicy: params.firstBot === "none" ? null : params.firstBot,
+          }
+        : { status: "roster", mainPolicy: null },
+    },
+    params,
+    now,
+  );
 }
 
 /** The open bot's binding in the state the address names. */
@@ -617,6 +658,44 @@ const REQUEST = "3f9a2c71-5b0e-4d6a-9c18-7e2f0a4b6d93";
 
 /** The read a "Check again" makes, when the read after a direct key save failed (`keyread=fail`). */
 let pendingRead: (() => void) | null = null;
+
+/** What a created bot's command setting reads back as, for `policy=` (default: as chosen). */
+function createdPolicy(
+  botId: string,
+  name: string,
+  chosen: "ask" | "full",
+  how: string | null,
+): NewBotPolicy {
+  const confirmed: NewBotPolicy = {
+    botId,
+    name,
+    workspace: `/w/${botId}`,
+    chosen,
+    status: "confirmed",
+    restrictive: true,
+    saved: chosen,
+    missingDeny: [],
+    reported: chosen === "ask" ? "guarded" : "full",
+    retryable: false,
+  };
+  if (how === "nolabel") return { ...confirmed, reported: "none" };
+  // Saved as chosen, with a tool Clawtrate blocks no longer blocked.
+  if (how === "nodeny")
+    return { ...confirmed, status: "unconfirmed", missingDeny: ["t3code__*"], retryable: true };
+  if (how === "checking") return { ...confirmed, status: "checking", saved: null, reported: null };
+  if (how === "unconfirmed" || how === "refused")
+    return { ...confirmed, status: "unconfirmed", saved: "deny", retryable: true };
+  if (how === "restrictive")
+    return {
+      ...confirmed,
+      status: "restrictive",
+      restrictive: false,
+      saved: null,
+      retryable: true,
+    };
+  if (how === "gone") return { ...confirmed, status: "unconfirmed", saved: null, retryable: false };
+  return confirmed;
+}
 
 /**
  * The account commands, answered on the fixture's state. Returns undefined
@@ -996,16 +1075,28 @@ export function accountCommand(
       return Promise.resolve();
     case "createBot": {
       const name = command.name.trim() || "New bot";
+      // As the host does: without a command choice nothing is sent.
+      if (command.approvals !== "ask" && command.approvals !== "full")
+        return Promise.reject(new Error("Choose how the new bot runs commands. Nothing was sent."));
+      const chosen = command.approvals;
+      // create=denied: the host refused before Create began (admin access went meanwhile).
+      if (params.create === "denied")
+        return Promise.reject(new Error("Creating a bot needs admin access."));
+      // create=refused: the account chosen went from the gateway while the dialog was open.
+      if (params.create === "refused") {
+        put((a) => ({ ...a, accounts: a.accounts.filter((x) => x.id !== command.account) }));
+        return Promise.reject(new Error(CHOICE_REFUSALS.gone));
+      }
       put((a) => ({
         ...a,
         creation: {
           name,
-          status: params.create === "checking" ? "checking" : "creating",
+          status: "creating",
           slow: false,
           botId: null,
           error: null,
           missing: [],
-          uncertain: false,
+          attempt: command.attempt,
         },
       }));
       if (params.create === "slow") {
@@ -1016,11 +1107,10 @@ export function accountCommand(
       }
       return new Promise((resolve, reject) =>
         later(500, () => {
-          if (params.create === "failed") {
+          if (params.create === "failed" || params.create === "unconfirmed") {
+            const status = params.create;
             put((a) =>
-              a.creation
-                ? { ...a, creation: { ...a.creation, status: "failed", error: "refused" } }
-                : a,
+              a.creation ? { ...a, creation: { ...a.creation, status, error: "no answer" } } : a,
             );
             reject(new Error("Could not create the bot."));
             return;
@@ -1031,7 +1121,24 @@ export function accountCommand(
               .replace(/[^a-z0-9]+/g, "-")
               .replace(/^-|-$/g, "") || "new-bot";
           const ref = `${command.provider}/${command.model}${command.account ? `@${command.account}` : ""}`;
+          const policy = createdPolicy(id, name, chosen, params.policy);
           const state = get();
+          const key = `agent:${id}:main`;
+          // The first task waits for step 2's read-back.
+          const task = policy.restrictive
+            ? [
+                {
+                  key,
+                  botId: id,
+                  sessionId: `${id}-main`,
+                  title: "Main",
+                  preview: null,
+                  updatedAt: Date.now(),
+                  status: "idle" as const,
+                  unread: false,
+                },
+              ]
+            : [];
           set({
             ...state,
             bots: [
@@ -1046,9 +1153,31 @@ export function accountCommand(
                 isDefault: false,
               },
             ],
-            tasksByBot: { ...state.tasksByBot, [id]: [] },
+            tasksByBot: { ...state.tasksByBot, [id]: params.create === "partial" ? [] : task },
+            transcripts:
+              task.length > 0 && params.create !== "partial"
+                ? {
+                    ...state.transcripts,
+                    [key]: {
+                      ...emptyActivity,
+                      runs: [],
+                      linkedRuns: {},
+                      interSession: [],
+                      mcpTools: {},
+                      sessionKey: key,
+                      status: "ready",
+                      items: [],
+                      error: null,
+                      hasMore: false,
+                      live: null,
+                      loadedAt: Date.now(),
+                    },
+                  }
+                : state.transcripts,
             accounts: {
               ...state.accounts,
+              firstBot: { status: "roster", mainPolicy: null },
+              policies: [...state.accounts.policies.filter((each) => each.botId !== id), policy],
               creation: {
                 name,
                 // create=partial: the bot exists, and its first task was not made.
@@ -1060,7 +1189,7 @@ export function accountCommand(
                     ? `${name} was created, but its first task was not made: the gateway did not answer.`
                     : null,
                 missing: params.create === "partial" ? ["task"] : [],
-                uncertain: false,
+                attempt: command.attempt,
               },
               bindings: [
                 ...state.accounts.bindings,
@@ -1079,8 +1208,89 @@ export function accountCommand(
           : a,
       );
       return Promise.resolve({ botId: command.botId, missing: [] });
+    case "retryBotPolicy": {
+      // As the host does: below admin nothing is written, and the refusal says why.
+      // policy=refused: the host refuses it, as when admin access went after the note was drawn.
+      if (!get().connection.canAdmin || params.policy === "refused")
+        return Promise.reject(new Error("Changing a bot's settings needs admin access."));
+      put((a) => ({
+        ...a,
+        policies: a.policies.map((each) =>
+          each.botId === command.botId
+            ? createdPolicy(each.botId, each.name, each.chosen, null)
+            : each,
+        ),
+      }));
+      // Step 2 read back at last: the first task that waited for it is made now.
+      const state = get();
+      if ((state.tasksByBot[command.botId] ?? []).length === 0) {
+        const key = `agent:${command.botId}:main`;
+        set({
+          ...state,
+          tasksByBot: {
+            ...state.tasksByBot,
+            [command.botId]: [
+              {
+                key,
+                botId: command.botId,
+                sessionId: `${command.botId}-main`,
+                title: "Main",
+                preview: null,
+                updatedAt: Date.now(),
+                status: "idle" as const,
+                unread: false,
+              },
+            ],
+          },
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...emptyActivity,
+              runs: [],
+              linkedRuns: {},
+              interSession: [],
+              mcpTools: {},
+              sessionKey: key,
+              status: "ready",
+              items: [],
+              error: null,
+              hasMore: false,
+              live: null,
+              loadedAt: Date.now(),
+            },
+          },
+        });
+      }
+      return Promise.resolve();
+    }
+    case "dismissBotPolicy":
+      put((a) => ({
+        ...a,
+        policies: a.policies.filter(
+          (each) => each.botId !== command.botId || each.status !== "confirmed",
+        ),
+      }));
+      return Promise.resolve();
+    case "refreshBotPolicies":
+      return Promise.resolve();
+    case "readApprovalsFile":
+      return new Promise((resolve) =>
+        deferred(
+          () =>
+            resolve({
+              blocks:
+                params.approvalsFile === "blocks" ||
+                (params.approvalsFile === "viral" && command.name.trim() === "Viral"),
+            }),
+          0,
+        ),
+      );
+    case "recheckFirstBot":
+      return Promise.resolve(accounts().firstBot);
     case "dismissBotCreation":
-      put((a) => ({ ...a, creation: null }));
+      put((a) =>
+        command.attempt && a.creation?.attempt !== command.attempt ? a : { ...a, creation: null },
+      );
       return Promise.resolve();
     case "changeBotAccount":
     case "setBotModel": {
