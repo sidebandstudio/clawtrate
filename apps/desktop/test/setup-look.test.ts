@@ -5,6 +5,7 @@
 
 import {
   chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -16,8 +17,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseStatus } from "../src/setup/parse.ts";
 import { lookHere } from "../src/setup/look.ts";
-import { checkRequest, type ProgramRequest, type ProgramResult } from "../src/setup/programs.ts";
+import {
+  checkRequest,
+  ProgramRunner,
+  type ProgramRequest,
+  type ProgramResult,
+} from "../src/setup/programs.ts";
 import {
   parseDescription,
   proveRun,
@@ -44,7 +51,7 @@ import * as fake from "./fixtures/sandbox.ts";
 import type { Identify } from "../../../tools/dev-gateway/src/state-guard.ts";
 
 /** The recorded status's listener (pid 4242), alive with this start time. */
-const LISTENER_STARTED = "Mon Nov 16 21:27:01 2026";
+const LISTENER_STARTED = "2026-11-16T21:27:01Z";
 const listening: Identify = (pid) =>
   pid === 4242
     ? { state: "alive", identity: LISTENER_STARTED }
@@ -92,7 +99,12 @@ function homeWorld(options: { program?: boolean; platform?: NodeJS.Platform } = 
   });
   const program = join(home, ".local/bin/openclaw");
   if (options.program !== false) executable(program);
-  return { ...world, candidates: [join(dir, "app/openclaw/bin/openclaw"), program] };
+  return {
+    ...world,
+    candidates: [join(dir, "app/openclaw/bin/openclaw"), program],
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
+  };
 }
 
 type Reply = Partial<ProgramResult> | ((request: ProgramRequest) => Partial<ProgramResult>);
@@ -124,6 +136,49 @@ const defaultTable = (status = statusJson({ port: 18789 }), auth = authJson()) =
   "gateway status --json": { stdout: status },
   "gateway status --json --deep": { stdout: status },
   "config get gateway.auth.mode --json": { stdout: auth },
+});
+
+describe("what the look runs of an installed OpenClaw", () => {
+  it("F-492 F-515: an OpenClaw whose launcher may repair itself is never run: the look reads its version and declines", async () => {
+    // An installed package as npm leaves it, its launcher a stand-in that leaves a marker if it
+    // runs at all, with the lifecycle work the real launcher would replay still pending.
+    const root = join(dir, "lib/node_modules/openclaw");
+    mkdirSync(root, { recursive: true });
+    const marker = join(dir, "lifecycle-ran");
+    const launcher = join(root, "openclaw.mjs");
+    writeFileSync(launcher, `#!/bin/sh\ntouch '${marker}'\necho 'OpenClaw 2026.10.6 (0123abc)'\n`, {
+      mode: 0o755,
+    });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.10.6" }),
+    );
+    writeFileSync(join(root, ".openclaw-lifecycle-pending"), "");
+    mkdirSync(join(dir, "bin"));
+    symlinkSync(launcher, join(dir, "bin/openclaw"));
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+    const world = {
+      ...productionWorld({ home, appData: dir, platform: "darwin" }),
+      candidates: [join(dir, "bin/openclaw")],
+    };
+    const runs: ProgramRequest[] = [];
+    const runner = new ProgramRunner();
+    const report = await lookHere(world, (request) => (runs.push(request), runner.run(request)));
+    expect(report?.look).toMatchObject({
+      outcome: "cant-tell",
+      reason: "read-only",
+      version: "2026.10.6",
+    });
+    expect(report?.found).toBeNull();
+    expect(runs).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
+    // Something that isn't an OpenClaw package is declined the same way, without a version.
+    const other = await lookHere({ ...world, candidates: [process.execPath] }, async () => {
+      throw new Error("nothing runs");
+    });
+    expect(other?.look).toMatchObject({ outcome: "cant-tell", reason: "read-only", version: null });
+  });
 });
 
 describe("the look on this computer", () => {
@@ -514,6 +569,32 @@ describe("the look on this computer", () => {
       fakeRunner(defaultTable(at("ws://127.0.0.1:19940/"))).run,
     );
     expect(slash?.found?.url).toBe("ws://127.0.0.1:19940");
+  });
+
+  it("F-516: an omitted daemon config path is allowed, but an invalid one makes status unusable", () => {
+    const status = statusJson();
+    const omitted = withStatus(status, (value) => {
+      delete value.config.daemon.path;
+    });
+    expect(parseStatus(omitted)?.daemonConfigPath).toBeNull();
+    for (const path of [null, 42, "", "x".repeat(1025)]) {
+      const malformed = withStatus(status, (value) => {
+        value.config.daemon.path = path;
+      });
+      expect(parseStatus(malformed)).toBeNull();
+    }
+  });
+
+  it.each(["unit", "targetRole"])("F-516: the whole service %s identifies the service", (field) => {
+    const status = (suffix: string) =>
+      withStatus(statusJson(), (value) => {
+        value.service[field] = "x".repeat(128) + suffix;
+      });
+    const first = parseStatus(status("1"));
+    const second = parseStatus(status("2"));
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first!.serviceKey).not.toBe(second!.serviceKey);
   });
 
   it("F-516: a gateway with no identifiable listener, two listeners, a listener that isn't running, or another config file for its service is not offered", async () => {
@@ -908,6 +989,31 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     ).toThrow(/outside the account's home/);
     expect(s.files.reads).toEqual([]);
     stoppedAtTheDescription(s);
+  });
+
+  it("F-492: refuses a run folder below a folder another account could replace it through", async () => {
+    const s = setting();
+    const shared = join(s.base, "shared");
+    const box = fake.runFolder(shared, { instance: s.mine.name, run: s.mine.run });
+    // A folder above the run folder that its group and others may write, without the sticky bit:
+    // anyone could rename the run folder away and put their own in its place.
+    chmodSync(shared, 0o777);
+    expect(await s.outcome(box.file)).toBe("file");
+    chmodSync(shared, 0o775);
+    expect(await s.outcome(box.file)).toBe("file");
+    // Sticky, as the temporary root is: only an entry's owner may rename it.
+    chmodSync(shared, 0o1777);
+    expect(await s.outcome(box.file)).toBe("opened");
+    // Owned by another account, even unwritable to others.
+    chmodSync(shared, 0o755);
+    const lstat = s.context.files.lstat;
+    s.context.files.lstat = (path) => {
+      const entry = lstat(path);
+      return path === shared && entry ? Object.assign(Object.create(entry), { uid: 4321 }) : entry;
+    };
+    expect(await s.outcome(box.file)).toBe("file");
+    s.context.files.lstat = lstat;
+    expect(await s.outcome(box.file)).toBe("opened");
   });
 
   it("refuses a description, a home or a working folder that is a link, a second link to the description, and another account's file", async () => {

@@ -15,6 +15,7 @@ import {
   deferred,
   helloOk,
   memoryStorage,
+  sleep,
   testHost,
   tokenKey,
   until,
@@ -50,6 +51,8 @@ async function withLocalSetup(
   const world = {
     ...productionWorld({ home: dir, appData: dir, platform: "darwin" }),
     candidates: [process.execPath],
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
     deep: false,
   };
   const opened: Opened = {
@@ -314,6 +317,58 @@ describe("two Connects that wait for the same cleanup", () => {
       await Promise.all([first, second]);
       expect(deleteSetting).toHaveBeenCalledTimes(2);
       expect(confirm).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+describe("which selection setup's cleanup and readiness belong to", () => {
+  it("F-492: Back's cleanup leaves a later selection of the same address connected", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(SCOPES, TOKEN) });
+    const bots = deferred<object>();
+    gateway.handlers["agents.list"] = () => bots.promise;
+    const client = makeClient(gateway);
+    await withLocalSetup(client, async (setup) => {
+      await setup.connect();
+      await until(() => gateway.calls("agents.list").length > 0);
+      // Another window chooses the same address with its token, then this one presses Back:
+      // the cleanup runs after that choice, and it is setup's selection it closes, or nothing.
+      const chosen = client.connect({ url: URL, token: "typed-shared-token-0123456789" });
+      setup.cancel();
+      await chosen;
+      await sleep(100);
+      expect(client.state.connection.gatewayUrl).toBe(URL);
+      expect(client.state.connection.status).not.toBe("idle");
+      bots.resolve({ defaultId: "main", agents: [{ id: "main" }] });
+    });
+  });
+
+  it("F-492: a read of bots left from an earlier selection of the same address doesn't complete setup", async () => {
+    const gateway = new FakeGateway();
+    // The earlier selection is Advanced's, with no device token; setup's own pairs.
+    gateway.connectReply = (params) =>
+      (params as { auth?: { bootstrapToken?: string } }).auth?.bootstrapToken === CODE
+        ? { ok: true, payload: helloOk(SCOPES, TOKEN) }
+        : { ok: true, payload: helloOk(SCOPES) };
+    const list = gateway.handlers["agents.list"]!;
+    const client = makeClient(gateway);
+    await withLocalSetup(client, async (setup) => {
+      await client.connect({ url: URL, token: "typed-shared-token-0123456789" });
+      await until(() => client.state.discovery.status === "ready");
+      // Setup connects to the same address; its own bots are slow to come.
+      const bots = deferred<object>();
+      gateway.handlers["agents.list"] = () => bots.promise;
+      const phases: string[] = [];
+      client.store.subscribe(() => phases.push(setup.current.phase));
+      await setup.connect();
+      await until(
+        () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+      );
+      await sleep(100);
+      expect(phases).not.toContain("done");
+      expect(setup.current.phase).toBe("connecting");
+      bots.resolve((await list({})) as object);
+      await until(() => setup.current.phase === "done");
     });
   });
 });

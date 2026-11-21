@@ -34,7 +34,8 @@ const succeeded = (result: ProgramResult) =>
   result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
 
 /** The connection a setup attempt opened, by its address. */
-type Owned = { attempt: number; url: string };
+/** Setup's connection: its attempt, its address and the client's selection that made it. */
+type Owned = { attempt: number; url: string; selection: number };
 
 /** What the host's own dialog shows: its words, nothing the page wrote. */
 export type Confirmation = { message: string; detail: string; confirm: string };
@@ -287,7 +288,7 @@ export class SetupController implements SetupHost {
     const attempt = this.attempt;
     let cleaning = this.cleaning;
     if (cleaning?.owned !== owned) {
-      const done = this.options.client.disconnect(owned.url).then(
+      const done = this.options.client.disconnect(owned.url, owned.selection).then(
         () => true,
         // Refused because another gateway is selected by then: that one stays as it is.
         (error: unknown) => error instanceof GatewayChangedError,
@@ -458,9 +459,15 @@ export class SetupController implements SetupHost {
     if (paired) {
       // A saved pairing for this address: reused, asking for read alone (§7).
       this.publish({ ...this.state, step: 1 });
-      this.owned = { attempt, url: found.url };
-      this.watch(attempt, found.url, found.port);
-      await client.connectForSetup(found.url, { check: listening, verify });
+      // The selection this connect makes: its cleanup and its readiness are that one's only.
+      const selection = client.nextSelection();
+      this.owned = { attempt, url: found.url, selection };
+      this.watch(attempt, found.url, found.port, selection);
+      await client.connectForSetup(found.url, {
+        check: listening,
+        verify,
+        consent: () => !expired(),
+      });
       return;
     }
     const made = await opened.run({
@@ -483,10 +490,15 @@ export class SetupController implements SetupHost {
     }
     if (attempt !== this.attempt) return;
     this.publish({ ...this.state, step: 1 });
-    this.owned = { attempt, url: found.url };
-    this.watch(attempt, found.url, found.port);
+    const selection = client.nextSelection();
+    this.owned = { attempt, url: found.url, selection };
+    this.watch(attempt, found.url, found.port, selection);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
-    await client.connectWithSetupCode(code, { check: listening, verify });
+    await client.connectWithSetupCode(code, {
+      check: listening,
+      verify,
+      consent: () => !expired(),
+    });
   }
 
   /**
@@ -561,7 +573,7 @@ export class SetupController implements SetupHost {
 
   /** Follows the connection Connect started, until it is in or has failed. */
   /** Follows this attempt's connection to `url` only: another route's state says nothing about it. */
-  private watch(attempt: number, url: string, port: number): void {
+  private watch(attempt: number, url: string, port: number, selection: number): void {
     this.stopWatching();
     let seen = false;
     const check = (state: ClawtrateState) => {
@@ -582,7 +594,9 @@ export class SetupController implements SetupHost {
       if (connection.gatewayUrl !== url) return;
       seen = true;
       if (connection.status === "connected") {
-        if (discovery.status === "ready") {
+        // Ready only for this selection's own read: one left from an earlier selection of the
+        // same address isn't this connection's.
+        if (discovery.status === "ready" && this.options.client.readyFor(selection)) {
           this.stopWatching();
           this.publish({ ...this.state, phase: "done", step: 2 });
         } else if (discovery.status === "error") {

@@ -4,9 +4,9 @@
 // limit; every program runs through `RunProgram`, never a shell, in the
 // world's own working folder. A sandboxed world never runs the deep status.
 
-import { lstat, readdir, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   MAX_LOOK_OTHERS,
   OLDEST_OPENCLAW_VERSION,
@@ -111,6 +111,46 @@ function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
       timer.unref?.();
     }),
   ]);
+}
+
+/**
+ * The OpenClaw versions whose commands the look runs: those whose pinned source
+ * shows a read-only path past the launcher's package-lifecycle branch. None yet:
+ * in 2026.10.6 every command but the browser's native host goes through it
+ * (openclaw.mjs, lines 649-715), and an unsupported Node starts a runtime
+ * recovery that may install one (lines 37-80). Any other version declines.
+ */
+export const READ_ONLY_VERSIONS: ReadonlySet<string> = new Set();
+
+/**
+ * The installed version, read from the package the program belongs to, without
+ * running it: the launcher `openclaw.mjs` it resolves to, beside the package's
+ * own `package.json` named "openclaw". Null when it isn't that.
+ */
+async function installedVersion(program: string): Promise<string | null> {
+  try {
+    const launcher = await realpath(program);
+    if (basename(launcher) !== "openclaw.mjs") return null;
+    const manifest = join(dirname(launcher), "package.json");
+    const info = await stat(manifest);
+    if (!info.isFile() || info.size > 64 * 1024) return null;
+    const parsed = JSON.parse(await readFile(manifest, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    if (parsed.name !== "openclaw" || typeof parsed.version !== "string") return null;
+    return parseBareVersion(parsed.version) ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Production's check: the package's own version, and whether it is one verified read-only. */
+export async function readOnlyProgram(
+  program: string,
+): Promise<{ verified: boolean; version: string | null }> {
+  const version = await installedVersion(program);
+  return { verified: version !== null && READ_ONLY_VERSIONS.has(version), version };
 }
 
 /** `fileIdentity` within the look's limit on file checks: null when the file system doesn't answer. */
@@ -269,6 +309,23 @@ export async function lookHere(
   if (cancelled()) return null;
   active();
   options.onStep?.(1);
+  // The real program runs only in a version whose commands are verified read-only. Its version
+  // comes from its package, read, never from running it; anything else declines, running nothing.
+  if (!world.installed) {
+    let verdict: { verified: boolean; version: string | null };
+    try {
+      verdict = await withDeadline(
+        (world.readOnly ?? readOnlyProgram)(program),
+        Date.now() + FILE_CHECK_MS,
+      );
+    } catch (error) {
+      if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+      throw error;
+    }
+    if (cancelled()) return null;
+    active();
+    if (!verdict.verified) return { look: cantTell("read-only", verdict.version), found: null };
+  }
   const first = world.profiles[0];
   if (!first) return { look: { ...empty, outcome: "not-found" }, found: null };
   const versionRun = await runFor(first, ["--version"], LIMITS.version);

@@ -18,7 +18,7 @@ A run that must be sandboxed and was given no sandbox, or one that doesn't pass,
 
 ## A sandbox
 
-A sandbox is a private folder of your account's, under a temporary root fixed in code, reached without links and outside your home, holding its description, `sandbox.json`:
+A sandbox is a private folder of your account's, under a temporary root fixed in code, reached without links and outside your home, below folders no other account can replace it through (each owned by you or the system and writable only by its owner, unless sticky like the temporary root), holding its description, `sandbox.json`:
 
 ```json
 { "instance": "look", "run": "<the instance's current run id>", "scenario": "recorded" }

@@ -116,7 +116,7 @@ describe("a process whose identity cannot be read is unknown, never exited (B2)"
     const exiting = brokenPs("echo '?E   Mon Nov 16 21:00:00 2026    '");
     expect(exiting(live.pid)).toEqual({
       state: "alive",
-      identity: "Mon Nov 16 21:00:00 2026",
+      identity: "2026-11-16T21:00:00Z",
     });
   });
 

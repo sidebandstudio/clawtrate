@@ -4,8 +4,10 @@
 // runner stands in for `openclaw`, and the core's fake gateway for the gateway.
 
 import { ClawtrateClient, type ClawtrateState } from "@clawtrate/core";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -18,7 +20,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawn } from "node:child_process";
 import {
   FakeGateway,
   helloOk,
@@ -73,7 +74,14 @@ function world(): LookWorld {
   chmodSync(program, 0o755);
   mkdirSync(join(dir, "home"), { recursive: true });
   const home = productionWorld({ home: join(dir, "home"), appData: dir, platform: "darwin" });
-  return { ...home, candidates: [program], profiles: [home.profiles[0]!], deep: false };
+  return {
+    ...home,
+    candidates: [program],
+    profiles: [home.profiles[0]!],
+    deep: false,
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
+  };
 }
 
 type Reply =
@@ -115,7 +123,7 @@ function harness(
     };
   };
   // The listener the recorded status names (pid 4242), by its start time; a test may replace it.
-  const listeners = new Map<number, string>([[4242, "Mon Nov 16 21:27:01 2026"]]);
+  const listeners = new Map<number, string>([[4242, "2026-11-16T21:27:01Z"]]);
   const identify: Identify = (pid) => {
     const started = listeners.get(pid);
     return started ? { state: "alive", identity: started } : { state: "exited", how: "absent" };
@@ -357,6 +365,38 @@ describe("Connect on this computer", () => {
     expect(h.setup.current.failure?.kind).toBe("changed");
     expect(minted(h.requests)).toEqual([]);
     h.client.stop();
+  });
+
+  it("F-492: two minutes passing while the socket signs sends no credential, the code's nor a saved token's", async () => {
+    for (const saved of [false, true]) {
+      let now = Date.now();
+      const h = harness({ now: () => now });
+      if (saved)
+        h.storage.data.set(
+          tokenKey(URL),
+          JSON.stringify({
+            token: "device-token",
+            grantedScopes: ["operator.read"],
+            heldScopes: ["operator.read"],
+          }),
+        );
+      // The two minutes run out while the socket's request is being signed.
+      const host = h.client as unknown as {
+        host: { signer: { sign: (p: string) => Promise<string> } };
+      };
+      const sign = host.host.signer.sign;
+      host.host.signer.sign = async (payload) => {
+        now += OPERATION_LIFETIME_MS + 1;
+        return sign(payload);
+      };
+      await h.client.start();
+      await h.setup.look();
+      await h.setup.connect();
+      await until(() => h.setup.current.phase === "failed" || h.gateway.connects.length > 0);
+      expect(h.gateway.connects).toEqual([]);
+      expect(h.setup.current.failure?.kind).toBe("changed");
+      h.client.stop();
+    }
   });
 
   it("F-492: a code that can't be made ends in its own state, with the exit code", async () => {
@@ -753,6 +793,88 @@ describe("the programs setup starts", () => {
     expect(runner.running()).toEqual([]);
   }, 20_000);
 
+  /** Whether a process is gone, by its PID: the system says there is none. */
+  const gone = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  it("F-492: a program's time limit stops the workers it started too, by their group, and only those", async () => {
+    const runner = loose();
+    const pidFile = join(dir, "worker.pid");
+    // A program that starts a worker, as OpenClaw's launcher can, and outlasts its time limit.
+    const outsider = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    try {
+      const result = await runner.run({
+        ...base,
+        program: "/bin/sh",
+        args: ["-c", `sleep 30 & echo $! > '${pidFile}'; sleep 30`],
+        timeoutMs: 300,
+        maxBytes: 4096,
+      });
+      expect(result.timedOut).toBe(true);
+      const worker = Number(readFileSync(pidFile, "utf8"));
+      await until(() => gone(worker), 5000);
+      expect(runner.running()).toEqual([]);
+      expect(runner.groupsLeft()).toBe(0);
+      // A process setup didn't start is never touched.
+      expect(gone(outsider.pid!)).toBe(false);
+    } finally {
+      outsider.kill();
+    }
+  }, 20_000);
+
+  it("F-492: an output a worker kept open past the program's end is refused, not parsed", async () => {
+    const runner = loose();
+    const result = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `printf '{"gateway":'; sleep 3 &`],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    expect(result).toMatchObject({ exitCode: 0, cut: true, stdout: "" });
+    await runner.stopAllAndWait();
+    expect(runner.groupsLeft()).toBe(0);
+    // A whole output, ended with the program, is kept as it is.
+    const whole = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `printf '{}'`],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    expect(whole).toMatchObject({ exitCode: 0, stdout: "{}" });
+    expect(whole.cut).toBeUndefined();
+  }, 20_000);
+
+  it("F-492: quitting waits until setup's programs and their workers are gone, a stubborn one killed after the grace", async () => {
+    const runner = loose();
+    const pidFile = join(dir, "stubborn-worker.pid");
+    void runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", `trap '' TERM; sleep 30 & echo $! > '${pidFile}'; while :; do sleep 1; done`],
+      timeoutMs: 60_000,
+      maxBytes: 4096,
+    });
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "");
+    const worker = Number(readFileSync(pidFile, "utf8"));
+    const leader = runner.running()[0]!;
+    await runner.stopAllAndWait();
+    expect(gone(worker)).toBe(true);
+    expect(gone(leader)).toBe(true);
+    // The desktop app quits only after that wait.
+    const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const quit = main.slice(main.indexOf('app.on("before-quit"'));
+    expect(quit).toContain("event.preventDefault();");
+    expect(quit.indexOf("programs.stopAllAndWait()")).toBeLessThan(quit.indexOf("app.quit();"));
+  }, 20_000);
+
   it("the host's runner refuses anything but the look's commands before it starts", async () => {
     const runner = new ProgramRunner();
     expect(() => runner.run({ ...base, program: "/usr/bin/env", args: [] })).toThrow();
@@ -883,7 +1005,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
   it("F-516 F-492: the listener replaced by another process, or restarted under its PID, between the dialog and its answer mints nothing and saves no route", async () => {
     for (const replace of [
       (h: ReturnType<typeof harness>) => h.listeners.delete(4242),
-      (h: ReturnType<typeof harness>) => h.listeners.set(4242, "Tue Nov 17 08:00:00 2026"),
+      (h: ReturnType<typeof harness>) => h.listeners.set(4242, "2026-11-17T08:00:00Z"),
     ]) {
       const h: ReturnType<typeof harness> = harness({
         confirm: async () => {
@@ -906,7 +1028,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     const h: ReturnType<typeof harness> = harness({
       replies: {
         [`qr --json --voice-node --url ${URL}`]: () => {
-          h.listeners.set(4242, "Tue Nov 17 08:00:00 2026");
+          h.listeners.set(4242, "2026-11-17T08:00:00Z");
           return { stdout: qrJson(URL, CODE, Date.now() + 600_000) };
         },
       },
@@ -1041,7 +1163,12 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     writeFileSync(program, "#!/bin/sh\nexit 1\n");
     chmodSync(program, 0o755);
     const h = harness({
-      world: { ...home, candidates: [program], deep: false },
+      world: {
+        ...home,
+        candidates: [program],
+        deep: false,
+        readOnly: async () => ({ verified: true, version: null }),
+      },
       replies: {
         "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19960 }) },
         "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },

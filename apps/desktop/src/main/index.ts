@@ -486,8 +486,19 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
-app.on("before-quit", () => {
-  programs.stopAll();
+/** Set once setup's programs and their workers are gone: quitting then goes ahead. */
+let programsEnded = false;
+app.on("before-quit", (event) => {
+  // The programs setup started, and the workers in their groups, end before the app does:
+  // quitting waits for them (killed after their grace), then quits again.
+  if (!programsEnded && programs.running().length + programs.groupsLeft() > 0) {
+    event.preventDefault();
+    void programs.stopAllAndWait().finally(() => {
+      programsEnded = true;
+      app.quit();
+    });
+    return;
+  }
   void closeSetup();
   runtime?.client.stop();
 });

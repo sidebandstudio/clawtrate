@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   ClawtrateClient,
   SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_APPEARED,
   SETUP_GRANT_REFUSED,
   setupGrant,
 } from "../src/client.ts";
@@ -160,13 +161,74 @@ describe("the setup connection's token gate", () => {
     expect(client.state.connection.error?.code).toBe("AUTH_BOOTSTRAP_TOKEN_INVALID");
     await sleep(200);
     expect(gateway.connects).toHaveLength(1);
-    // A retry has no code left to send.
+    // A retry has no code left to send, and sends nothing else in its place.
     await client.retryNow();
-    await until(() => gateway.connects.length === 2);
-    expect((gateway.connects[1] as ConnectParams).auth?.bootstrapToken).toBeUndefined();
+    await sleep(200);
+    expect(gateway.connects).toHaveLength(1);
+    expect(client.state.connection.error?.code).toBe("AUTH_BOOTSTRAP_TOKEN_INVALID");
     expect(everywhere(client, storage)).not.toContain(CODE);
     client.stop();
   });
+
+  it("F-492: a Retry after a refused code sends no pairing saved meanwhile, and asks for a new consent", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized: setup code invalid",
+        details: { code: "AUTH_BOOTSTRAP_TOKEN_INVALID", canRetryWithDeviceToken: false },
+      },
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.error?.code === "AUTH_BOOTSTRAP_TOKEN_INVALID");
+    // A pairing for this address is saved meanwhile (another window, another setup).
+    storage.data.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    );
+    await client.retryNow();
+    await until(() => client.state.connection.error?.code === SETUP_PAIRING_APPEARED);
+    await sleep(100);
+    expect(gateway.connects).toHaveLength(1);
+    expect(JSON.stringify(gateway.connects)).not.toContain("device-token");
+    client.stop();
+  });
+
+  it("F-492: a setup pairing that waits for the owner's approval still completes once approved", async () => {
+    const gateway = new FakeGateway();
+    let approved = false;
+    gateway.connectReply = (params) => {
+      const { auth } = params as ConnectParams;
+      expect(auth?.bootstrapToken).toBe(CODE);
+      if (!approved)
+        return {
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message: "pairing required",
+            details: { code: "PAIRING_REQUIRED", requestId: "r-1" },
+          },
+        };
+      return { ok: true, payload: helloOk(["operator.read"], "device-token") };
+    };
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "pairing");
+    approved = true;
+    await until(() => client.state.connection.status === "connected", 15_000);
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!).token).toBe("device-token");
+    client.stop();
+  }, 20_000);
 
   it("F-492: nothing answering on the port ends in its own error without retrying", async () => {
     const gateway = new FakeGateway();
@@ -252,6 +314,30 @@ describe("the setup connection's token gate", () => {
     expect(setupGrant(hello({ role: "operator" }))).toBe("other");
     expect(setupGrant(hello({ scopes: ["operator.read"] }))).toBe("other");
     expect(setupGrant(hello({ role: "node", scopes: ["operator.read"] }))).toBe("other");
+  });
+});
+
+describe("a setup connection's other reads", () => {
+  it("F-492: a failed read beside the bots, such as the preferences, says fixed words, never the gateway's own", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const secret = "gateway-says-internal-path-/srv/secret-9f2c";
+    const fail = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: secret });
+    };
+    gateway.handlers["users.prefs.get"] = fail;
+    const { client, everything } = recorded(gateway);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.discovery.status === "ready");
+    await until(() => gateway.calls("users.prefs.get").length > 0);
+    await sleep(100);
+    expect(everything()).toContain("users.prefs.get failed on the setup connection");
+    expect(everything()).not.toContain(secret);
+    client.stop();
   });
 });
 

@@ -92,6 +92,11 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "found-protocol": looked({}),
   "cant-tell-not-set-up": looked({ outcome: "cant-tell", reason: "not-set-up" }),
   "cant-tell-no-answer": looked({ outcome: "cant-tell", reason: "no-answer" }),
+  "cant-tell-read-only": looked({
+    outcome: "cant-tell",
+    reason: "read-only",
+    version: "2026.10.6",
+  }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
 };
 

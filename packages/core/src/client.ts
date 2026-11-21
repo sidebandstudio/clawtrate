@@ -595,6 +595,12 @@ function withinAsked(granted: readonly string[], asked: readonly string[]): stri
 export type SetupEndpointCheck = {
   check?: () => boolean;
   verify?: (signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Whether the host's dialog consent still holds (its two minutes), asked just before the
+   * first frame that carries a credential, a saved token's included. Once a hello is in, the
+   * consent is used and isn't asked again.
+   */
+  consent?: () => boolean;
 };
 
 /**
@@ -605,11 +611,12 @@ export type SetupEndpointCheck = {
 export const SETUP_LISTENER_READS_MS = 10_000;
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
-  if (!setup.check && !setup.verify) return null;
+  if (!setup.check && !setup.verify && !setup.consent) return null;
   return {
     url,
     check: setup.check ?? (() => true),
     ...(setup.verify ? { verify: setup.verify } : {}),
+    ...(setup.consent ? { consent: setup.consent } : {}),
   };
 }
 
@@ -875,6 +882,8 @@ export class ClawtrateClient {
     check: () => boolean;
     /** Reads the endpoint's listener again: once each socket opens, and before its credential. */
     verify?: (signal: AbortSignal) => Promise<boolean>;
+    /** The dialog's consent, until the first hello: asked before the first credential frame. */
+    consent?: () => boolean;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -883,7 +892,12 @@ export class ClawtrateClient {
    * publishes only typed outcomes: fixed codes and words, never the gateway's
    * own codes, text, request fields or version.
    */
-  private setupIntent: { url: string; reuse: boolean } | null = null;
+  private setupIntent: {
+    url: string;
+    reuse: boolean;
+    /** A new pairing the gateway refused its code for: no Retry may go on without a new consent. */
+    refused?: boolean;
+  } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -910,6 +924,16 @@ export class ClawtrateClient {
   private protocol: GatewayProtocolClient<Plan> | null = null;
   /** Stops the current setup socket's listener reads and the commands they started. */
   private endSocketReads: () => void = () => {};
+  /**
+   * Each choice of gateway (a connect of any kind, or a disconnect), numbered as
+   * it is asked: `selectionAsked` when queued, `selectionApplied` once it ran.
+   * `selectionReady` is the one whose bots and tasks were last read in full.
+   */
+  private selectionAsked = 0;
+  private selectionApplied = 0;
+  private selectionReady = -1;
+  /** The generation of the connection opened as the host's setup connection, while it lasts. */
+  private setupGeneration: number | null = null;
   private settings: ConnectionSettings | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
@@ -1106,7 +1130,7 @@ export class ClawtrateClient {
     },
     now: () => this.now(),
     randomId: () => this.randomId(),
-    log: (message) => this.log("warn", message),
+    log: (message) => this.logEngine(message),
   });
   /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
   private readonly routines = new RoutinesEngine({
@@ -1130,7 +1154,7 @@ export class ClawtrateClient {
       this.store.update((state) => ({ ...state, usage: change(state.usage ?? initialUsage) })),
     connected: () => this.state.connection.status === "connected",
     now: () => this.now(),
-    log: (message) => this.log("warn", message),
+    log: (message) => this.logEngine(message),
   });
   /**
    * Where a bot runs and the gateway's machines (`machines.ts`): read when a page
@@ -1233,7 +1257,9 @@ export class ClawtrateClient {
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
@@ -1261,7 +1287,9 @@ export class ClawtrateClient {
     setup: SetupEndpointCheck = {},
   ): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
@@ -1289,7 +1317,9 @@ export class ClawtrateClient {
    */
   async connectForSetup(url: string, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
+    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
+      this.selectionApplied = selection;
       const target = validateGatewayUrl(url);
       if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
@@ -1300,6 +1330,23 @@ export class ClawtrateClient {
       this.setupIntent = { url: target, reuse: true };
       if (stops === this.stops) await this.open();
     });
+  }
+
+  /**
+   * The number the next choice of gateway will get: read just before a connect
+   * call, it names that connect's selection.
+   */
+  nextSelection(): number {
+    return this.selectionAsked + 1;
+  }
+
+  /** Whether `selection` is the gateway chosen now, and its bots and tasks were read in full. */
+  readyFor(selection: number): boolean {
+    return (
+      this.selectionApplied === selection &&
+      this.selectionReady === selection &&
+      this.state.discovery.status === "ready"
+    );
   }
 
   /** Whether this device has a saved pairing for the gateway at `url`: `new` without one. */
@@ -1326,14 +1373,21 @@ export class ClawtrateClient {
    * token remain. With `gatewayUrl`, only that gateway is forgotten: the address
    * the person saw, which another viewer may have changed since.
    */
-  async disconnect(gatewayUrl?: string): Promise<void> {
+  async disconnect(gatewayUrl?: string, selection?: number): Promise<void> {
+    const asked = ++this.selectionAsked;
     return this.changeConnection(async () => {
       if (!this.settings) return;
       if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
         throw new GatewayChangedError();
       }
-      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
+      // A cleanup for one selection never ends a later one, even of the same address.
+      if (selection !== undefined && this.selectionApplied !== selection) {
+        throw new GatewayChangedError();
+      }
+      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
+      // and stays the selection it was.
       await this.host.storage.delete(SETTINGS_KEY);
+      this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
       this.setupCode = null;
@@ -2854,7 +2908,7 @@ export class ClawtrateClient {
           if (stopped?.aborted === true) note("bots", link.sessionKey);
           return;
         } catch (error) {
-          this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
+          this.logFailure("warn", "chat.abort of a recipient", error);
           if (error instanceof GatewayProtocolRequestError) return note("refused", link.sessionKey);
           // No answer: once the connection is back, asked once more.
           if (attempt > 0) return note("unanswered", link.sessionKey);
@@ -3253,7 +3307,7 @@ export class ClawtrateClient {
       if (resolution && resolution.id === id) this.noteApprovalOutcome(resolution);
     } catch (error) {
       if (generation === this.generation) this.noteMissingScope(error);
-      this.log("warn", `approval.get failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "approval.get", error);
     } finally {
       this.lookingUp.delete(id);
     }
@@ -3424,7 +3478,7 @@ export class ClawtrateClient {
       this.listApplied.set(listKey, revision);
       this.noteMissingScope(error);
       this.setApprovalSource(key, source.kind, isMissingScope(error) ? "unavailable" : "error");
-      this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      this.logFailure("warn", source.method, error);
       return;
     }
     if (stale()) return;
@@ -3660,8 +3714,7 @@ export class ClawtrateClient {
     try {
       answer = await this.request("tools.effective", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
-        this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
+      if (generation === this.generation) this.logFailure("warn", "tools.effective", error);
       return;
     }
     if (
@@ -3706,8 +3759,7 @@ export class ClawtrateClient {
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (currentConnection())
-        this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
+      if (currentConnection()) this.logFailure("warn", "session.reactions.list", error);
       return;
     }
     if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
@@ -3878,8 +3930,7 @@ export class ClawtrateClient {
           try {
             answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
           } catch (error) {
-            if (generation === this.generation)
-              this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+            if (generation === this.generation) this.logFailure("warn", "agent.wait", error);
             return;
           }
           if (
@@ -3914,8 +3965,7 @@ export class ClawtrateClient {
     try {
       answer = await this.request("agents.files.list", { agentId: botId });
     } catch (error) {
-      if (generation === this.generation)
-        this.log("warn", `agents.files.list failed: ${errorMessage(error)}`);
+      if (generation === this.generation) this.logFailure("warn", "agents.files.list", error);
       return;
     }
     if (
@@ -4318,7 +4368,7 @@ export class ClawtrateClient {
         this.listApplied.set(listKey, revision);
         this.noteMissingScope(error);
       }
-      this.log("warn", `question.list failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "question.list", error);
     }
   }
 
@@ -5149,7 +5199,7 @@ export class ClawtrateClient {
     const previous = this.deliveries.get(key) ?? Promise.resolve();
     const next = previous
       .then(() => this.deliver(key, messageId))
-      .catch((error: unknown) => this.log("error", `delivery failed: ${errorMessage(error)}`));
+      .catch((error: unknown) => this.logFailure("error", "delivery", error));
     this.deliveries.set(key, next);
     void next.then(() => {
       if (this.deliveries.get(key) === next) this.deliveries.delete(key);
@@ -5238,6 +5288,8 @@ export class ClawtrateClient {
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
+    // Every read this connection makes logs fixed words if it is setup's, after setup ends too.
+    this.setupGeneration = this.isSetup(settings.url) ? generation : null;
     // A connection made with the host's setup code stages its first token here.
     this.tokenGate =
       this.setupCode?.url === settings.url ? { generation, url: settings.url, staged: null } : null;
@@ -5466,9 +5518,26 @@ export class ClawtrateClient {
         const reuse = setup && !newPairing && this.setupIntent?.reuse === true;
         // A new pairing that finds a saved token for this address sends neither: the person
         // agreed to a new pairing, so the card asks whether to reuse that one.
-        if (newPairing && token) {
+        // A new pairing's code the gateway refused is used up for good: a Retry after it sends
+        // no pairing saved since, and nothing else, and the card asks for a new consent.
+        const refused =
+          setup && this.setupIntent?.reuse === false && this.setupIntent.refused === true;
+        if ((newPairing || refused) && token) {
           this.pairingAppeared();
           throw new Error("a saved pairing appeared");
+        }
+        if (refused) {
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: {
+              code: "AUTH_BOOTSTRAP_TOKEN_INVALID",
+              message: "The one-time code didn't work.",
+              hint: null,
+            },
+          });
+          throw new Error("the setup code was refused");
         }
         // A setup reuse whose token is gone sends nothing: the person consents again.
         if (reuse && !token) {
@@ -5526,6 +5595,14 @@ export class ClawtrateClient {
             throw new Error("the saved pairing is gone");
           }
         }
+        // The first frame with a credential, a saved token's included, goes only within the
+        // dialog's consent; past it nothing is sent and the screen says "changed".
+        const consent = this.setupCheck?.url === settings.url ? this.setupCheck.consent : undefined;
+        if (setup && consent && !consent()) {
+          this.setupEndpointChanged(settings.url, generation);
+          this.close();
+          throw new Error("the setup consent ran out");
+        }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
@@ -5560,9 +5637,39 @@ export class ClawtrateClient {
         };
       },
       onConnectHello: async (hello, context) => {
-        await lifecycle.acceptHello(hello, context.plan);
+        // Still the protocol's current socket: one replaced since, on this same address and
+        // connection, stages, writes and saves nothing, after any of these waits.
+        const live = () => {
+          try {
+            context.assertCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        // The lifecycle's acceptHello (a read of the saved record, then a store of the hello's
+        // token), with this socket's liveness asked before the store and before its write.
+        const issued = hello.auth?.deviceToken?.trim();
+        if (issued && context.plan.identity) {
+          const role = hello.auth?.role ?? context.plan.role;
+          const ids = { clientId: context.plan.clientId, deviceId: context.plan.identity.deviceId };
+          const stored = await tokenStore.load({ ...ids, role });
+          if (!live()) return;
+          await tokenStore.save(
+            {
+              ...ids,
+              role,
+              token: issued,
+              scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
+            },
+            live,
+          );
+        }
+        if (!live()) return;
         // Only this connection may drop this gateway's bootstrap secret.
         if (generation !== this.generation || this.settings?.url !== settings.url) return;
+        // A hello is in: the dialog's consent is used, and later retries don't ask it again.
+        if (this.setupCheck?.url === settings.url) delete this.setupCheck.consent;
         const gate = this.tokenGate;
         if (gate?.generation === generation) {
           // The code is used: it is forgotten whatever the grant.
@@ -5584,7 +5691,8 @@ export class ClawtrateClient {
           this.heldToken = staged.token;
           // A record saved meanwhile keeps what it holds, as a replacement token does.
           const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
-          if (generation !== this.generation || this.settings?.url !== settings.url) return;
+          if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+            return;
           await this.writeToken(settings.url, staged.deviceId, staged.role, {
             token: staged.token,
             grantedScopes: [...staged.scopes],
@@ -5595,7 +5703,7 @@ export class ClawtrateClient {
           // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
           await this.changeConnection(async () => {
             const current = this.settings;
-            if (generation !== this.generation || current?.url !== settings.url) return;
+            if (!live() || generation !== this.generation || current?.url !== settings.url) return;
             await this.saveSettings(current);
           });
           return;
@@ -5606,7 +5714,7 @@ export class ClawtrateClient {
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
           const current = this.settings;
-          if (generation !== this.generation || current?.url !== settings.url) return;
+          if (!live() || generation !== this.generation || current?.url !== settings.url) return;
           if (reuse) {
             if (this.setupEndpointFails(settings.url, generation)) {
               this.close();
@@ -5620,7 +5728,7 @@ export class ClawtrateClient {
           const paired =
             Boolean(hello.auth.deviceToken) ||
             (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
-          if (!paired) return;
+          if (!paired || !live()) return;
           try {
             await this.saveSettings({ ...current, token: null });
           } catch {
@@ -5870,6 +5978,10 @@ export class ClawtrateClient {
       : error.message;
     // A setup connection keeps its code only while the gateway waits for its owner's approval.
     if (setup && code !== "PAIRING_REQUIRED") this.dropSetupCredentials();
+    // A refused code ends this new pairing, apart from the code being used: a Retry can't reuse
+    // a pairing saved in the meantime (the plan asks for a new consent instead).
+    if (setup && code === "AUTH_BOOTSTRAP_TOKEN_INVALID" && this.setupIntent?.reuse === false)
+      this.setupIntent = { ...this.setupIntent, refused: true };
 
     const mismatch = protocolMismatch(details);
     if (mismatch) {
@@ -6099,6 +6211,7 @@ export class ClawtrateClient {
    * keeps the other's result and any data shown before it.
    */
   private async bootstrap(generation: number, resync: CaughtUp["reason"] | null): Promise<void> {
+    const selection = this.selectionApplied;
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
@@ -6155,10 +6268,12 @@ export class ClawtrateClient {
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
-    // The setup connection's first read of bots and tasks ends its setup: after it, the
-    // connection is the saved gateway's own.
+    // The setup connection's first complete read of bots and tasks ends its setup: after it,
+    // the connection is the saved gateway's own. A read that failed leaves setup on its failure
+    // screen, so the connection stays setup's, and every handshake from there, a retry or a
+    // reconnect included, asks for read alone; Back or another gateway ends it.
     const setup = this.isSetup(this.settings?.url);
-    if (setup) this.setupIntent = null;
+    if (setup && failures.length === 0) this.setupIntent = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
     // from then on the connection and its retries are the saved gateway's own.
     if (failures.length === 0 && this.setupCheck?.url === this.settings?.url)
@@ -6173,6 +6288,7 @@ export class ClawtrateClient {
         error: this.scrub(`Could not load ${failures.join("; ")}`),
       });
     } else {
+      this.selectionReady = selection;
       this.setDiscovery({
         status: "ready",
         error: null,
@@ -7017,7 +7133,7 @@ export class ClawtrateClient {
       const sidebar = await readSidebar(this.actionContext(null));
       if (generation === this.generation) this.setSidebar(sidebar, issued);
     } catch (error) {
-      this.log("warn", `users.prefs.get failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "users.prefs.get", error);
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
     }
@@ -7048,7 +7164,7 @@ export class ClawtrateClient {
             changed = this.waiting.restoreApproval(card, this.now()) || changed;
         }
       } catch (error) {
-        this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+        this.logFailure("warn", source.method, error);
       }
     }
     if (changed) this.publishTasks();
@@ -7064,7 +7180,7 @@ export class ClawtrateClient {
       this.waiting.replaceQuestions(questions, this.now());
       this.publishTasks();
     } catch (error) {
-      this.log("warn", `question.list failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "question.list", error);
     }
   }
 
@@ -7298,9 +7414,44 @@ export class ClawtrateClient {
    * and a write is dropped once that connection is no longer current, checked
    * after every wait, so a late write can never land after a switch.
    */
-  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
+  private connectionTokenStore(
+    url: string,
+    generation: number,
+  ): GatewayBrowserDeviceTokenStore & {
+    /** `store`, for one socket's hello: nothing is staged or written once that socket is retired. */
+    save: (
+      params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
+      live: () => boolean,
+    ) => Promise<void>;
+  } {
     const current = () => generation === this.generation && this.settings?.url === url;
+    const save = async (
+      { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
+      live: () => boolean,
+    ) => {
+      if (!current() || !live()) return;
+      // A setup connection's first token waits in memory for its grant to be checked.
+      const gate = this.tokenGate;
+      if (gate?.generation === generation && gate.url === url) {
+        gate.staged = { deviceId, role, token, scopes: [...scopes] };
+        return;
+      }
+      // A replacement token is this socket's credential now: taken out of gateway text too.
+      this.heldToken = token;
+      const existing = await this.loadToken(url, deviceId, role);
+      if (!current() || !live()) return;
+      const held = existing?.heldScopes ?? [...READ_SCOPES];
+      await this.writeToken(url, deviceId, role, {
+        token,
+        // A replacement token is held to what this client asks for, whatever it was granted.
+        grantedScopes: scopes.filter((scope) => held.includes(scope)),
+        heldScopes: held,
+        ...(existing?.adminHeld ? { adminHeld: true } : {}),
+        ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+      });
+    };
     return {
+      save,
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
@@ -7312,28 +7463,7 @@ export class ClawtrateClient {
             this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
-      store: async ({ deviceId, role, token, scopes }) => {
-        if (!current()) return;
-        // A setup connection's first token waits in memory for its grant to be checked.
-        const gate = this.tokenGate;
-        if (gate?.generation === generation && gate.url === url) {
-          gate.staged = { deviceId, role, token, scopes: [...scopes] };
-          return;
-        }
-        // A replacement token is this socket's credential now: taken out of gateway text too.
-        this.heldToken = token;
-        const existing = await this.loadToken(url, deviceId, role);
-        if (!current()) return;
-        const held = existing?.heldScopes ?? [...READ_SCOPES];
-        await this.writeToken(url, deviceId, role, {
-          token,
-          // A replacement token is held to what this client asks for, whatever it was granted.
-          grantedScopes: scopes.filter((scope) => held.includes(scope)),
-          heldScopes: held,
-          ...(existing?.adminHeld ? { adminHeld: true } : {}),
-          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-        });
-      },
+      store: (params) => save(params, () => true),
       clear: async ({ deviceId, role }) => {
         if (!current()) return;
         await this.host.storage.delete(this.tokenKey(url, deviceId, role));
@@ -7354,6 +7484,32 @@ export class ClawtrateClient {
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
     this.host.log?.(level, this.scrub(message));
+  }
+
+  /**
+   * A request that failed, logged with the gateway's own words, except on a setup
+   * connection: there it is a fixed line, like everything else setup publishes.
+   */
+  /** Whether this connection is, or was opened as, the host's setup connection. */
+  private quiet(): boolean {
+    return this.setupGeneration === this.generation || this.isSetup(this.settings?.url);
+  }
+
+  /** An engine's warning: on a setup connection, a fixed line, never the gateway's words. */
+  private logEngine(message: string): void {
+    this.log("warn", this.quiet() ? "a read failed on the setup connection" : message);
+  }
+
+  private logFailure(
+    level: "warn" | "error",
+    what: string,
+    error: unknown,
+    setup = this.quiet(),
+  ): void {
+    this.log(
+      level,
+      setup ? `${what} failed on the setup connection` : `${what} failed: ${errorMessage(error)}`,
+    );
   }
 }
 
