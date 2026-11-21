@@ -341,6 +341,7 @@ export function ComputerTab(props: ComputerTabProps) {
           // for a tab no one is looking at.
           online={online && shown}
           connected={online}
+          connectedAt={connection.connectedAt}
           onOpenMachines={props.onOpenMachines}
           browser={
             pane?.availability === "ready"
@@ -678,40 +679,33 @@ function ScreenSection(props: ScreenProps) {
       </div>
     );
   }
-  // A view still open keeps its picture and its controls whatever a tab lookup says: a lookup
-  // that failed, or couldn't see the browser, says so beside it.
-  if (pane?.view && pane.view.status !== "ended")
-    return (
-      <>
-        {pane.availability === "error" ? (
-          <p className="files-alert" role="alert" data-testid="computer-ask-failed">
-            {words.askFailedLine(name)} {pane.error}
-            <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
-              Try again
-            </button>
-          </p>
-        ) : (
-          pane.browser === "unknown" && (
-            <p className="files-alert" role="alert" data-testid="computer-tabs-unknown">
-              {words.tabsUnknownLine(name)}
-              <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
-                Retry
-              </button>
-            </p>
-          )
-        )}
-        <Tile {...props} pane={pane} />
-      </>
-    );
-  if (pane?.availability === "error")
-    return (
+  const readError =
+    pane?.availability === "error" ? (
       <p className="files-alert" role="alert" data-testid="computer-ask-failed">
         {words.askFailedLine(name)} {pane.error}
         <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
           Try again
         </button>
       </p>
+    ) : null;
+  const unknownTabs =
+    pane?.browser === "unknown" ? (
+      <p className="files-alert" role="alert" data-testid="computer-tabs-unknown">
+        {words.tabsUnknownLine(name)}
+        <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
+          Retry
+        </button>
+      </p>
+    ) : null;
+  // An open view keeps its picture and its controls when a tab lookup fails.
+  if (pane?.view && pane.view.status !== "ended")
+    return (
+      <>
+        {readError ?? unknownTabs}
+        <Tile {...props} pane={pane} />
+      </>
     );
+  if (readError) return readError;
   // Offline before any pane: nothing is being read, so nothing says it is.
   if (!pane && !props.online)
     return (
@@ -725,15 +719,7 @@ function ScreenSection(props: ScreenProps) {
         <div className="screen-blank">{glyph("working")}</div>
       </div>
     );
-  if (pane.tabs.length === 0 && pane.browser === "unknown")
-    return (
-      <p className="files-alert" role="alert" data-testid="computer-tabs-unknown">
-        {words.tabsUnknownLine(name)}
-        <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
-          Retry
-        </button>
-      </p>
-    );
+  if (pane.tabs.length === 0 && unknownTabs) return unknownTabs;
   if (pane.tabs.length === 0)
     return (
       <div className="screen computer-dark" data-state="closed" data-testid="computer-no-tabs">
@@ -955,6 +941,7 @@ function MachineSection({
   transcript,
   online,
   connected,
+  connectedAt,
   onOpenMachines,
   browser,
 }: {
@@ -966,6 +953,7 @@ function MachineSection({
   online: boolean;
   /** The gateway connection is up: after a drop the facts are the last read, at their time. */
   connected: boolean;
+  connectedAt: number | null;
   onOpenMachines?: (() => void) | undefined;
   browser: string | null;
 }) {
@@ -978,8 +966,7 @@ function MachineSection({
   const [lastGood, setLastGood] = useState<Record<string, { record: NodeRecord; at: number }>>({});
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<number | null>(null);
-  /** The latest read failed as a whole: what is shown is the read before, at its time. */
-  const [failed, setFailed] = useState(false);
+  const [readStatus, setReadStatus] = useState<"waiting" | "current" | "failed">("waiting");
   const ask = useCallback(
     (probe: boolean) =>
       bridge.invoke({
@@ -992,7 +979,7 @@ function MachineSection({
   );
   const keep = useCallback((answer: MachineFacts) => {
     setFacts(answer);
-    setFailed(false);
+    setReadStatus("current");
     // Only the nodes named now: a node no longer named leaves with its last record.
     setLastGood((before) => {
       const next: typeof before = {};
@@ -1011,7 +998,7 @@ function MachineSection({
         keep(answer);
         if (manual) setChecked(answer.readAt);
       },
-      fail: () => setFailed(true),
+      fail: () => setReadStatus("failed"),
       checking: setChecking,
     }),
   );
@@ -1023,12 +1010,16 @@ function MachineSection({
     if (!online) return;
     reader.read(() => ask(false), false);
     // The nodes, the task or the connection changed: what is still out is no longer asked for.
-    return () => reader.invalidate();
-  }, [ask, online, reader]);
+    return () => {
+      reader.invalidate();
+      setReadStatus("waiting");
+    };
+  }, [ask, online, reader, connectedAt]);
   // Times are read against when the facts were read.
   const now = facts?.readAt ?? 0;
   // After a failed read or a dropped connection, what is shown is the last read, at its time.
-  const stale = facts !== null && (failed || !connected);
+  const failed = readStatus === "failed";
+  const stale = facts !== null && (!connected || readStatus !== "current");
   const setting = facts?.setting;
   // As "Where it runs" says it: unset and auto are not resolved, and never the gateway's machine.
   const settingWords = setting ? `Commands: ${hostWords(setting)}` : null;
@@ -1045,9 +1036,23 @@ function MachineSection({
           role="status"
           data-testid="computer-machine-stale"
         >
-          {connected
-            ? `Couldn't read this again. As read at ${clockTime(facts.readAt)}.`
-            : `Not connected to the gateway. As read at ${clockTime(facts.readAt)}.`}
+          {!connected
+            ? "Not connected to the gateway."
+            : failed
+              ? "Couldn't read this again."
+              : "Reading again."}{" "}
+          As read at {clockTime(facts.readAt)}.
+          {connected && failed && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={checking}
+              onClick={() => read(true)}
+            >
+              {checking ? "Checking…" : "Check again"}
+            </button>
+          )}
         </p>
       )}
       {failed && facts === null && connected && (

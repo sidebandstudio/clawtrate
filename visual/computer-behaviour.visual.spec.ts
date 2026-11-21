@@ -111,33 +111,37 @@ test.describe("the full view on the desktop", () => {
     // The host takes the first input call and refuses the next, as with one queue slot left.
     await page.evaluate(() => {
       type Command = { type: string; input?: { text?: string } };
-      const bridge = (
-        window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
-      ).clawtrateFixture;
+      const fixture = window as unknown as {
+        clawtrateFixture: { invoke(command: Command): Promise<unknown> };
+        pasteAttempts: string[];
+      };
+      const bridge = fixture.clawtrateFixture;
       const invoke = bridge.invoke.bind(bridge);
-      let calls = 0;
+      fixture.pasteAttempts = [];
       bridge.invoke = (command) => {
         if (command.type !== "computerInput" || !command.input?.text) return invoke(command);
-        calls += 1;
-        return calls === 1 ? invoke(command) : Promise.resolve({ sent: false });
+        fixture.pasteAttempts.push(command.input.text);
+        return fixture.pasteAttempts.length === 2
+          ? Promise.resolve({ sent: false })
+          : invoke(command);
       };
     });
     const frame = fullView(page).getByTestId("screen-frame");
     await frame.focus();
     await frame.evaluate((element) => {
       const data = new DataTransfer();
-      data.setData("text/plain", "p".repeat(3000));
+      data.setData("text/plain", "a".repeat(2000) + "b".repeat(2000) + "c");
       element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
     });
     await expect(
       fullView(page)
         .getByRole("status")
-        .filter({ hasText: "Only part of the paste was sent: the last 1000 characters weren't." }),
+        .filter({ hasText: "Only part of the paste was sent: the last 2001 characters weren't." }),
     ).toBeVisible();
-    const texts = (await sentOf(page, "computerInput")).map(
-      (each) => (each.input as { text?: string }).text?.length,
+    const attempts = await page.evaluate(
+      () => (window as unknown as { pasteAttempts: string[] }).pasteAttempts,
     );
-    expect(texts).toEqual([2000]);
+    expect(attempts).toEqual(["a".repeat(2000), "b".repeat(2000)]);
   });
 
   test("F-142: closing the view during a paste drops the unsent suffix", async ({ page }) => {
@@ -647,6 +651,9 @@ test.describe("the computer button, recovery and the machine", () => {
       "aria-selected",
       "true",
     );
+    await openFull(page);
+    await take(page);
+    await expect(controlBar(page)).toContainText("Juniper is still acting");
   });
 
   test("the Computer tab asks the gateway nothing while another tab of the pane is shown", async ({
@@ -814,7 +821,7 @@ test.describe("the computer button, recovery and the machine", () => {
     await page.getByRole("tab", { name: "Files" }).click();
     await page.getByRole("tab", { name: "Computer" }).click();
     await expect(machine.getByTestId("computer-machine-stale")).toHaveText(
-      /^Couldn't read this again\. As read at \d+:\d\d (AM|PM)\.$/,
+      /^Couldn't read this again\. As read at \d+:\d\d (AM|PM)\.\s*Check again$/,
     );
     await expect(node).toContainText(/Connected when last read, \d+:\d\d (AM|PM)/);
     await page.evaluate(() =>
@@ -832,6 +839,54 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(machine.getByTestId("computer-machine-stale")).toHaveText(
       /^Not connected to the gateway\. As read at \d+:\d\d (AM|PM)\.$/,
     );
+  });
+
+  test("F-148: cached machine facts stay labeled through reconnect and a failed read can be retried", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=offline`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    const node = machine.getByTestId("computer-node");
+    const stale = machine.getByTestId("computer-machine-stale");
+    await expect(machine.getByTestId("computer-node-offline")).toBeVisible();
+    await page.evaluate(() => {
+      type Command = { type: string };
+      const { clawtrateFixture: bridge } = window as unknown as {
+        clawtrateFixture: {
+          invoke(command: Command): Promise<unknown>;
+          setState(update: (s: ClawtrateState) => ClawtrateState): void;
+        };
+      };
+      const invoke = bridge.invoke.bind(bridge);
+      const refusal = new Promise<void>((resolve) =>
+        window.addEventListener("refuse-machine-read", () => resolve(), { once: true }),
+      );
+      bridge.invoke = (command) => {
+        if (command.type !== "readMachine") return invoke(command);
+        bridge.invoke = invoke;
+        return refusal.then(() => {
+          throw new Error("offline");
+        });
+      };
+      bridge.setState((s) => ({ ...s, connection: { ...s.connection, status: "reconnecting" } }));
+    });
+    await expect(stale).toContainText("Not connected to the gateway.");
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: { setState(update: (s: ClawtrateState) => ClawtrateState): void };
+      };
+      clawtrateFixture.setState((s) => ({
+        ...s,
+        connection: { ...s.connection, status: "connected", connectedAt: Date.now() },
+      }));
+    });
+    await expect(stale).toContainText("Reading again.");
+    await expect(node).toContainText("Not connected when last read");
+    await page.evaluate(() => window.dispatchEvent(new Event("refuse-machine-read")));
+    await expect(stale).toContainText("Couldn't read this again.");
+    await stale.getByRole("button", { name: "Check again" }).click();
+    await expect(stale).toHaveCount(0);
+    await expect(machine.getByTestId("computer-node-offline")).toBeVisible();
   });
 
   test("F-148: a node record that couldn't be read is Unknown, never Not connected", async ({
@@ -944,12 +999,15 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
         window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
       ).clawtrateFixture;
       const invoke = bridge.invoke.bind(bridge);
+      const ack = new Promise<void>((resolve) =>
+        window.addEventListener("first-input-accepted", () => resolve(), { once: true }),
+      );
       bridge.invoke = async (command) => {
         const result = await invoke(command);
-        if (command.type === "computerInput" && command.input?.text === "a")
-          await new Promise<void>((resolve) =>
-            window.addEventListener("first-input-accepted", () => resolve(), { once: true }),
-          );
+        if (command.type === "computerInput" && command.input?.text === "a") {
+          await ack;
+          window.dispatchEvent(new Event("first-input-returned"));
+        }
         return result;
       };
     });
@@ -959,7 +1017,11 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
     await view.getByRole("button", { name: "Close the full view" }).click();
     await expect(view).toHaveCount(0);
     await page.evaluate(async () => {
+      const returned = new Promise<void>((resolve) =>
+        window.addEventListener("first-input-returned", () => resolve(), { once: true }),
+      );
       window.dispatchEvent(new Event("first-input-accepted"));
+      await returned;
       await new Promise(requestAnimationFrame);
     });
     const inputs = await sentOf(page, "computerInput");

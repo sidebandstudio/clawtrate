@@ -19,6 +19,7 @@
 
 import {
   ComputerViews,
+  browserUse,
   newRun,
   readCommandPlace,
   type ClawtrateState,
@@ -596,7 +597,8 @@ export function computerFixture(
         event("draining", gen);
         if (mode === "draining") return forever;
         await wait(params.takeRace ? 1500 : 700);
-        if (mode === "busy" || mode === "stuck" || mode === "stuck-refused")
+        const activeCall = mode === "active" && browserUse(get().transcripts[COMPUTER_TASK]).active;
+        if (activeCall || mode === "busy" || mode === "stuck" || mode === "stuck-refused")
           return {
             state: "busy",
             reason: "the bot is still acting in this browser",
