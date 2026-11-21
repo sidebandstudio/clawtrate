@@ -1028,7 +1028,8 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   }
   // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
   // denies the rest. Never is checked only when the gateway removes every tool of the line.
-  const choice = botDenied.length > 0 ? null : ownAsk ? "ask" : "allow";
+  // A tool server's line is read-only (no namespace to write): no choice is checked.
+  const choice = def.kind === "server" || botDenied.length > 0 ? null : ownAsk ? "ask" : "allow";
   if (def.kind === "question")
     return listed({
       ...base,

@@ -1006,7 +1006,7 @@ export function sentence(line: PermissionLine, view: BotPermissions, name: strin
   if (line.mark === "unread")
     return "Clawtrate could not confirm which rules the plugin is enforcing.";
   if (line.kind === "server")
-    return `These are the tools the gateway listed for this server in ${name}'s latest task at ${clock(view.readAt)}. The gateway doesn't name one namespace that covers all of this server's tools and no other server's, so Clawtrate won't allow, ask or deny the whole server here.`;
+    return `These are the tools the gateway listed for this server in ${name}'s latest task at ${clock(view.readAt)}.`;
   const can =
     line.kind === "plugin"
       ? `use the tools ${line.words.charAt(0).toLowerCase()}${line.words.slice(1)}`
