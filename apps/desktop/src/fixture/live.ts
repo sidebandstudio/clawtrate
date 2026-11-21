@@ -763,17 +763,16 @@ export function liveCommand(
   switch (command.type) {
     case "requestAccess": {
       set(upgrade(get(), { status: "requesting" }));
-      later(
-        () =>
-          set(
-            upgrade(get(), {
-              status: "pending",
-              requestId: REQUEST_ID,
-              approveCommand: `openclaw devices approve ${REQUEST_ID}`,
-            }),
-          ),
-        300,
-      );
+      later(() => {
+        if (get().connection.upgrade.status !== "requesting") return;
+        set(
+          upgrade(get(), {
+            status: "pending",
+            requestId: REQUEST_ID,
+            approveCommand: `openclaw devices approve ${REQUEST_ID}`,
+          }),
+        );
+      }, 300);
       return Promise.resolve();
     }
     case "sendMessage": {
