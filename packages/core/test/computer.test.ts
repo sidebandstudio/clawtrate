@@ -1084,6 +1084,20 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(h.pane().control).toMatchObject({ status: "unconfirmed", outOfSight: true, key: KEY });
   });
 
+  it("switching task while in control keeps the hand-back on the tab it came from, and offers Release again if it is not confirmed", async () => {
+    vi.useFakeTimers();
+    const h = harness({
+      "clawtrate-computer.control.release": () => {
+        throw refused("FORBIDDEN", "not_holder");
+      },
+    });
+    await granted(h);
+    h.views.show(h.viewer, "agent:pip:other");
+    expect(h.pane().control).toMatchObject({ status: "releasing", outOfSight: true, key: KEY });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control).toMatchObject({ status: "unconfirmed", outOfSight: true, key: KEY });
+  });
+
   it("a viewer that goes away gives control back and leaves no pane", async () => {
     const h = harness();
     await granted(h);

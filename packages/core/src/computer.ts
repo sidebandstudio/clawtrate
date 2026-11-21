@@ -746,7 +746,9 @@ export class ComputerViews {
     };
     live.shown = true;
     this.lives.set(viewer, live);
-    const kept = current?.control.outOfSight ? current.control : noControl;
+    // Read after leaving: the hand-back leaving started is the one kept.
+    const left = this.pane(viewer);
+    const kept = left?.control.outOfSight ? left.control : noControl;
     this.write((state) => ({
       ...state,
       panes: {
