@@ -3,7 +3,7 @@
 // keyboard and the screen reader. The same walk runs against a real
 // development gateway in e2e/setup.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 test.use(contextFor(WIDE, "light"));
@@ -366,4 +366,61 @@ test("F-515: with the tested version everything is offered: its facts and Connec
   await expect(page.getByTestId("setup-found").locator("dl > div")).toHaveCount(4);
   await page.getByRole("button", { name: "Connect read-only" }).click();
   expect(await sent(page)).toEqual(["setupConnect"]);
+});
+
+test("F-491: a step's elapsed time counts time the window spent suspended, and the step under way is announced without it", async ({
+  page,
+}) => {
+  // A clock this test moves: the time jumps, as after a suspend, while no timer ran.
+  await page.clock.install({ time: NOW });
+  await page.goto("/?setup=looking&theme=light");
+  await page.locator(".app").waitFor();
+  const running = page.getByRole("list", { name: "Steps" }).getByRole("listitem").nth(1);
+  await expect(running.locator(".s-step-time")).toHaveText("");
+  await expect(page.getByTestId("setup-step-live")).toHaveText("Checking its version");
+  await page.clock.setSystemTime(NOW.getTime() + 15_000);
+  await page.clock.runFor(1_000);
+  await expect(running.locator(".s-step-time")).toHaveText("16 s");
+  await expect(page.getByTestId("setup-step-live")).toHaveText("Checking its version");
+});
+
+test("Escape on the refused sandbox's screen does what its Back does: the first question", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=refused", "light");
+  await page.getByRole("heading", { name: "On this computer", exact: true }).focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  expect(await sent(page)).toEqual(["setupReset"]);
+});
+
+test("a look this window couldn't ask for shows no progress: back to the first question", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=first", "light");
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { send: (command: { type: string }) => Promise<void> };
+      }
+    ).clawtrateFixture;
+    fixture.send = async () => {
+      throw new Error("too many commands are waiting for this window");
+    };
+  });
+  await rows(page).first().click();
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Looking on this computer" })).toHaveCount(0);
+});
+
+test("F-493: from the keyboard, Advanced puts focus in the address field, and Back on the question's title", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=first", "light");
+  await page.getByRole("button", { name: "Advanced" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+  await page.getByRole("button", { name: "Back" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeFocused();
 });

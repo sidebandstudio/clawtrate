@@ -556,10 +556,22 @@ export function ConnectScreen({
   // Advanced: the address-and-token form as it was, with Back to the first question.
   const advancedBack =
     info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
+  // Advanced replaces the setup screens on the same screen, so focus moves here: to the
+  // address field going in, to the question's title coming back. Not on launch.
+  const card = useRef<HTMLDivElement>(null);
+  const lastView = useRef(view);
+  useEffect(() => {
+    const from = lastView.current;
+    lastView.current = view;
+    if (from === view) return;
+    if (view === "advanced") card.current?.querySelector<HTMLElement>("input")?.focus();
+    else if (from === "advanced")
+      card.current?.querySelector<HTMLElement>("[data-s-title]")?.focus();
+  }, [view]);
   return (
     <main className="connect" inert={inert}>
       <div className="connect-drag" />
-      <div className="connect-card">
+      <div className="connect-card" ref={card}>
         {mismatch ? (
           <>
             <header className="connect-brand">
