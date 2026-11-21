@@ -861,9 +861,10 @@ function PhoneLayout(
               // Each character typed is sent as text as it is typed; nothing is stored. Only text
               // can be sent, so a deletion or a replacement is not shown: the field is what was sent.
               if (!value.startsWith(typed)) return;
-              const added = value.slice(typed.length);
-              setTyped(value);
-              if (added) props.onInput({ kind: "text", text: added.slice(0, 2000) });
+              // At most one input call's text (2000): what isn't sent isn't kept either.
+              const added = value.slice(typed.length, typed.length + 2000);
+              setTyped(typed + added);
+              if (added) props.onInput({ kind: "text", text: added });
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {

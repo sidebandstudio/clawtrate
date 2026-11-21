@@ -703,6 +703,16 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
           .join(""),
       )
       .toBe("abc");
+    // A paste longer than one input call: the field keeps only what was sent.
+    await field.fill("abc" + "x".repeat(2001));
+    await expect(field).toHaveValue("abc" + "x".repeat(2000));
+    await expect
+      .poll(async () =>
+        (await sentOf(page, "computerInput"))
+          .map((each) => (each.input as { text?: string }).text ?? "")
+          .join(""),
+      )
+      .toBe("abc" + "x".repeat(2000));
     await fullView(page).getByRole("textbox", { name: "Type into the page" }).press("Enter");
     await expect(
       fullView(page).getByText("Enter isn't sent to the page. Tap the page's button instead."),
