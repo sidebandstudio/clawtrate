@@ -1078,6 +1078,41 @@ describe("handing back (F-145, section 18)", () => {
 });
 
 describe("the tab shown and the tab watched", () => {
+  it("F-142: while a tab is watched it stays the one shown, even when a list leaves it out for a while", async () => {
+    const other = { targetId: OTHER, url: "http://127.0.0.1:1/other", title: "Other", lease: null };
+    let answer: unknown = tabsAnswer(null, [other]);
+    const h = harness({ "clawtrate-computer.tabs": () => answer });
+    await ready(h);
+    h.views.choose(h.viewer, OTHER);
+    await h.views.watch(h.viewer);
+    h.streams.at(-1)!.frame();
+    const both = answer;
+    answer = { ...tabsAnswer(), browser: "not-running", reason: "discovery_timeout", tabs: [] };
+    await h.views.readTabs(h.viewer);
+    answer = tabsAnswer();
+    await h.views.readTabs(h.viewer);
+    answer = both;
+    await h.views.readTabs(h.viewer);
+    expect(h.pane().view).toMatchObject({ targetId: OTHER, status: "live" });
+    expect(h.pane().shown).toBe(OTHER);
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take").at(-1)).toEqual({
+      sessionKey: KEY,
+      targetId: OTHER,
+    });
+  });
+
+  it("F-142: input goes nowhere while the picture shows another tab than the one held", async () => {
+    const h = harness();
+    await granted(h);
+    // The view's tab changed under the lease (as a stream replaced on another tab would).
+    (h.views as unknown as { lives: Map<string, { view: { targetId: string } }> }).lives.get(
+      h.viewer,
+    )!.view.targetId = OTHER;
+    expect(h.views.input(h.viewer, { kind: "text", text: "x" })).toBe(false);
+    expect(h.calls("clawtrate-computer.input")).toEqual([]);
+  });
+
   it("F-142: a lookup that lists nothing while a tab is watched leaves Take on the watched tab once the list is back", async () => {
     let answer: unknown = tabsAnswer(null, [
       { targetId: OTHER, url: "http://127.0.0.1:1/other", title: "Other", lease: null },

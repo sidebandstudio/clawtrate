@@ -911,14 +911,15 @@ export class ComputerViews {
       const listed = (targetId: string | null | undefined) =>
         !!targetId && kept.some((tab) => tab.targetId === targetId);
       const watched = p.view && p.view.status !== "ended" ? p.view.targetId : null;
-      // The tab Take asks for is the one in the picture: an open view's tab is shown again first.
-      const shown = listed(p.shown)
-        ? p.shown
-        : listed(watched)
-          ? watched
+      // The tab Take asks for is the one in the picture: while a view is open its tab is the one
+      // shown, even when a list leaves it out (a closed tab ends the view, then the list decides).
+      const shown =
+        watched ??
+        (listed(p.shown)
+          ? p.shown
           : (kept.find((tab) => !tab.url.startsWith("chrome://"))?.targetId ??
             kept[0]?.targetId ??
-            null);
+            null));
       const view = p.view;
       const tab = view ? kept.find((each) => each.targetId === view.targetId) : undefined;
       return {
@@ -1532,6 +1533,8 @@ export class ComputerViews {
     const pane = this.pane(viewer);
     const lease = live?.lease;
     if (!live || !lease || pane?.control.status !== "granted") return false;
+    // Only into the tab in the picture: a view of another tab than the one held takes nothing.
+    if (live.view && !live.view.ended && live.view.targetId !== lease.targetId) return false;
     const last = lease.inputs.at(-1);
     if (
       input.kind === "text" &&
