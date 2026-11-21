@@ -7,7 +7,7 @@
 // setup-install.test.ts.
 
 import { ClawtrateClient, type SetupInstall, type SetupState } from "@clawtrate/core";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,6 +20,8 @@ import {
 } from "../src/setup/controller.ts";
 import type { InstallOutcome, Installer } from "../src/setup/install.ts";
 import { checkRequest, sessionEnv, type ProgramRequest } from "../src/setup/programs.ts";
+import { anythingHere } from "../src/setup/look.ts";
+import { quitGate } from "../src/setup/quit.ts";
 import type { Opened } from "../src/setup/sandbox.ts";
 import { productionWorld } from "../src/setup/world.ts";
 import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
@@ -73,6 +75,8 @@ function harness(
     needsBus?: string;
     /** The look's file checks after the dialog can't be made. */
     unreadable?: boolean;
+    /** Called as the world is opened after the dialog. */
+    afterDialogOpen?: () => void;
     platform?: "darwin" | "linux";
   } = {},
 ): Fake {
@@ -127,6 +131,7 @@ function harness(
   fake.setup = new SetupController({
     client,
     open: async () => {
+      if (fake.dialogs.length > 0) options.afterDialogOpen?.();
       if (options.unreadable && fake.dialogs.length > 0) throw new Error("EACCES");
       return opened();
     },
@@ -168,6 +173,15 @@ function harness(
     if (phase && phases.at(-1) !== phase) phases.push(phase);
   });
   return fake;
+}
+
+/** Waits until `ready` holds: an event of the controller's, never a fixed delay. */
+async function until(ready: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(`never happened: ${what}`);
+    await new Promise((done) => setTimeout(done, 5));
+  }
 }
 
 async function notFound(fake: Fake): Promise<void> {
@@ -220,8 +234,9 @@ describe("F-501: nothing is downloaded or run before the host's own dialog", () 
     const asked = fake.asked.length;
     await fake.setup.install();
     expect(fake.runs).toBe(0);
-    // Found, and never run.
+    // Found, and never run, written or removed.
     expect(fake.asked.length).toBe(asked);
+    expect(readFileSync(program, "utf8")).toBe("#!/bin/sh\nthe person's own\n");
     expect(fake.setup.current).toMatchObject({
       phase: "install-failed",
       install: { failure: { kind: "changed", step: -1, retry: false } },
@@ -399,12 +414,51 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     });
   });
 
+  it("F-501: after the dialog, a place the file checks can't look into is not taken for nothing", async () => {
+    const home = join(dir, "home");
+    // Only places in the test's own home: nothing of this computer's is looked at.
+    const world = {
+      ...productionWorld({ home, appData: dir, platform: "darwin" }),
+      candidates: [join(home, ".npm-global/bin/openclaw"), join(home, ".local/bin/openclaw")],
+    };
+    // A candidate's folder that can't be searched: its program can't be checked.
+    mkdirSync(join(home, ".npm-global"));
+    chmodSync(join(home, ".npm-global"), 0o600);
+    try {
+      expect(await anythingHere(world)).toBe("unreadable");
+    } finally {
+      chmodSync(join(home, ".npm-global"), 0o700);
+    }
+    expect(await anythingHere(world)).toBe("nothing");
+  });
+
+  it("F-501: a consent that expires while the file checks run after it starts nothing", async () => {
+    let now = 1_000;
+    let late = false;
+    const fake = harness({
+      now: () => now,
+      afterDialogOpen: () => {
+        // The file checks after the dialog take past the two minutes.
+        if (!late) now += OPERATION_LIFETIME_MS + 1;
+        late = true;
+      },
+    });
+    await notFound(fake);
+    await fake.setup.install();
+    expect(fake.runs).toBe(0);
+    expect(fake.setup.current).toMatchObject({
+      phase: "install-failed",
+      install: { failure: { kind: "expired", step: -1 } },
+    });
+  });
+
   it("F-502: closed for the app's quit, the controller starts nothing more: a dialog answered after it runs nothing", async () => {
     let answer: (yes: boolean) => void = () => {};
     const fake = harness({ answer: () => new Promise<boolean>((done) => (answer = done)) });
     await notFound(fake);
     const installing = fake.setup.install();
-    await new Promise((done) => setTimeout(done, 10));
+    // The dialog is open when the app quits.
+    await until(() => fake.dialogs.length === 1, "the dialog opens");
     const closing = fake.setup.close();
     answer(true);
     await installing;
@@ -420,11 +474,11 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     await notFound(fake);
     const asked = fake.asked.length;
     const installing = fake.setup.install();
-    await new Promise((done) => setTimeout(done, 20));
+    await until(() => fake.runs === 1, "the installer starts");
     expect(fake.setup.current.phase).toBe("installing");
     let closed = false;
     const closing = fake.setup.close().then(() => (closed = true));
-    await new Promise((done) => setTimeout(done, 20));
+    await new Promise((done) => setImmediate(done));
     // The operation is still under way: the quit waits for it.
     expect(closed).toBe(false);
     fake.release();
@@ -438,7 +492,7 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     const fake = harness({ hold: true });
     await notFound(fake);
     const running = fake.setup.install();
-    await new Promise((done) => setTimeout(done, 20));
+    await until(() => fake.runs === 1, "the installer starts");
     expect(fake.setup.current.phase).toBe("installing");
     await expect(fake.setup.look()).rejects.toThrow(/under way/);
     await expect(fake.setup.connect()).rejects.toThrow(/under way/);
@@ -470,9 +524,12 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     expect(fake.setup.current).toMatchObject({ phase: "install-failed", install: { failure } });
     const looks = fake.phases.filter((phase) => phase === "looking").length;
     fake.setup.cancel();
-    await new Promise((done) => setTimeout(done, 20));
-    expect(fake.phases.filter((phase) => phase === "looking").length).toBe(looks + 1);
-    expect(fake.setup.current.phase).toBe("found");
+    await until(
+      () =>
+        fake.phases.filter((phase) => phase === "looking").length === looks + 1 &&
+        fake.setup.current.phase === "found",
+      "Back's look ends",
+    );
   });
 
   it("F-502: Try again is a new dialog and a new installer, only for an attempt that was removed", async () => {
@@ -505,5 +562,30 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     await expect(stuck.setup.install()).rejects.toThrow(/nothing to set up/);
     expect(stuck.dialogs).toHaveLength(1);
     expect(stuck.runs).toBe(1);
+  });
+});
+
+describe("F-502: the app's quit while setting up drains", () => {
+  it("F-502: every quit asked while setup drains is held, and the app quits once, after the drain", async () => {
+    let drained: () => void = () => {};
+    let quits = 0;
+    const gate = quitGate(
+      () => new Promise<void>((done) => (drained = done)),
+      () => (quits += 1),
+    );
+    const prevented: boolean[] = [];
+    const event = () => ({ preventDefault: () => void prevented.push(true) });
+    expect(gate(event())).toBe(false);
+    // The person quits again while it drains: held, not let through.
+    expect(gate(event())).toBe(false);
+    expect(gate(event())).toBe(false);
+    expect(prevented).toHaveLength(3);
+    expect(quits).toBe(0);
+    drained();
+    await new Promise((done) => setImmediate(done));
+    expect(quits).toBe(1);
+    // The quit the gate asked for goes ahead.
+    expect(gate(event())).toBe(true);
+    expect(prevented).toHaveLength(3);
   });
 });

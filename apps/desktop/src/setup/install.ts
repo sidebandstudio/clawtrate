@@ -57,12 +57,12 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import type { InstallPins, InstallTarget } from "./install-pins.ts";
-import type { InstallRequest, InstallResult } from "./install-runner.ts";
+import { safeValue, type InstallRequest, type InstallResult } from "./install-runner.ts";
 import { sessionEnv } from "./programs.ts";
 
 export const INSTALL_PROFILE = "clawtrate";
@@ -203,6 +203,17 @@ function serviceOf(platform: "darwin" | "linux", home: string) {
         service: "openclaw-gateway-clawtrate.service",
         serviceFile: join(home, ".config/systemd/user/openclaw-gateway-clawtrate.service"),
       };
+}
+
+/**
+ * Whether the install can run for this home and app-data folder: each is an
+ * absolute path the install's runner passes as it is (no quote or shell
+ * syntax, such as an apostrophe in an account's name). The host offers setting up only then, so
+ * such an account sees the install isn't offered rather than a failure after
+ * its dialog.
+ */
+export function installSupported(home: string, appData: string): boolean {
+  return [home, appData].every((path) => isAbsolute(path) && safeValue(path));
 }
 
 /** The real computer's place, for a person's app or a hosted runner. */
@@ -837,6 +848,8 @@ export async function download(
   }
 }
 
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
+
 /** What a path is: absent (only ENOENT), there, or unreadable. */
 type Presence = "absent" | "there" | "unreadable";
 
@@ -852,7 +865,8 @@ type Owned = { text: string; stat: Stats };
 async function readOwn(path: string): Promise<Owned | null> {
   let handle;
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // Never through a link, and never waiting on a named pipe that has no writer.
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
@@ -882,9 +896,14 @@ const parsed = (text: string): Record<string, unknown> | null => {
 const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 
 /** Removes the file at `path` only when it still is `made`. Resolves whether it is gone. */
-async function unlinkIfSame(path: string, made: Stats): Promise<boolean> {
-  const now = await lstat(path).catch(() => null);
-  if (!now) return true;
+export async function unlinkIfSame(path: string, made: Stats): Promise<boolean> {
+  let now: Stats;
+  try {
+    now = await lstat(path);
+  } catch (error) {
+    // Only "no such file" is gone; a path that can't be read may still be there.
+    return errorCode(error) === "ENOENT";
+  }
   if (!same(now, made)) return false;
   return unlink(path).then(
     () => true,
@@ -893,9 +912,13 @@ async function unlinkIfSame(path: string, made: Stats): Promise<boolean> {
 }
 
 /** Removes the folder at `path` only when it still is `made` and is empty. Resolves whether it is gone. */
-async function rmdirIfSame(path: string, made: Stats): Promise<boolean> {
-  const now = await lstat(path).catch(() => null);
-  if (!now) return true;
+export async function rmdirIfSame(path: string, made: Stats): Promise<boolean> {
+  let now: Stats;
+  try {
+    now = await lstat(path);
+  } catch (error) {
+    return errorCode(error) === "ENOENT";
+  }
   if (!now.isDirectory() || !same(now, made)) return false;
   return rmdir(path).then(
     () => true,
@@ -993,11 +1016,13 @@ const failure = (
 const ok = (result: InstallResult) =>
   result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
 
-const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
-
 export class Installer {
   private readonly options: InstallOptions;
   private readonly at: ReturnType<typeof layout>;
+  /** Set when a program's group couldn't be confirmed ended: its attempt's files are then left. */
+  private lingering = false;
+  /** The id whose staging folder this run created itself: the only staging folder it may remove as its own. */
+  private stagingMade: string | null = null;
 
   constructor(options: InstallOptions) {
     this.options = options;
@@ -1038,15 +1063,23 @@ export class Installer {
   /** Runs one of this install's own commands; anything else is refused before it starts. */
   private exec(request: InstallRequest, port: number | null): Promise<InstallResult> {
     const allowed = commands(this.options.place, this.options.pins, port);
-    return this.options.run(request, (asked) => {
-      const known = allowed.some(
-        (command) =>
-          command.program === asked.program &&
-          command.args.length === asked.args.length &&
-          command.args.every((arg, index) => arg === asked.args[index]),
-      );
-      if (!known) throw new Error("refusing a command the install doesn't run");
-    });
+    return this.options
+      .run(request, (asked) => {
+        const known = allowed.some(
+          (command) =>
+            command.program === asked.program &&
+            command.args.length === asked.args.length &&
+            command.args.every((arg, index) => arg === asked.args[index]),
+        );
+        if (!known) throw new Error("refusing a command the install doesn't run");
+      })
+      .then((result) => {
+        if (result.lingering) {
+          this.lingering = true;
+          this.log("a program's process group couldn't be confirmed ended");
+        }
+        return result;
+      });
   }
 
   private env(extra: Record<string, string> = {}): Record<string, string> {
@@ -1201,10 +1234,13 @@ export class Installer {
       return false;
     }
     const staging = stagingDir(place, proof.id);
+    // This run's own attempt removes a staging folder only if it made it; one that was in the
+    // way is left, and the removal is then unproven.
+    const ownStaging = proof.staging !== null && (id === null || this.stagingMade === id);
     const moves: Array<{ from: string; to: string }> = [
       { from: place.programDir, to: join(quarantine, "program") },
       { from: place.recordFile, to: join(quarantine, "record") },
-      ...(proof.staging ? [{ from: staging, to: join(quarantine, "staging") }] : []),
+      ...(ownStaging ? [{ from: staging, to: join(quarantine, "staging") }] : []),
     ];
     const moved: typeof moves = [];
     let intact = true;
@@ -1229,11 +1265,15 @@ export class Installer {
     }
     await rm(quarantine, { recursive: true, force: true }).catch(() => {});
     // The record's scratch link, if its own removal failed: the same file as the record.
-    await unlinkIfSame(this.scratch(proof.id), proof.record.stat);
+    await unlinkIfSame(this.scratch(proof.id, "installing"), proof.record.stat);
     const left = await Promise.all(
-      [place.programDir, place.recordFile, staging, quarantine, this.scratch(proof.id)].map(
-        presence,
-      ),
+      [
+        place.programDir,
+        place.recordFile,
+        staging,
+        quarantine,
+        this.scratch(proof.id, "installing"),
+      ].map(presence),
     );
     if (left.some((state) => state !== "absent")) return false;
     this.log("removed an attempt that never reached onboarding");
@@ -1250,16 +1290,16 @@ export class Installer {
     const record = await readOwn(join(quarantine, "record"));
     if (!record || !same(record.stat, proof.record.stat) || record.text !== proof.record.text)
       return false;
-    if (proof.staging) {
+    if (proof.staging && (await presence(join(quarantine, "staging"))) !== "absent") {
       const staging = await lstat(join(quarantine, "staging")).catch(() => null);
       if (!staging?.isDirectory() || !same(staging, proof.staging)) return false;
     }
     return true;
   }
 
-  /** Where Clawtrate's record is made whole before it is put in place. */
-  private scratch(id: string): string {
-    return `${this.options.place.recordFile}.${id}.next`;
+  /** Where Clawtrate's record at a stage is made whole before it is put in place: one path per stage. */
+  private scratch(id: string, stage: Stage): string {
+    return `${this.options.place.recordFile}.${id}.${stage}.next`;
   }
 
   private record(id: string, stage: Stage, port: number | null): InstallRecord {
@@ -1278,7 +1318,7 @@ export class Installer {
 
   /** Clawtrate's record at a new stage: written whole to a new file, then moved over the last in one step. */
   private async writeStage(id: string, stage: Stage, port: number | null): Promise<void> {
-    const next = this.scratch(id);
+    const next = this.scratch(id, stage);
     const made = await this.writeNew(next, JSON.stringify(this.record(id, stage, port)));
     try {
       await rename(next, this.options.place.recordFile);
@@ -1326,7 +1366,7 @@ export class Installer {
       }
       return undo("write", []);
     }
-    const next = this.scratch(id);
+    const next = this.scratch(id, "installing");
     let scratch: Stats;
     try {
       scratch = await this.writeNew(next, JSON.stringify(this.record(id, "installing", null)));
@@ -1392,7 +1432,8 @@ export class Installer {
       step: number,
       extra: Partial<InstallFailure> = {},
     ) => {
-      const removed = await this.discard(id);
+      // A program that may still write there: nothing of the attempt is removed under it.
+      const removed = !this.lingering && (await this.discard(id));
       const cleanup: InstallCleanup = removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
@@ -1421,20 +1462,23 @@ export class Installer {
       this.log("the profile or its service appeared before onboarding");
       return early("changed", 2);
     }
-    let state: Stats;
     try {
       await mkdir(place.stateDir, { mode: 0o700 });
-      state = await lstat(place.stateDir);
     } catch (error) {
       return early(errorCode(error) === "EEXIST" ? "changed" : "write", 2);
     }
+    const state = await lstat(place.stateDir).catch(() => null);
+    /** Still before onboarding: the empty state folder this attempt made, then the attempt. */
+    const unmake = async (kind: InstallFailureKind) => {
+      const empty = state !== null && (await rmdirIfSame(place.stateDir, state));
+      const result = await early(kind, 2);
+      return empty ? result : stopped(kind, 2, { cleanup: "unproven", retry: false });
+    };
+    if (state === null || this.closing) return unmake(state === null ? "write" : "installer");
     try {
       await this.writeStage(id, "onboarding", port);
     } catch {
-      // Still before onboarding: the empty state folder this attempt made, then the attempt.
-      const empty = await rmdirIfSame(place.stateDir, state);
-      const result = await early("write", 2);
-      return empty ? result : stopped("write", 2, { cleanup: "unproven", retry: false });
+      return unmake("write");
     }
     const kept = (kind: InstallFailureKind, extra: Partial<InstallFailure> = {}, step = 2) =>
       stopped(kind, step, { cleanup: "kept", ...extra });
@@ -1450,6 +1494,17 @@ export class Installer {
       },
       port,
     );
+    if (onboard.failed) {
+      // Onboarding never started (the app quits, or it couldn't be run): back to `installing`,
+      // and the attempt is removed as before onboarding. If that can't be written, it is kept.
+      this.log("onboarding didn't start");
+      try {
+        await this.writeStage(id, "installing", null);
+      } catch {
+        return kept("onboard");
+      }
+      return unmake("onboard");
+    }
     const onboarded = readOnboarding(onboard.stdout, port);
     if (onboard.timedOut || !onboarded.ok || onboard.exitCode !== 0) {
       this.log(
@@ -1575,6 +1630,7 @@ export class Installer {
     this.log("downloading");
     const staging = stagingDir(place, id);
     await mkdir(staging, { mode: 0o700 });
+    this.stagingMade = id;
     const stagedTarball = join(staging, this.at.tarballName);
     const stagedNode = join(staging, this.at.nodeName);
     const get = this.options.download ?? download;

@@ -346,18 +346,28 @@ export type Serve = "ok" | "missing" | "redirect" | "partial" | "short";
  * `wrong` asks for one that doesn't match; `serve` changes how one of them is
  * answered.
  */
-export async function standIn(
-  options: {
-    scenario?: StandInScenario;
-    platform?: "darwin" | "linux";
-    wrong?: "openclaw" | "node";
-    serve?: { name: "openclaw" | "node"; as: Serve };
-  } = {},
-): Promise<StandIn> {
+export type StandInOptions = {
+  scenario?: StandInScenario;
+  platform?: "darwin" | "linux";
+  wrong?: "openclaw" | "node";
+  serve?: { name: "openclaw" | "node"; as: Serve };
+};
+
+export async function standIn(options: StandInOptions = {}): Promise<StandIn> {
+  const root = mkdtempSync(join(tmpdir(), "clawtrate-install-"));
+  try {
+    return await makeStandIn(root, options);
+  } catch (error) {
+    // A stand-in that couldn't be made leaves nothing behind.
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function makeStandIn(root: string, options: StandInOptions): Promise<StandIn> {
   const scenario = options.scenario ?? "ok";
   const platform = options.platform ?? "darwin";
   const target: InstallTarget = platform === "darwin" ? "darwin-arm64" : "linux-x64";
-  const root = mkdtempSync(join(tmpdir(), "clawtrate-install-"));
   const home = join(root, "home");
   const appData = join(root, "App Data");
   const served = join(root, "served");
@@ -418,17 +428,25 @@ export async function standIn(
   const server: Server = createServer((request, response) => {
     const path = request.url ?? "";
     requests.push(path);
-    const name = path === "/openclaw.tgz" ? "openclaw" : path === "/node.tgz" ? "node" : null;
-    const how = options.serve?.name === name ? options.serve.as : "ok";
+    const name =
+      path === "/openclaw.tgz" || path === "/redirected-openclaw.tgz"
+        ? "openclaw"
+        : path === "/node.tgz" || path === "/redirected-node.tgz"
+          ? "node"
+          : null;
+    const how =
+      options.serve?.name === name && !path.startsWith("/redirected-") ? options.serve.as : "ok";
     if (!name || how === "missing") {
       response.writeHead(404).end();
       return;
     }
     const body = readFileSync(join(served, `${name}.tgz`));
     if (how === "redirect") {
-      // Another host's name for the same loopback: never followed.
+      // Another path on the same loopback, which answers: never asked for.
       const port = (server.address() as { port: number }).port;
-      response.writeHead(302, { location: `http://localhost:${port}/${name}.tgz` }).end();
+      response
+        .writeHead(302, { location: `http://127.0.0.1:${port}/redirected-${name}.tgz` })
+        .end();
       return;
     }
     if (how === "partial") {
@@ -447,7 +465,10 @@ export async function standIn(
     response.writeHead(200, { "content-type": "application/octet-stream" });
     response.end(body);
   });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  await new Promise<void>((done, fail) => {
+    server.once("error", fail);
+    server.listen(0, "127.0.0.1", done);
+  });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   const base = `http://127.0.0.1:${port}`;

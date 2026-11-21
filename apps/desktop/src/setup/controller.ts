@@ -444,6 +444,11 @@ export class SetupController implements SetupHost {
       stoppedBefore("changed");
       return;
     }
+    // The file checks can take their time: the consent's two minutes hold after them too.
+    if (this.now() - at > OPERATION_LIFETIME_MS) {
+      stoppedBefore("expired");
+      return;
+    }
     this.publish({ ...initialSetupState, look, phase: "installing", install: start });
     let outcome: InstallOutcome;
     try {

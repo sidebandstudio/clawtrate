@@ -32,15 +32,25 @@ export type InstallResult = {
   stopped: boolean;
   /** Could not be started at all. */
   failed: boolean;
+  /**
+   * Its process group couldn't be confirmed ended, even after SIGKILL and a
+   * bounded wait: what it may still write is never removed on its account.
+   */
+  lingering: boolean;
 };
 
 export type RunInstallProgram = (request: InstallRequest) => Promise<InstallResult>;
 
 const STOP_GRACE_MS = 3_000;
+/** How long a group gets to be gone after SIGKILL before it is reported as lingering. */
+const KILL_WAIT_MS = 5_000;
 /** How long a finished program's group gets to end on its own before it is ended. */
 const DRAIN_MS = 1_000;
 const POLL_MS = 50;
 const SAFE_ENV_VALUE = /^[A-Za-z0-9._:/@+=, -]*$/;
+
+/** Whether a value is one the install's runner passes: a path or word with no quoting or shell syntax. */
+export const safeValue = (value: string) => SAFE_ENV_VALUE.test(value) && value.length <= 4096;
 
 /** Throws when a value could be read as more than one thing by the program or the system. */
 export function checkShape(request: InstallRequest): void {
@@ -54,7 +64,7 @@ export function checkShape(request: InstallRequest): void {
 }
 
 /** Whether any process of the group `pgid` is still there. */
-function groupAlive(pgid: number): boolean {
+export function groupAlive(pgid: number): boolean {
   try {
     process.kill(-pgid, 0);
     return true;
@@ -78,30 +88,50 @@ const pause = (ms: number) =>
     timer.unref?.();
   });
 
+type GroupTiming = { alive: (pgid: number) => boolean; graceMs: number; killWaitMs: number };
+
 /**
  * Ends the group `pgid` and waits until none of it is left: SIGTERM, then
- * SIGKILL after the grace period.
+ * SIGKILL after the grace period, then a bounded wait. Resolves whether the
+ * group is gone.
  */
-async function endGroup(pgid: number): Promise<void> {
-  if (!groupAlive(pgid)) return;
+async function endGroup(pgid: number, timing: GroupTiming): Promise<boolean> {
+  const { alive } = timing;
+  if (!alive(pgid)) return true;
   signalGroup(pgid, "SIGTERM");
-  const until = Date.now() + STOP_GRACE_MS;
-  while (groupAlive(pgid) && Date.now() < until) await pause(POLL_MS);
-  if (!groupAlive(pgid)) return;
+  const until = Date.now() + timing.graceMs;
+  while (alive(pgid) && Date.now() < until) await pause(POLL_MS);
+  if (!alive(pgid)) return true;
   signalGroup(pgid, "SIGKILL");
-  while (groupAlive(pgid)) await pause(POLL_MS);
+  const last = Date.now() + timing.killWaitMs;
+  while (alive(pgid) && Date.now() < last) await pause(POLL_MS);
+  return !alive(pgid);
 }
 
 export class InstallRunner {
   /** The process groups of programs still running or still draining, by group id. */
-  private readonly groups = new Map<number, Promise<void>>();
+  private readonly groups = new Map<number, Promise<boolean>>();
   /** Each group's one end: asked once, by its step or by the quit, and waited for by both. */
-  private readonly ends = new Map<number, () => Promise<void>>();
+  private readonly ends = new Map<number, () => Promise<boolean>>();
   private readonly spawnImpl: typeof nodeSpawn;
+  private readonly timing: GroupTiming;
   private closed = false;
 
-  constructor(options: { spawn?: typeof nodeSpawn } = {}) {
+  constructor(
+    options: {
+      spawn?: typeof nodeSpawn;
+      /** For the host's tests: whether a group is still there. */
+      alive?: (pgid: number) => boolean;
+      graceMs?: number;
+      killWaitMs?: number;
+    } = {},
+  ) {
     this.spawnImpl = options.spawn ?? nodeSpawn;
+    this.timing = {
+      alive: options.alive ?? groupAlive,
+      graceMs: options.graceMs ?? STOP_GRACE_MS,
+      killWaitMs: options.killWaitMs ?? KILL_WAIT_MS,
+    };
   }
 
   /** Runs one request that `check` has accepted; `check` throws for any other. */
@@ -115,6 +145,7 @@ export class InstallRunner {
       tooLarge: false,
       stopped: false,
       failed: true,
+      lingering: false,
     };
     // Once the app quits, nothing more starts.
     if (this.closed) return Promise.resolve(notStarted);
@@ -138,9 +169,9 @@ export class InstallRunner {
         child.once("error", () => resolve(notStarted));
         return;
       }
-      let ended: Promise<void> | null = null;
+      let ended: Promise<boolean> | null = null;
       /** Ends the whole group once, and remembers the wait. */
-      const end = () => (ended ??= endGroup(pgid));
+      const end = () => (ended ??= endGroup(pgid, this.timing));
       this.ends.set(pgid, end);
       let exited = false;
       let markExited: () => void = () => {};
@@ -149,8 +180,8 @@ export class InstallRunner {
         await exitedOnce;
         // What it started gets a moment to end with it, then is ended: nothing outlives the step.
         const until = Date.now() + DRAIN_MS;
-        while (groupAlive(pgid) && Date.now() < until) await pause(POLL_MS);
-        await end();
+        while (this.timing.alive(pgid) && Date.now() < until) await pause(POLL_MS);
+        return end();
       })();
       this.groups.set(pgid, drained);
       void drained.then(() => {
@@ -168,7 +199,14 @@ export class InstallRunner {
       const line = (text: string) => {
         if (stopped || tooLarge) return;
         kept.push(text);
-        if (request.onLine?.(text) === "stop") {
+        let stop: "stop" | void;
+        try {
+          stop = request.onLine?.(text);
+        } catch {
+          // A reader that failed ends the step as a stop would: the step's result says it was stopped.
+          stop = "stop";
+        }
+        if (stop === "stop") {
           stopped = true;
           void end();
         }
@@ -182,7 +220,7 @@ export class InstallRunner {
         child.stdout?.destroy();
         child.stderr?.destroy();
         // Resolved only once nothing of the group is left.
-        void drained.then(() =>
+        void drained.then((gone) =>
           resolve({
             exitCode: code,
             stdout: tooLarge ? "" : kept.join("\n"),
@@ -190,6 +228,7 @@ export class InstallRunner {
             tooLarge,
             stopped,
             failed,
+            lingering: !gone,
           }),
         );
       };

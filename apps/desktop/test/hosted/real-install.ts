@@ -146,15 +146,20 @@ const shared = [
     ...(platform === "darwin" ? [join(home, "Library/Logs/openclaw")] : []),
   ]),
 ];
-/** Every entry under a place, by its path: `(absent)` for a place that isn't there. */
-function listing(root: string): Set<string> {
-  const out = new Set<string>();
-  if (!existsSync(root)) return new Set(["(absent)"]);
+/**
+ * Every entry under a place, by its path, with what it is: a folder, or a
+ * file's size and modification time, so that a file written to in place
+ * shows too. `(absent)` for a place that isn't there.
+ */
+function listing(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!existsSync(root)) return new Map([["(absent)", ""]]);
   const walk = (at: string) => {
     for (const name of readdirSync(at)) {
       const path = join(at, name);
-      out.add(path);
-      if (statSync(path, { throwIfNoEntry: false })?.isDirectory()) walk(path);
+      const info = statSync(path, { throwIfNoEntry: false });
+      out.set(path, info?.isDirectory() ? "folder" : `${info?.size}:${info?.mtimeMs}`);
+      if (info?.isDirectory()) walk(path);
     }
   };
   walk(root);
@@ -512,7 +517,9 @@ await runner.close(5_000);
 mkdirSync(decoy);
 writeFileSync(join(decoy, "keep-me"), "the person's own\n");
 mkdirSync(join(sentinel, ".."), { recursive: true });
-writeFileSync(sentinel, sentinelText);
+// Made only where no definition is: a runner's own is never replaced or removed.
+check(!existsSync(sentinel), "no default service definition was there before the sentinel");
+writeFileSync(sentinel, sentinelText, { flag: "wx" });
 const keptBefore = `${tree(decoy)}\n${sha(sentinel)}`;
 const uninstall = spawnSync(
   at.openclaw,
@@ -605,7 +612,7 @@ check(!listening, `nothing listens on the install's port ${own.port}`);
 // first; everything there before is kept, and each place is then exactly as it was.
 for (const root of shared) {
   const before = sharedBefore.get(root)!;
-  const added = [...listing(root)].filter((path) => !before.has(path));
+  const added = [...listing(root).keys()].filter((path) => !before.has(path));
   say(
     `${root}: ${added.length} new entries${
       added.length
@@ -620,9 +627,10 @@ for (const root of shared) {
     await rm(path, { recursive: true, force: true });
   if (before.has("(absent)")) await rm(root, { recursive: true, force: true });
   const after = listing(root);
+  const changed = [...after].filter(([path, what]) => before.get(path) !== what);
   check(
-    after.size === before.size && [...after].every((path) => before.has(path)),
-    `${root} is as it was before the install`,
+    after.size === before.size && changed.length === 0,
+    `${root} is as it was before the install, each file there before unchanged in size and time (${changed.length} changed)`,
   );
 }
 check(

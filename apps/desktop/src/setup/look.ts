@@ -191,18 +191,30 @@ export type LookOptions = {
 export async function anythingHere(
   world: LookWorld,
   skipProgram: string | null = null,
-): Promise<"nothing" | "something" | "timeout"> {
+): Promise<"nothing" | "something" | "timeout" | "unreadable"> {
   if (world.installed)
     return world.installed.program || world.installed.signs ? "something" : "nothing";
   const files = Date.now() + FILE_CHECK_MS;
+  /** One path: a program or sign there, a miss (only "no such file"), or a check that couldn't be made. */
+  const check = (path: string, program: boolean) =>
+    stat(path).then(
+      (found) => (!program || (found.isFile() && (found.mode & 0o111) !== 0) ? "there" : "miss"),
+      (error: NodeJS.ErrnoException) =>
+        error.code === "ENOENT" || error.code === "ENOTDIR" ? "miss" : "unreadable",
+    );
   try {
-    const program = await withDeadline(findProgram(world, skipProgram), files);
-    if (program) return "something";
-    const signs = await withDeadline(
-      Promise.all([join(world.home, ".openclaw"), ...world.serviceFiles].map(exists)),
+    const seen = await withDeadline(
+      Promise.all([
+        ...world.candidates
+          .filter((candidate) => candidate !== skipProgram)
+          .map((candidate) => check(candidate, true)),
+        ...[join(world.home, ".openclaw"), ...world.serviceFiles].map((path) => check(path, false)),
+      ]),
       files,
     );
-    return signs.some(Boolean) ? "something" : "nothing";
+    if (seen.includes("there")) return "something";
+    // Absence is proven only by "no such file": a place that couldn't be checked isn't nothing.
+    return seen.includes("unreadable") ? "unreadable" : "nothing";
   } catch (error) {
     if (error instanceof FileCheckTimeout) return "timeout";
     throw error;

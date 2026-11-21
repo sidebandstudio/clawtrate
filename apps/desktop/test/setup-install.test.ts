@@ -10,12 +10,15 @@
 
 import type { SetupInstall } from "@clawtrate/core";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -30,6 +33,7 @@ import {
   download,
   InstallRefusedError,
   Installer,
+  installSupported,
   layout,
   onboardingFacts,
   onHostedRunner,
@@ -39,9 +43,11 @@ import {
   readOnboarding,
   readServiceInstall,
   REPLACED_FUNCTIONS,
+  rmdirIfSame,
   runsCheckedInstall,
   serviceArgv,
   stagingDir,
+  unlinkIfSame,
   type InstallOptions,
 } from "../src/setup/install.ts";
 import { installTarget, PINS } from "../src/setup/install-pins.ts";
@@ -103,8 +109,11 @@ function inventory(dir: string): string {
       a.name.localeCompare(b.name),
     )) {
       const path = join(at, entry.name);
-      if (entry.isDirectory()) walk(path);
-      else out.push(`${path} ${readFileSync(path, "base64")}`);
+      // A folder is an entry too: an empty one that went is a change.
+      if (entry.isDirectory()) {
+        out.push(`${path}/`);
+        walk(path);
+      } else out.push(`${path} ${readFileSync(path, "base64")}`);
     }
   };
   walk(dir);
@@ -275,8 +284,10 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
         ok: false,
         failure: { kind, step: 0, retry: true, cleanup: "removed" },
       });
-      // A redirect is never followed: the server was asked once for it.
+      // A redirect is never followed: the server was asked once for it, and its target, which
+      // answers, never.
       expect(stand.requests.filter((path) => path === "/node.tgz")).toHaveLength(1);
+      expect(stand.requests.filter((path) => path.startsWith("/redirected-"))).toEqual([]);
       expect(asked.filter((request) => request.program === stand.place.tar)).toEqual([]);
       expect(existsSync(stand.place.programDir)).toBe(false);
     },
@@ -455,14 +466,23 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
 
   it("F-502: a gateway that doesn't answer within the wait is named at the last step", async () => {
     const stand = await make({ scenario: "not-answering" });
-    const { outcome } = await runAll(installer(stand));
+    // A clock of the test's: each wait moves it, so the retries and the deadline don't depend on speed.
+    let clock = 0;
+    const { outcome } = await runAll(
+      installer(stand, {
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        statusWaitMs: 5_000,
+      }),
+    );
     expect(outcome).toMatchObject({
       ok: false,
       failure: { kind: "not-answering", step: 3, retry: false, cleanup: "kept" },
     });
-    expect(
-      stand.calls().filter((line) => line.endsWith("gateway status --json")).length,
-    ).toBeGreaterThan(1);
+    // At 0, 2, 4 and 5 s of the test's clock: retried, and stopped at the wait's end.
+    expect(stand.calls().filter((line) => line.endsWith("gateway status --json"))).toHaveLength(4);
   });
 });
 
@@ -1189,5 +1209,165 @@ describe("F-501 F-502 F-503: the review's closing cases", () => {
     expect(result).toEqual({ ok: false, why: "network" });
     expect(stand.requests).toEqual([]);
     expect(existsSync(file)).toBe(false);
+  });
+});
+
+describe("F-502 F-503: the CodeRabbit round's cases", () => {
+  it("F-502: a process group that can't be confirmed ended after SIGKILL ends the step in bounded time, and says so", async () => {
+    const stand = await make();
+    const own = new InstallRunner({ alive: () => true, graceMs: 100, killWaitMs: 300 });
+    const started = Date.now();
+    const result = await own.run(
+      {
+        program: "/usr/bin/true",
+        args: [],
+        env: { PATH: "/usr/bin:/bin" },
+        cwd: stand.root,
+        timeoutMs: 5_000,
+        maxBytes: 1024,
+      },
+      () => {},
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result.lingering).toBe(true);
+  }, 20_000);
+
+  it("F-502: an attempt one of whose programs may still be running keeps its files: the cleanup is unproven", async () => {
+    const stand = await make({ scenario: "installer-fails" });
+    const { outcome } = await runAll(
+      installer(stand, {
+        run: async (request, check) => {
+          check(request);
+          const result = await runner.run(request, check);
+          return request.args.includes("--runtime-only") ? { ...result, lingering: true } : result;
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", retry: false, cleanup: "unproven" },
+    });
+    expect(existsSync(stand.place.programDir)).toBe(true);
+  });
+
+  it("F-502: a reader of the output that throws stops the step instead of leaving it unresolved", async () => {
+    const stand = await make();
+    const own = new InstallRunner();
+    const result = await own.run(
+      {
+        program: "/bin/sh",
+        args: ["-c", "echo one; sleep 20"],
+        env: { PATH: "/usr/bin:/bin" },
+        cwd: stand.root,
+        timeoutMs: 30_000,
+        maxBytes: 1024,
+        onLine: () => {
+          throw new Error("a reader's bug");
+        },
+      },
+      () => {},
+    );
+    expect(result.stopped).toBe(true);
+    expect(own.running()).toEqual([]);
+  }, 30_000);
+
+  it("F-502: a named pipe where a record should be is never waited on: the look's question about a leftover answers", async () => {
+    const stand = await make();
+    const at = layout(stand.place, stand.pins);
+    mkdirSync(stand.place.programDir);
+    writeFileSync(
+      at.record,
+      JSON.stringify({ id: "a", version: "2026.10.6", profile: "clawtrate" }),
+    );
+    execFileSync("/usr/bin/mkfifo", [stand.place.recordFile]);
+    const answer = await Promise.race([
+      installer(stand).leftoverProgram(),
+      pause(3_000).then(() => "still waiting"),
+    ]);
+    expect(answer).toBeNull();
+  });
+
+  it("F-502: a staging folder that was in the attempt's way is never removed as its own", async () => {
+    const stand = await make();
+    const id = "7d1f2c3b-0000-4000-8000-000000000002";
+    const staging = stagingDir(stand.place, id);
+    mkdirSync(staging);
+    writeFileSync(join(staging, "keep-me"), "someone's\n");
+    const { outcome } = await runAll(installer(stand, { newId: () => id }));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "write", step: 0, retry: false, cleanup: "unproven" },
+    });
+    expect(readFileSync(join(staging, "keep-me"), "utf8")).toBe("someone's\n");
+  });
+
+  it("F-502: onboarding that never started (the app quitting) returns the attempt to before onboarding and removes it", async () => {
+    const stand = await make();
+    const { outcome } = await runAll(
+      installer(stand, {
+        run: async (request, check) => {
+          check(request);
+          if (request.args.includes("onboard"))
+            return {
+              exitCode: null,
+              stdout: "",
+              timedOut: false,
+              tooLarge: false,
+              stopped: false,
+              failed: true,
+              lingering: false,
+            };
+          return runner.run(request, check);
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "onboard", step: 2, retry: true, cleanup: "removed" },
+    });
+    expect(existsSync(stand.place.stateDir)).toBe(false);
+    expect(existsSync(stand.place.programDir)).toBe(false);
+    expect(existsSync(stand.place.recordFile)).toBe(false);
+  });
+
+  it("F-502: a scratch path of the reservation that stays doesn't block a later stage", async () => {
+    const stand = await make();
+    const id = "7d1f2c3b-0000-4000-8000-000000000003";
+    const at = layout(stand.place, stand.pins);
+    const plant = (file: string, when: "open" | "write") => {
+      // After the reservation, a file takes the reservation's scratch path (its removal failed).
+      if (file === at.npmUser && when === "open")
+        writeFileSync(`${stand.place.recordFile}.${id}.installing.next`, "left\n");
+    };
+    const { outcome } = await runAll(installer(stand, { newId: () => id, beforeWrite: plant }));
+    expect(outcome.ok).toBe(true);
+    expect(json(stand.place.recordFile)).toMatchObject({ id, stage: "installed" });
+  });
+
+  it("F-502: a removal whose target can't be looked at isn't counted as done", async () => {
+    const stand = await make();
+    const dir = join(stand.root, "closed");
+    mkdirSync(dir);
+    const file = join(dir, "made");
+    writeFileSync(file, "x");
+    const made = statSync(file);
+    chmodSync(dir, 0o600);
+    try {
+      expect(await unlinkIfSame(file, made)).toBe(false);
+      expect(await rmdirIfSame(join(dir, "sub"), made)).toBe(false);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(existsSync(file)).toBe(true);
+    expect(await unlinkIfSame(join(stand.root, "never-there"), made)).toBe(true);
+  });
+
+  it("F-501: setting up is offered only where the home and app data are paths the install's runner passes", () => {
+    // Account folders under a root of the test's own, never a real home's.
+    const at = (name: string) => [`/srv/accounts/${name}`, `/srv/accounts/${name}/App Data`];
+    expect(installSupported(...(at("someone") as [string, string]))).toBe(true);
+    expect(installSupported(...(at("o'neil") as [string, string]))).toBe(false);
+    expect(installSupported(...(at("a$b") as [string, string]))).toBe(false);
+    expect(installSupported("relative", "/x")).toBe(false);
   });
 });

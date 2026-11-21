@@ -37,10 +37,11 @@ import {
   type HostRuntime,
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
-import { computerPlace, Installer } from "../setup/install.ts";
+import { computerPlace, Installer, installSupported } from "../setup/install.ts";
 import { installTarget, PINS, runsOnGlibc } from "../setup/install-pins.ts";
 import { InstallRunner } from "../setup/install-runner.ts";
 import { checkRequest, ProgramRunner, sessionEnv } from "../setup/programs.ts";
+import { quitGate } from "../setup/quit.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
 import { desktopStartup } from "../setup/startup.ts";
@@ -95,7 +96,6 @@ const installPrograms = new InstallRunner();
 const installStop = new AbortController();
 /** How long the quit waits for setting OpenClaw up, its downloads and its programs to end. */
 const INSTALL_QUIT_WAIT_MS = 5_000;
-let setupDrained = false;
 let closeSetup: () => Promise<void> = async () => {};
 /** The setup controller's own close, once it exists: nothing new starts and its operation is waited for. */
 let closeController: () => Promise<void> = async () => {};
@@ -217,7 +217,7 @@ function setupInstaller(): (() => Installer) | null {
   if (platform !== "darwin" && platform !== "linux") return null;
   const target = installTarget(platform, process.arch, platform === "linux" && runsOnGlibc());
   const home = accountHome();
-  if (!target || !home) return null;
+  if (!target || !home || !installSupported(home, app.getPath("userData"))) return null;
   return () =>
     new Installer({
       place: computerPlace({
@@ -539,26 +539,31 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
-app.on("before-quit", (event) => {
-  // Setting up is closed first, so that no dialog's answer or queued step starts anything; then
-  // its downloads are aborted and every program it started, descendants too, is ended. The quit
-  // waits, within one bound, for the operation, the install's groups and the look's programs.
-  if (!setupDrained) {
-    event.preventDefault();
-    setupDrained = true;
+/**
+ * Setting up is closed first, so that no dialog's answer or queued step starts anything; then
+ * its downloads are aborted and every program it started, descendants too, is ended. The quit
+ * waits, within one bound, for the operation, the install's groups and the look's programs, and
+ * every quit asked while it waits is held too.
+ */
+const mayQuit = quitGate(
+  () => {
     const operation = closeController();
     installStop.abort();
     const deadline = new Promise<void>((done) => setTimeout(done, INSTALL_QUIT_WAIT_MS));
-    void Promise.race([
+    return Promise.race([
       Promise.all([
         operation,
         installPrograms.close(INSTALL_QUIT_WAIT_MS),
         programs.close(INSTALL_QUIT_WAIT_MS),
-      ]),
+      ]).then(() => {}),
       deadline,
-    ]).then(() => app.quit());
-    return;
-  }
+    ]);
+  },
+  () => app.quit(),
+);
+
+app.on("before-quit", (event) => {
+  if (!mayQuit(event)) return;
   void closeSetup();
   runtime?.client.stop();
 });
