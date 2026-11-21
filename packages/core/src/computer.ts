@@ -1883,6 +1883,8 @@ export class ComputerViews {
             view: null,
             control: noControl,
             shown: null,
+            // A Stop on the old gateway says nothing here; one still out changes nothing.
+            stop: null,
           },
         ]),
       ),

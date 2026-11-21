@@ -16,6 +16,7 @@ import {
   streamUrl,
   type ComputerContext,
   type ComputerState,
+  type StopAnswer,
 } from "../src/computer.ts";
 import * as words from "../src/computer-words.ts";
 import type { WebSocketLike } from "../src/host.ts";
@@ -1177,6 +1178,20 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     const renewals = h.calls("clawtrate-computer.view.renew").length;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewals);
+  });
+
+  it("F-149: switching gateways drops the Stop line, and a Stop still out changes nothing on the new gateway", async () => {
+    const h = harness();
+    await ready(h);
+    let answer!: (value: StopAnswer) => void;
+    h.ctx.stopTask = vi.fn(() => new Promise<StopAnswer>((resolve) => (answer = resolve)));
+    const stopping = h.views.stopTask(h.viewer);
+    expect(h.pane().stop).toMatchObject({ sending: true });
+    h.views.reset();
+    expect(h.pane().stop).toBeNull();
+    answer({ runIds: ["run-1"], aborted: null });
+    await stopping;
+    expect(h.pane().stop).toBeNull();
   });
 
   it("a viewer that goes away gives control back and leaves no pane", async () => {
