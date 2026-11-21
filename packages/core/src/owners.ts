@@ -46,6 +46,7 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
+import { MAX_ROUTINE_UPDATES } from "./routines.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -265,6 +266,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {

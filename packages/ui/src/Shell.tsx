@@ -566,10 +566,10 @@ export function Shell({
         {routines ? (
           <RoutinesView
             state={state}
+            info={info}
             nav={routines}
             onNav={setRoutines}
             onClose={closeRoutines}
-            info={info}
             onOpenTask={(botId, key) => {
               selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
               openDetail();

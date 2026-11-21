@@ -17,7 +17,8 @@
 //   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
 //   mslow=<bot>       that bot's placement read never answers
 //   plugins=none      the settings hold no plugin entries to inspect
-//   pairing=grant     a request for device access is approved after a moment
+//   pairing=grant     a request for device access is approved after a moment, or on release if
+//                     a test holds answers
 
 import {
   type ApprovalsFile,
@@ -349,6 +350,7 @@ export function machineCommands(now: number, params: MachineParams) {
     command: BridgeCommand,
     get: () => ClawtrateState,
     set: (state: ClawtrateState) => void,
+    deferred: (run: () => void, ms: number) => void,
   ): Promise<unknown> | undefined {
     const state = get();
     switch (command.type) {
@@ -461,14 +463,19 @@ export function machineCommands(now: number, params: MachineParams) {
           approveCommand: null,
           error: null,
         });
-        setTimeout(() => {
-          upgrade({
-            status: "pending",
-            requestId: "8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
-            approveCommand: "openclaw devices approve 8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
-          });
-          if (params.pairing === "grant")
-            setTimeout(() => {
+        // The request's pending state and the owner's approval are answers a test can hold.
+        deferred(
+          () =>
+            upgrade({
+              status: "pending",
+              requestId: "8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
+              approveCommand: "openclaw devices approve 8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
+            }),
+          300,
+        );
+        if (params.pairing === "grant")
+          deferred(
+            () =>
               set({
                 ...get(),
                 connection: {
@@ -476,9 +483,9 @@ export function machineCommands(now: number, params: MachineParams) {
                   scopes,
                   upgrade: { ...get().connection.upgrade, status: "approved" },
                 },
-              });
-            }, 600);
-        }, 300);
+              }),
+            900,
+          );
         return Promise.resolve();
       }
       default:
