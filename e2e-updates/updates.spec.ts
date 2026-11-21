@@ -532,6 +532,8 @@ if (process.platform !== "win32")
     const gateway = await sidebarGateway();
     const mode = statSync(profile).mode & 0o777;
     try {
+      // The first screen asks where OpenClaw runs; the address-and-token form is under Advanced.
+      await page.getByRole("button", { name: "Advanced" }).click();
       await page.getByPlaceholder("Gateway address").fill(gateway.url);
       await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
       await expect(page.locator(".rail")).toBeVisible();
