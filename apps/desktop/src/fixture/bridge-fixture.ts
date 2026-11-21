@@ -698,13 +698,15 @@ export function createFixtureBridge(
         return;
       }
       case "openSession": {
-        // A history the state no longer holds is read again, as a delayed answer a test can hold.
-        const history = histories[command.key];
-        if (history && !state.transcripts[command.key])
-          later(120, (current) => ({
-            ...current,
-            transcripts: { ...current.transcripts, [command.key]: history },
-          }));
+        // A history the state no longer holds, or that failed since, is read again: loading at
+        // once, as the engine shows it, then loaded as a delayed answer a test can hold.
+        const { key } = command;
+        const history = histories[key];
+        const current = state.transcripts[key];
+        if (!history || history === current || (current && current.status !== "error")) return;
+        const reading = { ...history, status: "loading" as const, error: null };
+        set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
+        later(120, (now) => ({ ...now, transcripts: { ...now.transcripts, [key]: history } }));
         return;
       }
       case "closeSession":

@@ -132,6 +132,11 @@ type Opening = {
   status: "loading" | "failed" | "earlier" | "missing" | "gone";
   line: string | null;
   gen: number;
+  /**
+   * Set by Try again until the bridge sends its first state after the history is
+   * asked for again: until then the transcript in view is the one that failed.
+   */
+  reread?: boolean;
 };
 
 type Row = {
@@ -540,7 +545,7 @@ export function SearchPalette({
   const finishOpening = useCallback(
     (open: Opening) => {
       // A restart in the same commit leaves this effect the previous render's opening.
-      if (open.gen !== generation.current) return;
+      if (open.gen !== generation.current || open.reread) return;
       const transcript = latest.current.state.transcripts[open.key];
       if (!transcript || transcript.status === "loading") return;
       const gone = goneLine(open.hit.botId, open.key, open.sessionId, open.wasListed);
@@ -590,17 +595,25 @@ export function SearchPalette({
   /** Ask for a task's history; a refusal shows on the result that asked. */
   const load = useCallback(
     (open: Opening) => {
-      opened.current = open.key;
-      bridge.send({ type: "openSession", key: open.key }).catch((error: unknown) =>
-        setOpening((now) =>
-          now === open
-            ? {
-                ...open,
-                status: "failed",
-                line: `Couldn't load this conversation: ${reason(error)}.`,
-              }
-            : now,
-        ),
+      bridge.send({ type: "openSession", key: open.key }).then(
+        () => {
+          if (!open.reread) return;
+          // States and answers come in order, so the next state holds the history asked for now.
+          const stop = bridge.subscribe(() => {
+            stop();
+            setOpening((now) => (now === open ? { ...open, reread: false } : now));
+          });
+        },
+        (error: unknown) =>
+          setOpening((now) =>
+            now === open
+              ? {
+                  ...open,
+                  status: "failed",
+                  line: `Couldn't load this conversation: ${reason(error)}.`,
+                }
+              : now,
+          ),
       );
     },
     [bridge],
@@ -640,6 +653,7 @@ export function SearchPalette({
       if (!latest.current.state.transcripts[hit.sessionKey]) {
         if (opened.current && opened.current !== hit.sessionKey)
           void bridge.send({ type: "closeSession", key: opened.current });
+        opened.current = hit.sessionKey;
         load(open);
       } else finishOpening(open);
     },
@@ -1341,11 +1355,18 @@ export function SearchPalette({
                       name: "Try again",
                       first: "Try again",
                       open: () => {
-                        const retry: Opening = { ...opening, status: "loading", line: null };
+                        const retry: Opening = {
+                          ...opening,
+                          status: "loading",
+                          line: null,
+                          reread: true,
+                        };
+                        // The bridge keeps one entry per task, so a task the palette didn't open
+                        // (the selected one) is reopened even after close, and never closed by it.
+                        const own = opened.current === opening.key;
                         void bridge
                           .send({ type: "closeSession", key: opening.key })
-                          .then(() => retry.gen === generation.current && load(retry));
-                        opened.current = opening.key;
+                          .then(() => (!own || retry.gen === generation.current) && load(retry));
                         setOpening(retry);
                       },
                     },

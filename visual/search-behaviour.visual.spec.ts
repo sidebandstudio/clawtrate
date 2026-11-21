@@ -42,7 +42,7 @@ type Fixture = {
   hold(): void;
   release(): void;
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
-  sent: Array<{ type: string }>;
+  sent: Array<{ type: string; key?: string }>;
 };
 
 /** Hold the fixture's delayed answers and drop a task's loaded history, so opening it reads it again. */
@@ -56,6 +56,26 @@ const unload = (page: Page, key: string) =>
       return { ...state, transcripts };
     });
   }, key);
+
+/** Make a task's loaded history one the gateway failed to read. */
+const fail = (page: Page, key: string) =>
+  page.evaluate((key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      transcripts: {
+        ...state.transcripts,
+        [key]: { ...state.transcripts[key]!, status: "error", error: "the gateway didn't answer" },
+      },
+    }));
+  }, key);
+
+const hold = (page: Page) =>
+  page.evaluate(() => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.hold());
+const release = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
+  );
 
 test.use(contextFor(WIDE, "light"));
 
@@ -295,6 +315,55 @@ test("F-033: a message whose history comes as the connection's access changes do
   await expect(page.locator(".title-pill-task")).not.toHaveText(
     "Disk almost full on the media box",
   );
+});
+
+test("F-033: Try again on a history that failed opens the message once the history loads", async ({
+  page,
+}) => {
+  await search(page, "clear the transcode", `scene=main&bot=pip&task=agent:pip:week&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await fail(page, "agent:otto:disk-space");
+  await user.click();
+  await expect(user).toContainText("Couldn't load this conversation: the gateway didn't answer.");
+  await hold(page);
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  // The failed history is still in view until the new read answers; it doesn't decide.
+  await expect(user).toContainText("Opening…");
+  await release(page);
+  await expect(palette(page)).toHaveCount(0);
+  await expect(page.locator(".title-pill-task")).toHaveText("Disk almost full on the media box");
+  await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
+});
+
+test("F-033: Try again on the selected task's failed history leaves that task open after search closes", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", `scene=main&${OTTO_DISK}&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await fail(page, key);
+  await user.click();
+  await expect(user).toContainText("Couldn't load this conversation");
+  await hold(page);
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  await expect(user).toContainText("Opening…");
+  await page.keyboard.press("Escape");
+  await expect(palette(page)).toHaveCount(0);
+  // The shell holds the task it shows; the palette never closes a task it didn't open.
+  const sessions = await page.evaluate(
+    (key) =>
+      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent
+        .filter((each) => each.key === key && /^(open|close)Session$/.test(each.type))
+        .map((each) => each.type),
+    key,
+  );
+  expect(sessions.at(-1)).toBe("openSession");
 });
 
 test("F-033: closing search stops the per-bot searches still queued", async ({ page }) => {
