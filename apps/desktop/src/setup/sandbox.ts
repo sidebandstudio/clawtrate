@@ -191,6 +191,28 @@ export type SandboxContext = {
 const within = (inner: string, outer: string) =>
   inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : outer + sep);
 
+/** The folders from `top` (included) down to `path`'s parent. */
+function ancestorsBelow(top: string, path: string): string[] {
+  const chain: string[] = [];
+  for (let at = dirname(path); within(at, top); at = dirname(at)) {
+    chain.unshift(at);
+    if (at === top || dirname(at) === at) break;
+  }
+  return chain;
+}
+
+/**
+ * A folder another account can't use to swap what lies below it: a real
+ * folder, owned by this account or the system, and writable by its group or
+ * others only when sticky (then only an entry's owner may rename or remove it).
+ */
+function protectedAncestor(entry: Entry | null, uid: number | null): boolean {
+  if (entry === null || !entry.isDirectory()) return false;
+  if (uid === null) return true;
+  if (entry.uid !== uid && entry.uid !== 0) return false;
+  return (entry.mode & 0o022) === 0 || (entry.mode & 0o1000) !== 0;
+}
+
 /** A folder of this account's that only it can enter, not a link (its `lstat`). */
 const privateFolder = (entry: Entry | null, uid: number | null) =>
   entry !== null &&
@@ -217,14 +239,25 @@ export function validateSandbox(path: string, context: SandboxContext): Validate
   // The folder's own path from the temporary root down, which must be its
   // canonical path: no link anywhere below the root, no "." or "..".
   let canonical: string | null = null;
+  let tempRoot: string | null = null;
   for (const temp of roots) {
     const name = temp.names.find((candidate) => root.startsWith(candidate + sep));
     if (name === undefined) continue;
-    if (files.realpath(temp.canonical) === temp.canonical)
+    if (files.realpath(temp.canonical) === temp.canonical) {
       canonical = temp.canonical + root.slice(name.length);
+      tempRoot = temp.canonical;
+    }
     break;
   }
-  if (canonical === null || files.realpath(root) !== canonical) throw new SetupRefusedError("file");
+  if (canonical === null || tempRoot === null || files.realpath(root) !== canonical)
+    throw new SetupRefusedError("file");
+  // Every folder from the temporary root down to the run folder's parent is one no other
+  // account can replace a child of: owned by this account or the system, and writable by
+  // neither its group nor others, unless sticky (as the temporary root itself is), where
+  // only an entry's owner may rename it.
+  for (const ancestor of ancestorsBelow(tempRoot, canonical)) {
+    if (!protectedAncestor(files.lstat(ancestor), context.uid)) throw new SetupRefusedError("file");
+  }
   const realHome = files.realpath(home) ?? home;
   if (within(canonical, realHome) || within(realHome, canonical) || within(canonical, home))
     throw new SetupRefusedError("home");

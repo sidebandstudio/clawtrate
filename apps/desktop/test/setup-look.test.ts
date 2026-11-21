@@ -937,6 +937,31 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     stoppedAtTheDescription(s);
   });
 
+  it("F-492: refuses a run folder below a folder another account could replace it through", async () => {
+    const s = setting();
+    const shared = join(s.base, "shared");
+    const box = fake.runFolder(shared, { instance: s.mine.name, run: s.mine.run });
+    // A folder above the run folder that its group and others may write, without the sticky bit:
+    // anyone could rename the run folder away and put their own in its place.
+    chmodSync(shared, 0o777);
+    expect(await s.outcome(box.file)).toBe("file");
+    chmodSync(shared, 0o775);
+    expect(await s.outcome(box.file)).toBe("file");
+    // Sticky, as the temporary root is: only an entry's owner may rename it.
+    chmodSync(shared, 0o1777);
+    expect(await s.outcome(box.file)).toBe("opened");
+    // Owned by another account, even unwritable to others.
+    chmodSync(shared, 0o755);
+    const lstat = s.context.files.lstat;
+    s.context.files.lstat = (path) => {
+      const entry = lstat(path);
+      return path === shared && entry ? Object.assign(Object.create(entry), { uid: 4321 }) : entry;
+    };
+    expect(await s.outcome(box.file)).toBe("file");
+    s.context.files.lstat = lstat;
+    expect(await s.outcome(box.file)).toBe("opened");
+  });
+
   it("refuses a description, a home or a working folder that is a link, a second link to the description, and another account's file", async () => {
     const s = setting();
     // The description a link to a good one elsewhere.
