@@ -297,6 +297,10 @@ export function Shell({
   // pane moves nothing except off what has just become inert.
   const drawerWasOpen = useRef(false);
   const panelWasOpen = useRef(panelOpen);
+  const focusOpener = () => {
+    const opener = openerRef.current;
+    (canFocus(opener) ? opener : toggleRef.current)?.focus();
+  };
   useEffect(() => {
     // Right after a resize the last measurement can lag a frame behind, so
     // focus is decided from the pane's width as it is now.
@@ -309,8 +313,7 @@ export function Shell({
     } else if (!panelOpen && panelWasOpen.current) {
       const active = document.activeElement;
       if (drawerWasOpen.current || !active || active === document.body) {
-        const opener = openerRef.current;
-        (canFocus(opener) ? opener : toggleRef.current)?.focus();
+        focusOpener();
       }
     }
     drawerWasOpen.current = drawerNow;
@@ -415,8 +418,11 @@ export function Shell({
   const showStep = useCallback(
     (stepId: string) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      const fromDrawer = drawerOpen;
       const reveal = () => {
         const found = taskKey !== null && revealStep(taskKey, callId);
+        // Nothing in the chat to focus: back to what opened the drawer, or the Work toggle.
+        if (!found && fromDrawer) focusOpener();
         setChatNote("");
         requestAnimationFrame(() =>
           setChatNote(
@@ -437,6 +443,7 @@ export function Shell({
   /** Bring a question's card into view and focus it: that question's own, when it is named. */
   const showQuestion = useCallback(
     (questionId?: string) => {
+      const fromDrawer = drawerOpen;
       const reveal = () => {
         const cards = document.querySelectorAll<HTMLElement>(
           '.transcript [data-testid="question-card"]',
@@ -446,7 +453,10 @@ export function Shell({
               `.transcript #${cardDomId({ kind: "question", id: questionId })}`,
             )
           : cards[cards.length - 1];
-        if (!card) return;
+        if (!card) {
+          if (fromDrawer) focusOpener();
+          return;
+        }
         card.scrollIntoView({ block: "center" });
         (card.querySelector<HTMLElement>("button, input") ?? card).focus({ preventScroll: true });
       };
