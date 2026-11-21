@@ -2486,6 +2486,48 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "an answer the gateway keeps as a reply, after text beside a call that it keeps as none",
+    covers: ["#reply-to"],
+    run: async (h) => {
+      const key = await h.session("main", "reply-to");
+      const root = await h.run("plain", key, "#text");
+      root.expectCalls([]);
+      root.expectEnd("final", scriptedFinalText("#text"));
+      const history = async () =>
+        (
+          await h
+            .op("plain")
+            .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: key })
+        ).messages;
+      const parent = String(rec((await history()).find((m) => m.role === "user")?.__openclaw).id);
+      const view = await h.run("plain", key, `#reply-to ${parent}`);
+      view.expectCalls([await lsCall(h, "main")]);
+      const answer = `This answers ${parent}.`;
+      view.expectEnd("final", answer);
+      const text = (row: JsonRecord) =>
+        (Array.isArray(row.content) ? (row.content as JsonRecord[]) : [])
+          .map((part) => (part.type === "text" ? String(part.text) : ""))
+          .join("");
+      const rows = (await history()).filter(
+        (m) => m.role === "assistant" && rec(m.__openclaw).runId === view.runId && text(m),
+      );
+      // The tag is read on the answer's row alone, the one with no tool call.
+      same(
+        rows.map((row) => [text(row), rec(row.openclawDelivery).replyToId ?? null]),
+        [
+          ["I will look first, then answer that message.", null],
+          [answer, parent],
+        ],
+        "each text row's reply reference",
+      );
+      same(
+        rec(rec(rec(rows[1]!.__openclaw).replyToMessage).message).content,
+        "#text",
+        "the message history attaches to the answer's reference",
+      );
+    },
+  },
+  {
     name: "six file reads in a row",
     covers: ["#read-six"],
     run: async (h) => {

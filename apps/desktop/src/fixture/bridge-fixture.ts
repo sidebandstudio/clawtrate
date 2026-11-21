@@ -503,8 +503,9 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered; admin or device access granted) until `release`: a test that must
-   * see a state lasting only until the answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin or device access granted; a machine setting read or saved)
+   * until `release`: a test that must see a state lasting only until the answer comes holds it,
+   * looks, then lets the answer through.
    * An answer asked for while held comes on release without waiting for a page timer, which a
    * loaded machine can leave unfired for longer than a check waits.
    */
