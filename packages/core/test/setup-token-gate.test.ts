@@ -568,7 +568,8 @@ describe("what a setup connection publishes", () => {
         message: BOOT,
         details: { code: "PAIRING_REQUIRED", requestId: BOOT, recommendedNextStep: BOOT },
       }),
-      (client) => client.state.connection.status === "pairing",
+      // A pairing the gateway says not to wait on ends the setup connection.
+      (client) => client.state.connection.error?.code === "PAIRING_ENDED",
     ],
     [
       "a close reason",

@@ -564,6 +564,15 @@ function withSetup(state: ClawtrateState, setup: SetupState | undefined): Clawtr
   return rest;
 }
 
+/** Of an upgrade's grant, what it asked for or what an asked scope implies; pairing only if asked. */
+function withinAsked(granted: readonly string[], asked: readonly string[]): string[] {
+  return granted.filter((scope) =>
+    scope === PAIRING_SCOPE
+      ? asked.includes(scope)
+      : asked.some((wanted) => scopeSatisfied([wanted], scope)),
+  );
+}
+
 /** A setup connection's first device token, held in memory until its grant is checked. */
 type StagedDeviceToken = { deviceId: string; role: string; token: string; scopes: string[] };
 
@@ -812,7 +821,8 @@ export class ClawtrateClient {
   private setupCode: { url: string; bootstrapToken: string; expiresAtMs: number } | null = null;
   /**
    * The host's check of a setup connection's endpoint, asked before every
-   * socket until the first hello: the listener the host found is still there.
+   * socket, retries included, until bots are first read on it: the listener
+   * the host found is still there.
    */
   private setupCheck: { url: string; check: () => boolean } | null = null;
   /**
@@ -1254,6 +1264,8 @@ export class ClawtrateClient {
   setSetup(next: SetupState | undefined): void {
     this.setupSlice = next;
     this.store.update((state) => ({ ...state }));
+    // Kept as the store bounded it, so nothing beyond its bounds stays in memory.
+    this.setupSlice = this.state.setup;
   }
 
   /**
@@ -1552,11 +1564,7 @@ export class ClawtrateClient {
           }
           // Only what the upgrade asked for, or what an asked scope implies, is kept: a
           // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
-          const within = scopes.filter((scope) =>
-            scope === PAIRING_SCOPE
-              ? target.includes(scope)
-              : target.some((asked) => scopeSatisfied([asked], scope)),
-          );
+          const within = withinAsked(scopes, target);
           const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
           const pairing = askedPairing && within.includes(PAIRING_SCOPE);
           await this.writeToken(url, deviceId, role, {
@@ -1606,10 +1614,13 @@ export class ClawtrateClient {
           if (this.scopeUpgrade !== upgrade) return;
           this.scopeUpgrade = null;
           if (outcome.status === "approved") {
+            // Judged on what is kept (the store's rule), so an approval is never one the saved
+            // record can't hold: an admin grant for a write request keeps neither.
+            const kept = withinAsked(outcome.scopes, target);
             if (
               (tier !== "held" &&
-                !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
-              (askedPairing && !outcome.scopes.includes(PAIRING_SCOPE))
+                !scopeSatisfied(kept, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
+              (askedPairing && !kept.includes(PAIRING_SCOPE))
             ) {
               this.failAccess(
                 new AccessRequestError(
@@ -5303,6 +5314,8 @@ export class ClawtrateClient {
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        // A plan for a connection already replaced reads and changes nothing of the current one.
+        if (generation !== this.generation) throw new Error("the connection was replaced");
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -5345,6 +5358,7 @@ export class ClawtrateClient {
           nonce,
           challengeTs: challengeTs ?? null,
         });
+        if (generation !== this.generation) throw new Error("the connection was replaced");
         // After the wait for the signature: the setup endpoint still passes, or nothing is sent.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -5392,10 +5406,15 @@ export class ClawtrateClient {
           }
           // The token stays a credential to take out of gateway text after its staging ends.
           this.heldToken = staged.token;
+          // A record saved meanwhile keeps what it holds, as a replacement token does.
+          const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
+          if (generation !== this.generation || this.settings?.url !== settings.url) return;
           await this.writeToken(settings.url, staged.deviceId, staged.role, {
             token: staged.token,
             grantedScopes: [...staged.scopes],
-            heldScopes: [...READ_SCOPES],
+            heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
+            ...(existing?.adminHeld ? { adminHeld: true } : {}),
+            ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
           });
           // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
           await this.changeConnection(async () => {
@@ -5405,11 +5424,21 @@ export class ClawtrateClient {
           });
           return;
         }
+        // A setup that reused this device's pairing saves its gateway once its hello is in.
+        const reuse = this.setupIntent?.url === settings.url && this.setupIntent.reuse;
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
           const current = this.settings;
           if (generation !== this.generation || current?.url !== settings.url) return;
+          if (reuse) {
+            if (this.setupEndpointFails(settings.url, generation)) {
+              this.close();
+              return;
+            }
+            await this.saveSettings(current);
+            return;
+          }
           if (!current.token) return;
           // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
           const paired =
@@ -5428,8 +5457,6 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.epoch += 1;
         this.attemptGreeted = true;
-        // Setup has reached its gateway: later reconnects are the saved gateway's own.
-        this.setupCheck = null;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
           const protocol = { gateway: hello.protocol, client: PROTOCOL_VERSION };
@@ -5721,7 +5748,18 @@ export class ClawtrateClient {
       // and connect as soon as an operator approves it.
       const nextStep = details.recommendedNextStep;
       const terminal = nextStep !== undefined && nextStep !== "wait_then_retry";
-      if (terminal && setup) this.dropSetupCredentials();
+      if (terminal && setup) {
+        // Its code is gone and nothing retries: an approval wait that can't end is not shown.
+        this.dropSetupCredentials();
+        this.pairingSeen = null;
+        this.setConnection({
+          status: "error",
+          pairing: null,
+          retryAt: null,
+          error: { ...PAIRING_ENDED, hint: null },
+        });
+        return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
+      }
       return {
         closeCode: 1000,
         closeReason: "awaiting pairing approval",
@@ -5730,7 +5768,8 @@ export class ClawtrateClient {
       };
     }
 
-    const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
+    // The gateway's own code: a setup connection publishes a fixed one, and still forgets the token.
+    const refused = raw === "AUTH_TOKEN_MISMATCH" || raw === "AUTH_DEVICE_TOKEN_MISMATCH";
     if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
       // next attempt can pair again with a bootstrap token. The gateway's refusal
@@ -5935,6 +5974,10 @@ export class ClawtrateClient {
     // connection is the saved gateway's own.
     const setup = this.isSetup(this.settings?.url);
     if (setup) this.setupIntent = null;
+    // The host's check of the listener lasts until the bots are read, a retry's read included:
+    // from then on the connection and its retries are the saved gateway's own.
+    if (failures.length === 0 && this.setupCheck?.url === this.settings?.url)
+      this.setupCheck = null;
     if (failures.length > 0 && setup) {
       this.log("error", "discovery failed on the setup connection");
       this.setDiscovery({ status: "error", error: "Could not load your bots." });
