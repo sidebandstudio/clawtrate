@@ -1057,6 +1057,7 @@ describe("F-189: creating a routine", () => {
   });
 
   it("finds a create in doubt by the draft's key only, never another routine of the same name and bot", async () => {
+    const input = fieldsOf(parseRoutine(job())!);
     const { routines } = engine({
       "cron.list": () => ({
         jobs: [
@@ -1066,7 +1067,9 @@ describe("F-189: creating a routine", () => {
         hasMore: false,
       }),
     });
-    expect(await routines.findCreated("draft-1")).toBeNull();
+    expect(await routines.checkCreate("draft-1", input, "gateway-1")).toEqual({
+      status: "missing",
+    });
     const found = engine({
       "cron.list": () => ({
         jobs: [
@@ -1076,7 +1079,10 @@ describe("F-189: creating a routine", () => {
         hasMore: false,
       }),
     });
-    expect((await found.routines.findCreated("draft-1"))?.id).toBe("mine");
+    expect(await found.routines.checkCreate("draft-1", input, "gateway-1")).toMatchObject({
+      status: "matches",
+      routine: { id: "mine" },
+    });
   });
 
   it("F-189: a find answered after the connection changed is refused, though the answer has the draft's routine", async () => {
@@ -1087,7 +1093,7 @@ describe("F-189: creating a routine", () => {
       initialRoutinesState,
       access,
     );
-    const find = routines.findCreated("draft-1", "gateway-1");
+    const find = routines.checkCreate("draft-1", fieldsOf(parseRoutine(job())!), "gateway-1");
     void find.catch(() => {});
     await Promise.resolve();
     // The connection drops and another gateway answers while the list is out.
@@ -1095,6 +1101,93 @@ describe("F-189: creating a routine", () => {
     access.identity = "gateway-2";
     answer({ jobs: [job({ id: "mine", declarationKey: "clawtrate:draft-1" })], hasMore: false });
     await expect(find).rejects.toThrow("Another gateway is connected now");
+  });
+
+  it("F-189: an edit in doubt reads as saved only when the whole routine is as the save would leave it", async () => {
+    const opened = fieldsOf(parseRoutine(job())!);
+    const sent = {
+      original: opened,
+      edit: { ...opened, name: "Evening digest", text: "Summarise today's notes." },
+      expected: opened,
+    };
+    const payload = (message: string) => ({ kind: "agentTurn", message, toolsAllow: ["*"] });
+    const read = (overrides: Record<string, unknown>) =>
+      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(JOB, sent, "gateway-1");
+    expect(
+      await read({ name: "Evening digest", payload: payload("Summarise today's notes.") }),
+    ).toMatchObject({ status: "matches" });
+    expect(await read({})).toEqual({ status: "unchanged" });
+    // The new name with the old instruction: the save landed and another client
+    // put the instruction back, or another client renamed it. Either way, not as it was.
+    expect(await read({ name: "Evening digest" })).toMatchObject({ status: "changed" });
+    expect(
+      await read({
+        name: "Evening digest",
+        payload: payload("Summarise today's notes."),
+        delivery: { mode: "announce" },
+      }),
+    ).toMatchObject({ status: "changed" });
+    expect(
+      await engine({
+        "cron.get": () => {
+          throw missing(JOB);
+        },
+      }).routines.checkUpdate(JOB, sent, "gateway-1"),
+    ).toEqual({ status: "missing" });
+  });
+
+  it("F-189: after Save mine anyway, an edit in doubt is held to the version it was saved over", async () => {
+    const opened = fieldsOf(parseRoutine(job())!);
+    const theirs = { ...opened, text: "Their instruction." };
+    const sent = { original: opened, edit: { ...opened, name: "Mine" }, expected: theirs };
+    const payload = (message: string) => ({ kind: "agentTurn", message, toolsAllow: ["*"] });
+    const read = (overrides: Record<string, unknown>) =>
+      engine({ "cron.get": () => job(overrides) }).routines.checkUpdate(JOB, sent, "gateway-1");
+    expect(await read({ payload: payload("Their instruction.") })).toEqual({
+      status: "unchanged",
+    });
+    expect(await read({ name: "Mine", payload: payload("Their instruction.") })).toMatchObject({
+      status: "matches",
+    });
+    expect(await read({ name: "Mine" })).toMatchObject({ status: "changed" });
+  });
+
+  it("F-189: an instruction a save in doubt wrote is compared whole, not as cut for display", async () => {
+    const long = "x".repeat(4_095);
+    const other = `${long.slice(0, -1)}y`;
+    const payload = (message: string) => ({ kind: "agentTurn", message, toolsAllow: ["*"] });
+    expect(parseRoutine(job({ payload: payload(long) }))!.textCut).toBe(true);
+    const opened = fieldsOf(parseRoutine(job())!);
+    const input = { ...opened, text: long };
+    const listed = (message: string) =>
+      engine({
+        "cron.list": () => ({
+          jobs: [
+            job({ id: "mine", declarationKey: "clawtrate:draft-1", payload: payload(message) }),
+          ],
+          hasMore: false,
+        }),
+      }).routines.checkCreate("draft-1", input, "gateway-1");
+    expect(await listed(long)).toMatchObject({ status: "matches" });
+    expect(await listed(other)).toMatchObject({ status: "changed" });
+    const sent = { original: opened, edit: input, expected: opened };
+    const read = (message: string) =>
+      engine({ "cron.get": () => job({ payload: payload(message) }) }).routines.checkUpdate(
+        JOB,
+        sent,
+        "gateway-1",
+      );
+    expect(await read(long)).toMatchObject({ status: "matches" });
+    expect(await read(other)).toMatchObject({ status: "changed" });
+    expect(await read("Summarise yesterday's notes.")).toEqual({ status: "unchanged" });
+    // A clipped instruction the save left alone reads as both sides show it.
+    const clipped = fieldsOf(parseRoutine(job({ payload: payload(long) }))!);
+    const rename = { original: clipped, edit: { ...clipped, name: "Mine" }, expected: clipped };
+    expect(
+      await engine({
+        "cron.get": () => job({ name: "Mine", payload: payload(long) }),
+      }).routines.checkUpdate(JOB, rename, "gateway-1"),
+    ).toMatchObject({ status: "matches" });
   });
 
   it("writes a one-time schedule as a time with its offset, never a zone beside it", () => {

@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import { fieldsOf, parseRoutine } from "../src/routines.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { grantingGateway, openTask, URL_A } from "./client-harness.ts";
 import { deferred, memoryStorage, tokenKey, until } from "./fake-gateway.ts";
@@ -154,7 +155,12 @@ describe("the editor's check of a save in doubt, from a viewer behind the host",
     await reconnect();
     const lists = gateway.calls("cron.list").length;
     await expect(
-      viewer.apply({ type: "findCreatedRoutine", key: "draft-1", gateway: "gateway-1" }),
+      viewer.apply({
+        type: "checkRoutineCreate",
+        key: "draft-1",
+        input: fieldsOf(parseRoutine(job())!),
+        gateway: "gateway-1",
+      }),
     ).rejects.toThrow("Another gateway is connected now");
     expect(gateway.calls("cron.list")).toHaveLength(lists);
     viewer.dispose();

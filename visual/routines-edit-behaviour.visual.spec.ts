@@ -292,6 +292,40 @@ test.describe("1440", () => {
     await expect(view(page).getByRole("heading", { name: "Morning digest, short" })).toBeVisible();
   });
 
+  test("F-189: after Save mine anyway, a check that reads the version it saved over keeps it in doubt, and its late answer saves it", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await openPage(page, "Morning digest", `${ADMIN}&save=conflict`);
+    await view(page).getByRole("button", { name: "Edit", exact: true }).click();
+    await editor(page).getByLabel("Name").fill("Morning digest, short");
+    await save(page).click();
+    // Someone else changed the instruction first; this save is now held to their version.
+    const conflict = editor(page).getByTestId("editor-changed");
+    await expect(conflict).toBeVisible();
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        releaseSave: () => void;
+        clawtrateFixture: { invoke: (command: { type: string }) => Promise<unknown> };
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) =>
+        command.type === "updateRoutine"
+          ? new Promise((resolve) => (w.releaseSave = () => resolve(invoke(command))))
+          : invoke(command);
+    });
+    await conflict.getByRole("button", { name: "Save mine anyway" }).click();
+    await page.clock.fastForward("00:31");
+    const note = editor(page).getByTestId("editor-unknown");
+    await expect(note).toContainText("No answer in 30 seconds.");
+    await note.getByRole("button", { name: "Check now" }).click();
+    await expect(note).toContainText("The gateway still has this routine as it was.");
+    await expect(conflict).toHaveCount(0);
+    await page.evaluate(() => (window as unknown as { releaseSave(): void }).releaseSave());
+    await expect(editor(page)).toHaveCount(0);
+    await expect(view(page).getByRole("heading", { name: "Morning digest, short" })).toBeVisible();
+  });
+
   test("F-189: while a save is out, Use my version can't swap the draft it sent", async ({
     page,
   }) => {

@@ -46,6 +46,7 @@ import {
   type RoutineRun,
   type RoutineRunNow,
   type RoutineSchedule,
+  type RoutineSaveCheck,
   type RoutineWrite,
   type RunConversation,
 } from "./routines.ts";
@@ -207,10 +208,19 @@ export type BridgeCommand =
   // `gateway` is the one a draft was opened on: a write waits for it to match.
   | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
   /**
-   * The routine a draft made, found by the draft's key: after a create whose
-   * answer never came. With `gateway`, refused when any other gateway answers.
+   * After a create whose answer never came: the routine its draft made, found
+   * by the draft's key, against `input`. Refused when any other gateway answers.
    */
-  | { type: "findCreatedRoutine"; key: string; gateway?: string | null }
+  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; gateway: string | null }
+  /** After an edit whose answer never came, as `updateRoutine` was sent it. */
+  | {
+      type: "checkRoutineUpdate";
+      id: string;
+      original: RoutineFields;
+      edit: RoutineFields;
+      expected: RoutineFields;
+      gateway: string | null;
+    }
   /**
    * One routine as the gateway has it now; reads only. With `gateway`, a
    * read-back of a write: answered by any other gateway, it is refused.
@@ -356,7 +366,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                   ? { key: string }
                   : C extends { type: "createRoutine" | "updateRoutine" | "setRoutineEnabled" }
                     ? RoutineWrite
-                    : C extends { type: "findCreatedRoutine" | "readRoutine" }
+                    : C extends { type: "readRoutine" }
                       ? Routine | null
                       : C extends { type: "runRoutineNow" }
                         ? RoutineRunNow
@@ -388,7 +398,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                   ? { dismissed: boolean }
                                                   : C extends { type: "saveApiKey" }
                                                     ? { profileId: string | null }
-                                                    : C extends { type: "createBot" | "finishBot" }
+                                                    : C extends {
+                                                          type: "createBot" | "finishBot";
+                                                        }
                                                       ? { botId: string; missing: MissingStep[] }
                                                       : C extends {
                                                             type: "newTask" | "newMainTask";
@@ -398,11 +410,15 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                           ? ArchiveResult
                                                           : C extends { type: "listArchived" }
                                                             ? ArchivedList
-                                                            : C extends { type: "readComposerMenu" }
+                                                            : C extends {
+                                                                  type: "readComposerMenu";
+                                                                }
                                                               ? MenuRow[]
                                                               : C extends { type: "readUsage" }
                                                                 ? UsageReport | UsageBusy
-                                                                : C extends { type: "listRoutines" }
+                                                                : C extends {
+                                                                      type: "listRoutines";
+                                                                    }
                                                                   ? BudgetRoutine[]
                                                                   : C extends {
                                                                         type: "readPlacement";
@@ -441,7 +457,13 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                                       type: "readMemory";
                                                                                     }
                                                                                   ? MemoryDocument
-                                                                                  : void;
+                                                                                  : C extends {
+                                                                                        type:
+                                                                                          | "checkRoutineCreate"
+                                                                                          | "checkRoutineUpdate";
+                                                                                      }
+                                                                                    ? RoutineSaveCheck
+                                                                                    : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -877,11 +899,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         gateway: optionalGateway(command.gateway),
       };
     }
-    case "findCreatedRoutine":
+    case "checkRoutineCreate":
       return {
-        type: "findCreatedRoutine",
+        type: "checkRoutineCreate",
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
-        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
+        input: routineFields(record(command.input, "routine")),
+        gateway: optionalGateway(command.gateway),
+      };
+    case "checkRoutineUpdate":
+      return {
+        type: "checkRoutineUpdate",
+        id: id(command.id, "routine id"),
+        original: routineFields(record(command.original, "routine")),
+        edit: routineFields(record(command.edit, "routine")),
+        expected: routineFields(record(command.expected, "routine")),
+        gateway: optionalGateway(command.gateway),
       };
     case "updateRoutine": {
       const expected = record(command.expected, "routine revision");
@@ -1503,8 +1535,10 @@ class ViewerSession implements BridgeSession {
         );
       case "createRoutine":
         return client.createRoutine(command.input, command.key, owner, command.gateway);
-      case "findCreatedRoutine":
-        return client.findCreatedRoutine(command.key, command.gateway);
+      case "checkRoutineCreate":
+        return client.checkRoutineCreate(command.key, command.input, command.gateway);
+      case "checkRoutineUpdate":
+        return client.checkRoutineUpdate(command.id, command, command.gateway);
       case "readRoutine":
         return client.readRoutine(command.id, command.gateway);
       case "updateRoutine":

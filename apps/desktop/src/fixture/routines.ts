@@ -21,6 +21,7 @@
 //   hooks=on                         the gateway's inbound hooks are on
 
 import { zonedTime } from "@clawtrate/ui";
+import { savedAs } from "@clawtrate/core";
 import type {
   BridgeCommand,
   ClawtrateState,
@@ -533,14 +534,21 @@ export function routineCommand(
         return { status: "saved", routine: made };
       });
     }
-    case "findCreatedRoutine":
-      // As the engine does: a find answered on another gateway is refused.
+    // As the engine does: a check answered on another gateway is refused, and
+    // a found routine is compared with what the save sent by `savedAs`.
+    case "checkRoutineCreate":
       return later(300, () => null).then(() => {
-        if (command.gateway !== undefined && !bound(command.gateway))
-          throw new Error("Another gateway is connected now.");
-        const made = drafts.get(command.key) ?? null;
-        if (made) replace(made);
-        return made;
+        if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+        const made = drafts.get(command.key);
+        if (!made) return { status: "missing" };
+        replace(made);
+        return savedAs(made, made.text, { input: command.input });
+      });
+    case "checkRoutineUpdate":
+      return later(300, () => null).then(() => {
+        if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+        const routine = kept(command.id);
+        return routine ? savedAs(routine, routine.text, command) : { status: "missing" };
       });
     case "readRoutine":
       // As the engine does: a read-back answered on another gateway is refused.

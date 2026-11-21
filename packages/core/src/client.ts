@@ -43,6 +43,7 @@ import {
   type RoutineRemove,
   type RoutineRun,
   type RoutineRunNow,
+  type RoutineSaveCheck,
   type RoutineWrite,
   type RunConversation,
   type RunSelector,
@@ -4182,14 +4183,27 @@ export class ClawtrateClient {
     return this.routines.create(input, key, owner, gateway);
   }
 
-  /** One routine as the gateway has it now: what a save in doubt is checked against. */
+  /** One routine as the gateway has it now. */
   readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
     return this.routines.readOne(id, gateway);
   }
 
-  /** The routine a draft made, if the gateway lists it. */
-  findCreatedRoutine(key: string, gateway?: string | null): Promise<Routine | null> {
-    return this.routines.findCreated(key, gateway);
+  /** What the gateway shows of a create whose answer never came, by its draft's key. */
+  checkRoutineCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkCreate(key, input, gateway);
+  }
+
+  /** What the gateway shows of an edit whose answer never came. */
+  checkRoutineUpdate(
+    id: string,
+    sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkUpdate(id, sent, gateway);
   }
 
   updateRoutine(

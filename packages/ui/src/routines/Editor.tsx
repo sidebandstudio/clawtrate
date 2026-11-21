@@ -82,9 +82,14 @@ type Save =
   | { status: "saving" }
   | { status: "refused"; error: string }
   | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
-  /** `sent` is what this save asked for, compared with what a check finds. */
-  | { status: "unknown"; error: string; sent: RoutineFields; check: Check }
+  /**
+   * `sent` is what this save asked for, and `asked` how: a create by its draft's
+   * key, or an edit from `original` held to `expected`. A check compares with both.
+   */
+  | { status: "unknown"; error: string; sent: RoutineFields; asked: Asked; check: Check }
   | { status: "conflict"; current: Routine };
+
+type Asked = { key: string } | { id: string; original: RoutineFields; expected: RoutineFields };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -322,6 +327,10 @@ export function Editor({
       setGone(false);
       setOriginal(null);
     }
+    const asked: Asked =
+      !asNew && mode.mode === "edit" && original && against
+        ? { id: mode.routine.id, original, expected: fieldsOf(against) }
+        : { key: key.current };
     const id = (attempt.current += 1);
     const sentOn = connection.gatewayId;
     setSave({ status: "saving" });
@@ -339,6 +348,7 @@ export function Editor({
                 status: "unknown",
                 error: result.error,
                 sent: fields,
+                asked,
                 check: { status: "idle" },
               },
         );
@@ -352,6 +362,7 @@ export function Editor({
                 status: "unknown",
                 error: "No answer in 30 seconds.",
                 sent: fields,
+                asked,
                 check: { status: "idle" },
               }
             : each,
@@ -381,7 +392,7 @@ export function Editor({
   /** Reads only: does the gateway show what this save asked for? */
   const check = async () => {
     if (save.status !== "unknown") return;
-    const { sent } = save;
+    const { sent, asked } = save;
     const id = attempt.current;
     const at = (next: Check) =>
       setSave((each) =>
@@ -389,43 +400,35 @@ export function Editor({
       );
     at({ status: "checking" });
     try {
-      if (mode.mode === "new") {
-        const found = await bridge.invoke({
-          type: "findCreatedRoutine",
-          key: key.current,
-          gateway,
-        });
-        if (id !== attempt.current) return;
-        if (!found) return at({ status: "missing" });
-        if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
-        // It landed, then changed: the editor now edits it, from what this save
-        // sent, so the other change is kept unless the person changes it too.
-        setMode({ mode: "edit", routine: found });
-        setOriginal(sent);
-        attempt.current += 1;
-        setSave({ status: "conflict", current: found });
-        return;
-      }
       // `gateway` is the one the save was written to: it never changes once bound.
-      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.routine.id, gateway });
+      const found =
+        "key" in asked
+          ? await bridge.invoke({
+              type: "checkRoutineCreate",
+              key: asked.key,
+              input: sent,
+              gateway,
+            })
+          : await bridge.invoke({ type: "checkRoutineUpdate", ...asked, edit: sent, gateway });
       if (id !== attempt.current) return;
-      if (!fresh) {
+      if (found.status === "missing" && "key" in asked) return at({ status: "missing" });
+      if (found.status === "missing") {
         setSave({ status: "idle" });
         setGone(true);
         return;
       }
-      // Each field this save sent, as it was sent, against the job read back.
-      const base = original ?? sent;
-      const wanted = changedFields(base, sent);
-      const differ = changedFields(sent, fieldsOf(fresh));
-      if (!differ.some((each) => wanted.includes(each))) at({ status: "matches", routine: fresh });
-      // A field that is neither what the editor opened with nor what this save
-      // sent was changed by someone else. Otherwise the gateway may only not have
-      // applied this save yet, and its answer can still come and settle it.
-      else if (changedFields(base, fieldsOf(fresh)).some((each) => differ.includes(each))) {
-        attempt.current += 1;
-        setSave({ status: "conflict", current: fresh });
-      } else at({ status: "unchanged" });
+      // The gateway may only not have applied this save yet: its answer can still come and settle it.
+      if (found.status === "unchanged") return at({ status: "unchanged" });
+      if (found.status === "matches" && "key" in asked) return onSaved(found.routine, true);
+      if (found.status === "matches") return at({ status: "matches", routine: found.routine });
+      if ("key" in asked) {
+        // It landed, then changed: the editor now edits it, from what this save
+        // sent, so the other change is kept unless the person changes it too.
+        setMode({ mode: "edit", routine: found.routine });
+        setOriginal(sent);
+      }
+      attempt.current += 1;
+      setSave({ status: "conflict", current: found.routine });
     } catch (error) {
       at({ status: "failed", error: errorText(error) });
     }

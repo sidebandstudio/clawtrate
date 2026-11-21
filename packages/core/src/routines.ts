@@ -487,6 +487,45 @@ export type RoutineWrite =
   | { status: "conflict"; current: Routine }
   | { status: "deleted" };
 
+/** What a read shows of a save whose answer never came. Reads only. */
+export type RoutineSaveCheck =
+  /** No routine from this draft, or the edited routine is gone. */
+  | { status: "missing" }
+  /** It reads as the save would leave it: maybe this save, maybe the same change made elsewhere. */
+  | { status: "matches"; routine: Routine }
+  /** It reads as it did before the save, which may not have been applied yet. */
+  | { status: "unchanged" }
+  /** Neither: something else changed it. */
+  | { status: "changed"; routine: Routine };
+
+/** A save in doubt as it was sent: a create's fields, or an edit as `update` was given it. */
+export type SentRoutine =
+  | { input: RoutineFields }
+  | { original: RoutineFields; edit: RoutineFields; expected: RoutineFields };
+
+/**
+ * The whole job against what the save would leave and, for an edit, what it
+ * was held to. `text` is the job's whole instruction: a routine's own is cut
+ * for display, so an instruction the save wrote is compared in full, and one
+ * it left alone as both sides show it.
+ */
+export function savedAs(routine: Routine, text: string, sent: SentRoutine): RoutineSaveCheck {
+  let wrote = "input" in sent ? sent.input : sent.expected;
+  let wholeText = true;
+  if (!("input" in sent)) {
+    // As `update` writes it: the target is never changed, only fields edited from the original.
+    const fields = { ...sent.edit, target: sent.original.target };
+    const written = changedFields(sent.original, fields);
+    wrote = { ...wrote, ...Object.fromEntries(written.map((key) => [key, fields[key]])) };
+    wholeText = written.includes("text");
+  }
+  const actual = wholeText ? { ...fieldsOf(routine), text } : fieldsOf(routine);
+  if (changedFields(wrote, actual).length === 0) return { status: "matches", routine };
+  if (!("input" in sent) && changedFields(sent.expected, actual).length === 0)
+    return { status: "unchanged" };
+  return { status: "changed", routine };
+}
+
 export type RoutineRunNow =
   | { status: "started"; runId: string | null }
   | { status: "already-running" }
@@ -999,7 +1038,7 @@ export class RoutinesEngine {
   /** A routine with the gateway's token for its definition, which `cron.update` can be held to. */
   private async readRevised(
     id: string,
-  ): Promise<{ routine: Routine | null; revision: string | null } | null> {
+  ): Promise<{ routine: Routine; revision: string | null; text: string } | null> {
     try {
       const job = await this.ctx.request("cron.get", { id });
       const routine = parseRoutine(job);
@@ -1011,6 +1050,7 @@ export class RoutinesEngine {
       return {
         routine,
         revision: typeof revision === "string" && revision !== "" ? revision : null,
+        text: instructionOf(asRecord(asRecord(job)?.payload) ?? {}),
       };
     } catch (error) {
       if (notFound(error)) return null;
@@ -1018,12 +1058,32 @@ export class RoutinesEngine {
     }
   }
 
-  /** The routine a draft made, if the gateway lists it: found by the draft's own key, nothing else. */
-  findCreated(key: string, gateway?: string | null): Promise<Routine | null> {
-    return this.onGateway(gateway, () => this.findByKey(key));
+  /**
+   * A create whose answer never came: the routine its draft made, if the
+   * gateway lists it, found by the draft's own key and nothing else.
+   */
+  async checkCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    const job = await this.onGateway(gateway, () => this.findByKey(key));
+    const routine = parseRoutine(job);
+    if (!routine) return { status: "missing" };
+    return savedAs(routine, instructionOf(asRecord(asRecord(job)?.payload) ?? {}), { input });
   }
 
-  private async findByKey(key: string): Promise<Routine | null> {
+  /** An edit whose answer never came, read on the gateway it was written to. */
+  async checkUpdate(
+    id: string,
+    sent: Extract<SentRoutine, { original: RoutineFields }>,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    const read = await this.onGateway(gateway, () => this.readRevised(id));
+    return read ? savedAs(read.routine, read.text, sent) : { status: "missing" };
+  }
+
+  private async findByKey(key: string): Promise<unknown> {
     let offset = 0;
     for (;;) {
       const result = asRecord(
@@ -1032,7 +1092,7 @@ export class RoutinesEngine {
       const job = arr(result?.jobs).find(
         (each) => asRecord(each)?.declarationKey === `${DECLARATION_PREFIX}${key}`,
       );
-      if (job) return parseRoutine(job);
+      if (job) return job;
       const nextOffset = num(result?.nextOffset);
       if (result?.hasMore !== true || nextOffset === null || nextOffset <= offset) return null;
       offset = nextOffset;

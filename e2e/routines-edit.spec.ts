@@ -40,8 +40,19 @@ let page: Page;
 let admin: OperatorSession;
 const made = new Set<string>();
 
-const call = <T>(method: string, params: unknown) => admin.request(method, params) as Promise<T>;
-const gatewayCall = (method: string, params: unknown) => admin.request(method, params);
+// The gateway takes 30 control-plane writes a minute from one client, and this
+// spec's own writes can pass that: a write it refuses for now waits as asked, once.
+async function gatewayCall(method: string, params: unknown): Promise<unknown> {
+  try {
+    return await admin.request(method, params);
+  } catch (error) {
+    const { retryable, retryAfterMs } = error as { retryable?: boolean; retryAfterMs?: number };
+    if (retryable !== true || typeof retryAfterMs !== "number") throw error;
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    return admin.request(method, params);
+  }
+}
+const call = <T>(method: string, params: unknown) => gatewayCall(method, params) as Promise<T>;
 
 async function add(routine: unknown): Promise<Job> {
   const job = await call<Job>("cron.add", routine);
@@ -470,6 +481,61 @@ test("F-189: checking an unanswered edit shows a conflict only when the write di
     }
     expect((await get(job.id)).name).toBe(name);
   }
+});
+
+test("F-189: checking an unanswered edit that another client partly put back shows a conflict, not the old version", async () => {
+  const job = await add(scriptedRoutine(`Partly put back ${STAMP}`));
+  const name = `My partly undone edit ${STAMP}`;
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await editor().getByLabel("Name").fill(name);
+  await editor().getByLabel("Instruction").fill("#text");
+  const held = holdCommand("updateRoutine", true);
+  await save().click();
+  const reply = await held;
+  // The save landed. Another client puts the instruction back; the name stays this save's.
+  await call("cron.update", { id: job.id, patch: { payload: job.payload } });
+  await expect(view().locator("h1")).toHaveText(name);
+  reply(unanswered);
+  const unknown = editor().getByTestId("editor-unknown");
+  await unknown.getByRole("button", { name: "Check now" }).click();
+  await expect(editor().getByTestId("editor-changed")).toBeVisible();
+  await expect(unknown).toHaveCount(0);
+  await editor().getByRole("button", { name: "Cancel" }).click();
+  expect(await get(job.id)).toMatchObject({ name, payload: job.payload });
+});
+
+test("F-189: a save in doubt with an instruction too long to show whole is found as saved, after a create and after an edit", async () => {
+  // One under the bound, which counts the instruction as JSON with its quotes, so it is cut for display.
+  const long = "x".repeat(MAX_ROUTINE_TEXT_CHARS - 1);
+  const name = `Long instruction ${STAMP}`;
+  await openRoutines();
+  await view().getByTestId("new-routine").click();
+  await editor().getByLabel("Name").fill(name);
+  await editor().getByLabel("Instruction").fill(long);
+  const late = holdLate("createRoutine");
+  await save().click();
+  const unknown = editor().getByTestId("editor-unknown");
+  await expect(unknown).toBeVisible();
+  late.land();
+  await expect.poll(async () => (await byName(name))?.id ?? null).not.toBeNull();
+  await unknown.getByRole("button", { name: "Check now" }).click();
+  await expect(editor()).toHaveCount(0);
+  await expect(view().getByRole("heading", { name })).toBeVisible();
+  expect((await byName(name))!.payload).toMatchObject({ message: long });
+
+  const job = await add(scriptedRoutine(`Long edit ${STAMP}`));
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await editor().getByLabel("Instruction").fill(long);
+  const held = holdCommand("updateRoutine", true);
+  await save().click();
+  (await held)(unanswered);
+  await unknown.getByRole("button", { name: "Check now" }).click();
+  await expect(unknown).toContainText(`${job.name} now reads as you typed it.`);
+  await expect(editor().getByTestId("editor-changed")).toHaveCount(0);
+  await unknown.getByRole("button", { name: "Close" }).click();
+  expect((await get(job.id)).payload).toMatchObject({ message: long });
 });
 
 test("F-189: a reminder in the main conversation keeps its text: renaming it never sends its payload", async () => {
