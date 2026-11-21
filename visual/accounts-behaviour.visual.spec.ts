@@ -4,7 +4,7 @@
 // thing, the access bar for admin, and what a read-only connection shows.
 import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -184,12 +184,14 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
 test("F-472: an approval released before the request turns pending stays approved", async ({
   page,
 }) => {
-  await page.clock.install();
+  await page.clock.install({ time: NOW });
   await openFixture(page, `scene=main&${OTTO_DISK}&access=write&admin=grant`, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("textbox", { name: "Name" }).fill("Viral");
   await page.getByRole("button", { name: "Next" }).click();
   const bar = page.getByTestId("admin-bar");
+  // Timers stop here, so the pending step cannot fire before the release, however slow the page.
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
   await page.evaluate(() =>
     (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
   );

@@ -8,7 +8,8 @@ export function holdableTimers() {
   return {
     /** A delayed answer, run after `ms`, or once released if a test holds answers then. */
     deferred(run: () => void, ms: number) {
-      const due = Date.now() + ms;
+      // Elapsed time, not the wall clock: the visual checks fix Date.now() for the whole page.
+      const due = performance.now() + ms;
       if (held) held.push({ run, due });
       else setTimeout(() => (held ? held.push({ run, due }) : run()), ms);
     },
