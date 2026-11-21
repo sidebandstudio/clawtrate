@@ -119,14 +119,16 @@ import {
   MAX_COMPUTER_TEXT,
   MAX_CONTROL_RECORDS,
   MAX_STOPPED_RUNS,
-  type ComputerControl,
-  type ComputerLease,
-  type ComputerPane,
-  type ComputerState,
-  type ComputerStop,
-  type ComputerTab,
-  type ComputerView,
-  type ControlRecord,
+} from "./computer-limits.ts";
+import type {
+  ComputerControl,
+  ComputerLease,
+  ComputerPane,
+  ComputerState,
+  ComputerStop,
+  ComputerTab,
+  ComputerView,
+  ControlRecord,
 } from "./computer.ts";
 import {
   MAX_CHECKIN_KEPT,

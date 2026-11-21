@@ -21,6 +21,13 @@
 // fewer frames; nothing queues.
 
 import { toBase64 } from "./bytes.ts";
+import {
+  MAX_COMPUTER_PANES,
+  MAX_COMPUTER_TABS,
+  MAX_COMPUTER_TEXT,
+  MAX_CONTROL_RECORDS,
+  MAX_STOPPED_RUNS,
+} from "./computer-limits.ts";
 import type { WebSocketLike } from "./host.ts";
 import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
 import { isTerminal, type QuestionAnswer, type QuestionCard, type Run } from "./runs.ts";
@@ -35,12 +42,15 @@ export const STREAM_PATH = "/clawtrate-computer/stream";
 
 // Bounds ---------------------------------------------------------------------------------------
 
-/** Viewers with a Computer tab at once; also the plugin's views per connection (8). */
-export const MAX_COMPUTER_PANES = 8;
-/** Tabs of one bot's browser kept for a pane; the rest are counted in `tabsOmitted`. */
-export const MAX_COMPUTER_TABS = 16;
-/** Latest control event per bot tab, newest kept. */
-export const MAX_CONTROL_RECORDS = 32;
+// The limits the state's schema reads live in `computer-limits.ts`, so `state-bounds.ts` can read
+// them while this file is still loading (it imports `runs.ts`, which imports `state-bounds.ts`).
+export {
+  MAX_COMPUTER_PANES,
+  MAX_COMPUTER_TABS,
+  MAX_COMPUTER_TEXT,
+  MAX_CONTROL_RECORDS,
+  MAX_STOPPED_RUNS,
+};
 /** The largest frame kept for a viewer: a bigger one is dropped and counted. */
 export const MAX_FRAME_BYTES = 180_000;
 /** Input calls waiting to go out, one at a time; past it new input is dropped. */
@@ -49,8 +59,6 @@ export const MAX_QUEUED_INPUTS = 32;
 export const MAX_INPUT_TEXT = 2000;
 /** How often a view and a held tab are renewed, at most (the plugin asks for well within `renewWithinMs`). */
 export const RENEW_EVERY_MS = 5_000;
-/** Runs a "Stop <Bot> in this task" names, at most. */
-export const MAX_STOPPED_RUNS = 8;
 
 /** What the conversation's Stop answers for a task (`ComputerContext.stopTask`). */
 export type StopAnswer = {
@@ -110,8 +118,6 @@ export const RENEW_DEADLINE_MS = 5_000;
 export const FRAME_WAIT_MS = 15_000;
 /** Busy refusals for the same reason in a row before the tab offers to stop the task. */
 export const STUCK_AFTER = 3;
-/** Strings the pane keeps: titles, addresses, refusals. */
-export const MAX_COMPUTER_TEXT = 1024;
 
 // The state ------------------------------------------------------------------------------------
 
