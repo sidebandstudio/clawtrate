@@ -1023,6 +1023,25 @@ describe("a choice whose viewer goes away, or whose Ask doesn't take effect", ()
     expect(line(view, "browser")).toMatchObject({ value: "never", mark: "set" });
   });
 
+  it("an Ask another admin removes before the deny comes off is not said as saved: the read-back shows the line as it is", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["read", "ls"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      // Another admin takes the Ask off between the rules write and the settings write.
+      if (method === "config.patch") gw.scopes.pip = { ...gw.scopes.pip!, rules: [] };
+      return answer(method, params);
+    };
+    const result = await engine.choose("pip", "read", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(result.outcome).toBe("not-shown");
+    expect(line(result.view!, "read")).toMatchObject({ value: "allowed", ownAsk: false });
+  });
+
   it("an Ask a Never rule for every bot overrides is not said as saved", async () => {
     const gw = new Gateway();
     gw.scopes["*"] = {
