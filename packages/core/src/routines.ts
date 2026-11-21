@@ -1,18 +1,28 @@
 // Routines: the gateway's scheduled jobs (`cron.*`), all read at
-// `operator.read` (automation.md sections 3 to 8). The engine keeps one thing,
-// the routine list in `ClawtrateState.routines`, from `cron.list` and the
+// `operator.read` (automation.md sections 3 to 8). The routine list in
+// `ClawtrateState.routines` comes from `cron.list` and the
 // `cron` event. A routine's runs, a run's conversation and the calendar's past
 // runs are read when a screen asks and returned to it, never kept here.
 //
+// Changing them (sections 9 and 10) needs `operator.admin`: every write checks
+// it here, just before it is sent, whatever asked for it. An update checks the
+// acknowledged revision and writes only what the person changed from the original.
+//
 // What the gateway returns was read on a development gateway (2026.10.6) and
-// is recorded in docs/decisions.md, "Routines: what the gateway returns".
+// is recorded in docs/decisions.md, "Routines: what the gateway returns" and
+// "Routines: changing them".
 
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { cutText } from "./bounds.ts";
 import { asRecord, mapHistory, type RawRecord } from "./mapping.ts";
 import type { TranscriptItem } from "./types.ts";
 
 /** Routines kept from `cron.list`; past it they are counted in `omitted`. */
 export const MAX_ROUTINES = 200;
+export const MAX_ROUTINE_UPDATES = 128;
 /** A routine's instruction or reminder text as kept and shown. */
 export const MAX_ROUTINE_TEXT_CHARS = 4_096;
 /** Runs read for a routine's page, newest first: older runs drop out of the list (F-355). */
@@ -31,6 +41,8 @@ export const MAX_RUN_CONVERSATION_CHARS = 160_000;
 export const MAX_ROUTINE_RUN_TEXT_CHARS = 2_048;
 /** `cron.list` and `cron.runs` take at most 200 a page (protocol schema). */
 const PAGE = 200;
+const UNCONFIRMED =
+  "Another gateway is connected now, so this routine couldn't be checked on the one it was changed on.";
 /** Pages of a run's conversation read back to its first message (`cron.history`, newest page first). */
 const MAX_HISTORY_PAGES = 5;
 /** While a routine is marked running, the list is read again this often: a `finished` can be dropped. */
@@ -47,6 +59,14 @@ export type RoutineSchedule = {
   /** `cron` and `at`: the IANA zone, or null for the gateway's own (cron) or UTC (at). */
   tz: string | null;
   everyMs: number | null;
+  /**
+   * `every`: the phase the gateway anchored the job at (it writes one for every
+   * new job), and `cron`: a stagger. Kept so a recovery copy runs as the
+   * original did; the form writes neither, and a patch of the schedule drops
+   * them again.
+   */
+  anchorMs?: number | null;
+  staggerMs?: number | null;
   /** `at`: the ISO time as written. */
   at: string | null;
   /** `other`: the gateway's kind (`on-exit`, `stream`, …). */
@@ -63,6 +83,10 @@ export type Routine = {
   payload: "agentTurn" | "systemEvent" | "other";
   /** The instruction (`payload.message`) or the reminder (`payload.text`), cut to its bound. */
   text: string;
+  /** `text` was cut: the editor must not write it back. */
+  textCut: boolean;
+  /** The creation form can reproduce the job's payload, conditions and delivery. */
+  canRecreate?: boolean;
   /** `isolated`: a conversation of its own each run; `main`: the bot's main conversation. */
   target: "isolated" | "main" | "other";
   /** The bound conversation of a current or named target, as the gateway recorded it. */
@@ -100,6 +124,12 @@ export type RoutinesState = {
    * one-shot removes itself.
    */
   removed: { id: string; ranOnce: boolean; runAt: number | null } | null;
+  /**
+   * The connection the list was read on. A row's Pause, Run now and Delete send
+   * it back, and are refused once another connection has begun: the row's id
+   * may name another gateway's routine there.
+   */
+  listedOn: number;
 };
 
 export const initialRoutinesState: RoutinesState = {
@@ -110,6 +140,7 @@ export const initialRoutinesState: RoutinesState = {
   omitted: 0,
   revision: 0,
   removed: null,
+  listedOn: 0,
 };
 
 export type RoutineRun = {
@@ -172,12 +203,29 @@ function parseSchedule(value: unknown): RoutineSchedule {
   const kind = str(schedule.kind);
   const base = { expr: null, tz: null, everyMs: null, at: null, name: null };
   if (kind === "cron" && str(schedule.expr))
-    return { ...base, kind, expr: str(schedule.expr), tz: str(schedule.tz) };
+    return {
+      ...base,
+      kind,
+      expr: str(schedule.expr),
+      tz: str(schedule.tz),
+      ...(num(schedule.staggerMs) !== null ? { staggerMs: num(schedule.staggerMs) } : {}),
+    };
   if (kind === "every" && num(schedule.everyMs))
-    return { ...base, kind, everyMs: num(schedule.everyMs) };
+    return {
+      ...base,
+      kind,
+      everyMs: num(schedule.everyMs),
+      ...(num(schedule.anchorMs) !== null ? { anchorMs: num(schedule.anchorMs) } : {}),
+    };
   if (kind === "at" && str(schedule.at))
     return { ...base, kind, at: str(schedule.at), tz: str(schedule.tz) };
   return { ...base, kind: "other", name: kind ?? "unknown" };
+}
+
+function instructionOf(payload: RawRecord): string {
+  return (
+    str(payload.message) ?? str(payload.text) ?? str(payload.script) ?? str(payload.command) ?? ""
+  );
 }
 
 /** A `cron.list` job as a routine; null for a check-in job, which is a bot's check-ins, not a routine. */
@@ -193,6 +241,11 @@ export function parseRoutine(value: unknown): Routine | null {
   const mode = str(delivery?.mode);
   const last = str(state.lastRunStatus) ?? str(state.lastStatus);
   const target = str(job.sessionTarget);
+  const fullText = instructionOf(payload);
+  const schedule = parseSchedule(job.schedule);
+  const gated = asRecord(job.trigger) !== null || asRecord(job.pacing) !== null;
+  const toolsAllow = arr(payload.toolsAllow);
+  const text = cutText(fullText, MAX_ROUTINE_TEXT_CHARS);
   const sharedSessionKey =
     target === "current"
       ? str(job.sessionKey)
@@ -204,12 +257,33 @@ export function parseRoutine(value: unknown): Routine | null {
     botId: str(job.agentId) ?? str(job.effectiveAgentId) ?? "main",
     name: str(job.name) ?? "Routine",
     enabled: job.enabled !== false,
-    schedule: parseSchedule(job.schedule),
+    schedule,
     payload: payloadKind === "agentTurn" || payloadKind === "systemEvent" ? payloadKind : "other",
-    text: cutText(
-      str(payload.message) ?? str(payload.text) ?? str(payload.command) ?? "",
-      MAX_ROUTINE_TEXT_CHARS,
-    ),
+    text,
+    textCut: text.length < fullText.length,
+    canRecreate:
+      payloadKind === "agentTurn" &&
+      text.length === fullText.length &&
+      target === "isolated" &&
+      !gated &&
+      // A copy is made with `cron.add` and the form's fields alone, so a job
+      // carrying anything the form cannot write again (a pause, a wake mode
+      // other than now, a one-shot that does not delete itself) is offered no
+      // copy that would run differently (F-189). The schedule's anchor and
+      // stagger are carried over in the copy itself.
+      job.enabled !== false &&
+      (job.wakeMode == null || job.wakeMode === "now") &&
+      (schedule.kind !== "at" || job.deleteAfterRun !== false) &&
+      wireSchedule(schedule) !== null &&
+      Object.keys(payload).every(
+        (key) => key === "kind" || key === "message" || key === "toolsAllow",
+      ) &&
+      // The gateway supplies this default when the form leaves toolsAllow out.
+      (payload.toolsAllow === undefined || (toolsAllow.length === 1 && toolsAllow[0] === "*")) &&
+      (mode === null || mode === "none" || mode === "announce") &&
+      Object.keys(delivery ?? {}).every((key) => key === "mode") &&
+      job.sessionKey == null &&
+      job.failureAlert == null,
     target: target === "isolated" || target === "main" ? target : "other",
     ...(sharedSessionKey ? { sharedSessionKey } : {}),
     // A job without delivery announces: the gateway's default (`mode: "announce"`, observed).
@@ -230,7 +304,7 @@ export function parseRoutine(value: unknown): Routine | null {
     lastError: cut(str(state.lastError), MAX_ROUTINE_RUN_TEXT_CHARS),
     runningAt: num(state.runningAtMs),
     deleteAfterRun: job.deleteAfterRun === true,
-    gated: asRecord(job.trigger) !== null || asRecord(job.pacing) !== null,
+    gated,
     updatedAt: num(job.updatedAtMs),
   };
 }
@@ -370,7 +444,221 @@ export type RoutinesContext = {
   request(method: string, params: unknown): Promise<unknown>;
   get(): RoutinesState;
   update(change: (routines: RoutinesState) => RoutinesState): void;
+  connected(): boolean;
+  /** The connection holds `operator.admin`. */
+  admin(): boolean;
+  /**
+   * The connection's confirmed gateway identity, or null until it is read: a
+   * write waits for it, so a draft never reaches a gateway it was not made on.
+   * `expected` names the gateway a draft was opened on, when the editor knows
+   * it: a write also waits for it to match.
+   */
+  identity(expected?: string | null): string | null;
+  /** The viewer that asked has gone away (`client.withdraw`). */
+  withdrawn(owner: object): boolean;
 };
+
+/** What the editor writes, and what it compares with a fresh read before writing. */
+export type RoutineFields = {
+  name: string;
+  /** The instruction (`agentTurn`) or the reminder (`systemEvent`); never written for another payload. */
+  text: string;
+  /** Written as `cron`, `every` or `at` (an ISO time with its offset); `other` is never written. */
+  schedule: RoutineSchedule;
+  target: Routine["target"];
+  delivery: Routine["delivery"];
+};
+
+export type NewRoutine = RoutineFields & { botId: string };
+export type RoutineRevision = RoutineFields & { updatedAt: number | null };
+
+/** How a write ended. Only `saved` says the gateway shows the change. */
+export type RoutineWrite =
+  | { status: "saved"; routine: Routine }
+  /**
+   * Nothing was sent: this connection has no admin access, no connection, no
+   * confirmed gateway identity yet, or the viewer that asked has gone away.
+   */
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "refused"; error: string }
+  /** Sent, with no answer that settles it: it may or may not have landed. */
+  | { status: "unknown"; error: string }
+  /** It was changed elsewhere since the editor opened; nothing was written. */
+  | { status: "conflict"; current: Routine }
+  | { status: "deleted" };
+
+/** What a read shows of a save whose answer never came. Reads only. */
+export type RoutineSaveCheck =
+  /** No routine from this draft, or the edited routine is gone. */
+  | { status: "missing" }
+  /** It reads as the save would leave it: maybe this save, maybe the same change made elsewhere. */
+  | { status: "matches"; routine: Routine }
+  /** It reads as it did before the save, which may not have been applied yet. */
+  | { status: "unchanged" }
+  /** Neither: something else changed it. */
+  | { status: "changed"; routine: Routine };
+
+/** A save in doubt as it was sent: a create's fields, or an edit as `update` was given it. */
+export type SentRoutine =
+  | { input: RoutineFields }
+  | { original: RoutineFields; edit: RoutineFields; expected: RoutineFields };
+
+/**
+ * The whole job against what the save would leave and, for an edit, what it
+ * was held to. `text` is the job's whole instruction: a routine's own is cut
+ * for display, so an instruction the save wrote is compared in full, and one
+ * it left alone as both sides show it.
+ */
+export function savedAs(routine: Routine, text: string, sent: SentRoutine): RoutineSaveCheck {
+  let wrote = "input" in sent ? sent.input : sent.expected;
+  let wholeText = true;
+  if (!("input" in sent)) {
+    // As `update` writes it: the target is never changed, only fields edited from the original.
+    const fields = { ...sent.edit, target: sent.original.target };
+    const written = changedFields(sent.original, fields);
+    wrote = { ...wrote, ...Object.fromEntries(written.map((key) => [key, fields[key]])) };
+    wholeText = written.includes("text");
+  }
+  const actual = wholeText ? { ...fieldsOf(routine), text } : fieldsOf(routine);
+  if (changedFields(wrote, actual).length === 0) return { status: "matches", routine };
+  if (!("input" in sent) && changedFields(sent.expected, actual).length === 0)
+    return { status: "unchanged" };
+  return { status: "changed", routine };
+}
+
+export type RoutineRunNow =
+  | { status: "started"; runId: string | null }
+  | { status: "already-running" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "refused"; error: string }
+  | { status: "unknown"; error: string };
+
+export type RoutineRemove =
+  | { status: "removed" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
+  | { status: "refused"; error: string }
+  | { status: "unknown"; error: string };
+
+/** The gateway's inbound hooks (`hooks.*`, admin config): global, not a routine's. */
+export type GatewayHooks = { enabled: boolean; path: string };
+
+/** Every routine Clawtrate creates names its draft, so a create in doubt is found exactly, never guessed. */
+export const DECLARATION_PREFIX = "clawtrate:";
+/** A draft's key: what the editor makes once per new routine and reuses for every try of it. */
+export const MAX_DRAFT_KEY_CHARS = 64;
+
+const instant = (at: string | null) => (at === null ? null : Date.parse(at));
+
+export function sameSchedule(a: RoutineSchedule, b: RoutineSchedule): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "at") return instant(a.at) === instant(b.at);
+  // The anchor and stagger are not compared: the form writes neither, a patch
+  // of the schedule drops them, and they never differ on their own.
+  return a.expr === b.expr && a.tz === b.tz && a.everyMs === b.everyMs && a.name === b.name;
+}
+
+export function fieldsOf(routine: Routine): RoutineFields {
+  return {
+    name: routine.name,
+    text: routine.text,
+    schedule: routine.schedule,
+    target: routine.target,
+    delivery: routine.delivery,
+  };
+}
+
+/** The fields of `b` that differ from `a`. */
+export function changedFields(a: RoutineFields, b: RoutineFields): Array<keyof RoutineFields> {
+  return (["name", "text", "schedule", "target", "delivery"] as const).filter((key) =>
+    key === "schedule" ? !sameSchedule(a.schedule, b.schedule) : a[key] !== b[key],
+  );
+}
+
+// An `at` time names its offset: the gateway drops a `tz` beside it and reads the
+// wall time as UTC (observed on 2026.10.6).
+const OFFSET = /(Z|[+-]\d\d:\d\d)$/u;
+
+function wireSchedule(schedule: RoutineSchedule): RawRecord | null {
+  if (schedule.kind === "cron" && schedule.expr)
+    return { kind: "cron", expr: schedule.expr, ...(schedule.tz ? { tz: schedule.tz } : {}) };
+  if (schedule.kind === "every" && schedule.everyMs)
+    return { kind: "every", everyMs: schedule.everyMs };
+  if (
+    schedule.kind === "at" &&
+    schedule.at &&
+    OFFSET.test(schedule.at) &&
+    !Number.isNaN(instant(schedule.at))
+  )
+    return { kind: "at", at: schedule.at };
+  return null;
+}
+
+/** `cron.update`'s patch: only what changed, and only what Clawtrate writes. */
+export function patchOf(
+  original: RoutineFields,
+  edit: RoutineFields,
+  payload: Routine["payload"],
+): RawRecord {
+  const patch: RawRecord = {};
+  for (const key of changedFields(original, edit)) {
+    if (key === "name") patch.name = edit.name;
+    if (key === "text" && payload === "agentTurn")
+      patch.payload = { kind: "agentTurn", message: edit.text };
+    if (key === "text" && payload === "systemEvent")
+      patch.payload = { kind: "systemEvent", text: edit.text };
+    const schedule = key === "schedule" ? wireSchedule(edit.schedule) : null;
+    if (schedule) patch.schedule = schedule;
+    if (key === "delivery" && (edit.delivery === "none" || edit.delivery === "announce"))
+      patch.delivery = { mode: edit.delivery };
+  }
+  return patch;
+}
+
+/** The gateway answered and refused: nothing was applied. */
+function refusal(error: unknown): string | null {
+  return error instanceof GatewayProtocolRequestError ? error.message : null;
+}
+
+/**
+ * The gateway's own answer that the job is gone (`details.code`, sent by every
+ * cron method on 2026.10.6), not any refusal whose words say "not found".
+ */
+const notFound = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError &&
+  asRecord(error.details)?.code === "CRON_JOB_NOT_FOUND";
+
+/** The gateway refused an update held to a definition that has changed since. */
+const changedSince = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError &&
+  asRecord(error.details)?.code === "CRON_JOB_CHANGED";
+
+/** A request that never left this client. */
+function unsent(error: unknown): boolean {
+  return (
+    (error instanceof GatewayProtocolRequestTimeoutError && !error.requestSent) ||
+    (error instanceof Error && error.name === "NotSentError")
+  );
+}
+
+/** The job in an answer: `cron.add` with a declaration key wraps it (`{created, job}`). */
+const answeredJob = (result: unknown) => {
+  const record = asRecord(result);
+  return asRecord(record?.job) ?? record;
+};
+
+/** Confirm the written fields against the whole reply. Only the bounded routine goes to a viewer. */
+function confirmedWrite(
+  result: unknown,
+  sent: RoutineFields,
+  changed?: Array<keyof RoutineFields>,
+): Routine | null {
+  const job = answeredJob(result);
+  const routine = parseRoutine(job);
+  if (!routine) return null;
+  const actual = { ...fieldsOf(routine), text: instructionOf(asRecord(job?.payload) ?? {}) };
+  const differs = changedFields(sent, actual).some((field) => !changed || changed.includes(field));
+  return differs ? null : routine;
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -414,6 +702,15 @@ export class RoutinesEngine {
   private lastFinished: { jobId: string; consumed: boolean; runAt: number | null } | null = null;
   /** The list read in flight: a load asked for meanwhile joins it and has it read again. */
   private loading: Promise<void> | null = null;
+  /** The connection a write was sent on: its answer is applied only while this holds. */
+  private epoch = 0;
+  /**
+   * The connection the shown list was read on. A row's Pause, Run now and
+   * Delete name only the routine's id, so after a reconnect, possibly to
+   * another gateway at the same address, they wait for this connection's list.
+   */
+  private listedEpoch = 0;
+  private readonly updates = new Set<{ id: string; removed: boolean }>();
 
   private readonly ctx: RoutinesContext;
 
@@ -462,10 +759,12 @@ export class RoutinesEngine {
         this.schedule(RETRY_MS);
         return;
       }
+      this.listedEpoch = this.epoch;
       this.ctx.update((state) => ({
         ...state,
         status: "loaded",
         error: null,
+        listedOn: this.epoch,
         ...read,
         revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
       }));
@@ -548,6 +847,8 @@ export class RoutinesEngine {
     this.invalidated = true;
     const jobId = str(record.jobId);
     const action = str(record.action);
+    if (action === "removed")
+      for (const update of this.updates) if (update.id === jobId) update.removed = true;
     const before = this.ctx.get();
     const kept = before.routines.find((each) => each.id === jobId);
     if (action !== "added" && jobId && before.removed?.id === jobId && !kept) return;
@@ -599,11 +900,374 @@ export class RoutinesEngine {
     this.loading = null;
     this.clearRecheck();
     this.lastFinished = null;
+    this.epoch += 1;
   }
 
   reset(): void {
     this.onClose();
     this.ctx.update(() => initialRoutinesState);
+  }
+
+  /**
+   * Why a write cannot be sent now, or null: checked just before each request.
+   * A withdrawn viewer's write is refused as unsent, too: its reply has no
+   * reader, and nothing of it may reach the gateway.
+   */
+  private blocked(
+    owner: object | null = null,
+    gateway: string | null | undefined = undefined,
+  ): "admin" | "offline" | "gateway" | null {
+    if (!this.ctx.connected()) return "offline";
+    const identity = this.ctx.identity();
+    if (identity === null) return "gateway";
+    // A draft names the gateway it was opened on; a write without one, or for
+    // another, is refused: the routine is at one address, and another gateway
+    // can be there in its place by now.
+    if (gateway !== undefined && identity !== gateway) return "gateway";
+    if (owner !== null && this.ctx.withdrawn(owner)) return "offline";
+    return this.ctx.admin() ? null : "admin";
+  }
+
+  /**
+   * A row read on an earlier connection: its id may name another gateway's
+   * routine now. `listedOn` is the list the row came from, as the viewer had it.
+   */
+  private unlisted(listedOn?: number): "gateway" | null {
+    if (this.listedEpoch !== this.epoch) return "gateway";
+    return listedOn === undefined || listedOn === this.epoch ? null : "gateway";
+  }
+
+  /** The gateway's own view of a routine, put in the list while the connection that read it holds. */
+  private keep(routine: Routine, epoch: number): void {
+    if (epoch !== this.epoch) return;
+    // A list read in flight may predate this answer, as it may an event's.
+    if (this.loading) this.invalidated = true;
+    this.ctx.update((state) => {
+      const at = state.routines.findIndex((each) => each.id === routine.id);
+      if (at < 0 && state.routines.length >= MAX_ROUTINES) return state;
+      const routines =
+        at < 0
+          ? [...state.routines, routine]
+          : state.routines.map((each, index) => (index === at ? routine : each));
+      return { ...state, routines };
+    });
+  }
+
+  /** What became of a write the gateway answered, or did not. */
+  private failed(error: unknown): RoutineWrite {
+    if (unsent(error)) return { status: "not-sent", reason: "offline" };
+    const refused = refusal(error);
+    if (refused !== null)
+      return notFound(error) ? { status: "deleted" } : { status: "refused", error: refused };
+    return { status: "unknown", error: errorText(error) };
+  }
+
+  /**
+   * A new routine for a bot (`cron.add`). `key` is the draft's: the gateway
+   * treats a second add with the same declaration key as the same routine, so
+   * trying again after an answer that never came cannot make two.
+   */
+  async create(
+    input: NewRoutine,
+    key: string,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    const blocked = this.blocked(owner, gateway);
+    if (blocked) return { status: "not-sent", reason: blocked };
+    if (input.target !== "isolated")
+      return { status: "refused", error: "New routines run in an isolated conversation." };
+    const schedule = wireSchedule(input.schedule);
+    if (!schedule) return { status: "refused", error: "Clawtrate can't write this schedule." };
+    // A recovery copy runs when the original did: the gateway anchors a new
+    // every-job at now and takes no stagger unless the request carries one.
+    if (schedule.kind === "every" && input.schedule.anchorMs != null)
+      schedule.anchorMs = input.schedule.anchorMs;
+    if (schedule.kind === "cron" && input.schedule.staggerMs != null)
+      schedule.staggerMs = input.schedule.staggerMs;
+    const epoch = this.epoch;
+    try {
+      const routine = confirmedWrite(
+        await this.ctx.request("cron.add", {
+          name: input.name,
+          agentId: input.botId,
+          schedule,
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: input.text },
+          delivery: { mode: input.delivery === "announce" ? "announce" : "none" },
+          declarationKey: `${DECLARATION_PREFIX}${key}`,
+        }),
+        input,
+      );
+      if (!routine)
+        return {
+          status: "unknown",
+          error: "The gateway answered, but doesn't show this routine as written.",
+        };
+      this.keep(routine, epoch);
+      return { status: "saved", routine };
+    } catch (error) {
+      const failed = this.failed(error);
+      return failed.status === "deleted" ? { status: "refused", error: errorText(error) } : failed;
+    }
+  }
+
+  /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
+  async readOne(id: string, gateway?: string | null): Promise<Routine | null> {
+    return (await this.onGateway(gateway, () => this.readRevised(id)))?.routine ?? null;
+  }
+
+  /**
+   * A read-back names the gateway its write went to. Another gateway may be
+   * connected by the time it is sent or answered, and its routines say nothing
+   * about that write. One that names no confirmed gateway confirms nothing:
+   * null is not an identity.
+   */
+  private async onGateway<T>(gateway: string | null | undefined, read: () => Promise<T>) {
+    const epoch = this.epoch;
+    const elsewhere = () =>
+      gateway !== undefined &&
+      (gateway === null || epoch !== this.epoch || this.ctx.identity() !== gateway);
+    if (elsewhere()) throw new Error(UNCONFIRMED);
+    const value = await read();
+    if (elsewhere()) throw new Error(UNCONFIRMED);
+    return value;
+  }
+
+  /** A routine with the gateway's token for its definition, which `cron.update` can be held to. */
+  private async readRevised(
+    id: string,
+  ): Promise<{ routine: Routine; revision: string | null; text: string } | null> {
+    try {
+      const job = await this.ctx.request("cron.get", { id });
+      const routine = parseRoutine(job);
+      // Only the gateway's not-found says a routine is gone: an answer Clawtrate
+      // can't read, or one for another job, says nothing about this one.
+      if (!routine || routine.id !== id)
+        throw new Error("The gateway's answer for this routine couldn't be read.");
+      const revision = asRecord(job)?.configRevision;
+      return {
+        routine,
+        revision: typeof revision === "string" && revision !== "" ? revision : null,
+        text: instructionOf(asRecord(asRecord(job)?.payload) ?? {}),
+      };
+    } catch (error) {
+      if (notFound(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * A create whose answer never came: the routine its draft made, if the
+   * gateway lists it, found by the draft's own key and nothing else.
+   */
+  async checkCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    const job = await this.onGateway(gateway, () => this.findByKey(key));
+    const routine = parseRoutine(job);
+    if (!routine) return { status: "missing" };
+    return savedAs(routine, instructionOf(asRecord(asRecord(job)?.payload) ?? {}), { input });
+  }
+
+  /** An edit whose answer never came, read on the gateway it was written to. */
+  async checkUpdate(
+    id: string,
+    sent: Extract<SentRoutine, { original: RoutineFields }>,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    const read = await this.onGateway(gateway, () => this.readRevised(id));
+    return read ? savedAs(read.routine, read.text, sent) : { status: "missing" };
+  }
+
+  private async findByKey(key: string): Promise<unknown> {
+    let offset = 0;
+    for (;;) {
+      const result = asRecord(
+        await this.ctx.request("cron.list", { includeDisabled: true, limit: PAGE, offset }),
+      );
+      const job = arr(result?.jobs).find(
+        (each) => asRecord(each)?.declarationKey === `${DECLARATION_PREFIX}${key}`,
+      );
+      if (job) return job;
+      const nextOffset = num(result?.nextOffset);
+      if (result?.hasMore !== true || nextOffset === null || nextOffset <= offset) return null;
+      offset = nextOffset;
+    }
+  }
+
+  /** Check the acknowledged revision, then patch the fields changed from the original. */
+  async update(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    let blocked = this.blocked(owner, gateway);
+    if (blocked) return { status: "not-sent", reason: blocked };
+    if (this.updates.size >= MAX_ROUTINE_UPDATES)
+      return { status: "refused", error: "Too many routine changes are in flight." };
+    const epoch = this.epoch;
+    const pending = { id, removed: false };
+    this.updates.add(pending);
+    try {
+      let current: Routine | null;
+      let revision: string | null;
+      try {
+        const read = await this.readRevised(id);
+        current = read?.routine ?? null;
+        revision = read?.revision ?? null;
+      } catch (error) {
+        if (pending.removed) return { status: "deleted" };
+        const failed = this.failed(error);
+        // Only a read failed: nothing was written.
+        return failed.status === "unknown" ? { status: "not-sent", reason: "offline" } : failed;
+      }
+      if (!current || pending.removed) return { status: "deleted" };
+      if (
+        current.updatedAt !== expected.updatedAt ||
+        changedFields(expected, fieldsOf(current)).length > 0
+      )
+        return { status: "conflict", current };
+      const fields = {
+        ...edit,
+        target: original.target,
+        text: current.textCut ? original.text : edit.text,
+      };
+      const patch = patchOf(original, fields, current.payload);
+      if (changedFields(original, fields).includes("schedule") && !patch.schedule)
+        return { status: "refused", error: "Clawtrate can't write this schedule." };
+      if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
+      blocked = this.blocked(owner, gateway);
+      if (blocked) return { status: "not-sent", reason: blocked };
+      if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
+      try {
+        // Held to the definition just checked: another editor's save that lands
+        // between the read and this write is refused, not overwritten.
+        const routine = confirmedWrite(
+          await this.ctx.request("cron.update", {
+            id,
+            patch,
+            ...(revision === null ? {} : { expectedConfigRevision: revision }),
+          }),
+          fields,
+          changedFields(original, fields),
+        );
+        if (pending.removed) return { status: "deleted" };
+        if (!routine)
+          return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
+        this.keep(routine, epoch);
+        return { status: "saved", routine };
+      } catch (error) {
+        if (pending.removed) return { status: "deleted" };
+        if (changedSince(error)) {
+          const now = await this.readOne(id).catch(() => undefined);
+          if (now === null) return { status: "deleted" };
+          if (now) return { status: "conflict", current: now };
+        }
+        return this.failed(error);
+      }
+    } finally {
+      this.updates.delete(pending);
+    }
+  }
+
+  /** Pause or resume (`cron.update {enabled}`). */
+  async setEnabled(
+    id: string,
+    enabled: boolean,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineWrite> {
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+    if (blocked) return { status: "not-sent", reason: blocked };
+    const epoch = this.epoch;
+    if (this.updates.size >= MAX_ROUTINE_UPDATES)
+      return { status: "refused", error: "Too many routine changes are in flight." };
+    // Registered as an update, so a removal confirmed meanwhile is not undone by this reply.
+    const pending = { id, removed: false };
+    this.updates.add(pending);
+    try {
+      const routine = parseRoutine(
+        answeredJob(await this.ctx.request("cron.update", { id, patch: { enabled } })),
+      );
+      if (pending.removed) return { status: "deleted" };
+      if (!routine || routine.enabled !== enabled)
+        return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
+      this.keep(routine, epoch);
+      return { status: "saved", routine };
+    } catch (error) {
+      return pending.removed ? { status: "deleted" } : this.failed(error);
+    } finally {
+      this.updates.delete(pending);
+    }
+  }
+
+  /** Run it once now (`cron.run {mode: "force"}`), paused or not; it stays as it was. */
+  async runNow(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRunNow> {
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+    if (blocked) return { status: "not-sent", reason: blocked };
+    try {
+      const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
+      if (result?.ok === true && result.enqueued === true)
+        return { status: "started", runId: str(result.runId) };
+      if (result?.reason === "already-running") return { status: "already-running" };
+      return {
+        status: "refused",
+        error: str(result?.reason) ?? "The gateway didn't start a run.",
+      };
+    } catch (error) {
+      const failed = this.failed(error);
+      return failed.status === "deleted"
+        ? { status: "refused", error: errorText(error) }
+        : (failed as RoutineRunNow);
+    }
+  }
+
+  /**
+   * Delete it (`cron.remove`). The reply's `removed: true`, or the gateway's
+   * established not-found refusal, is what takes it off the list: any other
+   * answer leaves the row while its outcome is checked.
+   */
+  async remove(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRemove> {
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
+    if (blocked) return { status: "not-sent", reason: blocked };
+    const epoch = this.epoch;
+    const drop = () => {
+      // A write still in flight for it must not put it back when it answers.
+      for (const update of this.updates) if (update.id === id) update.removed = true;
+      if (epoch === this.epoch && this.loading) this.invalidated = true;
+      if (epoch === this.epoch)
+        this.ctx.update((state) => ({
+          ...state,
+          routines: state.routines.filter((each) => each.id !== id),
+        }));
+      return { status: "removed" } as const;
+    };
+    try {
+      const result = asRecord(await this.ctx.request("cron.remove", { id }));
+      if (result?.removed !== true)
+        return { status: "unknown", error: "The gateway answered, but didn't remove it." };
+      return drop();
+    } catch (error) {
+      const failed = this.failed(error);
+      if (failed.status === "deleted") return drop();
+      return failed as RoutineRemove;
+    }
+  }
+
+  /** The gateway's inbound hooks, read from its config (admin); null below admin. */
+  async hooks(): Promise<GatewayHooks | null> {
+    if (this.blocked()) return null;
+    const hooks = asRecord(
+      asRecord(asRecord(await this.ctx.request("config.get", {}))?.config)?.hooks,
+    );
+    return { enabled: hooks?.enabled === true, path: str(hooks?.path) ?? "/hooks" };
   }
 
   /** A routine's runs in the gateway's order (newest finished first), at most `MAX_ROUTINE_RUNS`. */

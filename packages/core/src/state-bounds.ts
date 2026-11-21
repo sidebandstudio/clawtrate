@@ -5,6 +5,7 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -112,6 +113,15 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
+import {
+  MAX_CHECKIN_KEPT,
+  MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInDefaults,
+  type CheckInJob,
+  type CheckInSave,
+  type CheckInSetting,
+  type CheckInsState,
+} from "./check-ins.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -628,7 +638,7 @@ const upgrade = object<ScopeUpgradeState>()({
 });
 const connection = object<ConnectionState>()({
   status: ENUM,
-  gatewayUrl: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayUrl: text(MAX_GATEWAY_URL_CHARS),
   gatewayId: ID,
   serverVersion: NAME,
   protocol: NUMBER,
@@ -988,12 +998,55 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
+// Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.
+const checkInJob = object<CheckInJob>()({
+  botId: ID,
+  enabled: FLAG,
+  everyMs: NUMBER,
+  nextRunAtMs: NUMBER,
+});
+// A prompt code unit can take six characters when escaped in JSON.
+const checkInPrompt = text(6 * MAX_CHECKIN_PROMPT_CHARS + 2);
+const checkInSetting = object<CheckInSetting>()({
+  botId: ID,
+  every: NAME,
+  prompt: checkInPrompt,
+  promptCut: FLAG,
+});
+const checkInDefaults = object<CheckInDefaults>()({
+  inherited: list(MAX_CHECKIN_KEPT + 1, ID),
+  inheritedCut: FLAG,
+  every: NAME,
+  everyCut: FLAG,
+  prompt: checkInPrompt,
+  promptCut: FLAG,
+});
+const checkInSave = object<CheckInSave>()({
+  id: ID,
+  botId: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+export const CHECK_INS: Bound = object<CheckInsState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayId: ID,
+  scheduler: FLAG,
+  readBotIds: list(MAX_BOTS, ID),
+  jobs: list(MAX_BOTS, checkInJob),
+  settings: list(MAX_BOTS, checkInSetting),
+  defaults: checkInDefaults,
+  save: checkInSave,
+});
+
 // Routines (routines.ts): the list only; runs and their conversations are never kept.
 const routineSchedule = object<RoutineSchedule>()({
   kind: ENUM,
   expr: NAME,
   tz: NAME,
   everyMs: NUMBER,
+  anchorMs: NUMBER,
+  staggerMs: NUMBER,
   at: NAME,
   name: NAME,
 });
@@ -1005,6 +1058,8 @@ const routine = object<Routine>()({
   schedule: routineSchedule,
   payload: ENUM,
   text: text(MAX_ROUTINE_TEXT_CHARS),
+  textCut: FLAG,
+  canRecreate: FLAG,
   target: ENUM,
   sharedSessionKey: ID,
   delivery: ENUM,
@@ -1031,6 +1086,7 @@ export const ROUTINES: Bound = object<RoutinesState>()({
     ranOnce: FLAG,
     runAt: NUMBER,
   }),
+  listedOn: NUMBER,
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
@@ -1047,6 +1103,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,
+  checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   usage: USAGE,
 });

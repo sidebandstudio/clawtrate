@@ -518,11 +518,12 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     setDrafts((all) => ({ ...all, [id]: { text: all[id]?.text ?? "", error: next } }));
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const writable = env?.canWrite;
   useEffect(() => {
     // With no field to reply from (a read-only connection), the thread itself takes focus, so
-    // Escape reaches it.
+    // Escape reaches it. Write access ending removes the field, and the focus it held with it.
     (field.current ?? panel.current)?.focus();
-  }, [messageId]);
+  }, [messageId, writable]);
   if (!env) return null;
   const transcript = env.transcript;
   const root = messageOf(transcript, messageId);

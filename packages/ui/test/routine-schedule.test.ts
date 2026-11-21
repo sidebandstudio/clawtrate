@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   fullWhen,
   frequent,
+  hasOccurrence,
   occurrences,
   runOutcome,
   scheduleWords,
@@ -33,6 +34,7 @@ const routine = (over: Partial<Routine> = {}): Routine => ({
   schedule: schedule({ expr: "0 8 * * 1-5", tz: NY }),
   payload: "agentTurn",
   text: "",
+  textCut: false,
   target: "isolated",
   delivery: "none",
   deliveryChannel: null,
@@ -136,21 +138,19 @@ describe("F-197: occurrences", () => {
       ),
     ).toEqual(["2027-03-13T05:00:00.000Z", "2027-03-14T05:00:00.000Z", "2027-03-15T04:00:00.000Z"]);
   });
-  it("moves a skipped time forward by the spring gap", () => {
+  it("leave out a time the clocks skip that day, as the gateway does", () => {
     const daily = routine({
       schedule: schedule({ expr: "30 2 * * *", tz: NY }),
-      nextRunAt: Date.parse("2026-03-07T07:30:00Z"),
+      nextRunAt: Date.parse("2027-03-13T07:30:00Z"),
     });
     expect(
       iso(
-        occurrences(daily, Date.parse("2026-03-07T00:00:00Z"), Date.parse("2026-03-11T00:00:00Z")),
+        occurrences(daily, Date.parse("2027-03-13T00:00:00Z"), Date.parse("2027-03-17T00:00:00Z")),
       ),
-    ).toEqual([
-      "2026-03-07T07:30:00.000Z",
-      "2026-03-08T07:30:00.000Z",
-      "2026-03-09T06:30:00.000Z",
-      "2026-03-10T06:30:00.000Z",
-    ]);
+    ).toEqual(["2027-03-13T07:30:00.000Z", "2027-03-15T06:30:00.000Z", "2027-03-16T06:30:00.000Z"]);
+    expect(
+      hasOccurrence(daily, zonedTime(2027, 3, 14, 0, 0, NY), zonedTime(2027, 3, 15, 0, 0, NY)),
+    ).toBe(false);
   });
   it("lists distinct instants in order when spring wall times overlap", () => {
     const overlapping = routine({

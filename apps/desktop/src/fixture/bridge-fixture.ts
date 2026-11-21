@@ -2,6 +2,7 @@
 // implements the same ClawtrateBridge the desktop and web hosts do, holds
 // everything in memory, and never opens a socket or makes a request.
 
+import { holdableTimers } from "./timers.ts";
 import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
@@ -60,6 +61,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
@@ -480,6 +482,7 @@ export function createFixtureBridge(
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    checkIns?: CheckInParams;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -493,8 +496,10 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
-   * answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin or device access granted) until `release`: a test that must
+   * see a state lasting only until the answer comes holds it, looks, then lets the answer through.
+   * An answer asked for while held comes on release without waiting for a page timer, which a
+   * loaded machine can leave unfired for longer than a check waits.
    */
   hold(): void;
   release(): void;
@@ -520,6 +525,18 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  const checkInParams = options.checkIns ?? {
+    checkins: null,
+    defaultPrompt: false,
+    scheduler: true,
+    save: null,
+  };
+  const checkInCommand = checkInCommands(checkInParams);
+  if (state.bots.length > 0)
+    state = {
+      ...state,
+      checkIns: fixtureCheckIns(now, checkInParams, state.connection.gatewayId),
+    };
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
@@ -541,13 +558,8 @@ export function createFixtureBridge(
   const sent: BridgeCommand[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
-  let held: Array<() => void> | null = null;
-  /** A delayed answer, run after `ms`, or once released if a test holds answers then. */
-  const deferred = (run: () => void, ms: number) =>
-    void setTimeout(() => {
-      if (held) held.push(run);
-      else run();
-    }, ms);
+  const timers = holdableTimers();
+  const { deferred } = timers;
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
     deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
@@ -561,7 +573,13 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const checkIn = checkInCommand(command, () => state, set);
+    if (checkIn) {
+      sent.push(command);
+      return checkIn;
+    }
     if (
       command.type === "listMemory" ||
       command.type === "readMemory" ||
@@ -572,7 +590,7 @@ export function createFixtureBridge(
         throw new Error("Changing memory requires admin access.");
       return memory(command);
     }
-    const routine = routineCommand(command, () => state, now, routineParams);
+    const routine = routineCommand(command, () => state, now, routineParams, set);
     if (routine) {
       sent.push(command);
       return routine;
@@ -582,12 +600,20 @@ export function createFixtureBridge(
       sent.push(command);
       return usage;
     }
-    const machine = machineCommand(command, () => state, set);
+    // Every access tier shares one upgrade. A delayed answer belongs to the request that started it.
+    let setAnswer = set;
+    if (command.type === "requestAccess") {
+      const request = ++latestAccessRequest;
+      setAnswer = (next) => {
+        if (request === latestAccessRequest) set(next);
+      };
+    }
+    const machine = machineCommand(command, () => state, setAnswer, deferred);
     if (machine) {
       sent.push(command);
       return machine;
     }
-    const account = accountCommand(command, () => state, set, accountParams);
+    const account = accountCommand(command, () => state, setAnswer, accountParams, deferred);
     if (account) {
       sent.push(command);
       return account;
@@ -601,13 +627,7 @@ export function createFixtureBridge(
       sent.push(command);
       return rail;
     }
-    const live = liveCommand(
-      command,
-      () => state,
-      (next) => set(next),
-      files,
-      deferred,
-    );
+    const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
@@ -889,13 +909,7 @@ export function createFixtureBridge(
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
     raceArchive: () => void (railRace.archive = true),
-    hold() {
-      held ??= [];
-    },
-    release() {
-      const waiting = held ?? [];
-      held = null;
-      for (const apply of waiting) apply();
-    },
+    hold: timers.hold,
+    release: timers.release,
   };
 }

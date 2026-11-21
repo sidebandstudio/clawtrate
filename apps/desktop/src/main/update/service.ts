@@ -262,6 +262,7 @@ export class DesktopUpdateService {
             version: state.version,
             received: state.received,
             expected: state.total,
+            ...(state.step && { step: state.step }),
           });
       },
     });

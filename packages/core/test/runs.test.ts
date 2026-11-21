@@ -25,6 +25,7 @@ import {
   requestStop,
   revertStop,
   runsFromHistory,
+  settleRunFromWait,
   startLocalRun,
   startQueuedRun,
   type EngineContext,
@@ -1315,5 +1316,43 @@ describe("the gateway's title for a call", () => {
       ctx(),
     ).activity;
     expect(only(activity).steps[0]!.gatewayTitle).toBe("Skill Search");
+  });
+});
+
+describe("a run settled from its agent.wait record (F-097)", () => {
+  const started = () => play([A("run-1", 1, "lifecycle", { phase: "start" })]).activity;
+  const wait = (activity: TaskActivity, record: Record<string, unknown>) =>
+    settleRunFromWait(activity, "run-1", { runId: "run-1", ...record }, ctx());
+
+  it("F-097: a record of a run still going, or one the gateway does not know, leaves it running", () => {
+    expect(only(wait(started(), { status: "timeout" })).state).toBe("running");
+    expect(only(wait(started(), { status: "pending", timeoutPhase: "queue" })).state).toBe(
+      "running",
+    );
+  });
+
+  it("F-097: a run cut short by revoked access ends as stopped, as OpenClaw reads the record", () => {
+    const record = {
+      status: "error",
+      error: "unauthorized",
+      stopReason: "auth-revoked",
+      endedAt: 4_000,
+    };
+    expect(only(wait(started(), record))).toMatchObject({ state: "stopped", endedAt: 4_000 });
+  });
+
+  it("F-097: the gateway's end replaces one only inferred, and not one established", () => {
+    const inferred: TaskActivity = {
+      ...started(),
+      runs: [{ ...only(started()), state: "completed", outcomeKnown: false, endedAt: 3_000 }],
+    };
+    const record = { status: "error", error: "aborted", stopReason: "rpc", endedAt: 4_000 };
+    expect(only(wait(inferred, record))).toMatchObject({
+      state: "stopped",
+      outcomeKnown: true,
+      endedAt: 4_000,
+    });
+    const established = { ...inferred, runs: [{ ...only(inferred), outcomeKnown: true }] };
+    expect(only(wait(established, record)).state).toBe("completed");
   });
 });

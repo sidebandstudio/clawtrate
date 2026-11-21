@@ -293,7 +293,7 @@ test.describe("1440", () => {
   test("F-193: a running row follows the same run into its conversation", async ({ page }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
-    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(
       page,
       `(store) => ({ ...store, routines: store.routines.map((each) =>
@@ -309,7 +309,7 @@ test.describe("1440", () => {
   }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
-    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await expect(view(page).getByTestId("run-starting")).toHaveText("Running…");
     await change(
       page,
       `(store) => ({ ...store,
@@ -727,6 +727,22 @@ test.describe("phone", () => {
     await open.click();
     await expect(view(page)).toHaveCount(0);
     await expect(page.locator(".conversation h1")).toBeFocused();
+  });
+
+  test("F-190: a run that recorded a shared conversation keeps it after its routine is changed to a command", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Plan the week" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    const link = view(page).getByRole("button", { name: "Open conversation", exact: true });
+    await expect(link).toBeVisible();
+    await change(
+      page,
+      `(routines) => ({ ...routines, routines: routines.routines.map((each) =>
+        each.id === "routine-week" ? { ...each, payload: "other" } : each) })`,
+    );
+    await expect(link).toBeVisible();
   });
 
   test("Back to bots leaves the view for the rail, with focus on the Routines button", async ({
