@@ -35,7 +35,16 @@ import {
   RoutinesEngine,
   type BotRoutines,
   type CalendarRuns,
+  type GatewayHooks,
+  type NewRoutine,
+  type Routine,
+  type RoutineFields,
+  type RoutineRevision,
+  type RoutineRemove,
   type RoutineRun,
+  type RoutineRunNow,
+  type RoutineSaveCheck,
+  type RoutineWrite,
   type RunConversation,
   type RunSelector,
 } from "./routines.ts";
@@ -945,6 +954,10 @@ export class ClawtrateClient {
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    identity: () => this.state.connection.gatewayId,
+    withdrawn: (owner) => this.withdrawnOwners.has(owner),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -3427,24 +3440,23 @@ export class ClawtrateClient {
    */
   private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
     const incarnation = this.incarnations.get(key);
+    const epoch = this.epoch;
+    const currentConnection = () => generation === this.generation && epoch === this.epoch;
     let answer: unknown;
     let before: Transcript["reactions"];
     try {
-      if (this.selfId === null) await this.readSelf(generation);
+      if (this.selfId === null) await this.readSelf(currentConnection);
+      if (!currentConnection()) return;
       // What the list will replace: an event, a change of this person's or a new history page
       // after it was asked for is newer than the list, and the list then gives way to it.
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
+      if (currentConnection())
         this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
       return;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]!.reactions !== before) {
       // Changed while the list was on its way: ask again, a few times, rather than go back.
@@ -3490,16 +3502,19 @@ export class ClawtrateClient {
     return slashRows(skills, metadata);
   }
 
-  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
-  private async readSelf(generation: number): Promise<void> {
+  /**
+   * Who this connection acts for (`users.self`), for which reactions are the person's own.
+   * `current` says whether the answer still applies when it arrives.
+   */
+  private async readSelf(current: () => boolean): Promise<void> {
     try {
       const answer = asRecord(await this.request("users.self", {}));
-      if (generation !== this.generation) return;
+      if (!current()) return;
       const id = asRecord(answer?.profile)?.id;
       this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
     } catch {
       // A refusal on an earlier connection says nothing of a later one's identity.
-      if (generation === this.generation) this.selfId = null;
+      if (current()) this.selfId = null;
     }
   }
 
@@ -3521,17 +3536,22 @@ export class ClawtrateClient {
     if (typeof emoji !== "string" || !emoji || emoji.length > 64)
       throw new Error("Choose one emoji.");
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
-    const generation = this.generation;
-    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    // A scope upgrade reconnects to the same address and keeps the opening of the task.
+    const url = this.settings?.url;
     const incarnation = this.incarnations.get(key);
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
-    if (this.selfId === null) await this.readSelf(generation);
+    if (this.settings?.url !== url) throw new Error("That message is no longer shown here.");
+    // From the identity read through the write, a new connection can act for a different person.
+    const generation = this.generation;
+    const epoch = this.epoch;
+    const sameConnection = () => generation === this.generation && epoch === this.epoch;
+    if (this.selfId === null) await this.readSelf(sameConnection);
     // After every wait, immediately before the write: its viewer is still here, and the same
     // opening of the task still shows the message.
     this.checkNotWithdrawn(options.owner);
     const now = this.state.transcripts[key];
     if (
-      generation !== this.generation ||
+      !sameConnection() ||
       this.incarnations.get(key) !== incarnation ||
       !now ||
       !shownMessageIds(now).has(messageId)
@@ -3550,18 +3570,14 @@ export class ClawtrateClient {
         }),
       );
     } catch (error) {
-      this.noteMissingScope(error);
+      if (sameConnection()) this.noteMissingScope(error);
       throw error;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!sameConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]?.reactions !== before) {
       // Something newer changed them: the gateway's list says what is true now.
-      void this.readReactions(key, generation);
+      void this.readReactions(key, this.generation);
       return;
     }
     this.applyReactions(key, messageId, answer?.reactions);
@@ -4156,6 +4172,84 @@ export class ClawtrateClient {
   /** One run's conversation, when the gateway keeps it; returned, not kept. */
   readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
     return this.routines.conversation(id, run);
+  }
+
+  // Changing routines (automation.md sections 9 and 10): `operator.admin`, checked by the engine.
+
+  /** A new routine; `key` is its draft's, the same for every try of that draft. */
+  createRoutine(
+    input: NewRoutine,
+    key: string,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    return this.routines.create(input, key, owner, gateway);
+  }
+
+  /** One routine as the gateway has it now. */
+  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
+    return this.routines.readOne(id, gateway);
+  }
+
+  /** What the gateway shows of a create whose answer never came, by its draft's key. */
+  checkRoutineCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkCreate(key, input, gateway);
+  }
+
+  /** What the gateway shows of an edit whose answer never came. */
+  checkRoutineUpdate(
+    id: string,
+    sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkUpdate(id, sent, gateway);
+  }
+
+  updateRoutine(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    if (jsonTextLength(id) > MAX_ID_CHARS)
+      return Promise.resolve({ status: "refused", error: "That routine id is too long." });
+    return this.routines.update(id, original, edit, expected, owner, gateway);
+  }
+
+  setRoutineEnabled(
+    id: string,
+    enabled: boolean,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineWrite> {
+    return this.routines.setEnabled(id, enabled, owner, listedOn);
+  }
+
+  runRoutineNow(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRunNow> {
+    return this.routines.runNow(id, owner, listedOn);
+  }
+
+  removeRoutine(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRemove> {
+    return this.routines.remove(id, owner, listedOn);
+  }
+
+  /** The gateway's inbound hooks, read with admin; null below it. */
+  readGatewayHooks(): Promise<GatewayHooks | null> {
+    return this.routines.hooks();
   }
 
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
@@ -5426,9 +5520,17 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The last gateway's identity goes with the connection it came from, so a
+    // write waits for this one's read (routines.ts `blocked`).
+    this.setConnection({ gatewayId: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
     const gatewayId = this.readGatewayIdentity();
+    // Applied here too, so a bot list that fails or is slow to read does not
+    // keep the identity back.
+    void gatewayId.then((id) => {
+      if (id !== null && generation === this.generation) this.setConnection({ gatewayId: id });
+    });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -5438,9 +5540,11 @@ export class ClawtrateClient {
         if (generation === this.generation) {
           // A read asked later, after a bot was created, may have answered first.
           const newest = this.newestBots(botsIssued);
+          // Only a read that found the identity writes it: an older refresh whose
+          // read failed must not clear what a newer one on this connection confirmed.
           this.store.update((state) => ({
             ...state,
-            connection: { ...state.connection, gatewayId: id },
+            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }
