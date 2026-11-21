@@ -92,7 +92,8 @@ export function sshLook(facts: LookFacts): SshLook {
   let offLoopback = false;
   for (const status of ordered) {
     if (status.port === null) continue;
-    const found = serviceOnPort(facts, status.port);
+    // This profile's own status: another profile's on the same port says nothing of this one.
+    const found = serviceOnPort(facts, status.port, status.profile);
     if (!found.ok) {
       if (found.reason === "cant-tell") unsure = true;
       if (found.reason === "endpoint") offLoopback = true;

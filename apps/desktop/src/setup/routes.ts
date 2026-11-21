@@ -170,8 +170,8 @@ export class RouteStore {
     if (this.cache) return this.cache;
     const empty: FileShape = { version: 2, routes: [] };
     if (!this.folderIsPrivate()) {
-      // Nothing is read from, or kept in, a folder that isn't proven private.
-      this.cache = empty;
+      // Nothing is read from, or kept in, a folder that isn't proven private; nothing is cached
+      // either, so a later read of the proven folder starts from its file, never from empty.
       return empty;
     }
     const text = readPrivateFile(this.path, this.options.readAcl);

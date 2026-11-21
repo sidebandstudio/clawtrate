@@ -390,8 +390,8 @@ export function setupCommand(
       }
       // The fixture has no native dialog: the account is taken as confirmed.
       setup(there({ phase: "looking", step: 0 }, { destination: typed }));
-      later(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
-      later(
+      after(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
+      after(
         600,
         () =>
           current().phase === "looking" && setup({ ...current(), phase: "found", look: running }),
@@ -404,7 +404,13 @@ export function setupCommand(
       return true;
     case "setupStart":
       setup({ ...current(), phase: "connecting", step: 0 });
-      later(600, () => setup({ ...current(), phase: "found", look: running }));
+      // Only the Start still under way ends on the running card; Back or Reset end it here.
+      after(
+        600,
+        () =>
+          current().phase === "connecting" &&
+          setup({ ...current(), phase: "found", look: running }),
+      );
       return true;
     case "setupRetryRoute":
     case "setupRemoveRoute":

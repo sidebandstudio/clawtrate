@@ -856,7 +856,7 @@ export class SshTransport {
       verify: async (signal): Promise<VerifyResult> => {
         const look = await this.look(route, { signal });
         if (look.ok) {
-          const now = serviceOnPort(look.facts, gatewayPort);
+          const now = serviceOnPort(look.facts, gatewayPort, expected.profile);
           if (!now.ok) return { kind: now.reason === "not-running" ? "not-running" : "cant-tell" };
           return sameService(now.service, expected) ? { kind: "same" } : { kind: "different" };
         }

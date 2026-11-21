@@ -94,6 +94,9 @@ const CHANGING_RIGHTS = new Set([
   "chown",
 ]);
 
+/** The rights that let another account list, enter or read a folder: refused on the leaf only. */
+const READING_RIGHTS = new Set(["list", "search", "read"]);
+
 /**
  * `ls -lde` on macOS lists ACL entries below the folder's line; on Linux a `+`
  * marks one. The flags and the reading follow the system actually running
@@ -129,8 +132,11 @@ export function readAclWithLs(path: string, _platform?: NodeJS.Platform): AclRea
   return entries.length ? { kind: "entries", entries } : { kind: "none" };
 }
 
-/** Whether a folder's ACL lets anyone but this account change it. */
-function aclOpensIt(reading: AclReading, me: string): boolean | null {
+/**
+ * Whether a folder's ACL lets anyone but this account change it, or, on the
+ * leaf, list, enter or read it: folders above it are entered by others as usual.
+ */
+function aclOpensIt(reading: AclReading, me: string, leaf: boolean): boolean | null {
   switch (reading.kind) {
     case "none":
       return false;
@@ -143,7 +149,9 @@ function aclOpensIt(reading: AclReading, me: string): boolean | null {
         (entry) =>
           entry.allow &&
           entry.principal !== `user:${me}` &&
-          entry.rights.some((right) => CHANGING_RIGHTS.has(right)),
+          entry.rights.some(
+            (right) => CHANGING_RIGHTS.has(right) || (leaf && READING_RIGHTS.has(right)),
+          ),
       );
   }
 }
@@ -207,7 +215,7 @@ export function ensurePrivateDir(dir: string, options: PrivateDirOptions = {}): 
         info.uid === 0 && (Number(info.mode) & STICKY) !== 0 && childUid === uid;
       if (!stickyOverOwn) return fail("writable-by-others", path);
     }
-    const opens = aclOpensIt(readAcl(path, platform), me);
+    const opens = aclOpensIt(readAcl(path, platform), me, leaf);
     if (opens === null) return fail("unverifiable", path);
     if (opens) return fail("acl", path);
     return null;
@@ -374,7 +382,12 @@ export function chooseDataDir(
 ): DataDirChoice {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
-    (options.mkdir ?? ((path) => mkdirSync(path, { recursive: true })))(dir);
+    try {
+      (options.mkdir ?? ((path) => mkdirSync(path, { recursive: true })))(dir);
+    } catch {
+      // A file in its place, or no right to make it: the folder error, as on macOS and Linux.
+      return { ok: false, dir, reason: "unverifiable", at: dir };
+    }
     return { ok: true, dir, verified: "windows-unverified" };
   }
   // The system's own links followed (macOS's temporary folders are under `/var`); no other.

@@ -278,6 +278,20 @@ describe("the person's SSH configuration", () => {
         category: "invalid-value",
         setting: "Include",
       });
+      // A pattern's match that is a link out of the home folder: the Include is refused.
+      mkdirSync(join(world.home, ".ssh", "linked.d"), { recursive: true });
+      writeFileSync(join(world.home, ".ssh", "linked.d", "10.conf"), "Host devbox\n  Port 2201\n");
+      symlinkSync(join(outside, "conf"), join(world.home, ".ssh", "linked.d", "20.conf"));
+      expect(resolveWith("Include ~/.ssh/linked.d/*.conf\n")).toMatchObject({
+        ok: false,
+        category: "invalid-value",
+        setting: "Include",
+      });
+      rmSync(join(world.home, ".ssh", "linked.d", "20.conf"));
+      expect(resolveWith("Include ~/.ssh/linked.d/*.conf\n")).toMatchObject({
+        ok: true,
+        port: 2201,
+      });
       // Spelled outside but walked inside is inside: a link into the home folder is fine.
       symlinkSync(join(world.home, ".ssh"), join(outside, "back"), "dir");
       expect(resolveWith(`Host devbox\n  IdentityFile ~/out/back/id\n`)).toMatchObject({
