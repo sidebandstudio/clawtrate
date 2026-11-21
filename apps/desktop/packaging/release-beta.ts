@@ -1,26 +1,30 @@
 // Cuts a Clawtrate beta for macOS on the maintainer's Mac. CI never runs it.
 //
 //   pnpm release:beta                       build, sign, notarize, verify and prepare
-//   pnpm release:beta --publish <version>   publish what was prepared
+//   pnpm release:beta --publish <version> <release.json sha256>
+//                                           publish what was prepared
 //   pnpm release:beta --withdraw <version>  take a published beta back
 //
 // Preparing reads the signing and notarization secrets from the maintainer's
 // vault and hands them to macOS's own tools on their standard input, never in
 // a command's arguments or environment: `security` imports the certificate
 // into a new keychain in a private temporary folder, and `notarytool` stores
-// the API key in that keychain as a profile. The build runs with a short list
-// of ordinary variables plus the keychain's path, the identity's hash and the
-// profile's name, so neither it nor anything it starts holds a secret. Then it
-// checks each app inside its zip: signature, Gatekeeper, stapled ticket, bundle
-// id, version and architecture. It writes the zips, the Beta feed,
-// latest-mac.json, the release notes and release.json to
-// .release/beta/<version>/. Only Apple's notary service receives anything;
-// nothing is published.
+// the API key in that keychain as a profile. Both raw files are deleted before
+// the build starts. The build runs with a short list of ordinary variables plus
+// the keychain's path, the identity's hash and the profile's name, so neither
+// it nor anything it starts holds a secret. Then it checks a private copy of
+// each zip, app inside: signature, Gatekeeper, stapled ticket, bundle id,
+// version and architecture. From those verified copies it writes the zips, the
+// Beta feed, latest-mac.json, the release notes and release.json to
+// .release/beta/<version>/, and prints release.json's SHA-256. Only Apple's
+// notary service receives anything; nothing is published.
 //
-// Publishing checks that folder holds exactly that release and that every file
-// is unchanged, creates the GitHub prerelease as a draft, compares GitHub's
-// digest of each uploaded file with the prepared one, and only then makes it
-// public, reads every file back and waits for the site to serve the new feed.
+// Publishing takes that SHA-256 and requires release.json to have it, the
+// folder to hold exactly that release and every file to be unchanged. It
+// creates the GitHub prerelease as a draft, compares GitHub's digest of each
+// uploaded file and the draft's notes with the prepared ones, and only then
+// makes it public, reads it back, reads every file back and waits for the site
+// to serve the new feed.
 //
 // docs/development/releases.md is the runbook, including what a killed run
 // leaves behind and how to remove it.
@@ -28,6 +32,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -177,11 +182,19 @@ export interface Signing {
   teamId: string;
 }
 
+/** The tools that take a secret, by absolute path, so no entry in PATH can stand in for them. */
+export const SECURITY = "/usr/bin/security";
+export const XCRUN = "/usr/bin/xcrun";
+/** The lock settings the release keychain is given, as `show-keychain-info` reports them. */
+const KEYCHAIN_LOCK = /\block-on-sleep timeout=3600s\b/;
+
 /**
  * Makes the release keychain in `dir`: the certificate imported and the notary
  * key stored as NOTARY_PROFILE. Every secret goes to `security` or `notarytool`
- * on its standard input. The certificate's file is deleted once imported; the
- * key's file stays in `dir` until the caller removes it.
+ * on its standard input, one `security -i` command at a time, each one's status
+ * checked. Both raw files are deleted as soon as their tool returns, before the
+ * identity is read, so neither exists when the build starts. Failures name the
+ * step, never its input or the tool's output.
  */
 export function signingKeychain(runner: Run, secrets: Secrets, dir: string, base = process.env) {
   const p12 = p12Bytes(secrets.APPLE_CLAWTRATE_DEVELOPER_ID_P12_BASE64);
@@ -197,38 +210,64 @@ export function signingKeychain(runner: Run, secrets: Secrets, dir: string, base
   if (/\s/.test(issuer)) stop("APPLE_CLAWTRATE_NOTARY_ISSUER_ID has a space or line break.");
 
   const env = kept(base);
-  const certificate = join(dir, "developer-id.p12");
-  const key = join(dir, `AuthKey_${keyId}.p8`);
+  const certificate = join(dir, CERTIFICATE_FILE);
+  const key = join(dir, KEY_FILE);
   const keychain = join(dir, "release.keychain-db");
   // Lives only in this process: a keychain left by a killed run stays locked to everyone.
   const unlock = randomBytes(32).toString("base64url");
+  const security = (step: string, command: string) => {
+    if (runner(SECURITY, ["-i"], { env, input: `${command}\n` }).status !== 0)
+      stop(`The release keychain's ${step} step failed.`);
+  };
   writeFileSync(certificate, p12, { mode: 0o600, flag: "wx" });
-  writeFileSync(key, p8, { mode: 0o600, flag: "wx" });
-  const commands = [
-    `create-keychain -p ${securityWord(unlock)} ${securityWord(keychain)}`,
-    // Locks itself after an hour unused and when the Mac sleeps.
-    `set-keychain-settings -l -u -t 3600 ${securityWord(keychain)}`,
-    `unlock-keychain -p ${securityWord(unlock)} ${securityWord(keychain)}`,
-    `import ${securityWord(certificate)} -k ${securityWord(keychain)} -f pkcs12 -P ${securityWord(password)} -T /usr/bin/codesign`,
-    `set-key-partition-list -S apple-tool:,apple: -s -k ${securityWord(unlock)} ${securityWord(keychain)}`,
-  ];
-  const made = runner("security", ["-i"], { env, input: `${commands.join("\n")}\n` });
-  rmSync(certificate, { force: true });
-  if (made.status !== 0)
-    stop(
-      "The certificate did not import into the release keychain. Check APPLE_CLAWTRATE_DEVELOPER_ID_P12_BASE64 and APPLE_CLAWTRATE_DEVELOPER_ID_P12_PASSWORD.",
+  try {
+    security(
+      "create-keychain",
+      `create-keychain -p ${securityWord(unlock)} ${securityWord(keychain)}`,
     );
-  // notarytool asks for the key's path, its id and the issuer, in that order.
-  const stored = runner(
-    "xcrun",
-    ["notarytool", "store-credentials", NOTARY_PROFILE, "--keychain", keychain],
-    { env, input: `${key}\n${keyId}\n${issuer}\n` },
+    // Locks itself after an hour unused and when the Mac sleeps.
+    security(
+      "set-keychain-settings",
+      `set-keychain-settings -l -u -t 3600 ${securityWord(keychain)}`,
+    );
+    security(
+      "unlock-keychain",
+      `unlock-keychain -p ${securityWord(unlock)} ${securityWord(keychain)}`,
+    );
+    security(
+      "import",
+      `import ${securityWord(certificate)} -k ${securityWord(keychain)} -f pkcs12 -P ${securityWord(password)} -T /usr/bin/codesign`,
+    );
+  } finally {
+    rmSync(certificate, { force: true });
+  }
+  security(
+    "set-key-partition-list",
+    `set-key-partition-list -S apple-tool:,apple: -s -k ${securityWord(unlock)} ${securityWord(keychain)}`,
   );
+  const info = runner(SECURITY, ["show-keychain-info", keychain], { env });
+  if (info.status !== 0 || !KEYCHAIN_LOCK.test(info.stderr + info.stdout))
+    stop("The release keychain does not lock on sleep and after an hour.");
+  writeFileSync(key, p8, { mode: 0o600, flag: "wx" });
+  let stored: RunResult;
+  try {
+    // notarytool asks for the key's path, its id and the issuer, in that order.
+    stored = runner(
+      XCRUN,
+      ["notarytool", "store-credentials", NOTARY_PROFILE, "--keychain", keychain],
+      {
+        env,
+        input: `${key}\n${keyId}\n${issuer}\n`,
+      },
+    );
+  } finally {
+    rmSync(key, { force: true });
+  }
   if (stored.status !== 0)
     stop(
       "Apple did not accept the notary API key. Check APPLE_CLAWTRATE_NOTARY_API_KEY_P8, APPLE_CLAWTRATE_NOTARY_API_KEY_ID and APPLE_CLAWTRATE_NOTARY_ISSUER_ID.",
     );
-  const found = runner("security", ["find-identity", "-v", "-p", "codesigning", keychain], { env });
+  const found = runner(SECURITY, ["find-identity", "-v", "-p", "codesigning", keychain], { env });
   const identities = [
     ...found.stdout.matchAll(
       /^\s*\d+\)\s+([0-9A-F]{40})\s+"Developer ID Application: .*\(([A-Z0-9]{10})\)"$/gm,
@@ -240,6 +279,10 @@ export function signingKeychain(runner: Run, secrets: Secrets, dir: string, base
     );
   return { keychain, identity: identities[0]![1]!, teamId: identities[0]![2]! } as Signing;
 }
+
+/** The raw credential files, by fixed names; neither outlives its tool's call. */
+export const CERTIFICATE_FILE = "developer-id.p12";
+export const KEY_FILE = "notary.p8";
 
 /**
  * The build's environment: the ordinary variables of `base` and nothing else,
@@ -357,7 +400,10 @@ export interface ReleasePlan {
 }
 
 function plannedFile(dir: string, name: string): PlannedFile {
-  const bytes = readFileSync(join(dir, name));
+  return plannedBytes(name, readFileSync(join(dir, name)));
+}
+
+function plannedBytes(name: string, bytes: Buffer): PlannedFile {
   return {
     name,
     size: bytes.length,
@@ -382,7 +428,7 @@ function githubReleases(runner: Run): ReleaseRow[] {
     `repos/${REPOSITORY}/releases`,
     "--paginate",
     "--jq",
-    ".[] | {tag_name, draft, prerelease, target_commitish, assets: [.assets[] | {id, name, size, digest, state, browser_download_url}]}",
+    ".[] | {tag_name, draft, prerelease, target_commitish, body, assets: [.assets[] | {id, name, size, digest, state, browser_download_url}]}",
   ]);
   if (listed.status !== 0) stop("Could not read the repository's releases from GitHub.");
   return listed.stdout
@@ -444,25 +490,37 @@ const running = (pid: number) => {
   }
 };
 
-/** Removes the signing folders of runs that ended without removing them; refuses while one runs. */
+/**
+ * Removes the signing folders of runs that have ended, by the pid each one
+ * records; refuses while one of them runs. A folder with no readable pid may be
+ * a run that is just starting, so it is left for the maintainer to inspect.
+ */
 function clearLeftovers(parent: string) {
   for (const name of readdirSync(parent).filter((entry) => SIGNING_FOLDER.test(entry))) {
     const folder = join(parent, name);
-    let pid = 0;
+    let pid = Number.NaN;
     try {
       pid = Number(readFileSync(join(folder, "pid"), "utf8"));
     } catch {
-      // No pid: the run ended before writing it.
+      // No pid file.
     }
-    if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && running(pid))
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      console.log(
+        `Left ${folder} alone: it records no pid. If no release is running, remove it yourself.`,
+      );
+      continue;
+    }
+    if (pid !== process.pid && running(pid))
       stop(`Another release (pid ${pid}) is signing from ${folder}. Let it finish first.`);
     rmSync(folder, { recursive: true, force: true });
-    console.log(`Removed ${folder}, which an interrupted release left.`);
+    console.log(`Removed ${folder}, which an interrupted release (pid ${pid}) left.`);
   }
 }
 
 export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
   const { staging, appDir } = places;
+  // First, so a retry after any refusal clears what a killed run left.
+  clearLeftovers(places.temp);
   const read = readSecrets(runner);
   if (!read.ok) {
     stop(
@@ -491,13 +549,13 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
   const tag = betaTag(version);
   const out = join(staging, version);
   mkdirSync(staging, { recursive: true });
-  clearLeftovers(places.temp);
   console.log(`Building Clawtrate ${version} from ${commit.slice(0, 12)}.`);
   console.log("Notarization sends both apps to Apple's notary service. Nothing is published.");
 
-  // The keychain and the key file live here while the build runs. A normal
-  // exit, an error, Ctrl-C and SIGTERM remove it; a run killed outright
-  // leaves it, and the next run removes it (docs/development/releases.md).
+  // The keychain lives here while the build runs, and the zips are verified
+  // here. A normal exit, an error, Ctrl-C and SIGTERM remove the folder; a run
+  // killed outright leaves it, and the next run removes it
+  // (docs/development/releases.md).
   const temp = mkdtempSync(join(places.temp, "clawtrate-signing-"));
   writeFileSync(join(temp, "pid"), String(process.pid), { mode: 0o600 });
   const remove = () => rmSync(temp, { recursive: true, force: true });
@@ -510,6 +568,8 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
   process.on("SIGTERM", interrupted);
   try {
     const signing = signingKeychain(runner, secrets, temp);
+    for (const name of [CERTIFICATE_FILE, KEY_FILE])
+      if (existsSync(join(temp, name))) stop(`${name} still exists. Nothing was built.`);
     const build = runner(
       process.execPath,
       [join(APP_DIR, "packaging/candidate-build.ts"), out, version],
@@ -535,7 +595,9 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
       if (receipt.commit !== commit || receipt.packagerReadback !== "certificate")
         stop(`${key} was not signed with a certificate by this commit's build.`);
       rmSync(join(out, `${key}.json`));
-      const zip = join(out, artifactName(version, key));
+      // Verified as a private copy, which is what gets staged and recorded.
+      const zip = join(temp, artifactName(version, key));
+      copyFileSync(join(out, artifactName(version, key)), zip);
       const unpacked = join(temp, `verify-${key}`);
       const unpack = () => {
         rmSync(unpacked, { recursive: true, force: true });
@@ -566,11 +628,15 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
       console.log(`${key}: signed by team ${teamId}, notarized, stapled, accepted by Gatekeeper.`);
     }
 
-    const feed = makeFeed({ version, releaseDate, folder: releaseFolder(tag), dir: out });
+    // Everything below is made from the verified copies, then staged.
+    const feed = makeFeed({ version, releaseDate, folder: releaseFolder(tag), dir: temp });
     const feedText = `${JSON.stringify(feed, null, 2)}\n`;
-    const zips = Object.values(MAC_ARCHITECTURES).map((key) =>
-      plannedFile(out, artifactName(version, key)),
-    );
+    const zips = Object.values(MAC_ARCHITECTURES).map((key) => {
+      const name = artifactName(version, key);
+      const bytes = readFileSync(join(temp, name));
+      writeFileSync(join(out, name), bytes);
+      return plannedBytes(name, bytes);
+    });
     const latest: LatestMac = makeLatestMac(version, teamId!, {
       "mac-arm64": { url: feed.files["mac-arm64"]!.url, sha256: zips[0]!.sha256 },
       "mac-x64": { url: feed.files["mac-x64"]!.url, sha256: zips[1]!.sha256 },
@@ -587,14 +653,23 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
       commit,
       releaseDate,
       teamId: teamId!,
-      files: [...zips, plannedFile(out, FEED_NAME), plannedFile(out, LATEST_MAC_NAME)],
+      files: [
+        ...zips,
+        plannedBytes(FEED_NAME, Buffer.from(feedText)),
+        plannedBytes(LATEST_MAC_NAME, Buffer.from(latestText)),
+      ],
     };
-    writeFileSync(join(out, "release.json"), `${JSON.stringify(plan, null, 2)}\n`);
+    const record = Buffer.from(`${JSON.stringify(plan, null, 2)}\n`);
+    writeFileSync(join(out, "release.json"), record);
+    const recordSha256 = sha("sha256", record, "hex");
     rmSync(join(appDir, "dist"), { recursive: true, force: true });
     console.log(`\nPrepared ${out}`);
     for (const file of plan.files)
       console.log(`  ${file.name}  ${file.size} bytes  sha256 ${file.sha256}`);
-    console.log(`\nNothing was published. To publish it: pnpm release:beta --publish ${version}`);
+    console.log(`  release.json  sha256 ${recordSha256}`);
+    console.log(
+      `\nNothing was published. Keep the release.json digest above: publishing requires it.\nTo publish it: pnpm release:beta --publish ${version} ${recordSha256}`,
+    );
   } finally {
     remove();
     process.off("exit", remove);
@@ -628,7 +703,11 @@ export function releaseNotes(
  * name those zips by size and digest under this tag and team, and the notes
  * are the ones its record makes. Stops naming the first difference.
  */
-export function stagedRelease(staging: string, version: string): ReleasePlan {
+export function stagedRelease(
+  staging: string,
+  version: string,
+  recordSha256: string,
+): { plan: ReleasePlan; notes: string } {
   const tag = tagOf(version);
   const dir = join(staging, version);
   if (!existsSync(join(dir, "release.json"))) stop(`${dir} holds no prepared release.`);
@@ -637,9 +716,15 @@ export function stagedRelease(staging: string, version: string): ReleasePlan {
   const present = readdirSync(dir).sort();
   if (present.join("\n") !== expected.join("\n"))
     stop(`${dir} must hold exactly ${expected.join(", ")}; it holds ${present.join(", ")}.`);
+  // Read once, and matched with the digest preparation printed before anything trusts it.
+  const record = readFileSync(join(dir, "release.json"));
+  if (sha("sha256", record, "hex") !== recordSha256)
+    stop(
+      `${dir}/release.json is not the record preparation printed (sha256 ${recordSha256}). Nothing was published.`,
+    );
   let plan: ReleasePlan;
   try {
-    plan = JSON.parse(readFileSync(join(dir, "release.json"), "utf8")) as ReleasePlan;
+    plan = JSON.parse(record.toString("utf8")) as ReleasePlan;
   } catch {
     stop(`${dir}/release.json is not JSON.`);
   }
@@ -678,14 +763,16 @@ export function stagedRelease(staging: string, version: string): ReleasePlan {
     if (latest[arch as keyof typeof MAC_ARCHITECTURES].sha256 !== zip.sha256)
       stop(`latest-mac.json's ${arch} file is not ${zip.name} as prepared.`);
   });
-  if (readFileSync(join(dir, "notes.md"), "utf8") !== releaseNotes(version, plan.commit, zips))
+  const notes = releaseNotes(version, plan.commit, zips);
+  if (readFileSync(join(dir, "notes.md"), "utf8") !== notes)
     stop("notes.md is not the notes this release's record makes.");
-  return plan;
+  return { plan, notes };
 }
 
 /** How the script reaches the site and GitHub's public downloads; tests pass stand-ins. */
 export interface Net {
-  get: (url: string, signal: AbortSignal) => Promise<Response>;
+  /** `follow` false asks for a redirect to be returned, not followed. */
+  get: (url: string, signal: AbortSignal, follow: boolean) => Promise<Response>;
   /** Each request's own deadline. */
   requestMs: number;
   /** How long to wait for the site, and how often to ask. */
@@ -693,20 +780,23 @@ export interface Net {
   pollMs: number;
 }
 const NET: Net = {
-  get: (url, signal) => fetch(url, { redirect: "follow", signal }),
+  get: (url, signal, follow) => fetch(url, { redirect: follow ? "follow" : "manual", signal }),
   requestMs: 60_000,
   waitMs: 15 * 60_000,
   pollMs: 20_000,
 };
 
-/** A file's bytes through its public address, following GitHub's redirect, or why not. */
+/** A file's bytes through its public address, following GitHub's redirect unless told not to, or why not. */
 async function download(
   net: Net,
   url: string,
   ms: number,
+  follow = true,
 ): Promise<{ ok: true; body: Buffer } | { ok: false; status: number | null; reason: string }> {
   try {
-    const response = await net.get(url, AbortSignal.timeout(ms));
+    const response = await net.get(url, AbortSignal.timeout(ms), follow);
+    if (response.status >= 300 && response.status < 400)
+      return { ok: false, status: response.status, reason: `a redirect (HTTP ${response.status})` };
     if (!response.ok)
       return { ok: false, status: response.status, reason: `HTTP ${response.status}` };
     return { ok: true, body: Buffer.from(await response.arrayBuffer()) };
@@ -723,7 +813,8 @@ export type SiteReading =
   | { kind: "inconclusive"; reason: string };
 
 export async function readSite(net: Net): Promise<SiteReading> {
-  const got = await download(net, `${BETA_FEED_URL}?${Date.now()}`, net.requestMs);
+  // The configured address itself, with no redirect followed: a 404 elsewhere proves nothing.
+  const got = await download(net, BETA_FEED_URL, net.requestMs, false);
   if (!got.ok)
     return got.status === 404 ? { kind: "absent" } : { kind: "inconclusive", reason: got.reason };
   const text = got.body.toString("utf8");
@@ -747,11 +838,20 @@ async function watchSite(net: Net, done: (reading: SiteReading) => boolean) {
   }
 }
 
+/** Whether a tag is a beta's own, `v` and a beta version exactly. */
+function isBetaTag(tag: string): boolean {
+  try {
+    return tag.startsWith("v") && betaTag(tag.slice(1)) === tag;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Every earlier beta on GitHub that carries latest-mac.json, published or
- * withdrawn, must be signed by `teamId`. Reads them through the API, so an
- * outage or an unreadable file stops the release; only a listing with no
- * earlier beta is a first release.
+ * Every earlier beta on GitHub, published or withdrawn, must carry exactly one
+ * uploaded latest-mac.json naming `teamId`. Reads them through the API, so an
+ * outage, a missing or unreadable file stops the release; only a listing with
+ * no earlier beta is a first release.
  */
 function requireSameSigner(
   runner: Run,
@@ -759,23 +859,28 @@ function requireSameSigner(
   tag: string,
   teamId: string,
 ) {
-  const earlier = releases.filter(
-    (row) =>
-      row.tag_name !== tag &&
-      /^v\d+\.\d+\.\d+-beta\./.test(row.tag_name) &&
-      row.assets.some((asset) => asset.name === LATEST_MAC_NAME),
-  );
+  const earlier = releases.filter((row) => row.tag_name !== tag && isBetaTag(row.tag_name));
   if (earlier.length === 0) {
     console.log("GitHub has no earlier beta: this is the first, so there is no signer to match.");
     return;
   }
   for (const row of earlier) {
-    const asset = row.assets.find((each) => each.name === LATEST_MAC_NAME)!;
+    const metadata = row.assets.filter((each) => each.name === LATEST_MAC_NAME);
+    const asset = metadata[0];
+    if (
+      metadata.length !== 1 ||
+      asset!.state !== "uploaded" ||
+      !Number.isSafeInteger(asset!.id) ||
+      asset!.id! <= 0
+    )
+      stop(
+        `${row.tag_name} has no single uploaded ${LATEST_MAC_NAME}, so its signer is unknown. Nothing was published.`,
+      );
     const got = runner("gh", [
       "api",
       "-H",
       "Accept: application/octet-stream",
-      `repos/${REPOSITORY}/releases/assets/${asset.id}`,
+      `repos/${REPOSITORY}/releases/assets/${asset!.id}`,
     ]);
     let team: unknown;
     try {
@@ -783,7 +888,7 @@ function requireSameSigner(
     } catch {
       team = undefined;
     }
-    if (typeof team !== "string")
+    if (typeof team !== "string" || !TEAM_ID.test(team))
       stop(`Could not read the team of ${row.tag_name} from GitHub. Nothing was published.`);
     if (team !== teamId)
       stop(
@@ -793,13 +898,28 @@ function requireSameSigner(
   console.log(`Signed by team ${teamId}, as every earlier beta (${earlier.length}).`);
 }
 
+/** The release as GitHub lists it now: the row, undefined when absent, null when unreadable. */
+function readBack(runner: Run, tag: string): ReleaseRow | undefined | null {
+  try {
+    return githubReleases(runner).find((row) => row.tag_name === tag);
+  } catch (error) {
+    if (error instanceof Stop) return null;
+    throw error;
+  }
+}
+
+/** Release text as GitHub keeps it: line ends and trailing space aside. */
+const sameText = (a: string | null | undefined, b: string) =>
+  (a ?? "").replace(/\r\n/g, "\n").trimEnd() === b.replace(/\r\n/g, "\n").trimEnd();
+
 export async function publish(
   runner: Run,
   version: string,
+  recordSha256: string,
   net: Net = NET,
   staging = STAGING,
 ): Promise<void> {
-  const plan = stagedRelease(staging, version);
+  const { plan, notes } = stagedRelease(staging, version, recordSha256);
   const dir = join(staging, version);
   if (runner("gh", ["auth", "status"]).status !== 0)
     stop("Sign in to GitHub with `gh auth login`.");
@@ -825,8 +945,9 @@ export async function publish(
       plan.commit,
       "--title",
       `Clawtrate ${version} Beta`,
-      "--notes-file",
-      join(dir, "notes.md"),
+      // The notes checked above, as text: not the file, which could change after the check.
+      "--notes",
+      notes,
       "--prerelease",
       "--draft",
       ...plan.files.map((file) => join(dir, file.name)),
@@ -864,8 +985,12 @@ export async function publish(
           : `GitHub reports no digest for the draft's ${file.name}. ${leftDraft}`,
       );
   }
-  console.log(`The draft ${plan.tag} holds the ${plan.files.length} prepared files, by digest.`);
-  if (
+  if (!sameText(draft.body, notes))
+    stop(`The draft's notes are not the checked notes. ${leftDraft}`);
+  console.log(
+    `The draft ${plan.tag} holds the ${plan.files.length} prepared files, by digest, and the checked notes.`,
+  );
+  const flipped =
     runner("gh", [
       "release",
       "edit",
@@ -874,9 +999,19 @@ export async function publish(
       REPOSITORY,
       "--draft=false",
       "--prerelease",
-    ]).status !== 0
-  )
-    stop(`Publishing the draft ${plan.tag} failed. It is still a draft.`);
+    ]).status === 0;
+  // The command's status alone is not GitHub's state: read it back.
+  const after = readBack(runner, plan.tag);
+  if (after === null)
+    stop(
+      `GitHub ${flipped ? "accepted" : "refused"} publishing ${plan.tag}, and the release could not be read back: whether it is public is unconfirmed. Check it on GitHub.`,
+    );
+  if (!after || after.draft)
+    stop(
+      `GitHub lists ${plan.tag} as ${after ? "a draft" : "absent"}${flipped ? " although it accepted publishing it" : ""}. It was not published.`,
+    );
+  if (!flipped)
+    console.log(`Publishing reported a failure, but GitHub lists ${plan.tag} as public.`);
   console.log(`Published https://github.com/${REPOSITORY}/releases/tag/${plan.tag}`);
 
   for (const file of plan.files) {
@@ -912,15 +1047,25 @@ function describe(reading: SiteReading): string {
 
 export async function withdraw(runner: Run, version: string, net: Net = NET): Promise<void> {
   const tag = tagOf(version);
-  if (
+  const edited =
     runner("gh", ["release", "edit", tag, "--repo", REPOSITORY, "--draft=true"], { inherit: true })
-      .status !== 0
-  )
-    stop(`Could not turn ${tag} back into a draft.`);
-  const releases = githubReleases(runner);
+      .status === 0;
+  // The command's status alone is not GitHub's state: read it back.
+  let releases: ReleaseRow[];
+  try {
+    releases = githubReleases(runner);
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error;
+    stop(
+      `GitHub ${edited ? "accepted" : "refused"} turning ${tag} into a draft, and the release could not be read back: whether it is still public is unconfirmed. Check it on GitHub.`,
+    );
+  }
   const row = releases.find((each) => each.tag_name === tag);
   if (!row) stop(`GitHub no longer lists ${tag}.`);
-  if (!row.draft) stop(`GitHub still lists ${tag} as published.`);
+  if (!row.draft)
+    stop(
+      `GitHub still lists ${tag} as published${edited ? " although it accepted the change" : ""}.`,
+    );
   console.log(
     `GitHub lists ${tag} as a draft. Its download addresses can still answer from caches for a while.`,
   );
@@ -929,10 +1074,10 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
   console.log(
     `Waiting for ${BETA_FEED_URL} to ${next ? `offer ${next.tag_name.slice(1)}` : "serve no feed"}…`,
   );
+  // The remaining beta's own feed, or, with none, a 404 at the feed's own address.
+  const expected = next ? next.tag_name.slice(1) : null;
   const seen = await watchSite(net, (reading) =>
-    reading.kind === "feed"
-      ? reading.version !== version
-      : reading.kind === "absent" && next === null,
+    expected ? reading.kind === "feed" && reading.version === expected : reading.kind === "absent",
   );
   const { reading } = seen;
   if (seen.done) {
@@ -944,7 +1089,11 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
     return;
   }
   if (reading.kind === "feed")
-    stop(`The site still offers ${version}. Run the Site workflow and run this again.`);
+    stop(
+      reading.version === version
+        ? `The site still offers ${version}. Run the Site workflow and run this again.`
+        : `The site offers ${reading.version}, ${expected ? `not ${expected}` : "though GitHub lists no published beta"}. Run the Site workflow and run this again.`,
+    );
   if (reading.kind === "absent")
     stop(
       `The site serves no Beta feed, though GitHub lists ${next!.tag_name} as published. Run the Site workflow.`,
@@ -957,16 +1106,23 @@ export async function main(
   runner: Run = run,
   platform: NodeJS.Platform = process.platform,
 ): Promise<number> {
-  const [flag, version, extra] = argv;
+  const [flag, version, record, extra] = argv;
   try {
     if (flag === undefined) {
       if (platform !== "darwin") stop("A Mac beta is built on macOS.");
       prepare(runner, new Date());
-    } else if ((flag === "--publish" || flag === "--withdraw") && version && !extra) {
+    } else if (flag === "--publish" && version && record && !extra) {
       if (!parseVersion(version)) stop(`${version} is not a version.`);
-      await (flag === "--publish" ? publish(runner, version) : withdraw(runner, version));
+      if (!/^[0-9a-f]{64}$/.test(record))
+        stop(`${record} is not the release.json SHA-256 that preparation printed.`);
+      await publish(runner, version, record);
+    } else if (flag === "--withdraw" && version && !record) {
+      if (!parseVersion(version)) stop(`${version} is not a version.`);
+      await withdraw(runner, version);
     } else {
-      console.error("usage: pnpm release:beta [--publish <version> | --withdraw <version>]");
+      console.error(
+        "usage: pnpm release:beta [--publish <version> <release.json sha256> | --withdraw <version>]",
+      );
       return 2;
     }
     return 0;

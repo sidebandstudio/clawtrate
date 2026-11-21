@@ -13,11 +13,10 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEnvironment,
@@ -30,7 +29,10 @@ import {
   publish,
   readSecrets,
   readSignature,
+  releaseNotes,
   SECRET_NAMES,
+  SECURITY,
+  XCRUN,
   signingKeychain,
   stagedRelease,
   Stop,
@@ -44,7 +46,13 @@ import {
 } from "../packaging/release-beta.ts";
 import { signingPlan, signingProblems } from "../packaging/signing.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
-import { BETA_FEED_URL, checkBetaFiles, releaseFolder } from "../packaging/beta-files.ts";
+import {
+  BETA_FEED_URL,
+  checkBetaFiles,
+  makeLatestMac,
+  releaseFolder,
+} from "../packaging/beta-files.ts";
+import { makeFeed } from "../packaging/feed.ts";
 import type { ReleaseRow } from "../packaging/site-feed.ts";
 
 // A made-up key; its label is joined here so no line reads like a real one.
@@ -186,17 +194,30 @@ interface Call {
   args: string[];
   env?: NodeJS.ProcessEnv | undefined;
   input?: string | undefined;
+  files?: string[];
 }
 
-/** `security` and `notarytool` as they answer for a good certificate and key. */
-function keychainTools(calls: Call[], overrides: Partial<Record<string, RunResult>> = {}): Run {
+/**
+ * `security` and `notarytool` as they answer for a good certificate and key.
+ * Each call is recorded with the files then in `dir`; `security -i` steps are
+ * keyed by their command's first word, as in `security -i import`.
+ */
+function keychainTools(
+  calls: Call[],
+  overrides: Partial<Record<string, RunResult>> = {},
+  dir?: string,
+): Run {
   return (command, args, options) => {
-    calls.push({ command, args, env: options?.env, input: options?.input });
-    const key = `${command} ${args[0]}`;
+    const files = dir && existsSync(dir) ? readdirSync(dir).sort() : [];
+    calls.push({ command, args, env: options?.env, input: options?.input, files });
+    const step = args[0] === "-i" ? `-i ${options?.input?.split(" ")[0]}` : args[0];
+    const key = `${command.split("/").at(-1)} ${step}`;
     if (overrides[key]) return overrides[key]!;
-    if (command === "security" && args[0] === "-i") return ok("keychain: made\n");
-    if (command === "xcrun" && args[0] === "notarytool") return ok("Credentials saved.\n");
-    if (command === "security" && args[0] === "find-identity")
+    if (command === SECURITY && args[0] === "-i") return ok("");
+    if (command === SECURITY && args[0] === "show-keychain-info")
+      return ok("", `Keychain "${args[1]}" lock-on-sleep timeout=3600s\n`);
+    if (command === XCRUN && args[0] === "notarytool") return ok("Credentials saved.\n");
+    if (command === SECURITY && args[0] === "find-identity")
       return ok(
         `  1) ${IDENTITY} "Developer ID Application: Example (${TEAM})"\n     1 valid identities found\n`,
       );
@@ -211,26 +232,29 @@ describe("the release keychain", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("hands each secret to security or notarytool on its input, never in arguments or environment", () => {
+  it("hands each secret to security or notarytool on its input, one command at a time, never in arguments or environment", () => {
     const calls: Call[] = [];
     const base = { PATH: "/usr/bin", HOME: "/home-of-the-maintainer", NODE_OPTIONS: "--require x" };
-    const signing = signingKeychain(keychainTools(calls), SECRETS, dir, base);
+    const signing = signingKeychain(keychainTools(calls, {}, dir), SECRETS, dir, base);
     const keychain = join(dir, "release.keychain-db");
+    const key = join(dir, "notary.p8");
     expect(signing).toEqual({ keychain, identity: IDENTITY, teamId: TEAM });
     expect(calls.map(({ command, args }) => [command, ...args])).toEqual([
-      ["security", "-i"],
-      ["xcrun", "notarytool", "store-credentials", NOTARY_PROFILE, "--keychain", keychain],
-      ["security", "find-identity", "-v", "-p", "codesigning", keychain],
+      ...Array.from({ length: 5 }, () => ["/usr/bin/security", "-i"]),
+      ["/usr/bin/security", "show-keychain-info", keychain],
+      ["/usr/bin/xcrun", "notarytool", "store-credentials", NOTARY_PROFILE, "--keychain", keychain],
+      ["/usr/bin/security", "find-identity", "-v", "-p", "codesigning", keychain],
     ]);
     for (const call of calls) {
       const outside = JSON.stringify([call.args, call.env]);
       for (const secret of SECRET_TEXTS) expect(outside).not.toContain(secret);
       expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home-of-the-maintainer" });
     }
-    // `security -i` reads its own quoting: the password's quote and backslash are escaped.
-    const lines = calls[0]!.input!.trimEnd().split("\n");
+    // One command per `security -i`, each a single line; its own quoting escapes the quote and backslash.
+    const lines = calls.slice(0, 5).map((call) => call.input!);
+    for (const line of lines) expect(line.split("\n")).toEqual([expect.any(String), ""]);
     expect(lines[3]).toBe(
-      `import "${join(dir, "developer-id.p12")}" -k "${keychain}" -f pkcs12 -P "p\\"w\\\\d" -T /usr/bin/codesign`,
+      `import "${join(dir, "developer-id.p12")}" -k "${keychain}" -f pkcs12 -P "p\\"w\\\\d" -T /usr/bin/codesign\n`,
     );
     expect(lines.map((line) => line.split(" ")[0])).toEqual([
       "create-keychain",
@@ -239,28 +263,61 @@ describe("the release keychain", () => {
       "import",
       "set-key-partition-list",
     ]);
-    const key = join(dir, "AuthKey_KEYID12345.p8");
-    expect(calls[1]!.input).toBe(
+    expect(calls[6]!.input).toBe(
       `${key}\nKEYID12345\n${SECRETS.APPLE_CLAWTRATE_NOTARY_ISSUER_ID}\n`,
     );
-    // The certificate's file is gone once imported; the key's stays, private, for notarization.
-    expect(readdirSync(dir)).toEqual(["AuthKey_KEYID12345.p8"]);
-    expect(statSync(key).mode & 0o777).toBe(0o600);
-    expect(readFileSync(key, "utf8")).toBe(`${KEY}\n`);
+    // The certificate's file exists only up to its import, the key's only for notarytool.
+    expect(calls[3]!.files).toEqual(["developer-id.p12"]);
+    expect(calls[4]!.files).toEqual([]);
+    expect(calls[6]!.files).toEqual(["notary.p8"]);
+    expect(calls[7]!.files).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it.each([
-    ["security -i", "The certificate did not import"],
+    ["security -i create-keychain", "The release keychain's create-keychain step failed."],
+    [
+      "security -i set-keychain-settings",
+      "The release keychain's set-keychain-settings step failed.",
+    ],
+    ["security -i import", "The release keychain's import step failed."],
+    [
+      "security -i set-key-partition-list",
+      "The release keychain's set-key-partition-list step failed.",
+    ],
+    ["security show-keychain-info", "does not lock on sleep and after an hour"],
     ["xcrun notarytool", "Apple did not accept the notary API key"],
     ["security find-identity", "no single valid Developer ID Application identity"],
-  ])("stops when %s fails, printing none of its output", async (tool, message) => {
+  ])("stops when %s fails, printing none of its input or output", async (tool, message) => {
     const leaked = fail(`bad password ${SECRETS.APPLE_CLAWTRATE_DEVELOPER_ID_P12_PASSWORD}`, KEY);
+    const calls: Call[] = [];
     const text = await stopped(() =>
-      signingKeychain(keychainTools([], { [tool]: leaked }), SECRETS, dir, {}),
+      signingKeychain(keychainTools(calls, { [tool]: leaked }), SECRETS, dir, {}),
     );
     expect(text).toContain(message);
-    for (const secret of SECRET_TEXTS) expect(text).not.toContain(secret);
-    expect(existsSync(join(dir, "developer-id.p12"))).toBe(false);
+    for (const secret of [...SECRET_TEXTS, dir]) expect(text).not.toContain(secret);
+    // It stops at the failing step: nothing after it runs.
+    const at = calls.findIndex(
+      (call) =>
+        `${call.command.split("/").at(-1)} ${call.args[0] === "-i" ? `-i ${call.input!.split(" ")[0]}` : call.args[0]}` ===
+        tool,
+    );
+    expect(at).toBe(calls.length - 1);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("stops when the keychain would not lock on sleep or after an hour", async () => {
+    const unlocked = ok("", 'Keychain "k" no-timeout\n');
+    expect(
+      await stopped(() =>
+        signingKeychain(
+          keychainTools([], { "security show-keychain-info": unlocked }),
+          SECRETS,
+          dir,
+          {},
+        ),
+      ),
+    ).toBe("The release keychain does not lock on sleep and after an hour.");
   });
 
   it("refuses a password with a line break, which would end security's command, before writing anything", async () => {
@@ -464,11 +521,10 @@ function tools(
   let current = "";
   const keychain = keychainTools(calls);
   const mac = macTools(() => current, overrides);
-  const seen: { env?: NodeJS.ProcessEnv } = {};
+  const seen: { env?: NodeJS.ProcessEnv; signingFiles?: string[] } = {};
   const runner: Run = (command, args, options) => {
     if (command === "fleet") return vault(SECRETS)(command, args);
-    if (command === "security" || (command === "xcrun" && args[0] === "notarytool"))
-      return keychain(command, args, options);
+    if (command === SECURITY || command === XCRUN) return keychain(command, args, options);
     calls.push({ command, args, env: options?.env, input: options?.input });
     if (command === "git" && args[0] === "status") return ok("");
     if (command === "git" && args[0] === "rev-parse") return ok(`${COMMIT}\n`);
@@ -481,6 +537,8 @@ function tools(
     if (command === process.execPath) {
       current = args[2]!;
       seen.env = options!.env!;
+      // What the build could open in the signing folder.
+      seen.signingFiles = readdirSync(dirname(options!.env!.CSC_KEYCHAIN!)).sort();
       return build(args[1]!, args[2]!, options!.env!);
     }
     if (command === "ditto" && overrides[`ditto ${args[0]}`]) return overrides[`ditto ${args[0]}`]!;
@@ -534,6 +592,8 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       new RegExp(`^${place.temp}/clawtrate-signing-[A-Za-z0-9]{6}/release\\.keychain-db$`),
     );
     expect(seen.env!.CSC_NAME).toBe(IDENTITY);
+    // Neither raw credential file exists when the build starts.
+    expect(seen.signingFiles).toEqual(["pid"]);
     // No process saw a secret in its arguments or environment.
     for (const call of calls) {
       const outside = JSON.stringify([call.args, call.env ?? {}]);
@@ -560,13 +620,15 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       version: VERSION,
       releaseDate: "2026-11-20T18:00:00.000Z",
     });
-    expect(stagedRelease(place.staging, VERSION)).toMatchObject({
+    const record = sha256(readFileSync(join(out, "release.json")));
+    expect(stagedRelease(place.staging, VERSION, record).plan).toMatchObject({
       version: VERSION,
       tag: TAG,
       commit: COMMIT,
       teamId: TEAM,
     });
-    expect(output.join("\n")).toContain(`pnpm release:beta --publish ${VERSION}`);
+    expect(output).toContain(`  release.json  sha256 ${record}`);
+    expect(output.join("\n")).toContain(`pnpm release:beta --publish ${VERSION} ${record}`);
     const everything = [
       output.join("\n"),
       ...readdirSync(out).map((name) => readFileSync(join(out, name), "utf8")),
@@ -597,19 +659,22 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     expect(readdirSync(place.temp)).toEqual([]);
   });
 
-  it("removes a signing folder a killed run left, and refuses while another run signs", async () => {
+  it("removes a signing folder a killed run left, before anything else, and refuses while another run signs", async () => {
     const dead = join(place.temp, "clawtrate-signing-Abc123");
     mkdirSync(dead);
-    writeFileSync(join(dead, "AuthKey_KEYID12345.p8"), "left behind");
+    writeFileSync(join(dead, "notary.p8"), "left behind");
     // A pid no process has: well above the system's limit.
     writeFileSync(join(dead, "pid"), "99999999");
     const unrelated = join(place.temp, "clawtrate-signing-test");
     mkdirSync(unrelated);
-    prepare(tools(builds(place.appDir)).runner, NOW, place);
+    // Even a run the vault refuses clears it first.
+    const empty = vault({});
+    expect(await stopped(() => prepare(empty, NOW, place))).toContain("The vault has no value");
     expect(readdirSync(place.temp)).toEqual(["clawtrate-signing-test"]);
-    expect(output.join("\n")).toContain(`Removed ${dead}, which an interrupted release left.`);
+    expect(output.join("\n")).toContain(
+      `Removed ${dead}, which an interrupted release (pid 99999999) left.`,
+    );
 
-    rmSync(join(place.appDir, "dist"), { recursive: true, force: true });
     const live = join(place.temp, "clawtrate-signing-Def456");
     mkdirSync(live);
     writeFileSync(join(live, "pid"), String(process.ppid));
@@ -617,6 +682,49 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       `Another release (pid ${process.ppid}) is signing from ${live}. Let it finish first.`,
     );
     expect(existsSync(live)).toBe(true);
+  });
+
+  it("builds nothing while a raw credential file is still in the signing folder", async () => {
+    const { runner, calls } = tools(builds(place.appDir));
+    // A tool that leaves the key behind: the identity lookup writes it back.
+    const leaving: Run = (command, args, options) => {
+      if (command === SECURITY && args[0] === "find-identity")
+        writeFileSync(join(dirname(args.at(-1)!), "notary.p8"), "left by a tool");
+      return runner(command, args, options);
+    };
+    expect(await stopped(() => prepare(leaving, NOW, place))).toBe(
+      "notary.p8 still exists. Nothing was built.",
+    );
+    expect(calls.some((call) => call.command === process.execPath)).toBe(false);
+    expect(readdirSync(place.temp)).toEqual([]);
+  });
+
+  it("leaves a signing folder with no pid for the maintainer to inspect", () => {
+    const starting = join(place.temp, "clawtrate-signing-Ghi789");
+    mkdirSync(starting);
+    writeFileSync(join(starting, "notary.p8"), "maybe a run that is starting");
+    prepare(tools(builds(place.appDir)).runner, NOW, place);
+    expect(readdirSync(place.temp)).toEqual(["clawtrate-signing-Ghi789"]);
+    expect(output.join("\n")).toContain(
+      `Left ${starting} alone: it records no pid. If no release is running, remove it yourself.`,
+    );
+  });
+
+  it("stages and records the copy it verified, not the file the build left", () => {
+    const { runner } = tools(builds(place.appDir));
+    const out = join(place.staging, VERSION);
+    // Something rewrites the build's zip while the copy is being checked.
+    const swapping: Run = (command, args, options) => {
+      if (command === "spctl" && existsSync(join(out, ZIPS[0]!)))
+        writeFileSync(join(out, ZIPS[0]!), "a different zip");
+      return runner(command, args, options);
+    };
+    prepare(swapping, NOW, place);
+    expect(readFileSync(join(out, ZIPS[0]!), "utf8")).toBe("zip of mac-arm64");
+    const record = sha256(readFileSync(join(out, "release.json")));
+    expect(stagedRelease(place.staging, VERSION, record).plan.files[0]!.sha256).toBe(
+      sha256("zip of mac-arm64"),
+    );
   });
 
   it("checks the zip again after stapling it, and stops when it does not unpack", async () => {
@@ -746,15 +854,73 @@ describe("what publishing accepts as the prepared release", () => {
       () => writeFileSync(join(dir, "notes.md"), "Clawtrate, now with something else.\n"),
       "notes.md is not the notes this release's record makes.",
     ],
-  ])("refuses it when %s", async (_name, change, message) => {
-    change();
-    expect(await stopped(() => stagedRelease(place.staging, VERSION))).toContain(message);
-  });
+  ])(
+    "refuses it when %s, even given the edited record's own digest",
+    async (_name, change, message) => {
+      change();
+      const record = existsSync(join(dir, "release.json"))
+        ? sha256(readFileSync(join(dir, "release.json")))
+        : "0".repeat(64);
+      expect(await stopped(() => stagedRelease(place.staging, VERSION, record))).toContain(message);
+    },
+  );
 
   it("refuses a folder staged as another version", async () => {
+    const record = sha256(readFileSync(join(dir, "release.json")));
     renameSync(dir, join(place.staging, "0.1.1-beta.20261120.3"));
-    expect(await stopped(() => stagedRelease(place.staging, "0.1.1-beta.20261120.3"))).toContain(
-      "must hold exactly",
+    expect(
+      await stopped(() => stagedRelease(place.staging, "0.1.1-beta.20261120.3", record)),
+    ).toContain("must hold exactly");
+  });
+
+  it("refuses a whole consistent replacement against the digest preparation printed", async () => {
+    const printed = sha256(readFileSync(join(dir, "release.json")));
+    // Another arm64 zip, and the feed, latest-mac.json, notes and record all made to agree with it.
+    writeFileSync(join(dir, ZIPS[0]!), "plain text, not an app");
+    const plan = JSON.parse(readFileSync(join(dir, "release.json"), "utf8"));
+    const feed = makeFeed({
+      version: VERSION,
+      releaseDate: plan.releaseDate,
+      folder: releaseFolder(TAG),
+      dir,
+    });
+    const feedText = `${JSON.stringify(feed, null, 2)}\n`;
+    const zips = ZIPS.map((name) => {
+      const bytes = readFileSync(join(dir, name));
+      return {
+        name,
+        size: bytes.length,
+        sha256: sha256(bytes),
+        sha512: createHash("sha512").update(bytes).digest("base64"),
+      };
+    });
+    const latestText = `${JSON.stringify(
+      makeLatestMac(VERSION, TEAM, {
+        "mac-arm64": { url: feed.files["mac-arm64"]!.url, sha256: zips[0]!.sha256 },
+        "mac-x64": { url: feed.files["mac-x64"]!.url, sha256: zips[1]!.sha256 },
+        "win-x64": undefined,
+      }),
+      null,
+      2,
+    )}\n`;
+    writeFileSync(join(dir, "feed.json"), feedText);
+    writeFileSync(join(dir, "latest-mac.json"), latestText);
+    writeFileSync(join(dir, "notes.md"), releaseNotes(VERSION, COMMIT, zips));
+    const file = (name: string, text: string) => ({
+      name,
+      size: Buffer.byteLength(text),
+      sha256: sha256(text),
+      sha512: createHash("sha512").update(text).digest("base64"),
+    });
+    plan.files = [...zips, file("feed.json", feedText), file("latest-mac.json", latestText)];
+    writeFileSync(join(dir, "release.json"), `${JSON.stringify(plan, null, 2)}\n`);
+    // Consistent with itself: only the printed digest tells it apart.
+    const forged = sha256(readFileSync(join(dir, "release.json")));
+    expect(stagedRelease(place.staging, VERSION, forged).plan.files[0]!.sha256).toBe(
+      sha256("plain text, not an app"),
+    );
+    expect(await stopped(() => stagedRelease(place.staging, VERSION, printed))).toBe(
+      `${dir}/release.json is not the record preparation printed (sha256 ${printed}). Nothing was published.`,
     );
   });
 });
@@ -784,12 +950,13 @@ function github(
     if (line.startsWith("gh api repos/sidebandstudio/clawtrate/releases"))
       return ok(releases.map((row) => `${JSON.stringify(row)}\n`).join(""));
     if (line.startsWith("gh release create")) {
-      const files = args.filter((arg) => arg.startsWith(dir) && !arg.endsWith("notes.md"));
+      const files = args.filter((arg) => arg.startsWith(dir));
       releases.push({
         tag_name: args[2]!,
         draft: true,
         prerelease: true,
         target_commitish: args[args.indexOf("--target") + 1]!,
+        body: args.includes("--notes") ? args[args.indexOf("--notes") + 1]! : null,
         assets: files.map((path, id) => {
           const name = path.split("/").at(-1)!;
           const bytes = readFileSync(path);
@@ -815,11 +982,15 @@ function github(
   return { runner, calls, releases, answers, digests };
 }
 
-/** The site and public downloads: each address answers from `pages`, or 404. */
-function site(pages: Record<string, () => Promise<Response> | Response>): Net {
+/** The site and public downloads: each exact address answers from `pages`, or 404. */
+function site(
+  pages: Record<string, () => Promise<Response> | Response>,
+  asked: Array<[string, boolean]> = [],
+): Net {
   return {
-    get: async (url) => {
-      const page = pages[url.split("?")[0]!];
+    get: async (url, _signal, follow) => {
+      asked.push([url, follow]);
+      const page = pages[url];
       return page ? page() : new Response("", { status: 404 });
     },
     requestMs: 1_000,
@@ -832,9 +1003,11 @@ describe("publishing", () => {
   let place: ReturnType<typeof places>;
   let dir: string;
   let net: Net;
+  let record: string;
   beforeEach(() => {
     place = staged();
     dir = join(place.staging, VERSION);
+    record = sha256(readFileSync(join(dir, "release.json")));
     const files = Object.fromEntries(
       [...ZIPS, "feed.json", "latest-mac.json"].map((name) => [
         `${releaseFolder(TAG)}${name}`,
@@ -853,19 +1026,73 @@ describe("publishing", () => {
 
   it("publishes a draft whose every file GitHub reports by the prepared digest", async () => {
     const hub = github(dir);
-    await publish(hub.runner, VERSION, net, place.staging);
+    await publish(hub.runner, VERSION, record, net, place.staging);
     expect(published(hub.calls)).toBe(true);
     expect(output).toContain(
       "GitHub has no earlier beta: this is the first, so there is no signer to match.",
     );
-    expect(output).toContain(`The draft ${TAG} holds the 4 prepared files, by digest.`);
+    expect(output).toContain(
+      `The draft ${TAG} holds the 4 prepared files, by digest, and the checked notes.`,
+    );
     expect(output).toContain(`The Beta feed offers ${VERSION}.`);
+    // The notes go as the checked text, not as a file read again later.
+    const create = hub.calls.find((call) => call[1] === "release" && call[2] === "create")!;
+    expect(create).not.toContain("--notes-file");
+    expect(create[create.indexOf("--notes") + 1]).toBe(readFileSync(join(dir, "notes.md"), "utf8"));
+  });
+
+  it("leaves the draft unpublished when its notes are not the checked notes", async () => {
+    const hub = github(dir);
+    const changing: Run = (command, args, options) => {
+      const result = hub.runner(command, args, options);
+      if (args[0] === "release" && args[1] === "create")
+        hub.releases.at(-1)!.body = "Clawtrate, with other instructions.";
+      return result;
+    };
+    expect(await stopped(() => publish(changing, VERSION, record, net, place.staging))).toBe(
+      "The draft's notes are not the checked notes. It was left a draft: delete it and publish again.",
+    );
+    expect(published(hub.calls)).toBe(false);
+  });
+
+  it("reads the release back after making it public, whatever the command answered", async () => {
+    // The command fails, but GitHub did publish it: carry on, and say so.
+    const refused = github(dir);
+    const publishing: Run = (command, args, options) => {
+      if (args.includes("--draft=false")) {
+        refused.runner(command, args, options);
+        return fail("HTTP 502");
+      }
+      return refused.runner(command, args, options);
+    };
+    await publish(publishing, VERSION, record, net, place.staging);
+    expect(output).toContain(`Publishing reported a failure, but GitHub lists ${TAG} as public.`);
+
+    // The command succeeds, but the release is still a draft.
+    const ignored = github(dir);
+    const stays: Run = (command, args, options) =>
+      args.includes("--draft=false") ? ok() : ignored.runner(command, args, options);
+    expect(await stopped(() => publish(stays, VERSION, record, net, place.staging))).toBe(
+      `GitHub lists ${TAG} as a draft although it accepted publishing it. It was not published.`,
+    );
+
+    // The release cannot be read back.
+    const unread = github(dir);
+    let flipped = false;
+    const blind: Run = (command, args, options) => {
+      if (args.includes("--draft=false")) flipped = true;
+      if (flipped && args[0] === "api" && args[1]!.endsWith("/releases")) return fail("HTTP 503");
+      return unread.runner(command, args, options);
+    };
+    expect(await stopped(() => publish(blind, VERSION, record, net, place.staging))).toBe(
+      `GitHub accepted publishing ${TAG}, and the release could not be read back: whether it is public is unconfirmed. Check it on GitHub.`,
+    );
   });
 
   it("refuses when origin/main cannot be refreshed, before creating anything", async () => {
     const hub = github(dir);
     hub.answers["git fetch"] = fail("could not resolve host");
-    expect(await stopped(() => publish(hub.runner, VERSION, net, place.staging))).toBe(
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
       "Could not refresh origin/main from GitHub. Nothing was published.",
     );
     expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
@@ -874,7 +1101,7 @@ describe("publishing", () => {
   it("leaves the draft unpublished when GitHub's digest of a file is not the prepared one", async () => {
     const hub = github(dir);
     hub.digests[ZIPS[1]!] = `sha256:${sha256("same size, other bytes")}`;
-    expect(await stopped(() => publish(hub.runner, VERSION, net, place.staging))).toBe(
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
       `GitHub's digest of the draft's ${ZIPS[1]} is not the prepared file's. It was left a draft: delete it and publish again.`,
     );
     expect(published(hub.calls)).toBe(false);
@@ -883,7 +1110,7 @@ describe("publishing", () => {
   it("leaves the draft unpublished when GitHub reports no digest", async () => {
     const hub = github(dir);
     hub.digests[ZIPS[0]!] = "";
-    expect(await stopped(() => publish(hub.runner, VERSION, net, place.staging))).toContain(
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toContain(
       `GitHub reports no digest for the draft's ${ZIPS[0]}.`,
     );
     expect(published(hub.calls)).toBe(false);
@@ -897,7 +1124,7 @@ describe("publishing", () => {
       if (args[0] === "release" && args[1] === "create") hub.releases.at(-1)!.assets.pop();
       return result;
     };
-    expect(await stopped(() => publish(dropping, VERSION, net, place.staging))).toContain(
+    expect(await stopped(() => publish(dropping, VERSION, record, net, place.staging))).toContain(
       `The draft holds ${[...ZIPS, "feed.json"].sort().join(", ")}, not`,
     );
     expect(published(hub.calls)).toBe(false);
@@ -907,8 +1134,35 @@ describe("publishing", () => {
     tag_name: tag,
     draft,
     prerelease: true,
-    assets: [{ id: 7, name: "latest-mac.json", browser_download_url: "unused" }],
+    assets: [{ id: 7, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" }],
   });
+
+  it.each<[string, ReleaseRow["assets"]]>([
+    ["no latest-mac.json", []],
+    [
+      "two latest-mac.json",
+      [
+        { id: 7, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" },
+        { id: 8, name: "latest-mac.json", state: "uploaded", browser_download_url: "unused" },
+      ],
+    ],
+    [
+      "a latest-mac.json not fully uploaded",
+      [{ id: 7, name: "latest-mac.json", state: "starter", browser_download_url: "unused" }],
+    ],
+  ])(
+    "refuses when an earlier beta has %s, rather than treat it as the first",
+    async (_name, assets) => {
+      const hub = github(dir, {
+        earlier: [{ ...earlier("v0.1.1-beta.20261119.1"), assets }],
+        teams: { 7: TEAM, 8: TEAM },
+      });
+      expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
+        "v0.1.1-beta.20261119.1 has no single uploaded latest-mac.json, so its signer is unknown. Nothing was published.",
+      );
+      expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
+    },
+  );
 
   it("refuses another signer than an earlier beta's, published or withdrawn", async () => {
     for (const draft of [false, true]) {
@@ -916,7 +1170,7 @@ describe("publishing", () => {
         earlier: [earlier("v0.1.1-beta.20261119.1", draft)],
         teams: { 7: "OTHERTEAM1" },
       });
-      expect(await stopped(() => publish(hub.runner, VERSION, net, place.staging))).toBe(
+      expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
         `v0.1.1-beta.20261119.1 is signed by team OTHERTEAM1, this beta by ${TEAM}. Nothing was published.`,
       );
       expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
@@ -925,19 +1179,19 @@ describe("publishing", () => {
 
   it("refuses when an earlier beta's team cannot be read, rather than treat it as the first", async () => {
     const hub = github(dir, { earlier: [earlier("v0.1.1-beta.20261119.1")], teams: {} });
-    expect(await stopped(() => publish(hub.runner, VERSION, net, place.staging))).toBe(
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
       "Could not read the team of v0.1.1-beta.20261119.1 from GitHub. Nothing was published.",
     );
     const offline = github(dir);
     offline.answers["gh api repos/sidebandstudio/clawtrate/releases"] = fail("HTTP 503");
-    expect(await stopped(() => publish(offline.runner, VERSION, net, place.staging))).toBe(
+    expect(await stopped(() => publish(offline.runner, VERSION, record, net, place.staging))).toBe(
       "Could not read the repository's releases from GitHub.",
     );
   });
 
   it("accepts the signer of every earlier beta when it is this one", async () => {
     const hub = github(dir, { earlier: [earlier("v0.1.1-beta.20261119.1")], teams: { 7: TEAM } });
-    await publish(hub.runner, VERSION, net, place.staging);
+    await publish(hub.runner, VERSION, record, net, place.staging);
     expect(output).toContain(`Signed by team ${TEAM}, as every earlier beta (1).`);
   });
 });
@@ -1047,6 +1301,68 @@ describe("withdrawing", () => {
     ).toBe(`The site still offers ${VERSION}. Run the Site workflow and run this again.`);
   });
 
+  it("refuses a feed of another version than the beta GitHub still lists", async () => {
+    expect(
+      await stopped(() =>
+        withdraw(
+          hub(true).runner,
+          VERSION,
+          serving(() => new Response(feed("0.1.1-beta.20261118.1"))),
+        ),
+      ),
+    ).toBe(
+      `The site offers 0.1.1-beta.20261118.1, not ${older}. Run the Site workflow and run this again.`,
+    );
+    expect(
+      await stopped(() =>
+        withdraw(
+          hub(false).runner,
+          VERSION,
+          serving(() => new Response(feed(older))),
+        ),
+      ),
+    ).toBe(
+      `The site offers ${older}, though GitHub lists no published beta. Run the Site workflow and run this again.`,
+    );
+  });
+
+  it("reads the feed's own address and follows no redirect, so a 404 elsewhere proves nothing", async () => {
+    const asked: Array<[string, boolean]> = [];
+    const moved = site(
+      {
+        [BETA_FEED_URL]: () =>
+          new Response("", { status: 302, headers: { location: "https://example.com/gone" } }),
+      },
+      asked,
+    );
+    expect(await stopped(() => withdraw(hub(false).runner, VERSION, moved))).toBe(
+      `Could not tell what the site serves (a redirect (HTTP 302)). Check ${BETA_FEED_URL} yourself.`,
+    );
+    expect(asked.length).toBeGreaterThan(0);
+    for (const request of asked) expect(request).toEqual([BETA_FEED_URL, false]);
+  });
+
+  it("reports the state as unconfirmed when the release cannot be read back", async () => {
+    const made = hub(true);
+    let edited = false;
+    const blind: Run = (command, args, options) => {
+      if (args[0] === "release" && args[1] === "edit") edited = true;
+      if (edited && args[0] === "api") return fail("HTTP 503");
+      return made.runner(command, args, options);
+    };
+    expect(
+      await stopped(() =>
+        withdraw(
+          blind,
+          VERSION,
+          serving(() => new Response(feed(older))),
+        ),
+      ),
+    ).toBe(
+      `GitHub accepted turning ${TAG} into a draft, and the release could not be read back: whether it is still public is unconfirmed. Check it on GitHub.`,
+    );
+  });
+
   it("refuses when GitHub still lists the release as published", async () => {
     const made = hub(true);
     made.answers["gh release edit"] = ok();
@@ -1058,6 +1374,6 @@ describe("withdrawing", () => {
           serving(() => new Response(feed(older))),
         ),
       ),
-    ).toBe(`GitHub still lists ${TAG} as published.`);
+    ).toBe(`GitHub still lists ${TAG} as published although it accepted the change.`);
   });
 });
