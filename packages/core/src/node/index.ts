@@ -27,18 +27,24 @@ async function writePrivateFile(path: string, contents: string): Promise<void> {
   await rename(temp, path);
 }
 
-/** A key/value store persisted as one JSON file with owner-only permissions. */
+/**
+ * A key/value store persisted as one JSON file with owner-only permissions. A
+ * change is written to a copy, and the copy becomes what `get` reads only once
+ * the file has been replaced.
+ */
 export function createFileStore(path: string): KeyValueStore {
   let cache: Record<string, string> | null = null;
   let queue: Promise<void> = Promise.resolve();
 
   const load = async () => {
     if (cache) return cache;
+    // A write can land while this read is in flight; the first value to fill the cache wins.
     try {
-      cache = JSON.parse(await readFile(path, "utf8")) as Record<string, string>;
+      const loaded = JSON.parse(await readFile(path, "utf8")) as Record<string, string>;
+      cache ??= loaded;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      cache = {};
+      cache ??= {};
     }
     return cache;
   };

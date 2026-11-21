@@ -5,6 +5,7 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -650,7 +651,7 @@ const upgrade = object<ScopeUpgradeState>()({
 });
 const connection = object<ConnectionState>()({
   status: ENUM,
-  gatewayUrl: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayUrl: text(MAX_GATEWAY_URL_CHARS),
   gatewayId: ID,
   serverVersion: NAME,
   protocol: NUMBER,

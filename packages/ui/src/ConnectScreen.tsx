@@ -17,6 +17,7 @@ import logoUrl from "./assets/logo-mark.png";
 import { Character, type CharacterSpec } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
+import { useForget } from "./forget.ts";
 import { gatewayLabel } from "./format.ts";
 import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
@@ -159,6 +160,8 @@ function PairingPanel({
   name?: string | null;
 }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const pairing = connection.pairing!;
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
@@ -211,16 +214,23 @@ function PairingPanel({
         >
           {checking ? "Checking…" : "Check now"}
         </button>
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          Use another gateway
-        </button>
+        {gatewayUrl && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Use another gateway
+          </button>
+        )}
       </div>
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }
@@ -286,14 +296,14 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
           />
         </label>
         <label className="field">
-          <span className="visually-hidden">Gateway token, needed for the first pairing only</span>
+          <span className="visually-hidden">Gateway token, for pairing</span>
           <input
             className="input"
             name="token"
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder="Token, for the first pairing only"
+            placeholder="Gateway token, for pairing"
             autoComplete="off"
           />
         </label>
@@ -334,7 +344,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
         </div>
         <p className="field-hint">
           {PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access
-          only, and the token is used once.
+          only.
         </p>
       </form>
     </section>
@@ -350,6 +360,8 @@ function SetupPanel({
   loadingBots: boolean;
 }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const error = connection.error;
   return (
     <section className="panel" aria-labelledby="setup-title">
@@ -372,17 +384,24 @@ function SetupPanel({
           </button>
         </div>
       )}
-      <div className="actions">
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          Use another gateway
-        </button>
-      </div>
+      {gatewayUrl && (
+        <div className="actions">
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Use another gateway
+          </button>
+        </div>
+      )}
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }
@@ -396,6 +415,8 @@ function ProtocolNotice({
   error: ConnectionError;
 }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const protocol = error.protocol;
   const retrying = connection.status === "connecting" || connection.status === "reconnecting";
   const gateway = gatewayLabel(connection.gatewayUrl);
@@ -420,16 +441,23 @@ function ProtocolNotice({
         >
           {retrying ? "Retrying…" : "Retry"}
         </button>
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          Choose another gateway
-        </button>
+        {gatewayUrl && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Choose another gateway
+          </button>
+        )}
       </div>
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }

@@ -339,7 +339,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
   expect(endpoint.url).toMatch(/^ws:\/\/127\.0\.0\.1:(19[2-9]\d\d)$/);
 
   await page.getByPlaceholder("Gateway address").fill(endpoint.url);
-  await page.getByPlaceholder("Token, for the first pairing only").fill(endpoint.token);
+  await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
   await page.getByRole("button", { name: "Connect" }).click();
 
   // A fresh device identity must be approved on the gateway, over the real protocol.

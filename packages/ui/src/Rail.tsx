@@ -22,6 +22,7 @@ import { Avatar } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
+import { forgetFailure } from "./forget.ts";
 import {
   ArchiveIcon,
   ArrowDownIcon,
@@ -1151,6 +1152,8 @@ export function Rail({
     }
   };
 
+  // Disconnect forgets the gateway this menu names, so it is offered only with its address.
+  const forgetUrl = connection.gatewayUrl;
   const gatewayEntries: MenuEntry[] = [
     {
       kind: "head",
@@ -1204,15 +1207,21 @@ export function Rail({
         onOpenSettings();
       },
     },
-    {
-      kind: "item",
-      label: "Disconnect",
-      tone: "danger",
-      onSelect: () => {
-        setMenu(null);
-        void send({ type: "disconnect" });
-      },
-    },
+    ...(forgetUrl
+      ? [
+          {
+            kind: "item",
+            label: "Disconnect",
+            tone: "danger",
+            onSelect: () => {
+              setMenu(null);
+              void send({ type: "disconnect", gatewayUrl: forgetUrl }).catch((error: unknown) =>
+                runner.tell({ tone: "danger", text: forgetFailure(error) }),
+              );
+            },
+          } satisfies MenuEntry,
+        ]
+      : []),
   ];
 
   const sortEntries: MenuEntry[] = [

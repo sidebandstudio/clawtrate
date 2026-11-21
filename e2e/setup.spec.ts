@@ -363,7 +363,7 @@ test("F-493: Advanced is the address-and-token form, and it still connects", asy
   await page.getByRole("button", { name: "Advanced" }).click();
   const connection = readDevConnection(openInstance(SETUP).connectionFile)!;
   await page.getByPlaceholder("Gateway address").fill(connection.url);
-  await page.getByPlaceholder("Token, for the first pairing only").fill(connection.token);
+  await page.getByPlaceholder("Gateway token, for pairing").fill(connection.token);
   await page.getByRole("button", { name: "Connect a gateway" }).click();
   await expect(page.locator(".shell")).toBeVisible({ timeout: 60_000 });
   const added = devices().paired.filter((device) => !before.includes(device.deviceId));
