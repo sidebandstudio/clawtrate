@@ -9,6 +9,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { INSTANCE_NAME_PATTERN } from "../../../../tools/dev-gateway/src/instance.ts";
+import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
 
 export type ProgramResult = {
   /** The exit code, or null when the program was ended or did not start. */
@@ -104,46 +105,55 @@ export function checkRequest(request: ProgramRequest): void {
  * Starts programs and remembers each by its PID until it exits, so that
  * `stopAll` ends exactly the ones it started. Each starts as the leader of a
  * process group of its own, so a worker it starts is in that group: stopping
- * signals the group by its id, which the system doesn't reuse while any
- * member lives, never a process found by name. A worker that leaves the group
- * on purpose is not setup's to supervise. `check` decides which requests may
- * start; the setup host uses `checkRequest`.
+ * signals the group by its id, never a process found by name, and only while
+ * its leader is still running with the start time it had when it started. A
+ * group is forgotten as soon as its leader has exited and been reaped, so its
+ * id, free to be reused, is never signalled again. A worker that leaves the
+ * group, or outlives its leader, is not setup's to supervise. `check` decides
+ * which requests may start; the setup host uses `checkRequest`.
  */
 export class ProgramRunner {
   private readonly children = new Set<ChildProcess>();
-  /** The process groups of programs this runner started, until each has no member left. */
-  private readonly groups = new Set<number>();
+  /**
+   * The process groups of programs this runner started, by their leader's PID,
+   * with the leader's start time as `ps` read it then: until the leader exits.
+   */
+  private readonly groups = new Map<number, string | null>();
   private readonly spawnImpl: typeof nodeSpawn;
   private readonly check: (request: ProgramRequest) => void;
   private readonly graceMs: number;
+  private readonly identify: Identify;
 
   constructor(
     options: {
       spawn?: typeof nodeSpawn;
       check?: (request: ProgramRequest) => void;
       graceMs?: number;
+      identify?: Identify;
     } = {},
   ) {
     this.spawnImpl = options.spawn ?? nodeSpawn;
     this.check = options.check ?? checkRequest;
     this.graceMs = options.graceMs ?? STOP_GRACE_MS;
+    this.identify = options.identify ?? processIdentity;
   }
 
-  /** Whether a group this runner started still has a member; a gone one is forgotten. */
-  private alive(group: number): boolean {
-    try {
-      process.kill(-group, 0);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
-      this.groups.delete(group);
-      return false;
-    }
+  /**
+   * Whether a group is still verifiably this runner's: its leader hasn't exited, and is the
+   * process it started, by its start time. Anything else is forgotten.
+   */
+  private ours(group: number): boolean {
+    if (!this.groups.has(group)) return false;
+    const started = this.groups.get(group);
+    const now = this.identify(group);
+    if (started && now.state === "alive" && now.identity === started) return true;
+    this.groups.delete(group);
+    return false;
   }
 
-  /** Signals one group this runner started, while it has members. */
+  /** Signals one group this runner started, while it is verifiably its own. */
   private signal(group: number, name: NodeJS.Signals): void {
-    if (!this.alive(group)) return;
+    if (!this.ours(group)) return;
     try {
       process.kill(-group, name);
     } catch {
@@ -153,16 +163,16 @@ export class ProgramRunner {
 
   /**
    * Asks a program and the workers in its group to stop, and kills what is
-   * still there after the grace. Resolves once the group has no member left,
-   * or a moment after the kill.
+   * still there after the grace. Resolves once the leader has exited, or a
+   * moment after the kill.
    */
   private end(group: number): Promise<void> {
-    if (!this.alive(group)) return Promise.resolve();
+    if (!this.ours(group)) return Promise.resolve();
     this.signal(group, "SIGTERM");
     return new Promise((resolve) => {
       const started = Date.now();
       const poll = setInterval(() => {
-        if (!this.alive(group)) {
+        if (!this.groups.has(group)) {
           clearInterval(poll);
           resolve();
           return;
@@ -198,7 +208,12 @@ export class ProgramRunner {
       }
       this.children.add(child);
       const group = child.pid;
-      if (group !== undefined && process.platform !== "win32") this.groups.add(group);
+      if (group !== undefined && process.platform !== "win32") {
+        const leader = this.identify(group);
+        this.groups.set(group, leader.state === "alive" ? leader.identity : null);
+        // Exited and reaped: the group's id may be reused from now on, so it is forgotten.
+        child.once("exit", () => this.groups.delete(group));
+      }
       const stop = () => {
         if (group !== undefined && process.platform !== "win32") void this.end(group);
         else child.kill("SIGTERM");
@@ -259,9 +274,9 @@ export class ProgramRunner {
     });
   };
 
-  /** How many groups this runner started still have a member: workers may outlive their program. */
+  /** How many groups this runner started still have their leader running. */
   groupsLeft(): number {
-    return [...this.groups].filter((group) => this.alive(group)).length;
+    return this.groups.size;
   }
 
   /** The PIDs of the programs running now. */
@@ -281,6 +296,6 @@ export class ProgramRunner {
   async stopAllAndWait(): Promise<void> {
     for (const child of this.children)
       if (process.platform === "win32" && child.exitCode === null) child.kill("SIGTERM");
-    await Promise.all([...this.groups].map((group) => this.end(group)));
+    await Promise.all([...this.groups.keys()].map((group) => this.end(group)));
   }
 }
