@@ -35,7 +35,7 @@ public static class UpdateFile {
     using (var handle = CreateFileW(path, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
       Info info;
       if (handle.IsInvalid || GetFileType(handle) != 1 || !GetFileInformationByHandle(handle, out info)
-          || (info.attributes & 0x410) != 0) throw new IOException();
+          || (info.attributes & 0x410) != 0 || info.links != 1) throw new IOException();
       using (var file = new FileStream(handle, FileAccess.Read)) {
         if (file.Length != expected) return "size-mismatch";
         using (var hash = SHA512.Create()) {
@@ -68,7 +68,7 @@ export async function inspectUpdateFile(path: string, expected: number): Promise
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await file.stat({ bigint: true });
-    if (!info.isFile()) throw Error("Expected a regular update file");
+    if (!info.isFile() || info.nlink !== 1n) throw Error("Expected a regular update file");
     if (info.size !== BigInt(expected)) return null;
     const hash = createHash("sha512");
     const buffer = Buffer.alloc(64 * 1024);

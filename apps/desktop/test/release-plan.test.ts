@@ -13,7 +13,7 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assemble, plan, runPlan, type Candidate } from "../packaging/release-plan.ts";
 import { feedAddresses, compiledAddresses } from "../packaging/candidate-addresses.ts";
 import { artifactName, sha512Base64 } from "../packaging/feed.ts";
@@ -27,6 +27,10 @@ const mac = "mac-arm64";
 const file = () => path(artifactName(c.version, mac));
 const read = (name: string) => JSON.parse(readFileSync(path(name), "utf8"));
 const write = (name: string, value: unknown) => writeFileSync(path(name), JSON.stringify(value));
+// These tests start python3 and node, which can take seconds each on a busy machine: one took
+// 3.4 s of the default 5 s with the load average at 6, and several ran out at 30 or more.
+vi.setConfig({ testTimeout: 30_000 });
+
 // Small structural fixtures. No fixture is executed or signed.
 function macZip(cpu: number, variant = ""): Buffer {
   return execFileSync(process.platform === "win32" ? "python" : "python3", [
