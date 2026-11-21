@@ -1680,6 +1680,8 @@ export class ComputerViews {
         ...noControl,
         outcome: status === null ? "question-unknown" : alreadyOutcome(status),
       });
+      // The release cleared the renewals: the view goes on being renewed.
+      this.reschedule(live);
       return;
     }
     this.patchControl(live.viewer, { ...noControl, status: "answering" });

@@ -1676,6 +1676,22 @@ describe("closing edits: tab choice, competing takes, confirmation in time, hand
     expect(h.pane().control).toMatchObject({ status: "unconfirmed", outcome: "answer-not-sent" });
   });
 
+  it("F-145: a confirmed hand-back whose question can't be read sends no answer and keeps renewing the view", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.env.question = question();
+    await granted(h);
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    h.env.question = null;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control.outcome).toBe("question-unknown");
+    expect(h.pane().view?.status).toBe("live");
+    const renewals = h.calls("clawtrate-computer.view.renew").length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.calls("clawtrate-computer.view.renew").length).toBeGreaterThan(renewals);
+    expect(h.answered).toEqual([]);
+  });
+
   it("F-145: another question of the task closing keeps the queued answer; a question whose state can't be read is not answered", async () => {
     let done!: (value: unknown) => void;
     const h = harness({
