@@ -13,7 +13,7 @@ const base: DesktopUpdateSnapshot = {
   runningTrack: "stable",
   tracks: [
     { track: "stable", source: "stable.example" },
-    { track: "nightly", source: "nightly.example" },
+    { track: "nightly", source: "beta.example" },
   ],
   selectedTrack: "stable",
   pendingTrack: null,
