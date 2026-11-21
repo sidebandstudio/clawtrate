@@ -1027,14 +1027,15 @@ export class ClawtrateClient {
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
   /** The identity a routed connection must find after each hello; null until its first read. */
   private routeIdentity: { route: string; identity: string | null } | null = null;
+  /** The routed connection, by generation, whose gateway identity matched after its hello. */
+  private routeVerified: number | null = null;
+  /** A routed connection's token writes, held in memory until its identity matched. */
+  private routeHeld: { generation: number; writes: Array<() => Promise<void>> } | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
   private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
-    request: (method, params, options) => {
-      if (!this.protocol) return Promise.reject(new NotSentError());
-      return this.protocol.request(method, params, options);
-    },
+    request: (method, params, options) => this.request(method, params, options),
     get: () => this.state.accounts,
     update: (change) =>
       this.store.update((state) => ({ ...state, accounts: change(state.accounts) })),
@@ -1058,10 +1059,7 @@ export class ClawtrateClient {
   });
   /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
   private readonly routines = new RoutinesEngine({
-    request: (method, params) => {
-      if (!this.protocol) return Promise.reject(new NotSentError());
-      return this.protocol.request(method, params);
-    },
+    request: (method, params) => this.request(method, params),
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
@@ -1648,7 +1646,10 @@ export class ClawtrateClient {
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
     const upgrade = new GatewayScopeUpgrade({
-      request: (method, params, options) => protocol.request(method, params, options),
+      request: (method, params, options) =>
+        this.routeGated()
+          ? Promise.reject(new NotSentError())
+          : protocol.request(method, params, options),
       tokenStore: {
         load: auth.tokenStore.load,
         clear: auth.tokenStore.clear,
@@ -4564,7 +4565,7 @@ export class ClawtrateClient {
         return {
           alive,
           request: (method, params, options) =>
-            protocol && alive()
+            protocol && alive() && !this.routeGated()
               ? protocol.request(method, params, options)
               : Promise.reject(new NotSentError()),
         };
@@ -5421,17 +5422,21 @@ export class ClawtrateClient {
           }
           // The token stays a credential to take out of gateway text after its staging ends.
           this.heldToken = staged.token;
-          await this.writeToken(credential, staged.deviceId, staged.role, {
-            token: staged.token,
-            grantedScopes: [...staged.scopes],
-            heldScopes: [...READ_SCOPES],
-          });
-          // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
-          await this.changeConnection(async () => {
-            const current = this.settings;
-            if (generation !== this.generation || current?.url !== settings.url) return;
-            await this.saveSettings(current);
-          });
+          const commit = async () => {
+            await this.writeToken(credential, staged.deviceId, staged.role, {
+              token: staged.token,
+              grantedScopes: [...staged.scopes],
+              heldScopes: [...READ_SCOPES],
+            });
+            // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
+            await this.changeConnection(async () => {
+              const current = this.settings;
+              if (generation !== this.generation || current?.url !== settings.url) return;
+              await this.saveSettings(current);
+            });
+          };
+          // A route keeps the token only once its gateway said who it is (checkRouteIdentity).
+          if (!this.holdForRoute(generation, commit)) await commit();
           return;
         }
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
@@ -5578,7 +5583,9 @@ export class ClawtrateClient {
         this.pendingResync = "gap";
       },
       onEvent: (event) => {
-        if (generation === this.generation) this.handleEvent(event, generation);
+        // A route's gateway sends nothing that counts here until its identity matched.
+        if (generation === this.generation && !this.routeGated())
+          this.handleEvent(event, generation);
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
@@ -5773,7 +5780,11 @@ export class ClawtrateClient {
       );
     }
 
-    const pause = setup || shouldPauseGatewayReconnect({ details: error.details });
+    // A route's refusal comes before its gateway said who it is: the attempt ends, and the
+    // token is kept (its forgetting waits for an identity that never matched, so it lapses).
+    const routeRefused = refused && Boolean(this.settings?.route);
+    const pause =
+      setup || routeRefused || shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
@@ -6869,10 +6880,33 @@ export class ClawtrateClient {
   private request(
     method: string,
     params: unknown,
-    options?: { onSent?: (requestId: string) => void },
+    options?: Parameters<GatewayProtocolClient<Plan>["request"]>[2],
   ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
+    // A routed connection asks its gateway only who it is until that identity matched.
+    if (method !== "gateway.identity.get" && this.routeGated())
+      return Promise.reject(new NotSentError());
     return this.protocol.request(method, params, options);
+  }
+
+  /**
+   * Whether the current connection is a route's whose gateway identity hasn't
+   * matched yet (docs/decisions.md, "Routes"): only the handshake and
+   * `gateway.identity.get` pass; no request, event or token goes further.
+   */
+  private routeGated(): boolean {
+    return Boolean(this.settings?.route) && this.routeVerified !== this.generation;
+  }
+
+  /**
+   * Holds a write of a routed connection's token in memory until its gateway's
+   * identity matches, and says so; false when nothing is held back.
+   */
+  private holdForRoute(generation: number, write: () => Promise<void>): boolean {
+    if (!this.settings?.route || this.routeVerified === generation) return false;
+    if (this.routeHeld?.generation !== generation) this.routeHeld = { generation, writes: [] };
+    this.routeHeld.writes.push(write);
+    return true;
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
@@ -6933,6 +6967,9 @@ export class ClawtrateClient {
     const id = await this.readGatewayIdentity();
     if (generation !== this.generation || this.settings?.route !== route) return;
     if (id === null || (expected !== null && id !== expected)) {
+      // Terminal for this attempt: what it would have kept is forgotten, and nothing retries.
+      this.routeHeld = null;
+      this.heldToken = null;
       this.close();
       this.dropSetupCredentials();
       this.setConnection({
@@ -6959,6 +6996,12 @@ export class ClawtrateClient {
       return;
     }
     this.routeIdentity = { route, identity: id };
+    this.routeVerified = generation;
+    // Only now is a token from this hello kept.
+    const held = this.routeHeld?.generation === generation ? this.routeHeld.writes : [];
+    this.routeHeld = null;
+    for (const write of held) await write();
+    if (generation !== this.generation || this.settings?.route !== route) return;
     this.store.update((state) => ({
       ...state,
       connection: { ...state.connection, gatewayId: id },
@@ -7108,21 +7151,29 @@ export class ClawtrateClient {
         }
         // A replacement token is this socket's credential now: taken out of gateway text too.
         this.heldToken = token;
-        const existing = await this.loadToken(credential, deviceId, role);
-        if (!current()) return;
-        const held = existing?.heldScopes ?? [...READ_SCOPES];
-        await this.writeToken(credential, deviceId, role, {
-          token,
-          // A replacement token is held to what this client asks for, whatever it was granted.
-          grantedScopes: scopes.filter((scope) => held.includes(scope)),
-          heldScopes: held,
-          ...(existing?.adminHeld ? { adminHeld: true } : {}),
-          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-        });
+        const write = async () => {
+          const existing = await this.loadToken(credential, deviceId, role);
+          if (!current()) return;
+          const held = existing?.heldScopes ?? [...READ_SCOPES];
+          await this.writeToken(credential, deviceId, role, {
+            token,
+            // A replacement token is held to what this client asks for, whatever it was granted.
+            grantedScopes: scopes.filter((scope) => held.includes(scope)),
+            heldScopes: held,
+            ...(existing?.adminHeld ? { adminHeld: true } : {}),
+            ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          });
+        };
+        // A route's token from this hello waits in memory until its gateway's identity matched.
+        if (!this.holdForRoute(generation, write)) await write();
       },
       clear: async ({ deviceId, role }) => {
         if (!current()) return;
-        await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
+        const forget = async () => {
+          if (current()) await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
+        };
+        // Nor does a route's gateway that hasn't said who it is make this device forget its token.
+        if (!this.holdForRoute(generation, forget)) await forget();
       },
     };
   }

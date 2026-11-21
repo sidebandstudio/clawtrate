@@ -220,4 +220,108 @@ describe("a routed connection's gateway", () => {
     expect(client.state.connection.error?.code).toBe("GATEWAY_NOT_ALLOWED");
     expect(gateway.connects).toEqual([]);
   });
+
+  it("asks nothing else, takes no event and keeps no token from its hello until its gateway said who it is", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    // The hello carries a rotated token; the identity read hangs until the test answers it.
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], "token-2") });
+    let answer: (value: unknown) => void = () => {};
+    gateway.handlers["gateway.identity.get"] = () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      });
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => gateway.requests.some((r) => r.method === "gateway.identity.get"));
+    // Every path that asks the gateway, the engines' included, is held.
+    const tried = await Promise.allSettled([
+      client.refreshAccounts(),
+      client.refreshRoutines(),
+      client.readBotRoutines("main"),
+      client.refreshCheckIns("main"),
+      client.refreshUsage(),
+      client.readHistoryItem("agent:main:main", "item-1"),
+    ]);
+    expect(tried).toHaveLength(6);
+    // An event the gateway sends now counts for nothing.
+    gateway.emit("sessions.changed", { sessionKey: "agent:main:x", label: "planted" });
+    gateway.emit("exec.approval.requested", {
+      id: "planted-approval",
+      request: {
+        command: "uname -s",
+        host: "gateway",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        runId: "run-1",
+        allowedDecisions: ["deny"],
+      },
+      createdAtMs: 2_000,
+      expiresAtMs: 9_000_000_000_000,
+    });
+    await sleep(100);
+    expect(gateway.requests.map((r) => r.method)).toEqual(["gateway.identity.get"]);
+    expect(JSON.stringify(client.state)).not.toContain("planted");
+    // The rotated token waits in memory: the saved one is unchanged.
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+    expect(client.state.connection.status).not.toBe("connected");
+    answer({ deviceId: "gateway-1", publicKey: "key" });
+    await until(() => client.state.connection.status === "connected");
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-2");
+  });
+
+  it("keeps no first token, and saves no connection, when the gateway that redeemed its code isn't the route's", async () => {
+    const { storage, client, setIdentity } = setup();
+    setIdentity(null);
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      code: { bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_IDENTITY_UNREAD);
+    expect(storage.data.has(ROUTE_TOKEN)).toBe(false);
+    expect(storage.data.has("connection")).toBe(false);
+  });
+
+  it("a rotated token from a gateway that turns out to be another is never kept, and the saved one stays", async () => {
+    const { gateway, storage, client, setIdentity } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], "token-9") });
+    setIdentity("gateway-2");
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_IDENTITY_CHANGED);
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+  });
+
+  it("a refusal before its gateway said who it is ends the attempt and makes this device forget nothing", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    gateway.connectReply = () => ({
+      ok: false,
+      error: { code: "AUTH_TOKEN_MISMATCH", message: "token mismatch" },
+    });
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => client.state.connection.status === "error");
+    const sockets = gateway.sockets.length;
+    await sleep(200);
+    expect(gateway.sockets.length).toBe(sockets);
+    expect(storage.data.get(ROUTE_TOKEN)).toBe(SAVED_TOKEN);
+  });
 });
