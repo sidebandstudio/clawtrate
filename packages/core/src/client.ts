@@ -452,6 +452,8 @@ export const MAX_SPAWN_LINKS = 200;
 const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
+/** Token writes a routed connection holds until its identity matched (`holdForRoute`). */
+export const MAX_ROUTE_HELD_WRITES = 4;
 
 export type ConnectionSettings = {
   url: string;
@@ -1039,7 +1041,9 @@ export class ClawtrateClient {
   /** The routed connection, by generation, whose gateway identity matched after its hello. */
   private routeVerified: number | null = null;
   /** A routed connection's token writes, held in memory until its identity matched. */
-  private routeHeld: { generation: number; writes: Array<() => Promise<void>> } | null = null;
+  private routeHeldWrites: Array<() => Promise<void>> = [];
+  /** The connection, by generation, whose writes `routeHeldWrites` holds. */
+  private routeHeldFor: number | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
   private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
@@ -6949,8 +6953,12 @@ export class ClawtrateClient {
    */
   private holdForRoute(generation: number, write: () => Promise<void>): boolean {
     if (!this.settings?.route || this.routeVerified === generation) return false;
-    if (this.routeHeld?.generation !== generation) this.routeHeld = { generation, writes: [] };
-    this.routeHeld.writes.push(write);
+    if (this.routeHeldFor !== generation) {
+      this.routeHeldFor = generation;
+      this.routeHeldWrites = [];
+    }
+    // One hello brings a token and at most its forgetting; anything past the bound is not kept.
+    if (this.routeHeldWrites.length < MAX_ROUTE_HELD_WRITES) this.routeHeldWrites.push(write);
     return true;
   }
 
@@ -7013,7 +7021,8 @@ export class ClawtrateClient {
     if (generation !== this.generation || this.settings?.route !== route) return;
     if (id === null || (expected !== null && id !== expected)) {
       // Terminal for this attempt: what it would have kept is forgotten, and nothing retries.
-      this.routeHeld = null;
+      this.routeHeldWrites = [];
+      this.routeHeldFor = null;
       this.heldToken = null;
       this.close();
       this.dropSetupCredentials();
@@ -7043,8 +7052,9 @@ export class ClawtrateClient {
     this.routeIdentity = { route, identity: id };
     this.routeVerified = generation;
     // Only now is a token from this hello kept.
-    const held = this.routeHeld?.generation === generation ? this.routeHeld.writes : [];
-    this.routeHeld = null;
+    const held = this.routeHeldFor === generation ? this.routeHeldWrites : [];
+    this.routeHeldWrites = [];
+    this.routeHeldFor = null;
     for (const write of held) await write();
     if (generation !== this.generation || this.settings?.route !== route) return;
     this.store.update((state) => ({

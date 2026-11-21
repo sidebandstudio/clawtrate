@@ -309,6 +309,46 @@ export function sshTransportFor<T>(
   return make(join(dataDir, "ssh"));
 }
 
+/**
+ * `dir` with the system's own links followed: a link owned by root, in a
+ * folder owned by root that no one else can write (macOS's `/var` and
+ * `/tmp`), can't be redirected by another account, and is resolved. Any other
+ * link is left as it is spelt, for `ensurePrivateDir` to refuse.
+ */
+export function followSystemLinks(dir: string): string {
+  if (!isAbsolute(dir)) return dir;
+  const parts = resolve(dir).split(sep).filter(Boolean);
+  let current: string = sep;
+  for (let i = 0; i < parts.length; i += 1) {
+    const next = join(current, parts[i]!);
+    let info: Stats;
+    try {
+      info = lstatSync(next);
+    } catch {
+      // Missing from here on: what follows is made below a proven parent, or refused.
+      return join(next, ...parts.slice(i + 1));
+    }
+    if (info.isSymbolicLink()) {
+      let parent: Stats;
+      try {
+        parent = lstatSync(current);
+      } catch {
+        return resolve(dir);
+      }
+      const systems = info.uid === 0 && parent.uid === 0 && (Number(parent.mode) & 0o022) === 0;
+      if (!systems) return resolve(dir);
+      try {
+        current = realpathSync(next);
+      } catch {
+        return resolve(dir);
+      }
+      continue;
+    }
+    current = next;
+  }
+  return current;
+}
+
 /** The data folder the desktop app keeps its device key, tokens and routes in, or why there is none. */
 export type DataDirChoice =
   | { ok: true; dir: string; verified: "posix" | "windows-unverified" }
@@ -331,8 +371,10 @@ export function chooseDataDir(
     (options.mkdir ?? ((path) => mkdirSync(path, { recursive: true })))(dir);
     return { ok: true, dir, verified: "windows-unverified" };
   }
-  const verdict = ensurePrivateDir(dir, options);
+  // The system's own links followed (macOS's temporary folders are under `/var`); no other.
+  const real = followSystemLinks(dir);
+  const verdict = ensurePrivateDir(real, options);
   return verdict.ok
-    ? { ok: true, dir, verified: "posix" }
+    ? { ok: true, dir: real, verified: "posix" }
     : { ok: false, dir, reason: verdict.reason };
 }

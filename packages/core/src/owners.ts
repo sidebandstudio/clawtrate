@@ -35,6 +35,7 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
+  MAX_ROUTE_HELD_WRITES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
@@ -242,6 +243,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
+  // A routed connection's token writes, functions held until its identity matched, then dropped.
+  routeHeldWrites: { max: MAX_ROUTE_HELD_WRITES, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the

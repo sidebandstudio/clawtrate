@@ -1214,8 +1214,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       during = () => {};
       stub.setStatus("default", stopped);
       await lookOnDevbox(h);
+      // This Start's own call, not one an earlier case left in the stand-in's log.
+      const sent = stub.calls().length;
       const starting = h.remote.start();
-      await until(() => stub.calls().includes("gateway start"), 20_000);
+      await until(() => stub.calls().slice(sent).includes("gateway start"), 20_000);
       stub.setStatus("default", running());
       await starting;
       expect(h.setup().look).toMatchObject({ outcome: "running" });

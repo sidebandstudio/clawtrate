@@ -14,11 +14,13 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  mkdtempSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -475,15 +477,21 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
     expect(sshTransportFor(join(root, "home", "gateway"), () => "transport", { root })).toBe(
       "transport",
     );
+    // The system's own links are followed (macOS keeps temporary folders below root's /var link),
+    // and the folder is taken where it really is.
+    const viaSystem = mkdtempSync(join(tmpdir(), "clawtrate-data-system-"));
+    dirs.push(viaSystem);
+    const taken = chooseDataDir(join(viaSystem, "gateway"));
+    expect(taken).toMatchObject({ ok: true, dir: join(realpathSync(viaSystem), "gateway") });
     // Windows keeps its own branch: the folder is made, its ACLs are the system's.
     const made: string[] = [];
     expect(
-      chooseDataDir("C:\\Users\\you\\gateway", {
+      chooseDataDir("D:\\Clawtrate\\gateway", {
         platform: "win32",
         mkdir: (dir) => made.push(dir),
       }),
     ).toMatchObject({ ok: true, verified: "windows-unverified" });
-    expect(made).toEqual(["C:\\Users\\you\\gateway"]);
+    expect(made).toEqual(["D:\\Clawtrate\\gateway"]);
   });
 
   it.skipIf(process.platform !== "darwin")(
@@ -683,10 +691,10 @@ describe("one stopped verdict, and the loopback endpoint the status proves", () 
         ["loopback", undefined, "running"],
         ["lan", undefined, "running"],
         ["tailnet", undefined, "endpoint"],
-        ["custom", "192.168.1.20", "endpoint"],
+        ["custom", "198.51.100.20", "endpoint"],
       ];
       for (const [bind, custom, expected] of cases) {
-        const host = pick(bind, "100.64.0.9", custom);
+        const host = pick(bind, "203.0.113.9", custom);
         const text = statusJsonRecorded({
           port,
           bind,
@@ -699,7 +707,7 @@ describe("one stopped verdict, and the loopback endpoint the status proves", () 
         const status = parseGatewayStatus(
           "default",
           0,
-          text.replaceAll("<state>", "/home/you/.openclaw"),
+          text.replaceAll("<state>", "/srv/openclaw/state"),
         )!;
         const f = facts({ gateways: [status] });
         const look = sshLook(f);
