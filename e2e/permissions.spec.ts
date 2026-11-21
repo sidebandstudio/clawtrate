@@ -321,10 +321,16 @@ test("F-176: the page shows the rules plugin's own state and the gateway's setti
   await expect(
     page.getByTestId("permission-line").or(page.getByTestId("permissions")),
   ).toBeVisible();
+  // The page reconnects with the new scopes after the approval; a command sent in between is refused, so the poll asks again.
   await expect
-    .poll(async () => (await hostCommand<Json>({ type: "readPermissions", botId: "main" })).botId, {
-      timeout: 30_000,
-    })
+    .poll(
+      async () =>
+        (await hostCommand<Json>({ type: "readPermissions", botId: "main" }).catch(() => undefined))
+          ?.botId,
+      {
+        timeout: 30_000,
+      },
+    )
     .toBe("main");
   await expect(page.getByRole("radio", { name: "Allow", exact: true })).toHaveAttribute(
     "aria-disabled",
