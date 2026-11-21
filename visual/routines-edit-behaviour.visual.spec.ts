@@ -139,6 +139,28 @@ test.describe("1440", () => {
     await expect(editor(page)).toContainText("The gateway can't read this");
   });
 
+  test("F-195: Save explains a one-shot time that passed while the editor was open", async ({
+    page,
+  }) => {
+    await open(page);
+    await fillNew(page);
+    await editor(page).getByRole("radio", { name: "Once", exact: true }).click();
+    const date = editor(page).getByLabel("On", { exact: true });
+    await date.fill("2026-11-18");
+    await editor(page).getByLabel("At", { exact: true }).fill("12:00");
+    await page.clock.setFixedTime(new Date("2026-11-20T12:00:00Z"));
+    await save(page).click();
+    await expect(editor(page).getByText("Pick a time in the future.")).toBeVisible();
+    const sent = await page.evaluate(
+      () =>
+        (window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } })
+          .clawtrateFixture.sent,
+    );
+    expect(sent.some((command) => command.type === "createRoutine")).toBe(false);
+    await date.fill("2026-11-22");
+    await expect(editor(page).getByText("Pick a time in the future.")).toHaveCount(0);
+  });
+
   test("F-195: a cron expression that never runs in the next eight years is refused at Save, and nothing is sent", async ({
     page,
   }) => {

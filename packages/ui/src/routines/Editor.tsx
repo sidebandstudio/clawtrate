@@ -233,7 +233,7 @@ export function Editor({
   const [save, setSave] = useState<Save>({ status: "idle" });
   /** The gateway said it has no such routine. */
   const [gone, setGone] = useState(false);
-  const [tried, setTried] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
   // The draft as the person had it when they chose to see the other version.
   // With the fields it was edited from, so only what the person changed is restored.
   const [mine, setMine] = useState<{ draft: Draft; base: RoutineFields } | null>(null);
@@ -267,7 +267,7 @@ export function Editor({
       onClose();
   }, [gateway, connection.gatewayId, onClose]);
 
-  const errors: Problems = tried ? problems(draft, now, textLocked) : {};
+  const errors: Problems = checkedAt === null ? {} : problems(draft, checkedAt, textLocked);
   const bot = bots.find((each) => each.id === draft.botId);
   const botName = bot?.name ?? draft.botId;
   const deleted = id !== null && (gone || removed || (read.status === "ready" && !read.value));
@@ -306,8 +306,9 @@ export function Editor({
 
   const submit = (against = accepted, asNew = mode.mode === "new") => {
     if (asNew && mode.mode === "edit" && !accepted?.canRecreate) return;
-    setTried(true);
-    const found = problems(draft, Date.now(), textLocked);
+    const submittedAt = Date.now();
+    setCheckedAt(submittedAt);
+    const found = problems(draft, submittedAt, textLocked);
     if (Object.keys(found).length > 0) {
       focusError(found);
       return;
@@ -795,7 +796,7 @@ export function Editor({
           )}
         </div>
         {tzField}
-        {!errors.when && !errors.cron && <Preview draft={draft} now={now} />}
+        {!errors.when && !errors.cron && <Preview draft={draft} now={checkedAt ?? now} />}
       </>
     );
   }
