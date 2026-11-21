@@ -22,8 +22,8 @@ const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textConten
 const dlg = (p, id = "create-dialog") => p.evaluate((i) => document.getElementById(i).open, id);
 // The Account step leads to Approvals (controls.md section 10), whose choice Create waits for.
 const toCreate = async (p, perm = "ask") => {
-  await p.click('[data-b="to-approvals"]');
-  await p.click(`[data-b-perm="${perm}"]`);
+  await p.locator('[data-b="to-approvals"]').click({ timeout: 2000 }).catch(() => {});
+  await p.locator(`[data-b-perm="${perm}"]`).click({ timeout: 2000 }).catch(() => {});
 };
 const focused = (p) => p.evaluate(() => document.activeElement?.id || document.activeElement?.dataset?.b || document.activeElement?.tagName);
 
@@ -89,7 +89,7 @@ check("P1 back on the Account step with the new account chosen and the bot kept"
 await toCreate(p);
 await p.click('[data-b="create"]');
 check("P1 Create reads Creating… and is disabled", await p.evaluate(() => { const c = document.querySelector('[data-b="create"]'); return c.disabled && c.textContent === "Creating…"; }));
-await p.waitForTimeout(1600);
+await p.waitForSelector('[data-b-created="confirmed"]', { timeout: 5000 }).catch(() => {});
 check("P1 after Create the new bot's composer has focus", await p.evaluate(() => document.activeElement.classList.contains("composer-input")));
 check("P1 the new bot is created on its account and opened", !(await dlg(p)) && (await p.evaluate(() => document.querySelector("#title-pill").getAttribute("aria-label").startsWith("Viral, Main") && window.bots.accounts().find((a) => a.id === window.bots.binding.viral.account)?.label === "Studio")));
 await p.close();
@@ -190,112 +190,200 @@ await p.close();
 p = await open("open=create&step=account&name=Viral&defacct=openai:work");
 check("FM-01 when the default model names an account, it is chosen, and the step says why", await p.evaluate(() => document.querySelector('[data-b-choose="openai:work"]').getAttribute("aria-checked") === "true" && document.querySelector("#create-dialog").textContent.includes("Chosen because the gateway's default model names it.")));
 await p.close();
-p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask&create=partial");
-await p.click('[data-b="create"]');
-await p.waitForTimeout(1600);
-await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
-await p.click('#panel-settings [data-bs="account"]');
-check("FM-13 created but the fallback write refused: said on the account page, with Try again for that bot", (await text(p, "#panel-settings")).includes("Clawtrate couldn't write Viral's empty fallback list") && (await p.evaluate(() => !!document.querySelector('#panel-settings [data-bs="write-fallbacks"]'))));
-check("R2-02 the note says no fallback models are set and that in-request reroutes remain, not that nothing moves the bot", (await text(p, "#panel-settings")).includes("Viral has no fallback models set, so the gateway's fallback list doesn't apply to it") && (await text(p, "#panel-settings")).includes("A provider can still switch the model inside a request") && !(await text(p, "#panel-settings")).includes("nothing moves it"));
-await p.close();
-p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask&create=timeout");
-await p.click('[data-b="create"]');
-await p.waitForTimeout(650);
-check("FM-13 a first write that timed out looks for the bot before anything is sent again", (await text(p, "#create-dialog .b-foot")).includes("Checking whether Viral was created"));
-await p.waitForTimeout(1500);
-check("FM-13 and continues with the one it finds: one bot, not two", await p.evaluate(() => window.app.bots.filter((b) => b.name === "Viral").length === 1));
-await p.close();
+// The first bot's command policy and the one Create sequence (bots.md section 3, controls.md section 10).
+// The host's results come from fixtures in the address, chosen independently of the clicks. A control
+// that isn't there fails the check that needs it, not the run.
+const tap = (p, sel) => p.locator(sel).first().click({ timeout: 2000 }).then(() => true).catch(() => false);
+const evalOr = (p, fn, arg) => p.evaluate(fn, arg).catch(() => null);
+const settled = (p, state) => p.waitForSelector(`[data-b-created="${state}"]`, { timeout: 5000 }).then(() => true).catch(() => false);
+const writesOf = (p) => evalOr(p, () => window.bots.writes?.() ?? null);
+const said = async (p) => (await p.waitForTimeout(120), evalOr(p, () => document.querySelector("#b-announce")?.textContent || ""));
+const held = (p) => evalOr(p, () => { const c = document.querySelector(".composer-input"); return !!c && c.disabled && !!document.querySelector('[data-action="send"]')?.disabled; });
+const viralCount = (p) => evalOr(p, () => window.app.bots.filter((b) => b.name === "Viral").length);
+// No write log at all is not "nothing written": it is a failure.
+const ops = (w) => (Array.isArray(w) ? w.map((x) => x.op + (x.step ? `:${x.step}` : "")).join(",") : "no write log");
+const AP = "open=create&step=approvals&name=Viral&chosen=xai:default";
+const ASK_LINE = "Sets Viral's command policy to ask for approval when a command misses the machine's allowlist.";
+const FULL_LINE = "Sets Viral's command policy to run without routine approval. The machine, the task or a rule can still require approval or block a command.";
 
-// The first bot's command policy (controls.md section 10, bots.md section 3) -------------------------
 p = await open("open=create&step=account&name=Viral&chosen=xai:default");
-await p.click('[data-b="to-approvals"]');
+await tap(p, '[data-b="to-approvals"]');
 check("AP Next from Account opens Approvals, focused on its title", (await text(p, "#create-title")) === "Approvals" && (await focused(p)) === "create-title");
-check("AP its two choices, in words", await p.evaluate(() => {
+check("AP its two choices and the lines under them, in the design's words", await evalOr(p, (w) => {
   const t = document.querySelector("#create-dialog").textContent;
-  return ["When Viral wants to run a command:", "Ask before acting", "Viral asks you before each command that isn't on this machine's allowlist. Listed commands run.", "Run without routine approvals", "Viral runs commands without asking first. It still can't change the gateway's settings or plugins, and anything that always asks still asks.", "Commands run on the gateway's computer, as Viral. You can change this later in Viral's settings."].every((w) => t.includes(w));
-}));
-check("AP nothing is chosen at first, and Create is unavailable, saying why", await p.evaluate(() => document.querySelectorAll('#create-dialog [data-b-perm][aria-checked="true"]').length === 0 && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose how Viral runs commands.")));
-check("AP the two choices are one radio group with one tab stop, neither marked as recommended", await p.evaluate(() => { const g = document.querySelectorAll('#create-dialog [role="radiogroup"]'); const r = [...document.querySelectorAll("#create-dialog [data-b-perm]")]; return g.length === 1 && r.length === 2 && r.filter((x) => x.tabIndex === 0).length === 1 && !/recommended/i.test(document.querySelector("#create-dialog").textContent); }));
-await p.click('[data-b="create"]', { force: true }).catch(() => {});
-await p.waitForTimeout(200);
-check("AP Create with nothing chosen makes nothing", (await dlg(p)) && (await p.evaluate(() => !window.app.bots.some((b) => b.name === "Viral"))));
+  return w.every((x) => t.includes(x)) && !/runs commands without asking first|on the gateway's computer, as Viral|stricter setting wins/.test(t);
+}, ["When Viral wants to run a command:", "Ask before acting", ASK_LINE, "Run without routine approvals", FULL_LINE, "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot. You can change this later in Viral's settings.", "The gateway's approvals file can require approval or block commands."]));
+check("AP nothing is chosen at first, and Create is unavailable, saying why", await evalOr(p, () => document.querySelectorAll('#create-dialog [data-b-perm][aria-checked="true"]').length === 0 && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose how Viral runs commands.") && !document.querySelector("[data-b-inherits]")));
+check("AP the group's accessible name is Approvals", (await p.getByRole("radiogroup", { name: "Approvals", exact: true }).count()) === 1);
+check("AP each choice's title is its accessible name and its line its description", (await p.getByRole("radio", { name: "Ask before acting", exact: true }).count()) === 1 && (await p.getByRole("radio", { name: "Run without routine approvals", exact: true }).count()) === 1 && (await evalOr(p, (lines) => ["ask", "full"].every((v, i) => { const r = document.querySelector(`[data-b-perm="${v}"]`); const d = (r?.getAttribute("aria-describedby") || "").split(" ").map((id) => document.getElementById(id)?.textContent || "").join(" ").trim(); return d === lines[i]; }), [ASK_LINE, FULL_LINE])));
+check("AP the two choices are one radio group with one tab stop, neither marked as recommended", await evalOr(p, () => { const g = document.querySelectorAll('#create-dialog [role="radiogroup"]'); const r = [...document.querySelectorAll("#create-dialog [data-b-perm]")]; return g.length === 1 && r.length === 2 && r.filter((x) => x.tabIndex === 0).length === 1 && !/recommended/i.test(document.querySelector("#create-dialog").textContent); }));
+await p.click('[data-b="create"]', { force: true, timeout: 2000 }).catch(() => {});
+await p.waitForTimeout(300);
+check("AP Create with nothing chosen makes nothing and writes nothing", (await dlg(p)) && (await viralCount(p)) === 0 && ops(await writesOf(p)) === "");
+check("AP the host refuses a Create with no command choice: nothing is written", (await evalOr(p, () => window.bots.hostCreate({ name: "Viral", account: "xai:default", perm: null }).refused)) === true && ops(await writesOf(p)) === "");
+check("AP the host refuses a Create with no account choice: nothing is written", (await evalOr(p, () => window.bots.hostCreate({ name: "Viral", account: null, perm: "ask" }).refused)) === true && ops(await writesOf(p)) === "");
 await p.focus("#create-title");
 await p.keyboard.press("Tab");
 await p.keyboard.press("Tab");
-check("AP Tab reaches the first choice, past Close", await p.evaluate(() => document.activeElement.dataset.bPerm === "ask"));
+check("AP Tab reaches the first choice, past Close", await evalOr(p, () => document.activeElement.dataset.bPerm === "ask"));
 await p.keyboard.press("ArrowDown");
-check("AP an arrow moves and chooses, and Create becomes available", await p.evaluate(() => document.activeElement.dataset.bPerm === "full" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
-await p.click('[data-b="to-account"]');
-check("AP Back returns to Account with its choice kept", (await text(p, "#create-title")) === "Account" && (await p.evaluate(() => document.querySelector('[data-b-choose="xai:default"]').getAttribute("aria-checked") === "true")));
-await p.click('[data-b="to-approvals"]');
-check("AP and Next returns with the approvals choice kept", await p.evaluate(() => document.querySelector('[data-b-perm="full"]').getAttribute("aria-checked") === "true"));
-await p.click('[data-b-perm="ask"]');
-await p.click('[data-b="create"]');
-await p.waitForTimeout(800);
-check("AP after the writes, the read-back comes first: nothing is said about the choice yet", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Checking what was written…") && !(await p.evaluate(() => document.querySelector("[data-b-created]"))));
-await p.waitForTimeout(900);
-check("AP created with Ask: the first task says so, once read back", !(await dlg(p)) && (await text(p, "[data-b-created]")).includes("Created with Ask before acting. Viral asks you before each command that isn't on this machine's allowlist."));
-check("AP the announcement names the choice", (await p.evaluate(() => [...document.querySelectorAll("[aria-live]")].map((e) => e.textContent).join(" "))).includes("Created Viral. Created with Ask before acting."));
+check("AP an arrow moves and chooses, and Create becomes available", await evalOr(p, () => document.activeElement.dataset.bPerm === "full" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
+check("AP once chosen, the line above Create says the bot inherits the gateway's settings first", (await text(p, "[data-b-inherits]")) === "Before Clawtrate sets Viral's policy, the new bot inherits the gateway's settings.");
+await tap(p, '[data-b="to-account"]');
+check("AP Back returns to Account with its choice kept", (await text(p, "#create-title")) === "Account" && (await evalOr(p, () => document.querySelector('[data-b-choose="xai:default"]').getAttribute("aria-checked") === "true")));
+await tap(p, '[data-b="to-approvals"]');
+check("AP and Next returns with the approvals choice kept", await evalOr(p, () => document.querySelector('[data-b-perm="full"]').getAttribute("aria-checked") === "true"));
+await tap(p, '[data-b-perm="ask"]');
+await tap(p, '[data-b="create"]');
+const reading = await settled(p, "reading");
+check("CR the dialog closes on the returned bot, which says it is checking and holds its composer", reading && !(await dlg(p)) && (await held(p)) && (await text(p, "[data-b-created]")).includes("Checking what was written…") && !(await text(p, "[data-b-created]")).includes("saved command setting"));
+const okAsk = await settled(p, "confirmed");
+check("CR with Ask: the saved setting and the reported default policy, as two separate facts", okAsk && (await text(p, "[data-b-saved]")) === "Viral's saved command setting is Ask before acting." && (await text(p, "[data-b-label]")) === "The gateway reports that the default command policy asks on an allowlist miss.");
+check("CR nothing claims an effective result", !/effective|will still ask|Created with/.test(await text(p, "[data-b-created]")));
+check("CR once read back the composer opens, with focus", await evalOr(p, () => { const c = document.querySelector(".composer-input"); return !!c && !c.disabled && document.activeElement === c; }));
+check("CR the announcement names the saved setting", (await said(p)).includes("Viral's saved command setting is Ask before acting."));
+const w1 = await writesOf(p);
+check("CR one sequence: Create once, then the restrictive patch, then the chosen policy, all to the returned id", ops(w1) === "agents.create,config.patch:2,config.patch:3" && w1?.slice(1).every((x) => x.id === "viral"), ops(w1));
+check("CR the restrictive patch is Never, the named-tool denies with t3code__*, and an empty fallback list", !!w1?.[1] && w1[1].mode === "deny" && w1[1].deny.includes("t3code__*") && !w1[1].deny.includes("t3code") && JSON.stringify(w1[1].fallbacks) === "[]");
+check("CR the policy patch writes Ask, the final list with t3code__*, and names the exact deny path in replacePaths", !!w1?.[2] && w1[2].mode === "ask" && JSON.stringify(w1[2].deny) === '["gateway","plugins","t3code__*"]' && JSON.stringify(w1[2].replacePaths) === '["agents.entries.viral.tools.deny"]');
 await p.close();
-p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=full");
-await p.click('[data-b="create"]');
-await p.waitForTimeout(1700);
-check("AP created with Run without routine approvals: the first task says so", (await text(p, "[data-b-created]")).includes("Created with Run without routine approvals. Viral runs commands without asking first.") && !(await p.evaluate(() => document.querySelector("[data-b-created]").dataset.tone)));
+
+p = await open(`${AP}&perm=full`);
+await tap(p, '[data-b="create"]');
+check("CR with Full: its saved setting and the gateway's reported label", (await settled(p, "confirmed")) && (await text(p, "[data-b-saved]")) === "Viral's saved command setting is Run without routine approvals." && (await text(p, "[data-b-label]")) === "The gateway reports no routine approval in the default command policy.");
 await p.close();
-p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&stricter=1");
-check("AP a stricter approvals file is said under Run without routine approvals, before Create", (await text(p, '[data-b-perm="full"]')).includes("This computer's approvals file asks first, and the stricter setting wins, so Viral will still ask.") && !(await text(p, '[data-b-perm="ask"]')).includes("stricter"));
-await p.click('[data-b-perm="full"]');
-await p.click('[data-b="create"]');
-await p.waitForTimeout(1700);
-check("AP and after Create, the read-back says Viral will still ask", await p.evaluate(() => { const n = document.querySelector("[data-b-created]"); return n?.dataset.tone === "warn" && n.textContent.includes("Created with Run without routine approvals, but Viral will still ask. This computer's approvals file is stricter, and the stricter setting wins."); }));
-await p.close();
-p = await open("open=create&step=approvals&name=Viral&chosen=xai:default&perm=full&create=permfail");
-await p.click('[data-b="create"]');
-await p.waitForTimeout(1700);
-check("AP a policy that doesn't read back: said, with Write it again, and no choice claimed", await p.evaluate(() => { const n = document.querySelector("[data-b-created]"); return n?.dataset.tone === "warn" && n.textContent.includes("Couldn't confirm how Viral runs commands. Until it is written, Viral can't run commands.") && !!n.querySelector('[data-b="perm-again"]') && !n.textContent.includes("Created with"); }));
-await p.close();
-for (const [label, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["phone", { width: 390, height: 844 }, "&width=phone"]]) {
-  p = await open(`open=create&step=approvals&name=Viral&chosen=xai:default&stricter=1${query}`, viewport);
-  check(`AP at ${label}: the step fits with no sideways scroll, Create in view`, await p.evaluate(() => { const c = document.querySelector('[data-b="create"]').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth + 1 && c.bottom <= innerHeight && c.right <= innerWidth; }));
-  check(`AP at ${label}: each choice is at least 48 px tall`, await p.evaluate(() => { const r = [...document.querySelectorAll("[data-b-perm]")]; return r.length === 2 && r.every((x) => x.getBoundingClientRect().height >= 48); }));
+for (const [label, words] of [["read-only", "The gateway reports that the default command policy disables commands."], ["none", "The gateway didn't report a default command policy for Viral."]]) {
+  p = await open(`${AP}&perm=full&label=${label}`);
+  await tap(p, '[data-b="create"]');
+  check(`CR a reported label of ${label} is said as reported, beside the saved Full`, (await settled(p, "confirmed")) && (await text(p, "[data-b-saved]")).includes("Run without routine approvals") && (await text(p, "[data-b-label]")) === words);
   await p.close();
 }
+p = await open(`${AP}&approvals=deny`);
+check("CR an approvals file that blocks commands is said before Create, in warn", await evalOr(p, () => { const l = document.querySelector('[data-b-file="deny"]'); return l?.dataset.tone === "warn" && l.textContent === "The gateway's approvals file blocks commands." && !document.querySelector("#create-dialog").textContent.includes("can require approval or block"); }));
+await p.close();
 
-// F-005: a gateway with no bots opens on the first-bot prompt.
+p = await open(`${AP}&perm=ask&create=timeout`);
+await tap(p, '[data-b="create"]');
+await p.waitForTimeout(1100);
+check("CR a lost Create reply: not confirmed, with Review bots", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Clawtrate couldn't confirm whether Viral was created. Review the gateway's bot list.") && (await evalOr(p, () => !!document.querySelector('[data-b="review-bots"]') && !document.querySelector('[data-b="create"]'))));
+check("CR the lost reply is announced", (await said(p)).includes("Clawtrate couldn't confirm whether Viral was created"), await said(p));
+check("CR no policy or model patch is sent from that attempt, and no bot is assumed", ops(await writesOf(p)) === "agents.create" && (await viralCount(p)) === 0);
+await tap(p, '[data-b="review-bots"]');
+check("CR Review bots closes and shows what the gateway lists", !(await dlg(p)) && (await viralCount(p)) === 0);
+await p.close();
+p = await open(`${AP}&perm=ask&create=failed`);
+await tap(p, '[data-b="create"]');
+await p.waitForTimeout(1000);
+check("CR a refused Create keeps the dialog and writes nothing more", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Could not create the bot. Please try again.") && ops(await writesOf(p)) === "agents.create");
+await p.close();
+
+p = await open(`${AP}&perm=ask&create=partial`);
+await tap(p, '[data-b="create"]');
+check("CR the restrictive step not read back: its own state, nothing sent, and no policy write", (await settled(p, "restrictfail")) && (await evalOr(p, () => document.querySelector("[data-b-created]").dataset.tone === "danger")) && (await text(p, "[data-b-created]")).includes("Couldn't confirm Viral's settings. Clawtrate sends nothing to Viral until they are confirmed.") && (await held(p)) && ops(await writesOf(p)) === "agents.create,config.patch:2");
+await tap(p, '[data-b="restrict-again"]');
+check("CR Write them again repeats only the restrictive write, then the policy, for the same bot", (await settled(p, "confirmed")) && ops(await writesOf(p)) === "agents.create,config.patch:2,config.patch:2,config.patch:3" && (await viralCount(p)) === 1);
+await p.close();
+p = await open(`${AP}&perm=full&create=conflict`);
+await tap(p, '[data-b="create"]');
+check("CR a hash conflict before the policy write: it stops, writes no policy, and says it couldn't confirm", (await settled(p, "unconfirmed")) && ops(await writesOf(p)) === "agents.create,config.patch:2" && (await held(p)));
+await p.close();
+p = await open(`${AP}&perm=ask&readback=pending`);
+await tap(p, '[data-b="create"]');
+await settled(p, "reading");
+await p.waitForTimeout(1500);
+check("CR a read-back still pending: Checking what was written…, the composer held, announced", (await evalOr(p, () => document.querySelector("[data-b-created]")?.dataset.bCreated)) === "reading" && (await held(p)) && (await said(p)).includes("Checking what was written"));
+await p.close();
+p = await open(`${AP}&perm=full&readback=mismatch`);
+await tap(p, '[data-b="create"]');
+check("CR a mismatched read-back: couldn't confirm, with the setting it did read", (await settled(p, "unconfirmed")) && (await text(p, "[data-b-created]")).includes("Clawtrate couldn't confirm Viral's command setting. Review the gateway's settings before sending a task. Its saved command setting is Never.") && (await held(p)));
+check("CR the mismatch is announced", (await said(p)).includes("Clawtrate couldn't confirm Viral's command setting"), await said(p));
+check("CR with Review settings and, for the identified bot, Write it again", await evalOr(p, () => !!document.querySelector('[data-b="review-settings"]') && !!document.querySelector('[data-b="perm-again"]')));
+await tap(p, '[data-b="perm-again"]');
+check("CR Write it again repeats only the policy write: no second Create, one Viral", (await settled(p, "confirmed")) && ops(await writesOf(p)) === "agents.create,config.patch:2,config.patch:3,config.patch:3" && (await viralCount(p)) === 1 && (await text(p, "[data-b-saved]")).includes("Run without routine approvals"));
+await p.close();
+p = await open(`${AP}&perm=ask&readback=fail&retry=fail`);
+await tap(p, '[data-b="create"]');
+check("CR a failed read: couldn't confirm, naming no setting", (await settled(p, "unconfirmed")) && !(await text(p, "[data-b-created]")).includes("Its saved command setting"));
+await tap(p, '[data-b="perm-again"]');
+await settled(p, "reading");
+check("CR a retry whose read fails stays unconfirmed, the composer held", (await settled(p, "unconfirmed")) && (await held(p)) && (await viralCount(p)) === 1);
+await p.close();
+p = await open(`${AP}&perm=ask&readback=fail&retry=gone`);
+await tap(p, '[data-b="create"]');
+check("CR when the bot is no longer identified, no Write it again is offered", (await settled(p, "unconfirmed")) && (await evalOr(p, () => !document.querySelector('[data-b="perm-again"]') && !!document.querySelector('[data-b="review-settings"]'))));
+await p.close();
+p = await open(`${AP}&perm=ask`);
+await evalOr(p, () => window.bots.setAccess("write"));
+await p.waitForTimeout(100);
+check("AP access dropping below admin while the step is open removes the choices and Create", await evalOr(p, () => !document.querySelector("[data-b-perm]") && !document.querySelector('[data-b="create"]') && !!document.querySelector("#create-dialog .access-bar")));
+await p.close();
+
+// F-005: the first-bot prompt only on a confirmed unused implicit main.
 p = await open("state=nobots");
-check("FB no bots: the first-bot prompt, in place of No bots to show", (await text(p, "#transcript")).includes("Make your first bot") && (await text(p, "#transcript")).includes("Give it a name and a picture, choose the account it runs on and how it runs commands.") && !(await text(p, "#transcript")).includes("No bots to show"));
-await p.click('[data-b="first-bot"]');
-check("FB New bot on the prompt opens New bot; nothing is created by the prompt", (await dlg(p)) && (await focused(p)) === "b-name" && (await p.evaluate(() => window.app.bots.length === 0)));
+check("FB the replies confirm an unused implicit main: the first-bot prompt, in place of No bots to show", (await evalOr(p, () => window.bots.first?.().eligible)) === true && (await text(p, "#transcript")).includes("Make your first bot") && (await text(p, "#transcript")).includes("Give it a name and a picture, choose the account it runs on and how it runs commands.") && !(await text(p, "#transcript")).includes("No bots to show"));
+await tap(p, '[data-b="first-bot"]');
+check("FB New bot on the prompt opens New bot; nothing is created by the prompt", (await dlg(p)) && (await focused(p)) === "b-name" && (await evalOr(p, () => window.app.bots.length === 0)) && ops(await writesOf(p)) === "");
 await p.keyboard.type("Viral");
-await p.click('[data-b="next"]');
-await p.click('[data-b-choose="xai:default"]');
-await toCreate(p, "ask");
-await p.click('[data-b="create"]');
-await p.waitForTimeout(1700);
-check("FB after Create the first bot is the only bot, its task open with Message Viral", await p.evaluate(() => window.app.bots.length === 1 && !document.querySelector("[data-b-first]") && document.querySelector(".composer-input")?.getAttribute("placeholder") === "Message Viral"));
+await tap(p, '[data-b="next"]');
+await tap(p, '[data-b-choose="xai:default"]');
+await tap(p, '[data-b="to-approvals"]');
+await tap(p, '[data-b-perm="ask"]');
+await tap(p, '[data-b="create"]');
+check("FB after Create the rail shows what the gateway lists, the new bot, its task open with Message Viral", (await settled(p, "confirmed")) && (await evalOr(p, () => window.app.bots.map((b) => b.name).join() === "Viral" && !document.querySelector("[data-b-first]") && document.querySelector(".composer-input")?.getAttribute("placeholder") === "Message Viral")));
 await p.close();
 p = await open("state=nobots&access=read");
-check("FB below admin: the prompt says what the default bot does now and that creating needs admin", await p.evaluate(() => { const t = document.querySelector("#transcript").textContent; return t.includes("Until you make one, the gateway's default bot runs commands without asking.") && t.includes("Creating a bot changes the gateway's settings, which needs admin access.") && !!document.querySelector('#transcript [data-b="request"]') && !document.querySelector('[data-b="first-bot"]'); }));
-await p.click('#transcript [data-b="request"]');
+check("FB below admin: Main's reported policy, and that creating needs admin", await evalOr(p, () => { const t = document.querySelector("#transcript").textContent; return t.includes("The gateway reports no routine approval in Main's default command policy.") && t.includes("Creating a bot changes the gateway's settings, which needs admin access.") && !!document.querySelector('#transcript [data-b="request"]') && !document.querySelector('[data-b="first-bot"]') && !/Until you make one/.test(t); }));
+await tap(p, '#transcript [data-b="request"]');
 await p.waitForTimeout(800);
 check("FB below admin: Request admin access leads to the request", (await text(p, "#transcript .access-bar")).includes("Waiting for the gateway's owner."));
 await p.close();
-for (const [perm, words] of [["guarded", "asks before commands that aren't on its machine's allowlist."], ["read-only", "can't run commands."]]) {
+for (const [perm, words] of [["guarded", "The gateway reports that Main's default command policy asks on an allowlist miss."], ["read-only", "The gateway reports that Main's default command policy disables commands."]]) {
   p = await open(`state=nobots&access=write&defperm=${perm}`);
-  check(`FB below admin, the default bot ${perm}: said as read`, (await text(p, "[data-b-default-policy]")).includes(words));
+  check(`FB below admin, Main reported ${perm}: said as reported`, (await text(p, "[data-b-default-policy]")) === words);
   await p.close();
 }
 p = await open("state=nobots&access=write&defperm=none");
-check("FB below admin, no policy read: nothing is said about it", await p.evaluate(() => !document.querySelector("[data-b-default-policy]")));
+check("FB below admin, no label reported: nothing is said about it", await evalOr(p, () => !!document.querySelector("[data-b-first]") && !document.querySelector("[data-b-default-policy]")));
 await p.close();
-p = await open();
-check("FB a gateway with bots shows no first-bot prompt", await p.evaluate(() => !document.querySelector("[data-b-first]")));
-await p.close();
-for (const [label, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["phone", { width: 390, height: 844 }, "&width=phone"]]) {
-  p = await open(`state=nobots&access=read${query}`, viewport);
-  check(`FB at ${label}: the prompt fits with no sideways scroll`, await p.evaluate(() => { const r = document.querySelector("[data-b-first]")?.getBoundingClientRect(); return !!r && r.width > 0 && document.documentElement.scrollWidth <= innerWidth + 1; }));
+for (const [roster, what, main] of [["used", "an implicit main with tasks", true], ["legacy", "a main configured in the legacy agents.list", true], ["missing", "no session reply", true], ["fail", "a failed roster read", false]]) {
+  p = await open(`state=nobots&roster=${roster}`);
+  check(`FB ${what}: the normal roster, no first-bot prompt`, (await evalOr(p, () => window.bots.first?.().eligible)) === false && (await evalOr(p, (m) => !document.querySelector("[data-b-first]") && (m ? window.app.bots.map((b) => b.name).join() === "Main" : document.querySelector("#transcript").textContent.includes("No bots to show")), main)));
   await p.close();
 }
+p = await open();
+check("FB a gateway with bots shows no first-bot prompt", await evalOr(p, () => !document.querySelector("[data-b-first]")));
+await p.close();
+
+// Both walks at 1440 and phone width, dark (the default) and light.
+const openThemed = async (query, viewport, theme) => {
+  const q = await b.newPage({ viewport });
+  q.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  await q.goto(base.replace("theme=light", `theme=${theme}`) + "&" + query);
+  await q.waitForTimeout(150);
+  return q;
+};
+for (const theme of ["dark", "light"])
+  for (const [label, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["phone", { width: 390, height: 844 }, "&width=phone"]]) {
+    const at = `${label}, ${theme}`;
+    p = await openThemed(`${AP}&approvals=deny${query}`, viewport, theme);
+    check(`AP at ${at}: the theme is applied`, (await evalOr(p, () => document.documentElement.dataset.theme)) === theme);
+    await tap(p, '[data-b-perm="full"]');
+    check(`AP at ${at}: the step fits with no sideways scroll, Create in view`, await evalOr(p, () => { const c = document.querySelector('[data-b="create"]').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth + 1 && c.bottom <= innerHeight && c.right <= innerWidth; }));
+    check(`AP at ${at}: each choice is at least 48 px tall`, await evalOr(p, () => { const r = [...document.querySelectorAll("[data-b-perm]")]; return r.length === 2 && r.every((x) => x.getBoundingClientRect().height >= 48); }));
+    await tap(p, '[data-b="create"]');
+    check(`CR at ${at}: the confirmed note fits, with no sideways scroll`, (await settled(p, "confirmed")) && (await evalOr(p, () => { const r = document.querySelector("[data-b-created]").getBoundingClientRect(); return r.width > 0 && r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth + 1; })));
+    await p.close();
+    p = await openThemed(`${AP}&perm=full&readback=mismatch${query}`, viewport, theme);
+    await tap(p, '[data-b="create"]');
+    check(`CR at ${at}: the unconfirmed note and its actions fit`, (await settled(p, "unconfirmed")) && (await evalOr(p, () => [...document.querySelectorAll("[data-b-created], [data-b-created] button")].every((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right <= innerWidth; }) && document.documentElement.scrollWidth <= innerWidth + 1)));
+    await p.close();
+    p = await openThemed(`state=nobots&access=read${query}`, viewport, theme);
+    check(`FB at ${at}: the prompt fits with no sideways scroll`, await evalOr(p, () => { const r = document.querySelector("[data-b-first]")?.getBoundingClientRect(); return !!r && r.width > 0 && document.documentElement.scrollWidth <= innerWidth + 1; }));
+    await p.close();
+    p = await openThemed(`state=nobots${query}`, viewport, theme);
+    check(`FB at ${at}: the prompt's New bot is in view`, await evalOr(p, () => { const r = document.querySelector('[data-b="first-bot"]')?.getBoundingClientRect(); return !!r && r.bottom <= innerHeight && r.right <= innerWidth; }));
+    await p.close();
+  }
 
 // Settings, Accounts.
 p = await open();

@@ -468,10 +468,12 @@
     }
     delete el.dataset.readonly;
     const draft = model.drafts[t.id] || "";
+    // A page built on this one can hold a task's composer until it has read something back (bots.html: a new bot's command setting).
+    const held = t.hold ? " disabled" : "";
     el.innerHTML =
       `<div class="composer-inner"><div class="composer-box">` +
       `<button type="button" class="icon-button" data-action="attach" aria-label="Attach files">${icon("plus")}</button>` +
-      `<textarea class="composer-input" rows="1" aria-label="Message ${b.name}" placeholder="${offline() ? "Offline. Messages send when you reconnect." : `Message ${b.name}`}">${esc(draft)}</textarea>` +
+      `<textarea class="composer-input" rows="1" aria-label="Message ${b.name}" placeholder="${offline() ? "Offline. Messages send when you reconnect." : `Message ${b.name}`}"${held}>${esc(draft)}</textarea>` +
       `<button type="button" class="icon-button send-button" data-action="send" aria-label="Send"${canSend() ? "" : " disabled"}>${icon("arrow-up")}</button>` +
       `</div></div>`;
   }
@@ -479,7 +481,7 @@
   // One guard for every way of sending: the button, Enter, anything else.
   function canSend() {
     const t = currentTask();
-    return Boolean(t && canWrite() && (model.drafts[t.id] || "").trim());
+    return Boolean(t && canWrite() && !t.hold && (model.drafts[t.id] || "").trim());
   }
 
   function send() {
