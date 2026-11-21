@@ -8,6 +8,7 @@ import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts
 import type { TaskActivity } from "./runs.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
+import type { ComputerState } from "./computer.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
 export type ConnectionStatus =
@@ -385,6 +386,13 @@ export type ClawtrateState = {
    */
   sidebar?: SidebarState;
   /**
+   * The Work pane's Computer tab (`computer.ts`): whether the gateway has the
+   * computer plugin, the latest control event of each bot's tab, and each
+   * viewer's pane. Never a ticket, a frame or a lease's generation of this
+   * device's own. Absent where a host does not show it.
+   */
+  computer?: ComputerState;
+  /**
    * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
    * their own settings and the save under way. Absent until a screen reads them
    * (`refreshCheckIns`).
@@ -484,5 +492,6 @@ export const initialState: ClawtrateState = {
   routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
+  computer: { plugin: null, control: [], panes: {} },
   usage: initialUsage,
 };
