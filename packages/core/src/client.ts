@@ -911,6 +911,8 @@ export class ClawtrateClient {
     lifecycle: GatewayBrowserDeviceAuthLifecycle;
   } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
+  /** The generation of the connection opened as the host's setup connection, while it lasts. */
+  private setupGeneration: number | null = null;
   private settings: ConnectionSettings | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
@@ -1107,7 +1109,7 @@ export class ClawtrateClient {
     },
     now: () => this.now(),
     randomId: () => this.randomId(),
-    log: (message) => this.log("warn", message),
+    log: (message) => this.logEngine(message),
   });
   /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
   private readonly routines = new RoutinesEngine({
@@ -1131,7 +1133,7 @@ export class ClawtrateClient {
       this.store.update((state) => ({ ...state, usage: change(state.usage ?? initialUsage) })),
     connected: () => this.state.connection.status === "connected",
     now: () => this.now(),
-    log: (message) => this.log("warn", message),
+    log: (message) => this.logEngine(message),
   });
   /**
    * Where a bot runs and the gateway's machines (`machines.ts`): read when a page
@@ -2855,7 +2857,7 @@ export class ClawtrateClient {
           if (stopped?.aborted === true) note("bots", link.sessionKey);
           return;
         } catch (error) {
-          this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
+          this.logFailure("warn", "chat.abort of a recipient", error);
           if (error instanceof GatewayProtocolRequestError) return note("refused", link.sessionKey);
           // No answer: once the connection is back, asked once more.
           if (attempt > 0) return note("unanswered", link.sessionKey);
@@ -3254,7 +3256,7 @@ export class ClawtrateClient {
       if (resolution && resolution.id === id) this.noteApprovalOutcome(resolution);
     } catch (error) {
       if (generation === this.generation) this.noteMissingScope(error);
-      this.log("warn", `approval.get failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "approval.get", error);
     } finally {
       this.lookingUp.delete(id);
     }
@@ -3425,7 +3427,7 @@ export class ClawtrateClient {
       this.listApplied.set(listKey, revision);
       this.noteMissingScope(error);
       this.setApprovalSource(key, source.kind, isMissingScope(error) ? "unavailable" : "error");
-      this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      this.logFailure("warn", source.method, error);
       return;
     }
     if (stale()) return;
@@ -3661,8 +3663,7 @@ export class ClawtrateClient {
     try {
       answer = await this.request("tools.effective", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
-        this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
+      if (generation === this.generation) this.logFailure("warn", "tools.effective", error);
       return;
     }
     if (
@@ -3707,8 +3708,7 @@ export class ClawtrateClient {
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (currentConnection())
-        this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
+      if (currentConnection()) this.logFailure("warn", "session.reactions.list", error);
       return;
     }
     if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
@@ -3879,8 +3879,7 @@ export class ClawtrateClient {
           try {
             answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
           } catch (error) {
-            if (generation === this.generation)
-              this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+            if (generation === this.generation) this.logFailure("warn", "agent.wait", error);
             return;
           }
           if (
@@ -3915,8 +3914,7 @@ export class ClawtrateClient {
     try {
       answer = await this.request("agents.files.list", { agentId: botId });
     } catch (error) {
-      if (generation === this.generation)
-        this.log("warn", `agents.files.list failed: ${errorMessage(error)}`);
+      if (generation === this.generation) this.logFailure("warn", "agents.files.list", error);
       return;
     }
     if (
@@ -4319,7 +4317,7 @@ export class ClawtrateClient {
         this.listApplied.set(listKey, revision);
         this.noteMissingScope(error);
       }
-      this.log("warn", `question.list failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "question.list", error);
     }
   }
 
@@ -5150,7 +5148,7 @@ export class ClawtrateClient {
     const previous = this.deliveries.get(key) ?? Promise.resolve();
     const next = previous
       .then(() => this.deliver(key, messageId))
-      .catch((error: unknown) => this.log("error", `delivery failed: ${errorMessage(error)}`));
+      .catch((error: unknown) => this.logFailure("error", "delivery", error));
     this.deliveries.set(key, next);
     void next.then(() => {
       if (this.deliveries.get(key) === next) this.deliveries.delete(key);
@@ -5239,6 +5237,8 @@ export class ClawtrateClient {
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
+    // Every read this connection makes logs fixed words if it is setup's, after setup ends too.
+    this.setupGeneration = this.isSetup(settings.url) ? generation : null;
     // A connection made with the host's setup code stages its first token here.
     this.tokenGate =
       this.setupCode?.url === settings.url ? { generation, url: settings.url, staged: null } : null;
@@ -6987,7 +6987,7 @@ export class ClawtrateClient {
       const sidebar = await readSidebar(this.actionContext(null));
       if (generation === this.generation) this.setSidebar(sidebar, issued);
     } catch (error) {
-      this.log("warn", `users.prefs.get failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "users.prefs.get", error);
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
     }
@@ -7018,7 +7018,7 @@ export class ClawtrateClient {
             changed = this.waiting.restoreApproval(card, this.now()) || changed;
         }
       } catch (error) {
-        this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+        this.logFailure("warn", source.method, error);
       }
     }
     if (changed) this.publishTasks();
@@ -7034,7 +7034,7 @@ export class ClawtrateClient {
       this.waiting.replaceQuestions(questions, this.now());
       this.publishTasks();
     } catch (error) {
-      this.log("warn", `question.list failed: ${errorMessage(error)}`);
+      this.logFailure("warn", "question.list", error);
     }
   }
 
@@ -7291,6 +7291,32 @@ export class ClawtrateClient {
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
     this.host.log?.(level, this.scrub(message));
+  }
+
+  /**
+   * A request that failed, logged with the gateway's own words, except on a setup
+   * connection: there it is a fixed line, like everything else setup publishes.
+   */
+  /** Whether this connection is, or was opened as, the host's setup connection. */
+  private quiet(): boolean {
+    return this.setupGeneration === this.generation || this.isSetup(this.settings?.url);
+  }
+
+  /** An engine's warning: on a setup connection, a fixed line, never the gateway's words. */
+  private logEngine(message: string): void {
+    this.log("warn", this.quiet() ? "a read failed on the setup connection" : message);
+  }
+
+  private logFailure(
+    level: "warn" | "error",
+    what: string,
+    error: unknown,
+    setup = this.quiet(),
+  ): void {
+    this.log(
+      level,
+      setup ? `${what} failed on the setup connection` : `${what} failed: ${errorMessage(error)}`,
+    );
   }
 }
 

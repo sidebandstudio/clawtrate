@@ -314,6 +314,30 @@ describe("the setup connection's token gate", () => {
   });
 });
 
+describe("a setup connection's other reads", () => {
+  it("F-492: a failed read beside the bots, such as the preferences, says fixed words, never the gateway's own", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const secret = "gateway-says-internal-path-/srv/secret-9f2c";
+    const fail = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: secret });
+    };
+    gateway.handlers["users.prefs.get"] = fail;
+    const { client, everything } = recorded(gateway);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.discovery.status === "ready");
+    await until(() => gateway.calls("users.prefs.get").length > 0);
+    await sleep(100);
+    expect(everything()).toContain("users.prefs.get failed on the setup connection");
+    expect(everything()).not.toContain(secret);
+    client.stop();
+  });
+});
+
 /** A client whose every published state and log line is kept, as text. */
 function recorded(gateway: FakeGateway, storage = memoryStorage()) {
   const logs: string[] = [];
