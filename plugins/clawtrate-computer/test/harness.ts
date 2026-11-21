@@ -70,6 +70,8 @@ export class FakeBrowser {
   noBrowserEndpoint = false;
   /** Commands that are never answered. */
   stalledMethods = new Set<string>();
+  /** Tabs, by target id, whose session answers no command. */
+  stalledTabs = new Set<string>();
   sockets: FakeSocket[] = [];
 
   constructor() {
@@ -209,6 +211,8 @@ export class FakeSocket extends EventEmitter {
       }
     }
     if (this.browser.stalledMethods.has(message.method)) return;
+    const session = (message as { sessionId?: string }).sessionId;
+    if (session && this.browser.stalledTabs.has(session.replace(/^S-/, ""))) return;
     browserTimer(() => {
       if (!this.closed)
         this.emit("message", { data: JSON.stringify({ id: message.id, result: {} }) });
@@ -304,6 +308,7 @@ export function load(
     ticketTtlMs?: number;
     quietWindowMs?: number;
     quietTimeoutMs?: number;
+    callConfirmMs?: number;
   } = {},
 ) {
   const browser = options.browser ?? new FakeBrowser();
@@ -336,6 +341,7 @@ export function load(
     quietWindowMs: options.quietWindowMs ?? 20,
     quietTimeoutMs: options.quietTimeoutMs,
     renewTimeoutMs: options.renewTimeoutMs,
+    callConfirmMs: options.callConfirmMs,
     fetchImpl: browser.fetchImpl,
     WebSocketImpl: browser.WebSocketImpl,
   });

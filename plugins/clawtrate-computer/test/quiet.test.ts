@@ -258,6 +258,41 @@ describe("what the plugin can see in the bot's browser, a take does not grant ov
     await h.stop();
   });
 
+  it("a tab that does not answer the watch in time is not loading for ever: the take says it cannot see it, and is granted once the tab answers when asked again", async () => {
+    // As Chromium's own empty tab did under load: Page.enable not answered in time.
+    const h = load({
+      timeouts: { discoveryMs: 300, connectMs: 300, commandMs: 200 },
+      quietWindowMs: 60,
+      quietTimeoutMs: 500,
+    });
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SECOND)]);
+    h.browser.stalledTabs.add(SECOND);
+    await watched(h);
+    await sleep(300);
+    const refused = await h.call("control.take", tab);
+    expect(refused.payload).toMatchObject({ state: "busy", cause: "browser-not-watched" });
+    expect(h.events.find((e) => e.state === "busy")?.reason).toBe("browser-not-watched");
+    // The tab answers now: the next take asks it again and is granted.
+    h.browser.stalledTabs.delete(SECOND);
+    expect((await h.call("control.take", tab)).payload?.state).toBe("granted");
+    await h.stop();
+  });
+
+  it("a busy answer carries the event's code as `cause` beside its sentence", async () => {
+    const h = load({ quietWindowMs: 60, quietTimeoutMs: 500 });
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SECOND)]);
+    await watched(h);
+    h.browser.tabEvent(ATLAS, SECOND, "Page.frameStartedLoading", { frameId: "f2" });
+    const refused = await h.call("control.take", tab);
+    expect(refused.payload).toMatchObject({
+      state: "busy",
+      reason: "the bot's browser is still loading a page",
+      cause: "browser-not-quiet",
+    });
+    expect(h.events.find((e) => e.state === "busy")?.reason).toBe(refused.payload?.cause);
+    await h.stop();
+  });
+
   it("refuses when the plugin cannot watch the bot's browser", async () => {
     const h = load();
     h.browser.noBrowserEndpoint = true;
