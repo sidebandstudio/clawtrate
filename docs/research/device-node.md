@@ -87,9 +87,9 @@ Why, in the source:
 - **The surface.** `node.pair.approve` checks ownership first (`enforcePendingNodePairingOwnership`, `<openclaw>/dist/nodes-BW91tb1K.mjs`, before line 1060) and then the scopes the commands need (`approveNodePairing` with `callerScopes`, line 1105). `node.pair.list` gives a caller without admin only its own device (line 1094).
 - **"Its own device"** is the device a caller authenticated as with a device token: `callerDeviceId` is set only when `isDeviceTokenAuth` (`<openclaw>/dist/device-management-security-Dx--n3Fk.mjs` line 8; `message-handler-CRCo2VX0.mjs` line 3172).
 
-So, for Clawtrate's kind of connection:
+So, for each kind of connection. The second column is the node's own key also connected as an operator, as in `(c)`. Clawtrate's node has a key of its own (section 1.7), so Clawtrate's operator connection is "Another device" for it: below admin it can't approve its node's surface.
 
-| Step                              | Clawtrate's own operator, without admin                                                                 | Another device without admin | Admin connection | The gateway's computer                             |
+| Step                              | The node's own key as an operator, without admin (`(c)`)                                                | Another device without admin | Admin connection | The gateway's computer                             |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------- | ---------------- | -------------------------------------------------- |
 | See the device request            | Its own only                                                                                            | Its own only                 | All              | `openclaw devices list`                            |
 | Approve the device (role node)    | No                                                                                                      | No                           | Yes              | `openclaw devices approve <requestId>`             |
@@ -348,7 +348,7 @@ sessions.create twice with one key and the same arguments: {"first":"agent:pip:d
 the same key with different arguments: {"ok":false,"error":"session creation idempotency key was reused with different parameters","code":"INVALID_REQUEST"}
 ```
 
-  On the same gateway start and authenticated owner, an identical retry returned the same task. The gateway keeps completed results for five minutes. Clawtrate checks the boot ID and uses a four-minute window (`docs/decisions.md`, Creating a task). With anything changed, it is refused.
+  On the same gateway start and authenticated owner, an identical retry returned the same task. The gateway keeps completed results for five minutes. Clawtrate checks the boot ID and uses a four-minute window (`docs/decisions.md`, Creating a task). Changed arguments under the same key were refused while the first result was kept. After a restart, or once that record is gone, the same request can make a second task, so Clawtrate doesn't send it again then: it sends the person to the bot's tasks (design section 11).
 - On the iPhone, **unverified** here, since the app is not on `main`: what a share extension receives, whether it can use the app's paired device credential through a shared keychain, whether it can open the app, and what an App Intent's confirmation shows. The design names each as a builder's proof.
 
 ### 7.1 Which tasks are a person's own chats

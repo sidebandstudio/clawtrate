@@ -31,7 +31,7 @@
   const TITLE = P ? "This iPhone" : "This Mac";
 
   // Kept from one state to the next; everything else is per state.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit", "history", "half", "gw", "gone", "big", "nodefault", "nobots"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit", "history", "half", "gw", "gone", "big", "nodefault", "nobots", "ipad", "pc"];
   const go = (to, extra = {}) => {
     const next = new URLSearchParams();
     for (const key of KEEP) if (params.get(key) !== null) next.set(key, params.get(key));
@@ -177,6 +177,9 @@
   // What the gateway listed for an app: listed, partial (half=<app>: its first command only) or notlisted.
   const gatewayOf = (id) =>
     list("omit").includes(id) ? "notlisted" : list("half").includes(id) ? "partial" : OWN_APPS.includes(id) ? (id === chosen && params.get("own") === "listed" ? "listed" : "notlisted") : "listed";
+  // Whether the stored settings (config.get) were read without an app's entries: not after a read that failed, nor
+  // when only the active listing dropped them (read=active, the stored settings still list them).
+  const storedAbsent = (id) => !(id === chosen && ["active", "fail"].includes(params.get("read")));
   const codes = (cmds, join = " and ") => cmds.map((c) => `<code>${c}</code>`).join(join);
 
   const without = (key, id) => list(key).filter((x) => x !== id).join(",") || null;
@@ -221,7 +224,7 @@
       `<span class="d-fact">Gateway: ${gatewayLine}</span>` +
       missingLine +
       // Read as absent from the allowlist (config.get), entry by entry.
-      (gateway === "notlisted" && OWN_APPS.includes(id) ? `<span class="d-fact" data-absent>The gateway's allowlist didn't include ${codes(cmds, " or ")} when read at 5:31 PM.</span>` : "") +
+      (gateway === "notlisted" && OWN_APPS.includes(id) && storedAbsent(id) ? `<span class="d-fact" data-absent>The gateway's allowlist didn't include ${codes(cmds, " or ")} when read at 5:31 PM.</span>` : "") +
       scope +
       `</div><div class="d-app-action">${action}</div></div></li>`
     );
@@ -265,7 +268,7 @@
     `<li class="d-record" data-record="${r.id}"><p class="d-record-head"><b>${r.when}</b> · ${r.app} · <code>${r.command}</code></p>` +
     `<p>${r.named}</p><p data-did>${r.did}</p><p data-sent>${r.code ? `Sent <code>${r.code}</code>.` : r.sent}</p>${r.ack ? `<p data-ack>${r.ack}</p>` : ""}` +
     `<details class="d-raw"><summary>Raw</summary><pre><code>${esc(
-      JSON.stringify({ id: `${r.id}7f…`, command: r.command, paramsJSON: r.params || "{}", ...(r.code ? { sent: { ok: false, error: { code: r.code, message: r.sentence } } } : {}) }, null, 1),
+      JSON.stringify({ id: r.req ? r.req.id : `${r.id}7f…`, command: r.command, paramsJSON: r.params || "{}", ...(r.req ? { timeoutMs: r.req.timeoutMs, sessionKey: "agent:otto:dashboard:9c2e…" } : {}), ...(r.code ? { sent: { ok: false, error: { code: r.code, message: r.sentence } } } : {}) }, null, 1),
     )}</code></pre></details></li>`;
   const records = (phone, rows) =>
     `<h4 class="b-group">Requests to this device</h4>` +
@@ -399,7 +402,9 @@
             : fail === "pair"
               ? note("danger", `The gateway didn't pair this ${what} with the code.`, "Its reason: <code>PAIRING_REQUIRED (role-upgrade)</code>.") + retry()
               : fail === "read"
-                ? note("danger", "Couldn't read what the gateway lists.", `Requests to this ${what} wait until it is read.`) + retry("Check again")
+                ? note("danger", "Couldn't read what the gateway lists.", `Requests to this ${what} wait until it is read.`) +
+                  // A read again on the same connection: the code and the hello already succeeded.
+                  `<div class="d-actions">${act("Check again", go(here, { fail: null, at: "2" }), { variant: "primary", attrs: "data-retry" })}</div>`
                 : fail === "pending"
                   ? note("warn", `This ${what}'s commands wait for approval.`, `Pending: <code>${declared[2]}</code>, <code>${declared[3]}</code>.`) +
                     // Compared again just before node.pair.approve {requestId}: the request against the current declaration.
@@ -596,7 +601,7 @@
                 kind: "none",
                 scope: "Allow reads your calendar's events for this request, and lets every later request for Calendar that reaches this Mac read them, until you turn it off.",
                 foot: "Clawtrate closes this card by 5:44:30 PM.",
-                allowTo: go("mac-request", { ask: "allowed", said: "Calendar allowed" }),
+                allowTo: go("mac-request", { ask: "allowed", allowed: withId("allowed", "calendar"), said: "Calendar allowed" }),
                 denyTo: go("mac-on", { off: withId("off", "calendar"), said: "Calendar denied" }),
                 cmd: "calendar.events",
                 p: '{"from":"2026-11-21","to":"2026-11-22"}',
@@ -805,7 +810,7 @@
     const from = params.get("from");
     return [
       ...(from === "timedout"
-        ? [{ id: "t1", when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Timed out at 5:44 PM. Didn't run it. No permission was set by this request.", sent: "Sent nothing." }]
+        ? [{ id: "t1", req: REQS.c41d, params: REQS.c41d.p, when: "5:44 PM", app: "Location", command: "location.get", named: named("listed"), did: "Timed out at 5:44 PM. Didn't run it. No permission was set by this request.", sent: "Sent nothing." }]
         : []),
       ...(history ? [{ id: "p1", when: "5:20 PM", app: "Calendar", command: "calendar.events", named: named("listed"), did: "Ran it.", sent: "Sent the result.", ack: "The gateway accepted it." },
       { id: "p2", when: "5:02 PM", app: "Reminders", command: "reminders.list", named: named("none"), did: "Didn't run it: Reminders is Denied on this iPhone.", code: "NOT_ALLOWED_ON_DEVICE", sentence: `Reminders is not allowed on ${PHONE}.`, ack: "The gateway ignored this device's answer." }] : []),
@@ -1054,7 +1059,7 @@
     "share-unsure": () => {
       // Check again may submit the same operation only within four minutes, and only when the current
       // hello matches the saved address, credential context and nonempty boot ID.
-      const outside = params.get("late") === "1" || ["changed", "missing"].includes(params.get("start")) || params.get("cred") === "changed";
+      const outside = params.get("late") === "1" || ["changed", "missing"].includes(params.get("start")) || params.get("cred") === "changed" || params.get("addr") === "changed";
       const bot = toBot();
       return (
         other() +
@@ -1069,6 +1074,7 @@
                   link("A new gateway start", go("share-unsure", { start: "changed" })),
                   link("A hello with no boot ID", go("share-unsure", { start: "missing" })),
                   link("Other credentials", go("share-unsure", { cred: "changed" })),
+                  link("Another gateway address", go("share-unsure", { addr: "changed" })),
                 ),
           "Clawtrate",
           "unknown",
@@ -1094,7 +1100,7 @@
         (fromSiri ? "" : `<ul class="d-chips">${chips()}</ul>`) +
         `<textarea aria-label="Message" data-draft>${esc(fromSiri ? params.get("msg") || "Remind me to water the plants tonight." : noteText())}</textarea>` +
         (!canSend ? `<p class="d-lead" data-preview>Sending needs write access to the gateway.</p>` : bot && !fromSiri ? `<p class="d-lead" data-preview>Send starts a new task with ${BOTS[bot]}, with ${items()}.</p>` : "") +
-        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-draft-send${bot && canSend ? "" : " disabled"}>Send</button></div></div></div></div>`
+        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-draft-send data-where="Sends as the composer does (conversation.md). Nothing is sent in the prototype."${bot && canSend ? "" : " disabled"}>Send</button></div></div></div></div>`
       );
     },
     "share-closed": () => {
@@ -1153,10 +1159,10 @@
 
   const root = document.getElementById("device-root");
   let id = Object.hasOwn(SCREENS, screenId) ? screenId : "mac-off";
-  if (!listedBot()) {
-    if (["share-sent", "share-msgfail", "share-taskonly", "share-task", "share-unsure"].includes(id)) id = "share-draft";
-    if (id === "siri-sent") id = "siri-confirm";
-  }
+  // A submitted share keeps its recorded destination and outcome whatever the bot list says now; only a share
+  // with no destination at all opens the unsent draft. New sends still need a listed bot.
+  if (!toBot() && ["share-sent", "share-msgfail", "share-taskonly", "share-task", "share-unsure"].includes(id)) id = "share-draft";
+  if (!listedBot() && id === "siri-sent") id = "siri-confirm";
   root.dataset.screen = id;
   if (phoneScreen && !params.get("width")) {
     CT.settings.width = "phone";

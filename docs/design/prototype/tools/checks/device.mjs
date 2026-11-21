@@ -71,6 +71,40 @@ async function walk(name, start, steps, opts = {}) {
   await p.close();
 }
 const none = async () => {};
+// Tab from the last control lands on the first, Shift+Tab from the first on the last, and focus never leaves the modal.
+async function wraps(p, sel) {
+  const ends = () =>
+    p.evaluate((s) => {
+      const m = document.querySelector(s);
+      const items = [...m.querySelectorAll("a[href], button:not([disabled]), textarea, input, [tabindex='0']")].filter((el) => el.offsetParent !== null);
+      return items.length;
+    }, sel);
+  // One control: Tab and Shift+Tab keep it focused.
+  if ((await ends()) < 1) return false;
+  const focusEnd = (which) =>
+    p.evaluate(
+      ([s, w]) => {
+        const items = [...document.querySelector(s).querySelectorAll("a[href], button:not([disabled]), textarea, input, [tabindex='0']")].filter((el) => el.offsetParent !== null);
+        (w === "last" ? items[items.length - 1] : items[0]).focus();
+      },
+      [sel, which],
+    );
+  const isEnd = (which) =>
+    p.evaluate(
+      ([s, w]) => {
+        const items = [...document.querySelector(s).querySelectorAll("a[href], button:not([disabled]), textarea, input, [tabindex='0']")].filter((el) => el.offsetParent !== null);
+        return document.activeElement === (w === "last" ? items[items.length - 1] : items[0]);
+      },
+      [sel, which],
+    );
+  await focusEnd("last");
+  await p.keyboard.press("Tab");
+  const forward = await isEnd("first");
+  await focusEnd("first");
+  await p.keyboard.press("Shift+Tab");
+  const back = await isEnd("last");
+  return forward && back;
+}
 
 // 1. A chat's kind is not consent: no screen says whose chat or who asked --------------------
 
@@ -615,6 +649,7 @@ for (const [label, query] of [
   ["a changed gateway start", "start=changed"],
   ["a missing boot ID", "start=missing"],
   ["changed credentials", "cred=changed"],
+  ["another gateway address", "addr=changed"],
 ]) {
   p = await open(`screen=share-unsure&${query}`, phone);
   check(`a lost reply with ${label}: no Check again, no Open in Clawtrate, Open Juniper to that bot's list`, await p.evaluate(() => {
@@ -644,7 +679,7 @@ for (const [label, link_, screen, words, held, heldWords] of [
   check(`${label}: opens the returned task, with the exact first message and items held there`, (await at(q, "share-task")) && (await param(q, "held")) === held && (await q.locator('[data-task="4f2a…"]').count()) === 1 && (await text(q, "[data-held-text]")) === "Edited: meet at the north gate." && (await q.locator("[data-held] .d-chips li").count()) === 2 && (await text(q)).includes(heldWords) && !/Sent to|New task/.test(await text(q)));
   if (held === "refused") {
     await q.locator("[data-retry-held]").click();
-    check("its retry goes to the same task, not a new one", (await at(q, "share-task")) && (await q.locator('[data-task="4f2a…"]').count()) === 1 && (await text(q, "[data-held-text]")) === "Edited: meet at the north gate.");
+    check("its retry goes to the same task, not a new one", (await at(q, "share-task")) && (await param(q, "held")) === "retried" && (await text(q, "[data-held]")).includes("Sent to this task.") && (await q.locator("[data-retry-held]").count()) === 0 && (await q.locator('[data-task="4f2a…"]').count()) === 1 && (await text(q, "[data-held-text]")) === "Edited: meet at the north gate.");
   }
   await q.close();
 }
@@ -732,8 +767,7 @@ for (const screen of ["siri-locked", "siri-list", "siri-list-fail", "siri-confir
   await p.close();
 }
 p = await open("screen=siri-list", phone);
-for (let i = 0; i < 6; i += 1) await p.keyboard.press("Tab");
-check("List Bots' result keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-sys")));
+check("List Bots' result wraps Tab and Shift+Tab", await wraps(p, ".d-sys"));
 await p.keyboard.press("Escape");
 check("List Bots' result is dismissed by Escape, sending nothing", (await at(p, "siri-closed")) && (await text(p)).includes("Nothing was sent."));
 await p.close();
@@ -779,21 +813,16 @@ p = await open("screen=card-pending&taskname=" + encodeURIComponent('<img data-s
 check("a supplied task name stays text, never markup", (await p.locator("[data-supplied]").count()) === 0 && (await text(p, ".d-ask")).includes('<img data-supplied="1" src="x">'));
 await p.close();
 p = await open("screen=mac-messages-confirm");
-for (let i = 0; i < 6; i += 1) await p.keyboard.press("Tab");
-check("a dialog keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-dialog")));
-await p.keyboard.press("Shift+Tab");
-check("a dialog keeps Shift+Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-dialog")));
+check("a dialog wraps Tab and Shift+Tab", await wraps(p, ".d-dialog"));
 await p.close();
 p = await open("screen=mac-confirm");
 check("the host's dialog takes focus on its title, and the page behind is inert", await p.evaluate(() => document.activeElement?.id === "s-host-title" && document.querySelector(".b-settings").inert));
-for (let i = 0; i < 5; i += 1) await p.keyboard.press("Tab");
-check("the host's dialog keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".s-host")));
+check("the host's dialog wraps Tab and Shift+Tab", await wraps(p, ".s-host"));
 await p.keyboard.press("Escape");
 check("Escape on the host's dialog is its Cancel", await at(p, "mac-off"));
 await p.close();
 p = await open("screen=share", phone);
-for (let i = 0; i < 8; i += 1) await p.keyboard.press("Tab");
-check("the share sheet keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-share")));
+check("the share sheet wraps Tab and Shift+Tab", await wraps(p, ".d-share"));
 await p.close();
 p = await open("screen=mac-on&history=1");
 check("row actions are named for their app", await p.evaluate(() => !!document.querySelector('[aria-label="Allow Calendar"]') && !!document.querySelector('[aria-label="Turn off Location"]') && !!document.querySelector('[aria-label="Add Messages to the gateway\'s allowlist"]')));
@@ -809,6 +838,43 @@ check("that request allowed: said in place with what the gateway acknowledged", 
 await p.close();
 
 // Every state, at desktop and phone width, light and dark ------------------------------------
+
+// CodeRabbit round.
+p = await open("screen=phone-on&from=timedout", phone);
+check("a timed-out record's Raw is the original request: its ID, parameters, budget and task key", await p.evaluate(() => {
+  const raw = document.querySelector('[data-record="t1"] .d-raw code').textContent;
+  return raw.includes('"id": "c41d…"') && raw.includes("balanced") && raw.includes('"timeoutMs": 30000') && raw.includes("agent:otto:dashboard:9c2e…");
+}));
+await p.close();
+for (const [read, absent] of [["both", true], ["active", false], ["fail", false]]) {
+  p = await open(`screen=mac-messages-removed&read=${read}`);
+  check(`after a removal read ${read}: the allowlist sentence ${absent ? "follows the stored read" : "isn't drawn without a stored read showing the entries gone"}`, (await p.locator('[data-app="messages"] [data-absent]').count()) === (absent ? 1 : 0));
+  await p.close();
+}
+await walk("an unavailable first read: Check again reads again on the same connection", "screen=mac-steps&fail=read", [
+  [button("Check again"), "mac-steps"],
+  [async (p) => check("Check again keeps the code and the hello: only the read-back is running", (await stepStates(p)) === "done,done,running" && (await param(p, "at")) === "2"), null],
+]);
+await walk("Machines: one decision keeps the other request's outcome", "screen=machines", [
+  [click('[data-request="ipad"] button[data-variant="quiet"]'), "machines"],
+  [click('[data-request="pc"] button[data-variant="primary"]'), "machines"],
+  [click("[data-confirm]"), "machines", ["The gateway reported request 5d2e… rejected", "The gateway lists these commands for Workshop PC (read 5:22 PM)"]],
+]);
+await walk("a request's Allow on This Mac: the resolved card and the Calendar row agree", "screen=mac-request", [
+  [click("[data-ask-allow]"), "mac-request"],
+  [async (p) => check("Calendar reads Allowed on its row too", (await row(p, "calendar").getAttribute("data-local")) === "allowed"), null],
+]);
+p = await open("screen=share-draft&to=marlow", phone);
+await p.locator("[data-draft-send]").click();
+await p.waitForTimeout(80);
+check("the draft's Send says where sending happens, and nothing navigates", (await screenOf(p)) === "share-draft" && (await text(p, "#device-live")).includes("Sends as the composer does"));
+await p.close();
+p = await open("screen=share-unsure&to=juniper&nobots=1", phone);
+check("a lost reply keeps its recovery when the bot list is empty: Check again, no draft", (await screenOf(p)) === "share-unsure" && (await p.evaluate(() => document.getElementById("device-root").dataset.screen)) === "share-unsure" && (await p.locator("[data-check-again]").count()) === 1 && !(await text(p)).includes("Nothing has been sent."));
+await p.close();
+p = await open("screen=share-unsure&nodefault=1", phone);
+check("a share outcome with no destination at all opens the unsent draft", (await p.evaluate(() => document.getElementById("device-root").dataset.screen)) === "share-draft");
+await p.close();
 
 p = await open("screen=mac-off");
 const screens = await p.evaluate(() => window.CT.deviceScreens);
@@ -829,7 +895,9 @@ for (const [label, width] of [["1440", 1440], ["1100", 1100], ["800", 800], ["39
       if (theme === "light" && banned.test(await text(q))) words.push(screen);
       if (theme === "light" && provenance.test(await text(q))) claims.push(screen);
       if (q.errors.length) errors.push(`${screen}: ${q.errors[0]}`);
-      if (theme === "dark" && !(await q.evaluate(() => document.documentElement.dataset.theme === "dark"))) errors.push(`${screen}: not dark`);
+      if (!(await q.evaluate((t) => document.documentElement.dataset.theme === t, theme))) errors.push(`${screen}: not ${theme}`);
+      // The state drawn is the one asked for, not a fallback.
+      if ((await q.evaluate(() => document.getElementById("device-root").dataset.screen)) !== screen) errors.push(`${screen}: drew another state`);
       await q.close();
     }
   }
@@ -850,10 +918,10 @@ await p.close();
 p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1");
 await p.waitForTimeout(100);
-check("gallery: links to the device page", await p.evaluate(() => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "device.html")));
+check("gallery: links to the device page", await p.evaluate(() => [...document.querySelectorAll("a")].some((a) => !a.closest("#proto-bar") && a.getAttribute("href") === "device.html")));
 check("the prototype bar links to the device page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "device.html")));
 await p.goto(pageUrl("index.html"));
-check("index: links to the device page", await p.evaluate(() => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "device.html")));
+check("index: links to the device page", await p.evaluate(() => [...document.querySelectorAll("a")].some((a) => !a.closest("#proto-bar") && a.getAttribute("href") === "device.html")));
 await p.close();
 
 await b.close();
