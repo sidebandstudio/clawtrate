@@ -22,6 +22,7 @@ import {
   mainWindowTitle,
   taskbarOverlayDescription,
   windowsProcesses,
+  type OverlayRead,
 } from "./windows.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -203,10 +204,25 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
         window as unknown as { clawtrateHost: { setBadge(n: number): void } }
       ).clawtrateHost.setBadge(value);
     }, count);
-  await setBadge(3);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("3 unread");
-  await setBadge(0);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("");
+  const reads: OverlayRead[] = [];
+  let step = { phase: "set", expected: "3 unread" };
+  try {
+    await setBadge(3);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+    step = { phase: "clear", expected: "" };
+    await setBadge(0);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+  } catch (error) {
+    await test.info().attach("taskbar-overlay", {
+      body: JSON.stringify({ ...step, lastReads: reads.slice(-5) }, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
 });
 
 test("hands a second launch to the running app instead of starting another", async () => {
@@ -290,7 +306,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
   expect(endpoint.url).toMatch(/^ws:\/\/127\.0\.0\.1:(19[2-9]\d\d)$/);
 
   await page.getByPlaceholder("Gateway address").fill(endpoint.url);
-  await page.getByPlaceholder("Token, for the first pairing only").fill(endpoint.token);
+  await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
   await page.getByRole("button", { name: "Connect" }).click();
 
   // A fresh device identity must be approved on the gateway, over the real protocol.
