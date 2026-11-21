@@ -85,6 +85,27 @@ export async function watchReadingLine(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Wait until the conversation has held the place through the layout as it is
+ * now. Its correction runs when the browser delivers resize observations, after
+ * that update's scroll events, and the browser can deliver them some frames after
+ * a change is laid out, so frames alone do not say it has run. A new observer is
+ * told in the next delivery, after the conversation's own observer.
+ */
+export async function placeHeld(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const content = document.querySelector("[data-testid=transcript]")!.firstElementChild!;
+        const observer = new ResizeObserver(() => {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(content);
+      }),
+  );
+}
+
 /** Stop recording; every top recorded since `watchReadingLine`, and where it is now. */
 export async function readingLineSamples(page: Page): Promise<{ samples: number[]; now: number }> {
   return page.evaluate(() => {

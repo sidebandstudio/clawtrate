@@ -6,6 +6,12 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  markReadingLine,
+  placeHeld,
+  readingLineSamples,
+  watchReadingLine,
+} from "./reading-line.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
@@ -949,7 +955,11 @@ test.describe("action cards", () => {
       has: page.locator(':scope > summary[aria-label^="Read 3 files"]'),
     });
     await line(reads).click();
-    await reads.locator(".fold-rows .step").nth(3).locator(":scope > summary").click();
+    const row = reads.locator(".fold-rows .step").nth(3);
+    await line(row).click();
+    // The row's readable view is drawn once it is open, and the place is held through it.
+    await expect(row.locator(".step-body")).toBeVisible();
+    await placeHeld(page);
     // Read further down: the next bubble at the reading line, the fold above it.
     const marker = page.getByText("The house loses most heat through the loft.");
     await marker.evaluate((element) => {
@@ -959,8 +969,12 @@ test.describe("action cards", () => {
         element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
       scroller.dispatchEvent(new Event("scroll"));
     });
-    await settle(page);
+    // The scroll's own event has been told to the conversation before the fold splits.
+    await placeHeld(page);
     const before = (await marker.boundingBox())!.y;
+    // The place as the conversation itself holds it, watched in every frame of the split.
+    const held = await markReadingLine(page);
+    await watchReadingLine(page);
     // History now shows a bubble between the second and third read: the fold splits in two.
     await setState(
       page,
@@ -976,8 +990,16 @@ test.describe("action cards", () => {
        return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
     );
     await expect(page.getByText("The bills are in.")).toBeVisible();
+    await placeHeld(page);
     await settle(page);
-    expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
+    // Every frame of the split, and where it is now.
+    const { samples, now } = await readingLineSamples(page);
+    const drawn = (await marker.boundingBox())!.y;
+    expect(
+      Math.max(...[...samples, now].map((top) => Math.abs(top - held.top))),
+      `text at the reading line, from ${held.top}: ${[...samples, now].map((top) => top.toFixed(1)).join(" ")}`,
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(drawn - before)).toBeLessThanOrEqual(1);
     // The first part keeps the fold's key and its open state; the part after it opens too.
     // The second part holds the failed read, which its plural does not count.
     const parts = cards(page).filter({
