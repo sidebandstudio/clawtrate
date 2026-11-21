@@ -97,8 +97,13 @@ export class DesktopUpdateService {
       selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
       if (stored) lastCheck = stored.prefs.lastCheck ?? null;
       else {
-        const raw = await options.store.get("lastCheck");
-        if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+        // A bad last check must not hide the attempt read below.
+        try {
+          const raw = await options.store.get("lastCheck");
+          if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+        } catch {
+          preferenceIssue = "preferences-not-read";
+        }
       }
       try {
         const raw = stored ? null : await options.store.get("attempt");
@@ -272,6 +277,7 @@ export class DesktopUpdateService {
     const valid = await engine.recheckFile(offerId, this.snapshot.selectedTrack, state.version);
     if (this.engine !== engine || this.snapshot.state !== state) return false;
     if (!valid) {
+      this.retireFile();
       this.publish({
         kind: "failed",
         stage: "download",

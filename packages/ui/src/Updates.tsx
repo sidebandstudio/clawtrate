@@ -125,6 +125,8 @@ function updateRow(
 
 function preferenceLine(s: DesktopUpdateSnapshot) {
   switch (s.preferenceIssue) {
+    case "attempt-not-read":
+      return "Couldn't read the last update attempt.";
     case "preferences-not-read":
       return "Couldn't read the saved update settings.";
     case "track-not-saved":

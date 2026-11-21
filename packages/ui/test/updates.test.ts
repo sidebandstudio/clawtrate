@@ -174,6 +174,7 @@ it("F-231: names the running and selected tracks and shows choices only with two
 });
 
 it.each([
+  ["attempt-not-read", "Couldn't read the last update attempt."],
   ["preferences-not-read", "Couldn't read the saved update settings."],
   ["last-check-not-saved", "Couldn't save the time of the last check."],
   ["update-folder-unavailable", "Couldn't prepare update storage on this device."],
