@@ -679,6 +679,25 @@ test.describe("message actions on a phone", () => {
     await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
   });
 
+  test("F-066: a finger held on a message keeps its text from being selected until it lifts", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const text = turn.locator(".msg > .bubble").last();
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const finger = await fingerOn(turn);
+    await expect(text).toHaveCSS("user-select", "none");
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    // Still, once the actions show: the system's own long press can come a little later.
+    await expect(text).toHaveCSS("user-select", "none");
+    await finger.lift();
+    await expect(text).toHaveCSS("user-select", "auto");
+  });
+
   test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
     await open(page);
     const turn = answer(page);

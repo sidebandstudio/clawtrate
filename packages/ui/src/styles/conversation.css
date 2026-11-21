@@ -1201,6 +1201,13 @@
   }
 }
 
+/* A finger held on a message opens its actions, not a text selection or the system's callout. */
+.msg-unit[data-touching] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .msg-actions .icon-button {
   width: 28px;
   height: 28px;

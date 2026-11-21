@@ -189,6 +189,9 @@ export function MessageActions({
       if (timer) return cancel();
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
       start = { x: event.clientX, y: event.clientY };
+      // Until the finger lifts, so the system's own long press, which can come later than this
+      // one, neither selects the text nor shows its callout. More has Copy text.
+      turn.dataset.touching = "true";
       timer = setTimeout(() => {
         measure();
         setHeld(true);
@@ -202,6 +205,7 @@ export function MessageActions({
     const cancel = () => {
       if (timer) clearTimeout(timer);
       timer = null;
+      delete turn.dataset.touching;
     };
     turn.addEventListener("pointerdown", onDown);
     turn.addEventListener("pointerup", cancel);
