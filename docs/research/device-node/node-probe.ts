@@ -3,8 +3,9 @@
 //   pnpm dev-gateway start --instance <name> --no-seed   (or --default-local-pairing for `local`)
 //   node docs/research/device-node/node-probe.ts <experiment> --instance <name>
 //
-// It acts only on a named development instance this checkout started, reads
-// that instance's address and token from the tool's own run files, and runs
+// It acts only on a named development instance this checkout started. Before
+// every connection it proves that the instance's live gateway owns the address
+// and token in the tool's own run files (`probe-endpoint.ts`), and it runs
 // `openclaw` only through the tool's guarded runner (so always with
 // `--profile clawtrate-dev-<name>`). It never prints a token.
 //
@@ -42,8 +43,9 @@ import { connect as netConnect } from "node:net";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { openInstance, readDevConnection, recordedStartOptions } from "../../../tools/dev-gateway/src/cli.ts";
+import { openInstance, recordedStartOptions } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
+import { probeEndpoint } from "./probe-endpoint.ts";
 
 const requireFromTool = createRequire(new URL("../../../tools/dev-gateway/package.json", import.meta.url));
 const { GatewayClient } = (await import(
@@ -58,8 +60,13 @@ const { values, positionals } = parseArgs({
 const experiment = positionals[0];
 if (!values.instance) throw new Error("--instance <name> is required; the default instance is never probed");
 const inst = openInstance(values.instance);
-const connection = readDevConnection(inst.connectionFile);
-if (!connection || connection.instance !== values.instance) throw new Error("no connection record for this instance");
+const instanceName = values.instance;
+const connection = probeEndpoint(inst, instanceName);
+/** Proven again before each connection: a gateway that stopped meanwhile stops the probe before its token is sent. */
+const proveEndpoint = () => {
+  const now = probeEndpoint(inst, instanceName);
+  if (now.url !== connection.url || now.token !== connection.token) throw new Error("the instance's gateway changed during the probe");
+};
 const gatewayPort = Number(new URL(connection.url).port);
 const url = `ws://127.0.0.1:${gatewayPort}`;
 
@@ -134,6 +141,7 @@ type ConnectOptions = {
  */
 const tokenStore = new Map<string, { token: string; scopes: string[] }>();
 function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refused: Record<string, unknown> }> {
+  proveEndpoint();
   return new Promise((resolve) => {
     let settled = false;
     const events: Frame[] = [];
@@ -147,7 +155,7 @@ function connectOnce(options: ConnectOptions): Promise<{ conn: Conn } | { refuse
     const node = options.role === "node";
     const client = new GatewayClient({
       url: options.port ? `ws://127.0.0.1:${options.port}` : url,
-      ...(options.bootstrap ? { bootstrapToken: options.bootstrap } : options.shared === false ? {} : { token: connection!.token }),
+      ...(options.bootstrap ? { bootstrapToken: options.bootstrap } : options.shared === false ? {} : { token: connection.token }),
       clientName: node ? "node-host" : "gateway-client",
       mode: node ? "node" : "ui",
       clientDisplayName: `Clawtrate research ${options.label}`,

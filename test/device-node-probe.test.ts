@@ -1,0 +1,123 @@
+// The device-node research probe sends a development instance's token. It may
+// connect only to a gateway this checkout started and that is running now; a
+// connection record left by a stopped gateway, whose loopback port another
+// process holds, must stop it before any credential is sent.
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { probeEndpoint } from "../docs/research/device-node/probe-endpoint.ts";
+import { CHECKOUT_DIR } from "../tools/dev-gateway/src/env.ts";
+import {
+  NAMED_PORT_BLOCK,
+  NAMED_PORT_RANGE,
+  runDirFor,
+} from "../tools/dev-gateway/src/instance.ts";
+import { portFree } from "../tools/dev-gateway/src/registry.ts";
+import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import {
+  deadProcess,
+  liveProcess,
+  seedInstance,
+  stopChildren,
+  type Proc,
+} from "../tools/dev-gateway/test/fixtures.ts";
+
+afterAll(() => stopChildren());
+
+const TOKEN = "synthetic-probe-token-0123456789";
+
+/** A named instance's marker, run file and connection file, all agreeing, with the given gateway process. */
+function record(name: string, port: number, gateway: Proc, checkout: string) {
+  const home = mkdtempSync(join(tmpdir(), "clawtrate-probe-home-"));
+  const runRoot = join(checkout, "tools/dev-gateway/.run");
+  const { runId } = seedInstance(home, name, {
+    gateway,
+    checkout,
+    runRoot,
+    marker: { gatewayPort: port, providerPort: port + 10 },
+  });
+  const runDir = runDirFor(name, runRoot);
+  writeFileSync(
+    join(runDir, "state.json"),
+    JSON.stringify({
+      runId,
+      instance: name,
+      checkout,
+      gatewayPort: port,
+      providerPort: port + 10,
+      startedAt: "",
+    }),
+  );
+  const connectionFile = join(runDir, "connection.json");
+  writeFileSync(
+    connectionFile,
+    JSON.stringify({ url: `ws://127.0.0.1:${port}`, token: TOKEN, instance: name, runId }),
+  );
+  return { home, runDir, inst: { home, checkout, connectionFile, identify: processIdentity } };
+}
+
+async function freePort(): Promise<number> {
+  let port = NAMED_PORT_RANGE.first + 20 * NAMED_PORT_BLOCK;
+  while (!(await portFree(port))) port += NAMED_PORT_BLOCK;
+  return port;
+}
+
+describe("the device-node probe proves its endpoint before it sends a credential", () => {
+  it("accepts a record whose recorded gateway is alive, and refuses the same record once that gateway is gone", async () => {
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-probe-checkout-")));
+    const port = await freePort();
+    const live = record("probe-live", port, liveProcess(), checkout);
+    expect(probeEndpoint(live.inst, "probe-live")).toEqual({
+      url: `ws://127.0.0.1:${port}`,
+      token: TOKEN,
+      instance: "probe-live",
+    });
+    const stale = record("probe-stale", port, deadProcess(), checkout);
+    expect(() => probeEndpoint(stale.inst, "probe-stale")).toThrow(
+      /not probing instance "probe-stale": the gateway recorded for the instance is not running/,
+    );
+  });
+
+  it("a stale record with its loopback port reused: the probe stops before connecting, and the listener receives nothing", async () => {
+    const name = `probe-stale-${process.pid}`;
+    const port = await freePort();
+    // Another process now holds the port the stopped gateway used.
+    const received: string[] = [];
+    let connections = 0;
+    const listener = createServer((socket) => {
+      connections += 1;
+      socket.on("data", (data) => received.push(String(data)));
+    });
+    await new Promise<void>((resolve) => listener.listen(port, "127.0.0.1", resolve));
+    // The record sits where the probe reads it: this checkout's run folder for the instance.
+    const stale = record(name, port, deadProcess(), CHECKOUT_DIR);
+    try {
+      const run = spawnSync(
+        process.execPath,
+        ["docs/research/device-node/node-probe.ts", "drop", "--instance", name],
+        {
+          cwd: CHECKOUT_DIR,
+          env: { ...process.env, HOME: stale.home },
+          encoding: "utf8",
+          timeout: 60_000,
+        },
+      );
+      const output = `${run.stdout}${run.stderr}`;
+      expect(run.status).not.toBe(0);
+      expect(output).toContain(
+        `not probing instance "${name}": the gateway recorded for the instance is not running`,
+      );
+      expect(output).not.toContain(TOKEN);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(connections).toBe(0);
+      expect(received.join("")).not.toContain(TOKEN);
+    } finally {
+      listener.close();
+      rmSync(stale.runDir, { recursive: true, force: true });
+      rmSync(stale.home, { recursive: true, force: true });
+    }
+  }, 90_000);
+});
