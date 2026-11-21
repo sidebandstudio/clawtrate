@@ -437,6 +437,40 @@ describe("the fixture's routine host", () => {
     expect(await after).toEqual([]);
   });
 
+  it("a removed sample routine made again from its key starts with no runs", async () => {
+    vi.useFakeTimers();
+    const { ask } = host();
+    await ask({ type: "removeRoutine", id: DIGEST } as BridgeCommand);
+    expect(await ask({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand)).toEqual([]);
+    await ask({
+      type: "createRoutine",
+      input: { ...fields("Morning digest again"), botId: "marlow" },
+      key: DIGEST.replace(/^routine-/u, ""),
+      gateway: GATEWAY,
+    } as BridgeCommand);
+    expect(await ask({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand)).toEqual([]);
+  });
+
+  it("a conversation asked for by its run's time, with no run id, is found", async () => {
+    vi.useFakeTimers();
+    const { ask } = host();
+    const [newest] = await ask<RoutineRun[]>({
+      type: "readRoutineRuns",
+      id: DIGEST,
+    } as BridgeCommand);
+    const read = (runId: string | null) =>
+      ask<{ status: string }>({
+        type: "readRunConversation",
+        id: DIGEST,
+        runId,
+        runAt: newest!.runAt,
+        sessionKey: newest!.sessionKey,
+      } as BridgeCommand);
+    const byId = await read(newest!.runId);
+    expect(byId.status).not.toBe("none");
+    expect(await read(null)).toEqual(byId);
+  });
+
   it("two edits out at once to different fields both stand, as the gateway's patches do", async () => {
     vi.useFakeTimers();
     const { send, routines } = host();

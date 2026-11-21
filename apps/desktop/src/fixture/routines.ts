@@ -501,10 +501,12 @@ export function routineCommands(now: number, params: RoutineParams) {
     get: () => ClawtrateState,
     set: (state: ClawtrateState) => void,
   ): Promise<unknown> | undefined => {
+    // The sample list stands in for routines the list omitted, never for one removed here.
     const find = (id: string) =>
-      [...get().routines.routines, ...fixtureRoutineList(now, params)].find(
-        (each) => each.id === id,
-      );
+      [
+        ...get().routines.routines,
+        ...(removals.has(id) ? [] : fixtureRoutineList(now, params)),
+      ].find((each) => each.id === id);
     // `routinehold` and `routinefail` stand in for a slow or failed gateway, for one routine's reads.
     const answer = (id: string, value: () => unknown): Promise<unknown> => {
       if (params.fail === id)
@@ -746,7 +748,12 @@ export function routineCommands(now: number, params: RoutineParams) {
         // As the history read: the routine there when a held read resumes, if any.
         return answer(command.id, () => {
           const now = find(command.id);
-          const ran = now && runsOf(now).find((each) => each.runId === command.runId);
+          // A run the gateway recorded without an id is named by its time.
+          const ran =
+            now &&
+            runsOf(now).find((each) =>
+              command.runId === null ? each.runAt === command.runAt : each.runId === command.runId,
+            );
           return conversation(ran, ran && transcripts.get(ran.runId));
         });
       }
