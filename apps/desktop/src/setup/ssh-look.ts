@@ -66,7 +66,6 @@ const empty = (outcome: SetupLook["outcome"], reason: SetupLook["reason"] = null
   others: [],
 });
 
-
 /** The found card's result from the LOOK's facts, and what Connect or Start would act on. */
 export function sshLook(facts: LookFacts): SshLook {
   const program = facts.program;

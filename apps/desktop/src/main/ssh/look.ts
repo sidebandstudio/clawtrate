@@ -430,7 +430,11 @@ export type FoundService = { ok: true; service: GatewayService; holdsPort: true 
  */
 export function provenStopped(status: GatewayStatus, cli: LookFacts["version"]): boolean {
   if (cli === null || cli === "unreadable") return false;
-  const [year, month, day] = OLDEST_OPENCLAW_VERSION.split(".").map(Number) as [number, number, number];
+  const [year, month, day] = OLDEST_OPENCLAW_VERSION.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
   const supported = cli.year - year || cli.month - month || cli.day - day;
   return (
     status.exit === 0 &&

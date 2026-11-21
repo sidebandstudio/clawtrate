@@ -63,7 +63,6 @@ const probeHostOfInstalledCli:
           text,
         );
       if (!match) continue;
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
       return new Function(`${match[0]}\nreturn pickProbeHostForBind;`)() as (
         bind: string,
         tailnet: string | null,
