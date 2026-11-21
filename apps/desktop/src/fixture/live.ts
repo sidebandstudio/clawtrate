@@ -43,6 +43,7 @@ export const LIVE_SCENES = [
   "access-stale",
   "access-other-request",
   "access-identity-changed",
+  "access-identity-changed-address",
   "access-list-unread",
   "read-wait",
   "composer",
@@ -431,18 +432,19 @@ export function liveScene(
       return { initial: upgrade(base, { status: "confirming", requestId: REQUEST_ID }), steps: [] };
     case "access-unconfirmed":
     case "access-identity-changed":
+    case "access-identity-changed-address":
     case "access-identity-unread": {
       const outcome =
         name === "access-unconfirmed"
           ? "unconfirmed"
-          : name === "access-identity-changed"
+          : name === "access-identity-changed" || name === "access-identity-changed-address"
             ? "identity-changed"
             : "identity-unread";
       const state = upgrade(base, {
         status: outcome,
         requestId: REQUEST_ID,
         approveCommand: null,
-        place: "ssh",
+        place: name === "access-identity-changed-address" ? "address" : "ssh",
       });
       return {
         initial: {

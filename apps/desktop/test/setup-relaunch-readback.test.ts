@@ -107,7 +107,9 @@ function computer() {
     };
     if (auth?.bootstrapToken === CODE)
       return { ok: true, payload: helloOk(["operator.read"], "device-token") };
-    return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "device-token") };
+    // More than read only to the rotated token: an upgrade shows only on the staged token's socket.
+    const granted = auth?.deviceToken === "rotated-token" ? scopes : ["operator.read"];
+    return { ok: true, payload: helloOk(granted, auth?.deviceToken ?? "device-token") };
   };
   gateway.handlers["gateway.identity.get"] = () => ({
     deviceId: GATEWAY,

@@ -72,6 +72,8 @@ export type ClawtrateHost = {
     requestId: string,
     /** The profile the host's look found this connection's gateway for on this computer, as kept with it. */
     here?: { profile: "default" | "clawtrate" } | null,
+    /** The connection is an explicit address the person typed or pasted: no place is named for it. */
+    address?: boolean,
   ) => ApprovalInstructions;
   /**
    * Where the host has a shell on the gateway's computer (this computer, an

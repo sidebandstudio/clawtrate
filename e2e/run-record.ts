@@ -130,8 +130,13 @@ export function cleanUp(
     const { pid, identity } = record.sshd;
     let verdict = processVerdict(pid, identity, identify);
     if (verdict.state === "alive") {
-      process.kill(pid, "SIGTERM");
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Gone between the check and the signal, or not ours to signal: asked again below.
+      }
       const deadline = Date.now() + hostStopMs;
+      verdict = processVerdict(pid, identity, identify);
       while (verdict.state !== "dead" && Date.now() < deadline) {
         sleepSync(100);
         verdict = processVerdict(pid, identity, identify);

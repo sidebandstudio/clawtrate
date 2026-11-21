@@ -13,7 +13,16 @@ import {
   ROUTE_IDENTITY_UNREAD,
   SETUP_PAIRING_GONE,
 } from "../src/client.ts";
-import { FakeGateway, helloOk, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  FakeGateway,
+  helloOk,
+  memoryStorage,
+  sleep,
+  testHost,
+  until,
+} from "./fake-gateway.ts";
+import type { ReadBack } from "../src/approval.ts";
 
 const ROUTE = "ssh-0123456789abcdef01234567";
 const ROUTE_TOKEN = `deviceToken:route:${ROUTE}:device-1:operator`;
@@ -448,18 +457,30 @@ describe("F-500: a route's approval, confirmed through the route", () => {
   it("a forward that comes back before the kept disconnect is saved opens nothing", async () => {
     const t = await routed(() => ({ ok: false, step: "identity", exitCode: null }));
     const sockets = () => t.gateway.sockets.length;
+    // The suspension's own write is held open while the forward comes back.
+    const release = deferred<void>();
+    const set = t.storage.set;
+    t.storage.set = async (key, value) => {
+      if (key === "connection" && value.includes('"suspended":true')) await release.promise;
+      await set(key, value);
+    };
     t.approve();
     await until(() => t.client.state.connection.upgrade.status === "identity-unread");
     const before = sockets();
-    // Queued at once, before the suspension's own write has run.
-    void t.client.connectRoute({
+    const back = t.client.connectRoute({
       url: "ws://127.0.0.1:50002",
       route: ROUTE,
       identity: "gateway-1",
     });
+    await sleep(80);
+    expect(JSON.parse(t.storage.data.get("connection")!).suspended).toBeUndefined();
+    expect(sockets()).toBe(before);
+    release.resolve();
+    await back;
     await until(() => JSON.parse(t.storage.data.get("connection")!).suspended === true);
     await sleep(80);
     expect(sockets()).toBe(before);
+    expect(t.client.state.connection.status).toBe("error");
     t.client.stop();
   });
 
@@ -511,6 +532,61 @@ describe("F-500: a route on a host with no read-back", () => {
     await client.requestAccess();
     await until(() => client.state.connection.upgrade.status === "identity-unread");
     expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+    client.stop();
+  });
+});
+
+describe("F-500: a route's first pairing whose forward drops during the read-back", () => {
+  it("is refused as a first pairing: no selection is saved, suspended or otherwise", async () => {
+    const gateway = new FakeGateway();
+    let approved = false;
+    gateway.connectReply = () =>
+      approved
+        ? { ok: true, payload: helloOk(["operator.read"], "first-token") }
+        : {
+            ok: false,
+            error: {
+              code: "NOT_PAIRED",
+              message: "pairing required",
+              details: {
+                code: "PAIRING_REQUIRED",
+                requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
+                deviceId: "device-1",
+              },
+            },
+          };
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-1", publicKey: "key" });
+    const reading = deferred<ReadBack>();
+    let asked = 0;
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(
+      {
+        ...testHost(gateway, storage),
+        readBack: async () => {
+          asked += 1;
+          return reading.promise;
+        },
+      },
+      { reconnect: { initialMs: 20, maxMs: 40 } },
+    );
+    await client.start();
+    await client.connectRoute({
+      url: "ws://127.0.0.1:50001",
+      route: ROUTE,
+      code: { bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+    });
+    await until(() => client.state.connection.status === "pairing");
+    approved = true;
+    await client.retryNow();
+    await until(() => asked === 1);
+    // The forward goes down while the host reads back.
+    client.holdRoute(ROUTE);
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe("APPROVAL_UNCONFIRMED");
+    await sleep(50);
+    expect(storage.data.has("connection")).toBe(false);
+    expect(storage.data.has(ROUTE_TOKEN)).toBe(false);
+    expect(client.suspended).toBe(false);
     client.stop();
   });
 });

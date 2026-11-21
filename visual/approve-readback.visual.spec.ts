@@ -186,3 +186,22 @@ for (const size of SHOWN) {
     });
   }
 }
+
+test("F-500: an address route's Review opens Settings on its Gateway pane, whichever pane was shown last", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openFixture(
+    page,
+    `scene=access-identity-changed-address&${OTTO_DISK}&panel=closed`,
+    "light",
+  );
+  // Settings shown last on another pane.
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Usage" }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await page.getByTestId("access-bar").getByRole("button", { name: "Review" }).click();
+  await expect(dialog.getByRole("heading", { name: "Gateway" })).toBeVisible();
+});

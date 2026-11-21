@@ -81,7 +81,8 @@ export function readDevConnection(
  * tooling's command. A gateway setup reached on this computer or over SSH gets
  * the command for its profile and the computer to run it on
  * (docs/design/setup.md §9), after a relaunch too, from the profile kept with
- * the connection; an address route keeps the general one.
+ * the connection; an address route keeps the general one, even where a setup
+ * found a gateway at the same address.
  */
 export function approvalInstructionsFor(
   devGateway: DevGatewayConnection | null,
@@ -90,8 +91,9 @@ export function approvalInstructionsFor(
   gatewayUrl: string,
   requestId: string,
   here?: { profile: "default" | "clawtrate" } | null,
+  address?: boolean,
 ) => ApprovalInstructions {
-  return (gatewayUrl, requestId, here) => {
+  return (gatewayUrl, requestId, here, address) => {
     if (devGateway && gatewayUrl === devGateway.url)
       return {
         command:
@@ -100,9 +102,11 @@ export function approvalInstructionsFor(
             : `pnpm dev-gateway approve --instance ${devGateway.instance}`,
         note: null,
       };
-    const place =
-      placeFor(gatewayUrl) ??
-      (here ? ({ route: "this-computer", profile: here.profile } as const) : null);
+    // An address the person typed is never given the words of a place a setup found there.
+    const place = address
+      ? null
+      : (placeFor(gatewayUrl) ??
+        (here ? ({ route: "this-computer", profile: here.profile } as const) : null));
     return place
       ? approvalForPlace(place, requestId)
       : defaultApprovalInstructions(gatewayUrl, requestId);

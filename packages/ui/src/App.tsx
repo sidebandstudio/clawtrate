@@ -51,6 +51,7 @@ export function App({
   const { desktopUpdates } = useBridge();
   const updated = useDesktopUpdateSnapshot(desktopUpdates);
   const [openUpdates, setOpenUpdates] = useState(false);
+  const [openGateway, setOpenGateway] = useState(false);
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
@@ -58,12 +59,15 @@ export function App({
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpener = useRef<HTMLElement | null>(null);
-  const openSettings = useCallback((section?: "updates") => {
+  const openSettings = useCallback((section?: "updates" | "gateway") => {
     setOpenUpdates(section === "updates");
+    setOpenGateway(section === "gateway");
     const active = document.activeElement as HTMLElement | null;
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
   }, []);
+  // Review on an address route: Settings on its Gateway pane, whichever pane was shown last.
+  const openGatewaySettings = useCallback(() => openSettings("gateway"), [openSettings]);
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
     const opener = settingsOpener.current;
@@ -141,11 +145,12 @@ export function App({
           route={state.setup?.route ?? null}
           updateReading={updated}
           initialUpdates={openUpdates}
+          initialGateway={openGateway}
           onClose={closeSettings}
         />
       )}
       {screen === "shell" ? (
-        <OpenSettingsContext.Provider value={openSettings}>
+        <OpenSettingsContext.Provider value={openGatewaySettings}>
           <Shell
             state={state}
             info={info}

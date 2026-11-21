@@ -1558,8 +1558,12 @@ class ViewerSession implements BridgeSession {
         const setup = policy.setup;
         if (!setup) throw new Error("This host doesn't set up OpenClaw on its computer.");
         if (command.type === "setupLook") return setup.look();
-        if (command.type === "setupReviewHere")
-          return setup.reviewHere ? setup.reviewHere() : setup.look();
+        // Never a general look instead: another profile is never shown for the saved one (§9).
+        if (command.type === "setupReviewHere") {
+          if (!setup.reviewHere)
+            throw new Error("This host doesn't look again at a gateway set up on its computer.");
+          return setup.reviewHere();
+        }
         if (command.type === "setupConnect") return setup.connect();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();

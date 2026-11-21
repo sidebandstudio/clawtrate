@@ -57,7 +57,11 @@ export type ScopeUpgradeStatus =
    * what the gateway granted and the client reconnects with it (setup §9).
    */
   | "confirming"
-  /** Approved and confirmed: the record and the reconnect showed exactly what was asked, and the token is saved. */
+  /**
+   * Approved and confirmed: the reconnect showed the established gateway and
+   * exactly what was asked, and the token is saved. On this computer and over
+   * SSH the device's record showed it too; an explicit address has no record read.
+   */
   | "approved"
   | "rejected"
   | "expired"

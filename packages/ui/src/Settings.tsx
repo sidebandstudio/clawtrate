@@ -151,6 +151,14 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
 
+/** The section Settings opens on: the one asked for, else the one shown last, else Gateway. */
+export function openingSection<S extends string>(
+  asked: S | null,
+  remembered: S | null | undefined,
+): S | "gateway" {
+  return asked ?? remembered ?? "gateway";
+}
+
 function GatewayConnectionButton({ action }: { action: "retry" | "suspend" }) {
   const send = useCommand();
   const [failed, setFailed] = useState(false);
@@ -190,6 +198,7 @@ export function Settings({
   checkIns,
   bots,
   initialUpdates,
+  initialGateway = false,
   updateReading,
   onClose,
   route = null,
@@ -202,16 +211,19 @@ export function Settings({
   checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
   initialUpdates: boolean;
+  /** Opened for the Gateway pane itself (an address route's Review, setup.md §9). */
+  initialGateway?: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const asked = initialUpdates ? "updates" : initialGateway ? "gateway" : null;
   const [section, setSectionState] = useState<Section>(() =>
-    initialUpdates ? "updates" : (recall<Section>(SHOWN_LAST) ?? "gateway"),
+    openingSection(asked, recall<Section>(SHOWN_LAST)),
   );
-  // On a phone the list comes first; a section replaces it.
-  const [pane, setPane] = useState<"nav" | "section">(initialUpdates ? "section" : "nav");
+  // On a phone the list comes first; a section asked for replaces it.
+  const [pane, setPane] = useState<"nav" | "section">(asked ? "section" : "nav");
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);

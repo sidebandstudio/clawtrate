@@ -26,4 +26,5 @@ if (
 }
 const result = openInstance(instance).runner.runSync(args);
 process.stdout.write(result.stdout);
-process.exit(result.status ?? 1);
+// Not process.exit: a piped stdout finishes writing the whole document before Node exits.
+process.exitCode = result.status ?? 1;

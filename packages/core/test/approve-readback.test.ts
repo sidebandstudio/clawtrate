@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { APPROVAL_WORDS, type ReadBack } from "../src/approval.ts";
+import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import type { ApprovalInstructions } from "../src/host.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -194,8 +195,17 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
     await sleep(30);
     expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
     expect(t.connectsWith("rotated-token")).toEqual([]);
+    // When the staged token's reconnect reaches the gateway, before its hello, still nothing.
+    const atConnect: Array<string | undefined> = [];
+    const reply = t.gateway.connectReply;
+    t.gateway.connectReply = (params, url) => {
+      if ((params as ConnectParams).auth?.deviceToken === "rotated-token")
+        atConnect.push(t.storage.data.get(tokenKey(URL_A)));
+      return reply(params, url);
+    };
     hold.resolve(exact());
     await until(() => t.client.state.connection.canWrite);
+    expect(atConnect).toEqual([t.saved]);
     expect(JSON.parse(t.storage.data.get(tokenKey(URL_A))!).token).toBe("rotated-token");
     t.client.stop();
   });
@@ -1112,9 +1122,19 @@ describe("F-500: an approval is bound to one request and one connection", () => 
   it("refused, it is kept disconnected at once, before its suspension is saved", async () => {
     const t = await setUp({ readBack: () => ({ ok: false, step: "identity", exitCode: null }) });
     await waiting(t.client);
+    // The suspension's own write is held open.
+    const release = deferred<void>();
+    const set = t.storage.set;
+    t.storage.set = async (key, value) => {
+      if (key === "connection" && value.includes('"suspended":true')) await release.promise;
+      await set(key, value);
+    };
     t.approve();
     await until(() => t.client.state.connection.status === "error");
+    expect(JSON.parse(t.storage.data.get("connection")!).suspended).toBeUndefined();
     expect(t.client.suspended).toBe(true);
+    release.resolve();
+    await until(() => JSON.parse(t.storage.data.get("connection")!).suspended === true);
     // Reconnect is the person's: it opens again, with the saved token.
     await t.client.retryNow();
     await until(() => t.client.state.connection.status === "connected");
@@ -1211,6 +1231,8 @@ describe("F-500: a manual first pairing through Advanced is confirmed before it 
     });
     await until(() => t.client.state.connection.status === "error");
     expect(t.client.state.connection.error?.code).toBe("APPROVAL_IDENTITY_UNREAD");
+    // It failed on the confirming connection itself, with the staged token.
+    expect(t.deviceTokens()).toEqual(["first-token"]);
     expect(t.storage.data.has(tokenKey(URL_A))).toBe(false);
     t.client.stop();
   });
@@ -1220,6 +1242,119 @@ describe("F-500: a manual first pairing through Advanced is confirmed before it 
     await until(() => t.client.state.connection.status === "connected");
     await until(() => t.storage.data.has(tokenKey(URL_A)));
     expect(t.deviceTokens()).toEqual([]);
+    t.client.stop();
+  });
+});
+
+describe("F-500: a connection saved before the address mark, to a remote address", () => {
+  it("still needs a read-back: with none to be had it keeps nothing, and waits with the address words", async () => {
+    const REMOTE = "wss://gateway.example";
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "device-token") };
+    };
+    gateway.handlers["gateway.identity.get"] = () => identity();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: REQUEST });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => ({
+      status: "approved",
+      requestId: REQUEST,
+      deviceToken: "rotated-token",
+      scopes: [...INTERACTIVE_SCOPES],
+    });
+    const saved = JSON.stringify({
+      token: "read-token",
+      grantedScopes: READ_SCOPES,
+      heldScopes: READ_SCOPES,
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: REMOTE, token: null }),
+      [tokenKey(REMOTE)]: saved,
+    });
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), readBack: async () => null },
+      FAST,
+    );
+    await client.start();
+    await until(() => client.state.connection.gatewayId === GATEWAY);
+    await client.requestAccess();
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.upgrade).toMatchObject({
+      status: "identity-unread",
+      place: "address",
+    });
+    expect(storage.data.get(tokenKey(REMOTE))).toBe(saved);
+    expect(
+      gateway.connects.some((c) => (c as ConnectParams).auth?.deviceToken === "rotated-token"),
+    ).toBe(false);
+    client.stop();
+  });
+});
+
+describe("F-500: the waiting words follow how the connection was chosen", () => {
+  it("a first pairing's command is built with the profile kept with the connection", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: REQUEST, deviceId: "device-1" },
+      },
+    });
+    const asked: unknown[][] = [];
+    const client = new ClawtrateClient(
+      {
+        ...testHost(gateway, memoryStorage()),
+        approvalInstructions: (...args: unknown[]) => {
+          asked.push(args);
+          return { command: "the host's command", note: null };
+        },
+      },
+      FAST,
+    );
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: URL_A, bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+      { here: { profile: "clawtrate" } },
+    );
+    await until(() => client.state.connection.status === "pairing");
+    expect(asked.at(-1)).toEqual([URL_A, REQUEST, { profile: "clawtrate" }, false]);
+    client.stop();
+  });
+
+  it("an explicit address tells the host so, so no place found there is named for it", async () => {
+    const asked: unknown[][] = [];
+    const t = await setUp({ connection: { url: URL_A, token: null, address: true } });
+    const host = t.client as unknown as {
+      host: { approvalInstructions: (...a: unknown[]) => unknown };
+    };
+    const original = host.host.approvalInstructions;
+    host.host.approvalInstructions = (...args: unknown[]) => {
+      asked.push(args);
+      return original(...args);
+    };
+    await waiting(t.client);
+    expect(asked.at(-1)?.slice(2)).toEqual([null, true]);
+    t.client.stop();
+  });
+});
+
+describe("F-500: Review and Look again on this computer", () => {
+  it("a host without the saved profile's look refuses, and never looks generally instead", async () => {
+    const t = await setUp();
+    const looked: string[] = [];
+    const viewer = createBridgeSession(t.client, {
+      setup: {
+        look: async () => void looked.push("look"),
+        cancel: () => {},
+        connect: async () => {},
+        reset: () => {},
+      },
+    });
+    await expect(viewer.apply({ type: "setupReviewHere" })).rejects.toThrow();
+    expect(looked).toEqual([]);
+    viewer.dispose();
     t.client.stop();
   });
 });

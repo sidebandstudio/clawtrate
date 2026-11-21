@@ -1116,7 +1116,7 @@ export class ClawtrateClient {
   /** The setup connection to this address went through its owner's approval (`PAIRING_REQUIRED`). */
   private setupApproved: string | null = null;
   /** The approval being confirmed (`beginApproval`), bound to one request and one selected connection. */
-  private approval: { credential: string } | null = null;
+  private approval: { credential: string; kind: Confirm["kind"] } | null = null;
   /** Counts waits and their ends: a Check now answer for an earlier one is dropped. */
   private waitSerial = 0;
   /** The next scheduled check of a waiting request (`scheduleCheck`). */
@@ -2068,34 +2068,41 @@ export class ClawtrateClient {
 
   /** The waiting state's words and command for `requestId`, for this connection's place. */
   private instructionsFor(url: string, requestId: string): ApprovalInstructions {
+    const selected = this.settings?.url === url ? this.settings : null;
     return (this.host.approvalInstructions ?? defaultApprovalInstructions)(
       url,
       requestId,
-      this.settings?.url === url ? (this.settings.here ?? null) : null,
+      selected?.here ?? null,
+      selected?.address === true,
     );
   }
 
   /**
    * Whether the host must read back after an approval on this connection
-   * (setup §9): a route's, or one the host's look found on this computer. Only
-   * an explicit address route has no shell; a connection saved before the
-   * distinction was kept counts as found here when its address is loopback.
-   * Decided from the saved connection alone, whatever the host can do: a
-   * connection that needs the read-back on a host without one keeps nothing.
+   * (setup §9): a route's, or one the host's look found on this computer.
+   * Only a connection marked as an explicit address has no shell; one saved
+   * before the mark was kept needs the read-back too, whatever its address,
+   * so it keeps nothing it can't confirm. Decided from the saved connection
+   * alone, whatever the host can do: a connection that needs the read-back on
+   * a host without one keeps nothing.
    */
   private shellExpected(): boolean {
     const settings = this.settings;
     if (!settings) return false;
-    if (settings.route || settings.here) return true;
-    if (settings.address) return false;
-    return LOOPBACK.test(settings.url);
+    return !settings.address || Boolean(settings.route || settings.here);
   }
 
-  /** What the waiting state can offer here: a route over SSH, this computer, or an address. */
+  /**
+   * What the waiting state can offer here: a route over SSH, this computer
+   * (its look's profile, or an unmarked loopback address), or an address,
+   * where the host has nothing to look at while the request waits.
+   */
   private placeKind(): "ssh" | "here" | "address" {
     const settings = this.settings;
-    if (settings?.route) return "ssh";
-    return this.shellExpected() ? "here" : "address";
+    if (!settings) return "address";
+    if (settings.route) return "ssh";
+    if (settings.here) return "here";
+    return !settings.address && LOOPBACK.test(settings.url) ? "here" : "address";
   }
 
   /**
@@ -2103,8 +2110,11 @@ export class ClawtrateClient {
    * its read-back and reconnect do afterwards checks that it is still this
    * attempt. Disconnect, Stop, another selection or a new request end it at once.
    */
-  private beginApproval(credential: string): { credential: string } {
-    const attempt = { credential };
+  private beginApproval(
+    credential: string,
+    kind: Confirm["kind"],
+  ): { credential: string; kind: Confirm["kind"] } {
+    const attempt = { credential, kind };
     this.approval = attempt;
     this.waitSerial += 1;
     this.clearCheck();
@@ -2164,7 +2174,7 @@ export class ClawtrateClient {
     record: StoredDeviceToken | null;
     nowShown: boolean;
   }): Promise<void> {
-    const attempt = this.beginApproval(args.credential);
+    const attempt = this.beginApproval(args.credential, "upgrade");
     const current = () => this.approvalCurrent(attempt);
     const { staged, record } = args;
     // The approval itself: the operator role and exactly the asked scopes, wider or narrower refused.
@@ -2242,7 +2252,7 @@ export class ClawtrateClient {
     /** Saves the gateway, inside the queued operation that keeps the token (finishConfirm). */
     saveGateway: (generation: number) => Promise<boolean>;
   }): Promise<void> {
-    const attempt = this.beginApproval(args.credential);
+    const attempt = this.beginApproval(args.credential, "first");
     const current = () => this.approvalCurrent(attempt) && this.settings?.url === args.url;
     const known =
       args.route !== null && this.routeIdentity?.route === args.route
@@ -2336,7 +2346,9 @@ export class ClawtrateClient {
    */
   private refuseApproval(
     outcome: Unconfirmed,
-    kind: Confirm["kind"] = this.confirm?.kind ?? "upgrade",
+    // The attempt's own kind, recorded when it began: a first pairing refused before its staged
+    // token's reconnect saves no selection, as an upgrade's refusal would.
+    kind: Confirm["kind"] = this.approval?.kind ?? this.confirm?.kind ?? "upgrade",
   ): void {
     this.approval = null;
     this.confirm = null;
@@ -2519,7 +2531,7 @@ export class ClawtrateClient {
   private scheduleCheck(): void {
     this.clearCheck();
     const upgrade = this.state.connection.upgrade;
-    if (!this.shellExpected() || !upgrade.requestId || !this.scopeUpgrade) {
+    if (this.placeKind() === "address" || !upgrade.requestId || !this.scopeUpgrade) {
       if (upgrade.checkAt) this.setUpgrade({ checkAt: null });
       return;
     }
@@ -2552,7 +2564,7 @@ export class ClawtrateClient {
     const upgrade = this.state.connection.upgrade;
     const url = this.settings?.url;
     const identity = this.identity;
-    if (!url || !identity || !upgrade.requestId || !this.shellExpected()) return;
+    if (!url || !identity || !upgrade.requestId || this.placeKind() === "address") return;
     if (
       upgrade.status !== "pending" &&
       upgrade.status !== "stale" &&
@@ -6816,10 +6828,9 @@ export class ClawtrateClient {
         : Array.isArray(details.requestedScopes)
           ? details.requestedScopes.filter((s): s is string => typeof s === "string")
           : [...REQUESTED_SCOPES];
-      const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
-        url,
-        shownId,
-      );
+      // Built as a scope upgrade's are: with the profile kept with the connection, or none for
+      // an explicit address.
+      const instructions = this.instructionsFor(url, shownId);
       this.setConnection({
         status: "pairing",
         error: null,

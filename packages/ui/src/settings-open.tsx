@@ -6,5 +6,5 @@ import { createContext, useContext } from "react";
 
 export const OpenSettingsContext = createContext<(() => void) | null>(null);
 
-/** Opens Settings on its Gateway pane, or null where no Settings can open. */
+/** Opens Settings on its Gateway pane, whichever pane was shown last, or null where none can open. */
 export const useOpenSettings = () => useContext(OpenSettingsContext);

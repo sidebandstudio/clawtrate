@@ -196,6 +196,28 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(existsSync(recordPath(run.records, run.record.run))).toBe(false);
   });
 
+  it("an sshd that exits between the check and the signal is still cleaned up, folder and record", () => {
+    const gone = deadProcess();
+    const run = aRun(deadProcess());
+    const dir = own(mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}ssh-approve-${run.record.run}-`)));
+    saveRecord(run.records, {
+      ...run.record,
+      dirs: [...run.record.dirs, dir],
+      sshd: { ...gone, dir },
+    });
+    // Alive when first asked; by the signal it has exited, so the signal itself fails.
+    let asked = 0;
+    const identify: Identify = (pid) =>
+      pid === gone.pid
+        ? asked++ === 0
+          ? { state: "alive", identity: gone.identity }
+          : { state: "exited", how: "absent" }
+        : processIdentity(pid);
+    expect(() => recoverDeadRuns(run.records, run.reset, run.log, identify)).not.toThrow();
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(recordPath(run.records, run.record.run))).toBe(false);
+  });
+
   it("never signals a process that only shares the recorded sshd's PID, and keeps no folder of another run", () => {
     const other = liveProcess();
     const run = aRun(deadProcess());

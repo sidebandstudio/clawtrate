@@ -394,6 +394,15 @@ describe("pairing instructions (A3)", () => {
         "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile:",
       );
     }
+    // An address the person typed: never a place's words, even where a setup found one there.
+    const here = approvalInstructionsFor(null, () => ({
+      route: "this-computer",
+      profile: "clawtrate",
+    }));
+    expect(here(DEV_GATEWAY_URL, REQ).title).toBe("Waiting for approval on this computer.");
+    expect(here(DEV_GATEWAY_URL, REQ, null, true)).toEqual(
+      approvalInstructionsFor(null)(DEV_GATEWAY_URL, REQ),
+    );
     // Only an id of the gateway's UUID shape goes in a command (setup §9).
     expect(approvalInstructionsFor(null)(DEV_GATEWAY_URL, "req-1").command).toBe(
       "openclaw devices list",
