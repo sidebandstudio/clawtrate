@@ -14,7 +14,7 @@ The owner has authorized publishing Mac betas. The track reads "Beta" in the app
   - `APPLE_CLAWTRATE_NOTARY_API_KEY_P8`: an App Store Connect API key with the Developer role, the `.p8` file's text or its base64;
   - `APPLE_CLAWTRATE_NOTARY_API_KEY_ID`: that key's ten-character ID;
   - `APPLE_CLAWTRATE_NOTARY_ISSUER_ID`: the issuer ID shown above the keys in App Store Connect.
-- **GitHub**: `gh` signed in as someone who may create releases in `sidebandstudio/clawtrate`. Pages is on, with GitHub Actions as its source and `clawtrate.dev` as its custom domain, so the Site workflow can deploy. That workflow is the site's only deploy; it deploys nothing until `site/index.html` is on `main`.
+- **GitHub**: `gh` signed in as someone who may create releases in `sidebandstudio/clawtrate`. Pages is on, with GitHub Actions as its source and `clawtrate.dev` as its custom domain, so the Site workflow can deploy. That workflow is the site's only deploy. It deploys nothing until `site/index.html` is on `main` and a beta is published, while a `__CLAWTRATE_…__` template token is left, or while `site/install.sh` pins the placeholder `APPLE_CLAWTRATE_TEAM_ID` or another team than the beta's. Before the first beta, put the Developer ID team in `CLAWTRATE_TEAM_ID` in `site/install.sh`.
 - **The Mac**: Xcode's command line tools (`codesign`, `spctl`, `xcrun stapler`, `notarytool`), Node 26 and pnpm, and Apple's Developer ID intermediate certificate (Xcode installs it; otherwise it is at [Apple's certificate authority](https://www.apple.com/certificateauthority/)).
 - **The app**: an update installs in place only from a Developer ID build that has the install step (#202) and Restart (#204). A beta cut before they are on `main` still checks and downloads its successor, but cannot restart into it.
 
@@ -31,23 +31,27 @@ pnpm release:beta
 If the vault lacks any of the five values, the script names the missing ones and stops before building. Otherwise it:
 
 1. chooses the version: the checked-in version with its patch raised, the UTC day and the next run number that no tag, draft or staged release has used, for example `0.1.1-beta.20261120.1`, and refuses one that is not newer than every tag;
-2. makes a private temporary folder, `$TMPDIR/clawtrate-signing-XXXXXX`, and a keychain in it. The certificate and its password go to `security`, and the notary key's path, id and issuer to `notarytool`, on their standard input, never in a command's arguments or environment. The certificate's file is deleted once imported. The key's file stays until the build ends;
+2. makes a private temporary folder, `$TMPDIR/clawtrate-signing-XXXXXX`, and a keychain in it that locks itself after an hour unused and when the Mac sleeps. The certificate and its password go to `/usr/bin/security`, one command at a time, each one's status checked, and the notary key's path, id and issuer to `/usr/bin/xcrun notarytool`, on their standard input, never in a command's arguments or environment. The certificate's file is deleted as soon as its import returns, and the key's file (`notary.p8`) as soon as `notarytool` has stored it, so neither exists when the build starts;
 3. builds and signs both apps with `candidate-build.ts`, the same build the release candidates use, with only ordinary variables (`PATH`, `HOME`, the locale and caches), the keychain, the identity's hash, the notary profile's name, the Beta feed address and the build date. Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
-4. unpacks each zip and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again;
-5. writes `.release/beta/<version>/`: the two zips, `feed.json` (the Beta feed, naming each zip at its release download address with its size and SHA-512), `latest-mac.json` (the team and each architecture's version, address and SHA-256, for the site's install script), `notes.md` and `release.json`, the record of every file's size and hashes;
-6. removes the signing folder and `apps/desktop/dist`, and prints the files, their SHA-256 and the command that publishes them.
+4. copies each zip into the private folder, unpacks the copy and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again;
+5. writes `.release/beta/<version>/` from those verified copies: the two zips, `feed.json` (the Beta feed, naming each zip at its release download address with its size and SHA-512), `latest-mac.json` (the team and each architecture's version, address and SHA-256, for the site's install script), `notes.md` and `release.json`, the record of every file's size and hashes;
+6. removes the signing folder and `apps/desktop/dist`, and prints the files, their SHA-256, the SHA-256 of `release.json` and the command that publishes them, which includes it. Keep that value somewhere outside the staging folder: publishing requires it, and it is what ties the staged files to the ones that passed the checks.
 
 Only Apple's notary service receives anything. A failed build prints the path of its log, not the log: electron-builder's output can name the identity, its hash and the team. Keep that log and the script's output private.
 
 ### If a run is killed
 
-A normal exit, an error, Ctrl-C and `kill` (SIGTERM) remove the signing folder. A run killed outright (`kill -9`, a crash or a power cut) leaves `$TMPDIR/clawtrate-signing-*`, which can hold the notary key's file, readable by your user, the keychain with the certificate, which locks itself after an hour or when the Mac sleeps and whose password died with the run, and at worst the certificate's file. The next `pnpm release:beta` removes any such folder whose run has ended. To remove one yourself:
+A normal exit, an error, Ctrl-C and `kill` (SIGTERM) remove the signing folder. A run killed outright (`kill -9`, a crash or a power cut) leaves its `$TMPDIR/clawtrate-signing-XXXXXX` folder. Killed while `security` imports the certificate, it can still hold the certificate's file, and killed while `notarytool` stores the key, the key's file (`notary.p8`), both readable by your user. At any later point it holds the keychain, whose password died with the run but which stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps. It also holds the verified copies of the zips.
+
+The next `pnpm release:beta` removes, before anything else, each such folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. A folder with no `pid` may be a run that is just starting, so it is left alone and named. To remove one yourself, check its run first:
 
 ```sh
-rm -rf "$TMPDIR"/clawtrate-signing-*
+cat "$TMPDIR"/clawtrate-signing-XXXXXX/pid     # the run's process id
+ps -p <that pid>                               # no row: the run has ended
+rm -rf "$TMPDIR"/clawtrate-signing-XXXXXX      # that folder only
 ```
 
-The keychain was never added to your keychain list, so nothing else needs undoing. If you think the key's file was copied, revoke the key in App Store Connect and put a new one in the vault.
+The keychain was never added to your keychain list, so nothing else needs undoing. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
 
 ### Check it before publishing
 
@@ -56,15 +60,15 @@ The script has checked each app as it ships. Before publishing, read `notes.md` 
 ### Publish it
 
 ```sh
-pnpm release:beta --publish <version>
+pnpm release:beta --publish <version> <release.json sha256>
 ```
 
-It publishes only what was prepared, and:
+Use the command preparation printed. It publishes only what was prepared, and:
 
-1. requires `.release/beta/<version>/` to hold exactly the two zips, `feed.json`, `latest-mac.json`, `notes.md` and `release.json`; `release.json` to name this version, its tag, a full commit, a team and exactly those four files; every file to have its recorded size and hashes; the feed and `latest-mac.json` to name those zips, each at its own canonical name, by size and digest, under this tag and team; and `notes.md` to be the notes the record makes;
+1. reads `release.json` once and refuses it unless its SHA-256 is the one given, before trusting anything in it. It then requires `.release/beta/<version>/` to hold exactly the two zips, `feed.json`, `latest-mac.json`, `notes.md` and `release.json`; `release.json` to name this version, its tag, a full commit, a team and exactly those four files; every file to have its recorded size and hashes; the feed and `latest-mac.json` to name those zips, each at its own canonical name, by size and digest, under this tag and team; and `notes.md` to be the notes the record makes;
 2. refreshes `origin/main` and refuses if it cannot, then requires the commit to be on it, the tag to be unused and the version to be newer than every tag;
 3. reads the team from every earlier beta on GitHub, drafts included, and refuses another team or one it cannot read. Only a listing with no earlier beta counts as the first;
-4. creates the release `v<version>` as a draft prerelease with the zips, `feed.json` and `latest-mac.json`, requires the draft to hold exactly those files, fully uploaded, each with GitHub's SHA-256 digest of the prepared bytes, and only then publishes it;
+4. creates the release `v<version>` as a draft prerelease with the zips, `feed.json`, `latest-mac.json` and, as text, the notes it checked. It requires the draft to hold exactly those files, fully uploaded, each with GitHub's SHA-256 digest of the prepared bytes, and those notes, and only then publishes it. It reads the release back afterwards: it goes on only once GitHub lists it as public, and says so when the command failed but the release is public, or that the state is unconfirmed when it cannot read it;
 5. downloads every file back through its public address and compares its size and SHA-512 with the record;
 6. waits up to 15 minutes for `https://clawtrate.dev/updates/beta/feed.json` to serve the new feed. Publishing the release starts the Site workflow. Pages can cache the old feed for up to ten minutes. If the wait ends, run the Site workflow by hand and check the feed.
 
@@ -76,7 +80,9 @@ A beta on the Beta track then finds it with Check for Updates in Settings → Up
 pnpm release:beta --withdraw <version>
 ```
 
-It makes the release a draft again and reads it back to report that GitHub lists it as a draft. The Site workflow then deploys the previous beta's feed, or no feed when it was the first. The script waits up to 15 minutes, each request with its own deadline, until the site serves a valid feed of another version, or answers 404 while GitHub lists no published beta. It reports a failed connection, another status or a body that is not a feed as inconclusive, and exits 1. GitHub's download addresses can keep answering from caches for a while; the signed trial is where to see how long. An app that checked earlier can still hold the offer, but its download now fails. Copies already downloaded stay on those Macs, and the engine never downgrades, so whoever installed the withdrawn beta needs a newer one: fix the problem and cut the next beta. Keep the draft as the record, and never reuse its version; the script counts drafts.
+It makes the release a draft again and reads it back to report that GitHub lists it as a draft, or that the state is unconfirmed when it cannot read it. The Site workflow then deploys the previous beta's feed and download page. The script waits up to 15 minutes, each request to the feed's own address with its own deadline and no redirect followed, until the site serves the remaining beta's feed, or, when GitHub lists no other published beta, answers that address with a 404. It reports a feed of any other version, a redirect, a failed connection, another status or a body that is not a feed, and exits 1.
+
+Withdrawing the only published beta leaves the site as it was: with no beta to fill the download page from, the Site workflow deploys nothing, so the last deployment keeps serving the withdrawn feed and the script says so. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one. GitHub's download addresses can keep answering from caches for a while; the signed trial is where to see how long. The app may still show the offer, and a cached download can still answer. Copies already downloaded stay on those Macs, and the engine never downgrades, so whoever installed the withdrawn beta needs a newer one: fix the problem and cut the next beta. Keep the draft as the record, and never reuse its version; the script counts drafts.
 
 ### What only a signed build shows
 
