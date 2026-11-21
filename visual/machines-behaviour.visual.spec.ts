@@ -7,7 +7,7 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
+import { contextFor, hold, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -19,17 +19,6 @@ const sent = (page: Page) =>
     (
       window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
-  );
-// The fixture's answers are held and then let through by the check, not left to a page timer:
-// on a loaded machine the check can look too late, or the timer can stay unfired for longer than
-// the check waits (#248, #252).
-const hold = (page: Page) =>
-  page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
-  );
-const release = (page: Page) =>
-  page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
   );
 /** The Work pane's live region, or Settings' when Settings is open. */
 const announcer = (page: Page) => page.getByTestId("work-announcer");
@@ -259,7 +248,7 @@ test("F-046: the Runs on row is drawn from its own read while the account read h
   );
 });
 
-test("F-046: a refused save says what the gateway answered, and the setting shown stays as it was", async ({
+test("F-046: a refused save says nothing was saved and what the gateway answered, and the setting shown stays as it was", async ({
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin&mwrite=refused`, "light");
@@ -269,12 +258,60 @@ test("F-046: a refused save says what the gateway answered, and the setting show
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
   await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
-    /The gateway answered: invalid config/,
+    "Nothing was saved. The gateway answered: invalid config: agents.entries.otto.tools.exec.node",
   );
-  await expect(announcer(page)).toHaveText("Save not confirmed");
+  await expect(announcer(page)).toHaveText("Couldn't save");
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
     "Otto's command machine: media-box · Connected",
   );
+});
+
+test("F-046: a save whose answer never came says it couldn't be confirmed and what reading it back shows, never saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unanswered`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "Read back afterwards, Otto's command machine setting is the gateway's machine.",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+  // The page reads again and shows the stored setting, still without saying it was saved.
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: The gateway's machine",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+});
+
+test("F-046: a save whose answer never came, on a gateway that can't read its settings file, says the setting couldn't be read, and still does once the page reads again", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unreadable`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  // The read after the save fails too: the page says so, and the save's outcome stays with it.
+  const failed = page.getByTestId("runs-on-error");
+  await expect(failed.getByRole("heading")).toHaveText("Couldn't load where Otto runs");
+  await expect(failed).toContainText(
+    "The gateway reports that its settings file isn't valid, so it can't be read.",
+  );
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "The setting couldn't be read back either.",
+  );
+  await expect(page.getByTestId("runs-on-machine")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("Save not confirmed");
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({

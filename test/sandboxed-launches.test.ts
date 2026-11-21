@@ -34,8 +34,8 @@ describe("the packaged app's launches", () => {
         expect(call, `${file}:${index + 1}`).toMatch(/launchArgs\(|--clawtrate-setup-sandbox=/);
       });
     }
-    // The main launch, the Windows launch and the second launch.
-    expect(launches.length).toBeGreaterThanOrEqual(3);
+    // The Mac and Windows launches, the second instance and the newer Mac build.
+    expect(launches.length).toBeGreaterThanOrEqual(4);
   });
 
   it("every packaged launch, the second included, gets the run's own home, temporary folder and working folder", () => {
@@ -62,7 +62,7 @@ describe("the packaged app's launches", () => {
         expect(call, `${file}:${index + 1}`).toMatch(/env: place\.env/);
       });
     }
-    expect(launches).toBeGreaterThanOrEqual(3);
+    expect(launches).toBeGreaterThanOrEqual(4);
   });
 
   it("an app that exited before its teardown asked is seen as exited, from the exit recorded at its spawn", async () => {

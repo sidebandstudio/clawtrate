@@ -1,14 +1,110 @@
-# Desktop release candidates
+# Desktop releases
 
-**In-place installation is not on `main` yet.** The desktop host can verify a download. Installation is a later app change. Keep both tracks closed until installation exists and the signed upgrade trial below passes on all three systems.
+A Mac beta is cut on the maintainer's Mac with `pnpm release:beta` and published as a GitHub prerelease, with its feed on the website. That is [Beta for macOS](#beta-for-macos). Stable builds and Windows builds go through [release candidates](#make-a-candidate) and the [owner procedure](#owner-procedure).
+
+## Beta for macOS
+
+The owner has authorized publishing Mac betas. The track reads "Beta" in the app and on the site. [Decisions](../decisions.md#the-beta-track) says why its code identifier is still `nightly`, and [where a beta's files live](../decisions.md#where-a-betas-files-live).
+
+### Before the first beta
+
+- **The vault** holds five values, read with `fleet secret get <NAME> --scope personal` at run time:
+  - `APPLE_CLAWTRATE_DEVELOPER_ID_P12_BASE64`: the Developer ID Application certificate and its private key, exported from Keychain Access as a `.p12` and base64-encoded (`base64 -i cert.p12`);
+  - `APPLE_CLAWTRATE_DEVELOPER_ID_P12_PASSWORD`: the password the `.p12` was exported with;
+  - `APPLE_CLAWTRATE_NOTARY_API_KEY_P8`: an App Store Connect API key with the Developer role, the `.p8` file's text or its base64;
+  - `APPLE_CLAWTRATE_NOTARY_API_KEY_ID`: that key's ten-character ID;
+  - `APPLE_CLAWTRATE_NOTARY_ISSUER_ID`: the issuer ID shown above the keys in App Store Connect.
+- **GitHub**: `gh` signed in as someone who may create releases in `sidebandstudio/clawtrate` and start its workflows: Contents and Actions write access. `gh auth login` gives both; a fine-grained token needs both, or `--publish` and `--withdraw` change the release and then cannot start the Site workflow. Pages is on, with GitHub Actions as its source and `clawtrate.dev` as its custom domain, so the Site workflow can deploy. The `github-pages` environment allows deployments from the `main` branch only, with no tag rule: a tag rule would let anyone who can push a `v*` tag deploy that tag's own copy of the workflow, which is weaker than requiring a merge to `main`. So a release event does not deploy the site; the release commands start the Site workflow on `main` themselves. That workflow is the site's only deploy. It deploys nothing until `site/index.html` is on `main` and a beta is published, while a `__CLAWTRATE_…__` template token is left, or while `site/install.sh` pins the placeholder `APPLE_CLAWTRATE_TEAM_ID` or another team than the beta's. Before the first beta, put the Developer ID team in `CLAWTRATE_TEAM_ID` in `site/install.sh`.
+- **The Mac**: Xcode's command line tools (`codesign`, `spctl`, `xcrun stapler`, `notarytool`), Node 26 and pnpm, and Apple's Developer ID intermediate certificate (Xcode installs it; otherwise it is at [Apple's certificate authority](https://www.apple.com/certificateauthority/)).
+- **The app**: an update installs in place only from a Developer ID build that has the install step (#202) and the Restart screen (#204), both on `main`, so every beta has them.
+
+### Cut a beta
+
+From a clean checkout of `main` at the commit to release, with no `apps/desktop/dist`:
+
+```sh
+git switch main && git pull --ff-only
+pnpm install --frozen-lockfile
+pnpm release:beta
+```
+
+If the vault lacks any of the five values, the script names the missing ones and stops before building. Otherwise it:
+
+1. chooses the version: the checked-in version with its patch raised, the UTC day and the next run number that no tag, draft or staged release has used, for example `0.1.1-beta.20261120.1`, and refuses one that is not newer than every tag;
+2. makes a private temporary folder, `$TMPDIR/clawtrate-signing-XXXXXX`, and a keychain in it that locks itself after an hour unused and when the Mac sleeps. The certificate and its password go to `/usr/bin/security`, one command at a time, each one's status checked, and the notary key's path, id and issuer to `/usr/bin/xcrun notarytool`, on their standard input, never in a command's arguments or environment. The certificate's file is deleted as soon as its import returns, and the key's file (`notary.p8`) as soon as `notarytool` has stored it, so neither exists when the build starts;
+3. builds and signs both apps with `candidate-build.ts`, the same build the release candidates use, with only ordinary variables (`PATH`, `HOME`, the locale and caches), the keychain, the identity's hash, the notary profile's name, the Beta feed address and the build date. Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
+4. copies each zip into the private folder, unpacks the copy and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again;
+5. writes `.release/beta/<version>/` from those verified copies: the two zips, `feed.json` (the Beta feed, naming each zip at its release download address with its size and SHA-512), `latest-mac.json` (the team and each architecture's version, address and SHA-256, for the site's install script), `notes.md` and `release.json`, the record of every file's size and hashes;
+6. removes the signing folder and `apps/desktop/dist`, and prints the files, their SHA-256, the SHA-256 of `release.json` and the command that publishes them, which includes it. Keep that value somewhere outside the staging folder: publishing requires it, and it is what ties the staged files to the ones that passed the checks.
+
+Only Apple's notary service receives anything. A failed build prints the path of its log, not the log: electron-builder's output can name the identity, its hash and the team. Keep that log and the script's output private.
+
+### If a run is killed
+
+A normal exit, an error, Ctrl-C and `kill` (SIGTERM) remove the signing folder. Ctrl-C and `kill` first stop the build and everything it started, a stalled notarization included, and wait for all of it to end. A run killed outright (`kill -9`, a crash or a power cut) leaves its `$TMPDIR/clawtrate-signing-XXXXXX` folder. Killed while `security` imports the certificate, it can still hold the certificate's file, and killed while `notarytool` stores the key, the key's file (`notary.p8`), both readable by your user. At any later point it holds the keychain, whose password died with the run but which stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps. It also holds the verified copies of the zips.
+
+The next `pnpm release:beta` removes, before anything else, each such folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. A folder with no `pid` may be a run that is just starting, so it is left alone and named. To remove one yourself, check its run first:
+
+```sh
+cat "$TMPDIR"/clawtrate-signing-XXXXXX/pid     # the run's process id
+ps -p <that pid>                               # no row: the run has ended
+rm -rf "$TMPDIR"/clawtrate-signing-XXXXXX      # that folder only
+```
+
+The keychain was never added to your keychain list, so nothing else needs undoing. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
+
+### Check it before publishing
+
+The script has checked each app as it ships. Before publishing, read `notes.md` and `latest-mac.json`, and confirm that the version, the commit and the team are the ones you expect. To look yourself, unpack a zip with `ditto -x -k` into a new folder and run `spctl --assess --type execute --verbose=2` and `xcrun stapler validate` on the app. Opening it there starts a real app with your own data folder, so do that only on a Mac set aside for it.
+
+### Publish it
+
+```sh
+pnpm release:beta --publish <version> <release.json sha256>
+```
+
+Use the command preparation printed. It publishes only what was prepared, and:
+
+1. reads `release.json` once and refuses it unless its SHA-256 is the one given, before trusting anything in it. It then requires `.release/beta/<version>/` to hold exactly the two zips, `feed.json`, `latest-mac.json`, `notes.md` and `release.json`; `release.json` to name this version, its tag, a full commit, a team and exactly those four files; every file to have its recorded size and hashes; the feed and `latest-mac.json` to name those zips, each at its own canonical name, by size and digest, under this tag and team; and `notes.md` to be the notes the record makes;
+2. asks GitHub whether the commit is on `sidebandstudio/clawtrate`'s `main`, whatever this checkout's `origin` is, and refuses if it is not or GitHub cannot say; then requires the tag to be unused and the version to be newer than every tag;
+3. reads the team from every earlier beta on GitHub, drafts included, and refuses another team or one it cannot read. Only a listing with no earlier beta counts as the first;
+4. creates the release `v<version>` as a draft prerelease with the zips, `feed.json`, `latest-mac.json` and, as text, the notes it checked. It requires the draft to hold exactly those files, fully uploaded, each with GitHub's SHA-256 digest of the prepared bytes, and those notes, and only then publishes it. It reads the release back afterwards: it goes on only once GitHub lists it as public, and says so when the command failed but the release is public, or that the state is unconfirmed when it cannot read it;
+5. downloads every file back through its public address and compares its size and SHA-512 with the record;
+6. starts the Site workflow on `main` (`gh workflow run site.yml --ref main`), only once GitHub lists the release as public and every public file matches, and waits up to 15 minutes for `https://clawtrate.dev/updates/beta/feed.json` to serve the new feed. Pages can cache the old feed for up to ten minutes. If the workflow cannot be started, or the wait ends, the script says so: look at the Site workflow's run on `main`, start it there by hand if needed, and check the feed.
+
+A beta on the Beta track then finds it with Check for Updates in Settings → Updates and downloads it when the person chooses. Restart to Update installs it once the person confirms (#202 and #204, both on `main`). New installs come from the site: the download link, or the install script, which reads `latest-mac.json`.
+
+### Withdraw a beta
+
+```sh
+pnpm release:beta --withdraw <version>
+```
+
+It makes the release a draft again and reads it back to report that GitHub lists it as a draft, or that the state is unconfirmed when it cannot read it. Once GitHub lists it as a draft, it starts the Site workflow on `main`, which deploys the feed and download page of the newest beta still published. A release changed by hand on GitHub, made a draft or deleted, changes nothing on the site until someone runs `gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main`. The script waits up to 15 minutes, each request to the feed's own address with its own deadline and no redirect followed, and no request after the first running past the wait, until the site serves the remaining beta's own `feed.json`, byte for byte by GitHub's digest of it, or, when GitHub lists no other published beta, answers that address with a 404. It reports any other feed, the same version's included, a redirect, a failed connection, another status or a body that is not a feed, and exits 1.
+
+Withdrawing the only published beta leaves the site as it was: with no beta to fill the download page from, the Site workflow deploys nothing, so the last deployment keeps serving the withdrawn feed and the script says so. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one. GitHub's download addresses can keep answering from caches for a while; the signed trial is where to see how long. The app may still show the offer, and a cached download can still answer. Copies already downloaded stay on those Macs, and the engine never downgrades, so whoever installed the withdrawn beta needs a newer one: fix the problem and cut the next beta. Keep the draft as the record, and never reuse its version; the script counts drafts.
+
+### What only a signed build shows
+
+The tests and the unsigned launch check show the release files, the redirect rule and that a newer build opens the same data folder, device key and saved connection. Two consecutive Developer ID beta builds are needed to show that Squirrel.Mac accepts the successor's designated requirement and hands the app over, and that the person's pairing and tasks are there after the real restart. That is the owner's trial.
+
+### The owner's signed trial
+
+**Mac, Apple silicon and Intel.** On each architecture use two consecutive Developer ID-signed, notarized builds and their exact ZIPs on an isolated feed. Inspect the designated requirement and full version in each signed bundle. Test both allowed track transitions. Try an unsigned or ad hoc app, another signer, an unsafe or different archive, another architecture, another product and an older or unrelated same-identity release. Observe ShipIt state during Check, Download and an ordinary quit before Restart. None should stage an update. After confirmed Restart, record loopback requests, ATS and proxy behavior, listener closure, OS security-service traffic and the order of staging. Exercise quit during stage, helper error and retry, canceled authorization and supported writable and protected installation locations. Complete a restart and check data preservation. Independently compare intended and installed bundle identities. Confirm that Clawtrate reports only the version it actually reads after relaunch.
+
+**Windows x64.** Prepare consecutive signed builds for a controlled trial of the currently gated path. Derive `CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256` from the actual signing leaf's DER bytes and independently compare the pin, product, setup marker and full Stable and Beta versions on both releases. Establish cache-only trust on a fresh trial machine with warm and empty chain and revocation caches. Include timestamped, expired, revoked, wrong-leaf, other-product and older signed inputs. Exercise long, short and volume paths, a custom location with spaces and ordinary special characters, both registrations and coexisting installations. Verify per-user handoff and refusal of unproved elevated modes. Before enabling any elevated mode, establish exact package sharing, loader, overlay and embedded payload reads throughout elevation, including refusal or canceled UAC. Prove that a failed start or blocked quit leaves other installations and processes alone. Record exit order, one handoff, independent OS egress, final location, preserved app data and the newly running version. Keep the Windows tracks closed pending the results.
+
+## Release candidates
+
+**In-place installation (#202) and the Restart screen (#204) are on `main`.** Keep Stable and Windows closed until the signed upgrade trial passes on all three systems. The Mac beta above is published with the owner's authorization, and its first two signed builds are its trial.
 
 ## Make a candidate
 
-Stable and Nightly each have a fixed feed. Stable uses `X.Y.Z`. A nightly takes the checked-in desktop version, increments its patch and appends the UTC day and numeric workflow run. For example, from `0.1.0`, run 9 on November 19, 2026 gives `0.1.1-nightly.20261119.9`. Run 10 follows it. Both precede stable `0.1.1`. A selected ref can have an old base. Check its version against the actual feeds.
+Stable and Beta each have a fixed feed. Stable uses `X.Y.Z`. A beta takes the checked-in desktop version, increments its patch and appends the UTC day and numeric workflow run. For example, from `0.1.0`, run 9 on November 19, 2026 gives `0.1.1-beta.20261119.9`. Run 10 follows it. Both precede stable `0.1.1`. A selected ref can have an old base. Check its version against the actual feeds.
 
 The Windows packager wraps its x64 app in a 32-bit NSIS installer. Before upload, the Windows job reads the PE header of `apps/desktop/dist/win-unpacked/Clawtrate.exe` and requires AMD64. It records that observation alongside the installer.
 
-1. In Actions, choose **Desktop release candidate**, **Run workflow** and a reviewed source ref. Select `stable` and enter the exact version, or select `nightly` and leave the version blank. Rerunning failed jobs keeps a successful version selection. Rerunning all jobs selects a new epoch and can change the nightly date after UTC midnight. Start a fresh dispatch for a new candidate and retain its source commit and epoch.
+1. In Actions, choose **Desktop release candidate**, **Run workflow** and a reviewed source ref. Select `stable` and enter the exact version, or select `beta` and leave the version blank. The workflow passes the Beta track on as `nightly`, its identifier in the code. Rerunning failed jobs keeps a successful version selection. Rerunning all jobs selects a new epoch and can change the beta's date after UTC midnight. Start a fresh dispatch for a new candidate and retain its source commit and epoch.
 2. A successful workflow retains `candidate-<version>` for three days. It contains two Mac ZIPs, a Windows installer, three build records, `update-feed.json` and `release-plan.json`. The native jobs check the staged Mac apps for ad hoc signatures and Windows for an unsigned installer before retention. The assembly job matches its files to those native jobs' checksums.
 3. Read the verdict. **Refused** lists inconsistencies. **Complete and consistent** means the file names, file structures, architecture headers, sizes and hashes match, and the recorded build settings agree. The Mac check reads the executable named in the outer app's Info.plist. The plan checks for Windows PE executable structure. The owner's Windows check establishes that the file is the expected installer and that it installs the intended x64 app. When present, the Windows build record attributes the unpacked app's architecture to the build job. That observation has no effect on the verdict. Signing is **not checked by this plan**. A build record can be edited.
 
@@ -24,13 +120,13 @@ Exit 0 means complete and consistent. Exit 1 means refusal or an error reading o
 
 ### Choose the host, version and identities
 
-1. Choose a direct HTTPS host and approve its costs. Use distinct fixed feeds such as `/stable/feed.json` and `/nightly/feed.json`. Store binaries in a version folder beside their feed, for example `/stable/0.1.1/Clawtrate-0.1.1-mac-arm64.zip`. The plan's local check of the address's form requires canonical unescaped paths and a distinct URL for each configured track. Both addresses, including an absent one, are compared across build records. Verify separately that the host answers, the TLS certificate is trusted by the app, and the bytes served match. The feed and its files must return HTTP 200 on the same origin and port without credentials or redirects. Ordinary GitHub Release download URLs redirect. Configure the feed and CDN to bypass caching or revalidate on every request.
-2. Save a local copy of each feed currently served and keep a private release history. After withdrawal the current feed alone cannot tell you the highest version ever offered. Choose a new version above the versions it supersedes, including the withdrawn version. Never reuse a published version or object name. Keep nightlies between the last stable and the next intended stable.
+1. Choose a direct HTTPS host and approve its costs. Use distinct fixed feeds such as `/stable/feed.json` and `/beta/feed.json`. Store binaries in a version folder beside their feed, for example `/stable/0.1.1/Clawtrate-0.1.1-mac-arm64.zip`. The plan's local check of the address's form requires canonical unescaped paths and a distinct URL for each configured track. Both addresses, including an absent one, are compared across build records. Verify separately that the host answers, the TLS certificate is trusted by the app, and the bytes served match. The feed and its files must return HTTP 200 on the same origin and port without credentials or redirects. Ordinary GitHub Release download URLs redirect. Configure the feed and CDN to bypass caching or revalidate on every request.
+2. Save a local copy of each feed currently served and keep a private release history. After withdrawal the current feed alone cannot tell you the highest version ever offered. Choose a new version above the versions it supersedes, including the withdrawn version. Never reuse a published version or object name. Keep betas between the last stable and the next intended stable.
 3. Prepare the same trusted signing identities used for the preceding build. On Mac, use a Developer ID Application certificate in `CSC_LINK` with `CSC_KEY_PASSWORD`, or an identity in `CSC_NAME`. For notarization, use `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`, or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE` with optional `APPLE_KEYCHAIN`. On Windows use `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`, or `CSC_LINK` and `CSC_KEY_PASSWORD`. Keep credentials and signed build logs on private builders. See [Packaging](packaging.md#signing-and-notarizing).
 
 ### Build and verify the exact bytes
 
-On both native builders use fresh checkouts of the approved commit. Install dependencies and set the same `SOURCE_DATE_EPOCH` (whole UTC seconds), `CLAWTRATE_UPDATE_FEED_URL` and `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL`. Preserve the epoch selected for the candidate. For a nightly, its UTC day must match the version. Run `node apps/desktop/packaging/candidate-build.ts staging <version>` from each checkout root. Copy both folders' contents into one fresh `candidate` directory. Set `BUILD_DATE` to the epoch in UTC ISO format with milliseconds.
+On both native builders use fresh checkouts of the approved commit. Install dependencies and set the same `SOURCE_DATE_EPOCH` (whole UTC seconds), `CLAWTRATE_UPDATE_FEED_URL` and `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL`. Preserve the epoch selected for the candidate. For a beta, its UTC day must match the version. Run `node apps/desktop/packaging/candidate-build.ts staging <version>` from each checkout root. Copy both folders' contents into one fresh `candidate` directory. Set `BUILD_DATE` to the epoch in UTC ISO format with milliseconds.
 
 Pass paths to the saved current feeds, selected track first, other track second. Use `-` for a track with no previous feed. The comparison runs offline. Investigate every refusal and check the private release history before uploading.
 

@@ -9,7 +9,7 @@ it("only validated bounded attempt records can describe a relaunch", async () =>
   try {
     const prefs = createUpdatePreferenceStore(join(dir.path, "preferences.json"));
     const record = {
-      target: "1.1.0-nightly.20261101.9",
+      target: "1.1.0-beta.20261101.9",
       from: "1.0.0",
       time: "2026-11-01T00:00:00.000Z",
       track: "nightly",

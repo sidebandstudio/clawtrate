@@ -38,7 +38,7 @@ describe("packaging configuration", () => {
     expect(script).toContain('RMDir "$LOCALAPPDATA\\${CLAWTRATE_UPDATER_DIR}"');
   });
 
-  it.each(["1.2.0", "1.2.0-nightly.20261104.10"])(
+  it.each(["1.2.0", "1.2.0-beta.20261104.10"])(
     "emits the full signed setup version and setup-only marker for %s",
     (version) => {
       const config = builderConfig({}, "45.3.2");

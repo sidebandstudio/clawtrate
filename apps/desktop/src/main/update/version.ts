@@ -1,7 +1,7 @@
 import type { UpdateTrack } from "@clawtrate/core";
 
 const VERSION =
-  /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-nightly\.([1-9]\d{7})\.(0|[1-9]\d{0,11}))?$/;
+  /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-beta\.([1-9]\d{7})\.(0|[1-9]\d{0,11}))?$/;
 
 export type Version =
   readonly [number, number, number] | readonly [number, number, number, number, number];
@@ -34,5 +34,5 @@ export function isNewer(candidate: Version, current: Version): boolean {
 
 export function formatVersion(version: Version): string {
   const base = version.slice(0, 3).join(".");
-  return version.length === 3 ? base : base + "-nightly." + version[3] + "." + version[4];
+  return version.length === 3 ? base : base + "-beta." + version[3] + "." + version[4];
 }
