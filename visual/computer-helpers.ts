@@ -23,27 +23,38 @@ export const tileReady = (page: Page) =>
  */
 export const painted = (canvas: Locator) =>
   expect
-    .poll(() =>
-      canvas
-        .evaluate(
-          (element: HTMLCanvasElement) =>
-            element.getContext("2d")?.getImageData(0, 0, 1, 1).data[3] ?? 0,
-        )
-        .catch(() => 0),
+    .poll(
+      () =>
+        canvas
+          .evaluate(
+            (element: HTMLCanvasElement) =>
+              element.getContext("2d")?.getImageData(0, 0, 1, 1).data[3] ?? 0,
+          )
+          .catch(() => 0),
+      // Often: a view that ends soon after its frame clears the picture.
+      { intervals: [20] },
     )
     .toBeGreaterThan(0);
 
-/** Watch, and wait for the first frame to be drawn. */
-export async function watch(page: Page) {
+/** Watch: the tile is live. */
+async function startWatch(page: Page) {
   await tileReady(page);
   await computerPanel(page).getByRole("button", { name: "Watch Juniper's browser" }).click();
   await expect(computerPanel(page).locator(".screen[data-state=live] canvas")).toBeVisible();
+}
+
+/** Watch, and wait for the first frame to be drawn. */
+export async function watch(page: Page) {
+  await startWatch(page);
   await painted(computerPanel(page).locator(".screen canvas"));
 }
 
-/** Watch, then open the full view. */
+/**
+ * Watch, then open the full view at once and wait for its picture: a scene whose view ends soon
+ * after its first frame (`ended`) still offers Open.
+ */
 export async function openFull(page: Page) {
-  await watch(page);
+  await startWatch(page);
   await computerPanel(page)
     .getByRole("button", { name: "Open Juniper's browser full window" })
     .click();
