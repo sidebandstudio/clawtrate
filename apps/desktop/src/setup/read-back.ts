@@ -78,6 +78,12 @@ export type ReadBackHere = {
   url: string;
   /** The identity the connection established; the list is read only when the endpoint returns it. */
   expected: string | null;
+  /**
+   * Whether the endpoint's listener is still the one proved before the reads:
+   * asked just before the device list and again after it, and a list read on
+   * either side of a change is discarded.
+   */
+  listener?: () => Promise<boolean>;
 };
 
 /**
@@ -110,6 +116,9 @@ export async function readBackHere(spec: ReadBackHere): Promise<ReadBack> {
   // Another gateway at the endpoint: its device list is never asked for.
   if (spec.expected !== null && identity.deviceId !== spec.expected)
     return { ok: false, step: "list", exitCode: null, identity };
+  // The list only from the listener that answered as that gateway, the same before and after it.
+  const changed = { ok: false, step: "list", exitCode: null, identity } as const;
+  if (spec.listener && !(await spec.listener())) return changed;
   const listRun = await call("device.pair.list");
   const list =
     listRun.exitCode === 0 && exitOf(listRun) === 0 ? parseDeviceList(listRun.stdout) : null;
@@ -117,5 +126,6 @@ export async function readBackHere(spec: ReadBackHere): Promise<ReadBack> {
     const exit = exitOf(listRun);
     return { ok: false, step: "list", exitCode: exit === 0 ? null : exit, identity };
   }
+  if (spec.listener && !(await spec.listener())) return changed;
   return { ok: true, identity, list };
 }

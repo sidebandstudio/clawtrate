@@ -648,7 +648,10 @@ type Confirm = {
   record: StoredDeviceToken;
   /** Set when this client didn't see the approval as it happened (after a drop). */
   nowShown: boolean;
-  /** What else is kept once the token is: a first pairing's gateway; false when it wasn't kept. */
+  /**
+   * What else is kept once the token is: a first pairing's gateway, saved
+   * inside the queued operation that keeps the token; false when it wasn't.
+   */
   commit: (() => Promise<boolean>) | null;
 };
 
@@ -970,12 +973,18 @@ export class ClawtrateClient {
    */
   private setupIntent: { url: string; reuse: boolean } | null = null;
   /**
-   * The setup connection whose first device token is staged here until its
-   * grant is checked (`setupGrant`): written only for the operator role with
-   * exactly `operator.read`.
+   * The connection whose first device token is staged here until its grant
+   * is checked (`setupGrant`): a setup connection's (`setup`), or any first
+   * pairing that waited for its owner's approval (§9), Advanced's included.
+   * Written only for the operator role with exactly `operator.read`, and for a
+   * manual approval only after its confirming hello.
    */
-  private tokenGate: { generation: number; url: string; staged: StagedDeviceToken | null } | null =
-    null;
+  private tokenGate: {
+    generation: number;
+    url: string;
+    staged: StagedDeviceToken | null;
+    setup: boolean;
+  } | null = null;
   /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
   private heldToken: string | null = null;
   /** The route whose gateway the state shows, or null for one reached by its address. */
@@ -1112,6 +1121,8 @@ export class ClawtrateClient {
   private waitSerial = 0;
   /** The next scheduled check of a waiting request (`scheduleCheck`). */
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Counts checks of a waiting request: only the latest one's answer is applied. */
+  private checkSerial = 0;
   /**
    * The connection Clawtrate disconnected after an approval it couldn't
    * confirm, kept disconnected from that moment, before its suspension is
@@ -1453,6 +1464,12 @@ export class ClawtrateClient {
     return this.settings?.route ?? null;
   }
 
+  /** The selected gateway when the host's look found it on this computer: its address and profile. */
+  get here(): { url: string; profile: "default" | "clawtrate" } | null {
+    const settings = this.settings;
+    return settings?.here ? { url: settings.url, profile: settings.here.profile } : null;
+  }
+
   /** Whether the person chose Disconnect: nothing reconnects until Reconnect. */
   get suspended(): boolean {
     const settings = this.settings;
@@ -1666,6 +1683,15 @@ export class ClawtrateClient {
     this.close();
   }
 
+  /**
+   * Resolves once every queued change to the selected gateway has settled: an
+   * approval's token and gateway committed together, or both put back. A host
+   * that exits waits for it after `stop`.
+   */
+  settled(): Promise<void> {
+    return this.connectionChanges;
+  }
+
   /** Open a transcript. Calls are counted; the last matching close releases it. */
   openSession(key: string, reservation = false): void {
     // A task's key is kept, and keys every map of the task, only within the id cap.
@@ -1822,6 +1848,21 @@ export class ClawtrateClient {
     if (!this.settings) throw new Error("Connect to a gateway first.");
     // A new request replaces one whose approval was being confirmed: that one keeps nothing.
     if (this.approval) this.cancelApproval();
+    // Request again after the wait was found stale, another request or unreadable: the old
+    // wait ends here, by this explicit choice, and a new request is made.
+    const settled = this.state.connection.upgrade.status;
+    if (
+      this.scopeUpgrade &&
+      (settled === "stale" ||
+        settled === "other-request" ||
+        settled === "list-unread" ||
+        settled === "identity-unread")
+    ) {
+      this.scopeUpgrade.cancelScopeUpgrade();
+      this.scopeUpgrade = null;
+      this.lostRequest = null;
+      this.clearCheck();
+    }
     if (this.scopeUpgrade && (wanted !== this.upgradeTier || (pairing && !this.pairingWanted))) {
       // A narrower request is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
@@ -1910,7 +1951,6 @@ export class ClawtrateClient {
     if (lost) {
       const controller = new AbortController();
       upgrade = { cancelScopeUpgrade: () => controller.abort() };
-      pending(lost);
       wait = request(
         "device.scopes.waitUpgrade",
         { requestId: lost },
@@ -1962,6 +2002,8 @@ export class ClawtrateClient {
       });
     }
     this.scopeUpgrade = upgrade;
+    // The resumed wait is installed first, so its waiting state schedules its own checks.
+    if (lost) pending(lost);
     wait.then(
       (outcome) => {
         if (this.scopeUpgrade !== upgrade) return;
@@ -2038,11 +2080,12 @@ export class ClawtrateClient {
    * (setup §9): a route's, or one the host's look found on this computer. Only
    * an explicit address route has no shell; a connection saved before the
    * distinction was kept counts as found here when its address is loopback.
-   * A host without any read-back (no shell anywhere) has address routes only.
+   * Decided from the saved connection alone, whatever the host can do: a
+   * connection that needs the read-back on a host without one keeps nothing.
    */
   private shellExpected(): boolean {
     const settings = this.settings;
-    if (!settings || !this.host.readBack) return false;
+    if (!settings) return false;
     if (settings.route || settings.here) return true;
     if (settings.address) return false;
     return LOOPBACK.test(settings.url);
@@ -2196,7 +2239,8 @@ export class ClawtrateClient {
     deviceId: string;
     record: StoredDeviceToken;
     route: string | null;
-    keepGateway: (generation: number) => Promise<boolean>;
+    /** Saves the gateway, inside the queued operation that keeps the token (finishConfirm). */
+    saveGateway: (generation: number) => Promise<boolean>;
   }): Promise<void> {
     const attempt = this.beginApproval(args.credential);
     const current = () => this.approvalCurrent(attempt) && this.settings?.url === args.url;
@@ -2207,14 +2251,8 @@ export class ClawtrateClient {
     const read = await this.hostReadBack(args.url, known);
     if (!current()) return;
     let gatewayId = known;
-    // A first pairing is a setup connection's, here or over SSH: where the host can read back
-    // at all, never without its read. A host with no shell anywhere leaves it to the hello.
-    if (read === "address") {
-      if (this.host.readBack) {
-        this.refuseApproval("identity-unread", "first");
-        return;
-      }
-    } else {
+    // An explicit address has no shell: the confirming hello establishes its gateway.
+    if (read !== "address") {
       const verdict = this.readBackVerdict(read, known, args.deviceId, READ_SCOPES, true);
       if (verdict !== "exact") {
         this.refuseApproval(verdict, "first");
@@ -2232,7 +2270,7 @@ export class ClawtrateClient {
       deviceId: args.deviceId,
       record: args.record,
       nowShown: false,
-      commit: () => args.keepGateway(this.generation),
+      commit: () => args.saveGateway(this.generation),
     };
     await this.changeConnection(async () => {
       if (!current() || this.confirm?.attempt !== attempt || this.confirm.generation !== null)
@@ -2250,9 +2288,11 @@ export class ClawtrateClient {
   private async hostReadBack(url: string, expected: string | null): Promise<ReadBack | "address"> {
     const unread = { ok: false, step: "identity", exitCode: null } as const;
     if (!this.shellExpected()) return "address";
+    // A connection that needs the read-back, on a host with none: an identity it couldn't read.
+    if (!this.host.readBack) return unread;
     const here = this.settings?.url === url ? (this.settings.here ?? null) : null;
     try {
-      return (await this.host.readBack!(url, { expected, here })) ?? unread;
+      return (await this.host.readBack(url, { expected, here })) ?? unread;
     } catch {
       return unread;
     }
@@ -2365,9 +2405,8 @@ export class ClawtrateClient {
     }
     const id = await this.readGatewayIdentity();
     if (!live()) return;
-    // A first pairing on a host with no shell anywhere: the hello's gateway is the one it pairs with.
-    const expected =
-      confirm.gatewayId ?? (confirm.kind === "first" && !this.host.readBack ? id : null);
+    // A first pairing on an explicit address: the confirming hello's gateway, which must say who it is.
+    const expected = confirm.gatewayId ?? (confirm.kind === "first" ? id : null);
     const same = checkIdentity(id === null ? null : { deviceId: id, publicKey: "" }, expected);
     if (same !== "same") {
       this.refuseApproval(same === "other" ? "identity-changed" : "identity-unread");
@@ -2375,32 +2414,44 @@ export class ClawtrateClient {
     }
     // The staged token is this socket's credential now: taken out of gateway text too.
     this.heldToken = confirm.record.token;
-    const key = this.tokenKey(confirm.credential, confirm.deviceId, "operator");
-    let before: string | null | undefined;
-    try {
-      before = await this.host.storage.get(key);
-    } catch {
-      this.refuseApproval("unconfirmed");
-      return;
-    }
-    if (!live()) return;
-    const putBack = async () => {
+    // The token and, for a first pairing, its gateway: written in one queued operation, so no
+    // Connect, Disconnect or Stop runs between them, and both put back as they were when the
+    // attempt fails or ends while they are written. Shutdown waits for it (`settled`).
+    const kept = await this.changeConnection(async () => {
+      if (!live()) return false;
+      const key = this.tokenKey(confirm.credential, confirm.deviceId, "operator");
+      const keys = confirm.commit ? [key, SETTINGS_KEY] : [key];
+      const priorSettings = this.settings;
+      let before: Array<string | null>;
       try {
-        if (before === null || before === undefined) await this.host.storage.delete(key);
-        else await this.host.storage.set(key, before);
+        before = await Promise.all(keys.map((each) => this.host.storage.get(each)));
       } catch {
-        this.log("warn", "Could not put back this device's earlier token.");
+        return false;
       }
-    };
-    let kept: boolean;
-    try {
-      await this.writeToken(confirm.credential, confirm.deviceId, "operator", confirm.record);
-      kept = live() && (confirm.commit ? await confirm.commit() : true) && live();
-    } catch {
-      kept = false;
-    }
-    if (!kept) {
+      const putBack = async () => {
+        this.settings = priorSettings;
+        for (const [index, each] of keys.entries()) {
+          try {
+            const value = before[index];
+            if (value === null || value === undefined) await this.host.storage.delete(each);
+            else await this.host.storage.set(each, value);
+          } catch {
+            this.log("warn", "Could not put back this device's earlier token or gateway.");
+          }
+        }
+      };
+      try {
+        if (!live()) return false;
+        await this.writeToken(confirm.credential, confirm.deviceId, "operator", confirm.record);
+        const saved = live() && (confirm.commit ? await confirm.commit() : true);
+        if (saved && live()) return true;
+      } catch {
+        // Put back below.
+      }
       await putBack();
+      return false;
+    });
+    if (!kept) {
       if (generation === this.generation && this.confirm === confirm)
         this.refuseApproval("unconfirmed");
       return;
@@ -2513,6 +2564,8 @@ export class ClawtrateClient {
     this.clearCheck();
     const generation = this.generation;
     const serial = this.waitSerial;
+    // One answer counts: the latest check's, never a slower earlier one's.
+    const check = (this.checkSerial += 1);
     const requestId = upgrade.requestId;
     const expected = this.state.connection.gatewayId;
     const read = await this.hostReadBack(url, expected);
@@ -2520,6 +2573,7 @@ export class ClawtrateClient {
     if (
       generation !== this.generation ||
       serial !== this.waitSerial ||
+      check !== this.checkSerial ||
       this.approval ||
       this.state.connection.upgrade.requestId !== requestId
     )
@@ -6144,8 +6198,13 @@ export class ClawtrateClient {
       else this.confirm = null;
     }
     // A connection made with the host's setup code stages its first token here.
+    // So does any connection to an address whose first pairing waits for its owner's approval.
     this.tokenGate =
-      this.setupCode?.url === settings.url ? { generation, url: settings.url, staged: null } : null;
+      this.setupCode?.url === settings.url
+        ? { generation, url: settings.url, staged: null, setup: true }
+        : this.setupApproved === settings.url
+          ? { generation, url: settings.url, staged: null, setup: false }
+          : null;
     const identity = await this.loadIdentity();
     if (generation !== this.generation) return;
 
@@ -6383,15 +6442,17 @@ export class ClawtrateClient {
             grantedScopes: [...staged.scopes],
             heldScopes: [...READ_SCOPES],
           };
+          // Saves the gateway this pairing was for, unless another was chosen meanwhile; false
+          // when it wasn't saved. Paired: Advanced's shared bootstrap secret goes with it.
+          const saveGateway = async (opened: number) => {
+            const current = this.settings;
+            if (opened !== this.generation || current?.url !== settings.url) return false;
+            await this.saveSettings({ ...current, token: null });
+            return true;
+          };
           // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
-          // False when the gateway wasn't saved: its token isn't kept either (finishConfirm).
           const keepGateway = async (opened: number) =>
-            this.changeConnection(async () => {
-              const current = this.settings;
-              if (opened !== this.generation || current?.url !== settings.url) return false;
-              await this.saveSettings(current);
-              return true;
-            });
+            this.changeConnection(() => saveGateway(opened));
           // A first pairing its owner approved (§9): read back, then reconnect with the token
           // before anything is kept. This connection goes no further.
           if (this.setupApproved === settings.url) {
@@ -6404,7 +6465,7 @@ export class ClawtrateClient {
               deviceId: staged.deviceId,
               record,
               route: settings.route ?? null,
-              keepGateway,
+              saveGateway,
             });
             return;
           }
@@ -6480,7 +6541,7 @@ export class ClawtrateClient {
       resolveClose: (context) => {
         // A setup connection that ended before its hello is not retried and its code is
         // forgotten, unless the gateway is waiting for its owner to approve this device.
-        const setup = this.tokenGate?.generation === generation;
+        const setup = this.tokenGate?.generation === generation && this.tokenGate.setup;
         if (setup && this.state.connection.status !== "pairing") this.setupCode = null;
         // The reconnect with a staged token is never retried: its failure is the approval's outcome.
         if (this.confirm?.generation === generation) return { retry: false, notify: true };
@@ -6506,7 +6567,11 @@ export class ClawtrateClient {
         this.routines.onClose();
         this.usage.onClose();
         const status = this.state.connection.status;
-        if (status !== "pairing" && this.tokenGate?.generation === generation) {
+        if (
+          status !== "pairing" &&
+          this.tokenGate?.generation === generation &&
+          this.tokenGate.setup
+        ) {
           // The setup connection ended before its hello: its code is forgotten and it stops.
           this.setupCode = null;
           this.setConnection({
@@ -6680,12 +6745,13 @@ export class ClawtrateClient {
     // A failure of an older connection says nothing about this one.
     if (generation !== this.generation)
       return { closeCode: 1000, closeReason: "superseded", stop: true };
+    const details = asRecord(error.details) ?? {};
     // The gateway refused the reconnect with a staged token: what was granted isn't confirmed.
+    // A refusal for another protocol version says so, in the identity and version words.
     if (this.confirm?.generation === generation) {
-      this.refuseApproval("unconfirmed");
+      this.refuseApproval(protocolMismatch(details) ? "identity-unread" : "unconfirmed");
       return { closeCode: 1000, closeReason: "approval unconfirmed", stop: true };
     }
-    const details = asRecord(error.details) ?? {};
     const raw = typeof details.code === "string" ? details.code : error.gatewayCode;
     // A setup connection publishes typed outcomes only: the few codes its screens name,
     // fixed words, and nothing else the gateway sent.
@@ -6736,8 +6802,11 @@ export class ClawtrateClient {
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
-      // A first pairing that waits for its owner: its token is confirmed before it is kept (§9).
-      if (setup) this.setupApproved = url;
+      // A first pairing that waits for its owner, a setup's or Advanced's: its token is staged
+      // when it arrives on the next hello, and confirmed before it is kept (§9).
+      this.setupApproved = url;
+      if (this.tokenGate?.generation !== generation)
+        this.tokenGate = { generation, url, staged: null, setup: false };
       // The command names the request id only in the gateway's UUID shape, never other text.
       const shownId = setup ? (REQUEST_ID.test(requestId) ? requestId : "") : requestId;
       // A setup connection shows this device, the scopes it asked for and the gateway's
@@ -6778,6 +6847,15 @@ export class ClawtrateClient {
     }
 
     const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
+    // Refused while this device waited on a request whose wait the connection lost: the owner
+    // may have approved it, rotating the token. What it granted can't be confirmed (setup §9).
+    // Kept disconnected, as any approval it couldn't confirm, with this device's earlier token
+    // left as it was: nothing is forgotten for an outcome Clawtrate couldn't confirm.
+    if (refused && this.lostRequest?.url === url) {
+      this.refuseApproval("unconfirmed", "upgrade");
+      this.setConnection({ paired: false });
+      return { closeCode: 1000, closeReason: "approval unconfirmed", stop: true };
+    }
     if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
       // next attempt can pair again with a bootstrap token. The gateway's refusal
@@ -6790,14 +6868,6 @@ export class ClawtrateClient {
     // A route's refusal comes before its gateway said who it is: the attempt ends, and the
     // token is kept (its forgetting waits for an identity that never matched, so it lapses).
     const routeRefused = refused && Boolean(this.settings?.route);
-    // Refused while this device waited on a request whose wait the connection lost: the owner
-    // may have approved it, rotating the token. What it granted can't be confirmed (setup §9).
-    // Kept disconnected, as any approval it couldn't confirm.
-    if (refused && this.lostRequest?.url === url) {
-      this.refuseApproval("unconfirmed", "upgrade");
-      this.setConnection({ paired: false });
-      return { closeCode: 1000, closeReason: "approval unconfirmed", stop: true };
-    }
     const pause = setup || routeRefused || shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",

@@ -489,3 +489,28 @@ describe("F-500: a route's approval, confirmed through the route", () => {
     t.client.stop();
   });
 });
+
+describe("F-500: a route on a host with no read-back", () => {
+  it("keeps no approval: the route needs one, whatever the host can do", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "token-1") };
+    };
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => ({
+      status: "approved",
+      requestId: "up-1",
+      deviceToken: "rotated",
+      scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+    });
+    await client.start();
+    await client.connectRoute({ url: "ws://127.0.0.1:50001", route: ROUTE });
+    await until(() => client.state.connection.status === "connected");
+    await client.requestAccess();
+    await until(() => client.state.connection.upgrade.status === "identity-unread");
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+    client.stop();
+  });
+});

@@ -67,6 +67,15 @@ export class SetupRouter implements SetupHost {
     await this.here.look();
   }
 
+  /**
+   * Review and Look again after an approval for a gateway set up here (§9):
+   * this computer's look for the saved profile alone, checking its address.
+   */
+  async reviewHere(): Promise<void> {
+    this.remote?.reset();
+    await this.here.reviewOf(this.here.savedHere());
+  }
+
   cancel(): void {
     if (this.remote?.active) this.remote.cancel();
     else this.here.cancel();

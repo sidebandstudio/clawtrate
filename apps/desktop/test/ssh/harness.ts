@@ -227,6 +227,8 @@ export function statusJson(options: {
   rpcOk?: boolean;
   pid?: number;
   configPath?: string;
+  /** The running gateway's version: 2026.10.6 as recorded. */
+  version?: string;
 }): unknown {
   const pid = options.pid ?? 4242;
   return {
@@ -246,7 +248,7 @@ export function statusJson(options: {
       bindMode: "loopback",
       bindHost: "127.0.0.1",
       port: options.port,
-      version: "2026.10.6",
+      version: options.version ?? "2026.10.6",
     },
     // A stopped service frees its port: nothing listens there, and the RPC fails.
     port:

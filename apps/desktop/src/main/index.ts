@@ -607,7 +607,10 @@ app.on("before-quit", (event) => {
   void closeSetup();
   runtime?.client.stop();
   const bound = new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS));
-  void Promise.race([closeRemote().catch(() => undefined), bound]).finally(() => {
+  // An approval's token and gateway, committed together or both put back, within the same bound.
+  const settled = runtime?.client.settled() ?? Promise.resolve();
+  const closed = Promise.all([closeRemote().catch(() => undefined), settled]);
+  void Promise.race([closed, bound]).finally(() => {
     quitting = "done";
     app.quit();
   });

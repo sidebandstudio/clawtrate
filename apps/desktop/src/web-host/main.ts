@@ -156,7 +156,8 @@ async function main(): Promise<void> {
     programs.stopAll();
     void closeSetup();
     runtime.client.stop();
-    void host.close().then(() => process.exit(0));
+    // An approval's token and gateway, committed together or both put back, before exiting.
+    void Promise.all([host.close(), runtime.client.settled()]).then(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };
   process.on("SIGINT", shutdown);

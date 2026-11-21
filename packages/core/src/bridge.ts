@@ -79,6 +79,8 @@ export type BridgeCommand =
   | { type: "disconnect"; gatewayUrl: string }
   /** Setting up on the host's computer (`setup.ts`): look there, stop, pair with what was found, start over. */
   | { type: "setupLook" }
+  /** Review and Look again after an approval here (setup §9): the saved profile's look alone. */
+  | { type: "setupReviewHere" }
   | { type: "setupCancel" }
   | { type: "setupConnect" }
   | { type: "setupReset" }
@@ -1070,6 +1072,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "checkAccess":
     case "stopPairing":
     case "setupLook":
+    case "setupReviewHere":
     case "setupCancel":
     case "setupConnect":
     case "setupReset":
@@ -1548,12 +1551,15 @@ class ViewerSession implements BridgeSession {
       case "disconnect":
         return client.disconnect(command.gatewayUrl);
       case "setupLook":
+      case "setupReviewHere":
       case "setupCancel":
       case "setupConnect":
       case "setupReset": {
         const setup = policy.setup;
         if (!setup) throw new Error("This host doesn't set up OpenClaw on its computer.");
         if (command.type === "setupLook") return setup.look();
+        if (command.type === "setupReviewHere")
+          return setup.reviewHere ? setup.reviewHere() : setup.look();
         if (command.type === "setupConnect") return setup.connect();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();

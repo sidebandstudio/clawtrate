@@ -25,6 +25,8 @@ type StatusOptions = {
   /** The address the status probed, and the one its RPC answered on. */
   probeUrl?: string;
   rpcUrl?: string;
+  /** The process listening on the port: 4242 as recorded. */
+  listenerPid?: number;
 };
 
 /** `openclaw gateway status --json` (and `--deep`), as recorded, with one fact changed at a time. */
@@ -75,7 +77,7 @@ export function statusJson(options: StatusOptions = {}): string {
       listeners: listening
         ? [
             {
-              pid: 4242,
+              pid: options.listenerPid ?? 4242,
               command: "node",
               address: `127.0.0.1:${port}`,
               commandLine: "openclaw-gateway",

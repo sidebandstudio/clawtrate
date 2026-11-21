@@ -1,5 +1,6 @@
 import { isApprovalDisconnect, type ClawtrateState, type Transcript } from "@clawtrate/core";
 import { useEffect, useState } from "react";
+import type { ApprovalAction } from "./ApprovalWait.tsx";
 import { gatewayLabel } from "./format.ts";
 
 /**
@@ -64,7 +65,7 @@ export type Strip = {
    * `route-retry` restores an SSH route's forward at once; `review` opens that
    * computer's screens again (docs/design/setup.md §8).
    */
-  action: "retry" | "reload" | "reconnect" | "route-retry" | "review" | null;
+  action: "retry" | "reload" | "reconnect" | "route-retry" | "review" | "approval" | null;
   /** Show the host's retry countdown in the text. */
   countdown: boolean;
 };
@@ -81,6 +82,16 @@ export function stripFor(
 ): Strip | null {
   const { connection, discovery } = state;
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
+  // Clawtrate disconnected after an approval it couldn't confirm (§9): said before a route's own
+  // state, with the same actions as the access bar, never a plain Reconnect to another gateway.
+  if (connection.status === "error" && isApprovalDisconnect(connection.error?.code))
+    return {
+      tone: "danger",
+      text: "Disconnected",
+      more: connection.error?.message ?? null,
+      action: "approval",
+      countdown: false,
+    };
   const route = routeStrip(state);
   if (route) return route;
   switch (connection.status) {
@@ -94,15 +105,6 @@ export function stripFor(
         countdown: true,
       };
     case "error":
-      // The gateway answered; Clawtrate disconnected after an approval it couldn't confirm (§9).
-      if (isApprovalDisconnect(connection.error?.code))
-        return {
-          tone: "danger",
-          text: "Disconnected",
-          more: connection.error?.message ?? null,
-          action: "reconnect",
-          countdown: false,
-        };
       return {
         tone: "danger",
         text: `Can't reach ${gatewayLabel(connection.gatewayUrl)}`,
@@ -251,6 +253,7 @@ export function StatusStrip({
   onRetry,
   onReload,
   onRoute,
+  approval = null,
 }: {
   strip: Strip;
   retryAt: number | null;
@@ -258,6 +261,8 @@ export function StatusStrip({
   onReload: () => void;
   /** The SSH route's "Retry now" and "Review", both the host's. */
   onRoute?: () => void;
+  /** After an approval Clawtrate couldn't confirm: the access bar's first action (§9). */
+  approval?: ApprovalAction | null;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -292,7 +297,12 @@ export function StatusStrip({
         )}
         {strip.more && <span>· {strip.more}</span>}
       </span>
-      {strip.action && (
+      {strip.action === "approval" && approval && (
+        <button type="button" onClick={approval.run}>
+          {approval.label}
+        </button>
+      )}
+      {strip.action && strip.action !== "approval" && (
         <button
           type="button"
           onClick={

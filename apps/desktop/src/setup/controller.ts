@@ -143,8 +143,10 @@ export class SetupController implements SetupHost {
    * relaunch too), or the one this setup found. A fresh look for exactly that
    * profile must find it running a supported version at exactly that address,
    * with one listener; then the identity is read there and, only when it is
-   * `expected`, the device list; and the same listener and program must still
-   * be there after both reads, or nothing read counts. Null for an address
+   * `expected`, the device list. Just before the list and again after it, the
+   * endpoint's listener (its PID and start time, from the status's own port
+   * report), the running version and the program file must be the ones the
+   * fresh look proved, or nothing read counts. Null for an address
    * this computer's look has no profile for. Reads only.
    */
   async readBack(url: string, request: ReadBackRequest): Promise<ReadBack | null> {
@@ -177,6 +179,9 @@ export class SetupController implements SetupHost {
         cwd: opened.world.cwd,
         url: found.url,
         expected: request.expected,
+        // Before the list and after it: the endpoint's listener by PID and start time, the
+        // running version, the endpoint and the program file, as the fresh look proved them.
+        listener: () => this.unchanged(opened, found),
       });
       // The proof held through both reads: the same listener, and the same program file.
       const program = opened.world.installed ? "stand-in" : await fileIdentity(found.program);
@@ -223,7 +228,22 @@ export class SetupController implements SetupHost {
     });
   }
 
-  async look(): Promise<void> {
+  /**
+   * Review or Look again after an approval for a gateway set up here (§9):
+   * the look for the profile the connection was saved with alone, never
+   * another; a gateway of that profile found anywhere but the saved address
+   * is "This changed since you looked." Without a saved profile, the look.
+   */
+  async reviewOf(saved: { profile: string; url: string } | null): Promise<void> {
+    await this.look(saved ?? undefined);
+  }
+
+  /** The selected gateway's saved place on this computer, as the client keeps it. */
+  savedHere(): { profile: string; url: string } | null {
+    return this.options.client.here;
+  }
+
+  async look(saved?: { profile: string; url: string }): Promise<void> {
     this.stopWatching();
     // Another look: the earlier one's programs end before this one asks anything.
     this.options.stopPrograms();
@@ -245,7 +265,10 @@ export class SetupController implements SetupHost {
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
     let refusal: SetupRefusedError | null = null;
-    const report = await lookHere(opened.world, opened.run, {
+    const world = saved
+      ? { ...opened.world, profiles: opened.world.profiles.filter((p) => p.name === saved.profile) }
+      : opened.world;
+    const report = await lookHere(world, opened.run, {
       identify: opened.identify,
       ...(opened.assertActive ? { checkActive: opened.assertActive } : {}),
       onStep: (step) => {
@@ -282,6 +305,11 @@ export class SetupController implements SetupHost {
           others: [],
         },
       });
+      return;
+    }
+    // The saved profile's gateway, at the saved address, or this isn't the gateway reviewed.
+    if (saved && report.found && report.found.url !== saved.url) {
+      this.fail({ kind: "changed" });
       return;
     }
     this.found = report.found;

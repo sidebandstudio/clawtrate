@@ -129,7 +129,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     if (self.state !== "alive") throw new Error("could not determine this process's start time");
     record.runner.identity = self.identity;
     // In the short temporary folder, named so a later run recovers it if this one is killed.
-    root = tempDir(`${TEMP_PREFIX}ssh-approve-`);
+    root = tempDir(`${TEMP_PREFIX}ssh-approve-${RUN}-`);
     if (!isRunTempDir(root)) throw new Error("the test's folder is not one a later run recovers");
     record.dirs.push(root);
     const runId = newRunId();
@@ -149,6 +149,12 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
 
     t = makeWorld(root);
     server = await startSshd(root, t.home, t.userKey);
+    // The daemon, by PID and start time, with its folder: recorded before anything uses it, so a
+    // later run stops exactly it and removes exactly that folder if this one is killed.
+    const daemon = processIdentity(server.pid);
+    if (daemon.state !== "alive") throw new Error("could not determine the test sshd's start time");
+    record.sshd = { pid: server.pid, identity: daemon.identity, dir: root };
+    saveRecord(RECORDS, record);
     assertSessionHome(root, server, t.world, t.userKey);
     stub = installStubOpenclaw(t.home);
     stub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
@@ -176,6 +182,10 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
         'd="$HOME/.openclaw/stub"',
         'if [ "$3" = device.pair.list ] && [ -f "$d/hold" ]; then',
         '  while [ ! -f "$d/release" ]; do sleep 0.2; done',
+        "fi",
+        // Or the service's status changes as the list is read: another listener, another version.
+        'if [ "$3" = device.pair.list ] && [ -f "$d/status-after-list.json" ]; then',
+        '  mv "$d/status-after-list.json" "$d/status-default.json"',
         "fi",
         ...real,
         `exec '${process.execPath}' '${join(import.meta.dirname, "read-call.ts")}' '${INSTANCE}' "$@"`,
@@ -319,6 +329,36 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
       ]);
     } finally {
       status(gatewayPort);
+    }
+  });
+
+  it("F-500: a service that changes while LIST runs, another listener or another version, discards the read", async () => {
+    const url = client.state.connection.gatewayUrl!;
+    const expected = client.state.connection.gatewayId!;
+    const stubDir = join(t.home, ".openclaw", "stub");
+    const proved = statusJson({ port: gatewayPort, home: t.home, pid: gatewayPid });
+    try {
+      for (const after of [
+        statusJson({ port: gatewayPort, home: t.home, pid: gatewayPid + 1 }),
+        statusJson({ port: gatewayPort, home: t.home, pid: gatewayPid, version: "2026.10.7" }),
+      ]) {
+        stub.setStatus("default", proved);
+        writeFileSync(join(stubDir, "status-after-list.json"), JSON.stringify(after, null, 2));
+        const ran = reads().length;
+        const read = await remote.readBack(url, { expected, here: null });
+        // IDENTITY and LIST both ran, and the list doesn't count.
+        expect(reads().slice(ran)).toEqual([
+          `gateway call gateway.identity.get --expect-url ws://127.0.0.1:${gatewayPort} --json`,
+          `gateway call device.pair.list --expect-url ws://127.0.0.1:${gatewayPort} --json`,
+        ]);
+        expect(read).toMatchObject({ ok: false, step: "list", identity: { deviceId: expected } });
+      }
+      // With nothing changed, the same read counts.
+      stub.setStatus("default", proved);
+      expect(await remote.readBack(url, { expected, here: null })).toMatchObject({ ok: true });
+    } finally {
+      rmSync(join(stubDir, "status-after-list.json"), { force: true });
+      stub.setStatus("default", proved);
     }
   });
 

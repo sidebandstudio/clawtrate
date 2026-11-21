@@ -206,8 +206,34 @@ describe("the setup connection's token gate", () => {
       else expect(auth.deviceToken).toBe("device-token");
       return { ok: true, payload: helloOk(["operator.read"], "device-token") };
     };
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "f".repeat(64), publicKey: "k" });
     const storage = memoryStorage();
-    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    // The host reads back on this computer: the gateway, and this device's record with read alone.
+    const client = new ClawtrateClient(
+      {
+        ...testHost(gateway, storage),
+        readBack: async () => ({
+          ok: true,
+          identity: { deviceId: "f".repeat(64), publicKey: "k" },
+          list: {
+            pending: [],
+            paired: [
+              {
+                deviceId: "device-1",
+                publicKey: "public-key",
+                clientId: "gateway-client",
+                clientMode: "ui",
+                role: "operator",
+                roles: ["operator"],
+                scopes: ["operator.read"],
+                tokens: [{ role: "operator", scopes: ["operator.read"] }],
+              },
+            ],
+          },
+        }),
+      },
+      FAST,
+    );
     await client.start();
     await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
     await until(() => client.state.connection.status === "pairing");

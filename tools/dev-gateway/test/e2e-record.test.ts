@@ -181,6 +181,48 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     },
   );
 
+  it("stops an interrupted SSH check's sshd by its PID, waits for it, then removes its exact folder", () => {
+    const daemon = liveProcess();
+    const run = aRun(deadProcess());
+    const dir = own(mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}ssh-approve-${run.record.run}-`)));
+    saveRecord(run.records, {
+      ...run.record,
+      dirs: [...run.record.dirs, dir],
+      sshd: { ...daemon, dir },
+    });
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(processState(daemon.pid, daemon.identity, processIdentity)).toBe("dead");
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(recordPath(run.records, run.record.run))).toBe(false);
+  });
+
+  it("never signals a process that only shares the recorded sshd's PID, and keeps no folder of another run", () => {
+    const other = liveProcess();
+    const run = aRun(deadProcess());
+    const dir = own(mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}ssh-approve-${run.record.run}-`)));
+    // Another start time: the recorded daemon is gone, and this process isn't it.
+    saveRecord(run.records, {
+      ...run.record,
+      sshd: { pid: other.pid, identity: "Thu Jan  1 00:00:00 1970", dir },
+    });
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(processState(other.pid, other.identity, processIdentity)).toBe("alive");
+    expect(existsSync(dir)).toBe(false);
+    // A folder named for another run isn't one this record may name.
+    const elsewhere = own(mkdtempSync(join(tmpdir(), `${TEMP_PREFIX}ssh-approve-ffffffff-`)));
+    const path = join(run.records, "ffeeddcc.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...run.record,
+        run: "ffeeddcc",
+        instances: [],
+        sshd: { ...other, dir: elsewhere },
+      }),
+    );
+    expect(readRecord(path)).toBeNull();
+  });
+
   it("leaves alone a record that names instances other than its run's own", () => {
     const run = aRun(deadProcess());
     run.record.instances.push({ name: "review", runId: newRunId() });

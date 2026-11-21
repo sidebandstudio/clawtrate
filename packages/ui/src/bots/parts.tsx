@@ -18,6 +18,7 @@ import {
 } from "../icons.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { approvalShelf, WaitingRow } from "../ApprovalWait.tsx";
+import { useOpenSettings } from "../settings-open.tsx";
 
 /** A sentence on a soft fill: neutral, something to act on, or a failure. */
 export function Note({
@@ -280,6 +281,7 @@ export function AdminBar({
   need: string;
 }) {
   const send = useCommand();
+  const openSettings = useOpenSettings();
   const ask = () => void send({ type: "requestAccess", tier: "admin" }).catch(() => {});
   const upgrade = connection.upgrade;
   const mine = askingAdmin(connection);
@@ -291,7 +293,7 @@ export function AdminBar({
   const shelf =
     info.readOnly || !mine
       ? null
-      : approvalShelf(connection, send, ask, "sm", info.setup !== undefined);
+      : approvalShelf(connection, send, ask, "sm", info.setup !== undefined, openSettings);
   if (info.readOnly) {
     body = (
       <>

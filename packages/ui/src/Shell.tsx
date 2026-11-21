@@ -14,6 +14,8 @@ import {
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
 import { unreadCount } from "./unread.ts";
+import { approvalActions } from "./ApprovalWait.tsx";
+import { useOpenSettings } from "./settings-open.tsx";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
@@ -66,6 +68,7 @@ export function Shell({
   onCaughtUp?: (caughtUp: boolean) => void;
 }) {
   const send = useCommand();
+  const openSettings = useOpenSettings();
   const interactive = canWrite(state.connection, info);
 
   // When access arrives, the strip says so for four seconds; the conversation announces it.
@@ -559,6 +562,14 @@ export function Shell({
                       onRetry={() => void send({ type: "retry" })}
                       onReload={reload}
                       onRoute={() => void send({ type: "setupRetryRoute" })}
+                      approval={
+                        approvalActions(
+                          state.connection,
+                          send,
+                          info.setup !== undefined,
+                          openSettings,
+                        )[0] ?? null
+                      }
                     />
                   )
                 }

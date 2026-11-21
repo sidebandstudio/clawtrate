@@ -19,6 +19,58 @@ export type ApprovalShelf = {
   offline?: boolean;
 };
 
+/** One of the actions after an approval, by its label and what it does. */
+export type ApprovalAction = { label: string; run: () => void };
+
+/**
+ * The actions after an approval Clawtrate couldn't confirm, the same in the
+ * access bars and the status strip, each doing what its label says. Review
+ * and Look again open the route's own look: over SSH that computer's review,
+ * on this computer the look for the saved profile at its saved address, and
+ * on an address route Settings, which names the configured address and
+ * offers another gateway. Reconnect is its own, explicit, choice, offered
+ * only for an approval that couldn't be confirmed. Empty for any other state.
+ */
+export function approvalActions(
+  connection: ConnectionState,
+  send: Send,
+  /** Whether this host has setup's looks (the desktop app). */
+  looks: boolean,
+  openSettings: (() => void) | null,
+): ApprovalAction[] {
+  const upgrade = connection.upgrade;
+  const quietly = (command: Parameters<Send>[0]) => () => void send(command).catch(() => {});
+  const place = upgrade.place;
+  const routeLook: (() => void) | null = !looks
+    ? null
+    : place === "ssh"
+      ? quietly({ type: "setupRetryRoute" })
+      : place === "here"
+        ? quietly({ type: "setupReviewHere" })
+        : null;
+  const review = routeLook ?? (place === "address" ? openSettings : null);
+  const reconnect = { label: "Reconnect", run: quietly({ type: "retry" }) };
+  switch (upgrade.status) {
+    case "unconfirmed":
+      return [...(routeLook ? [{ label: "Look again", run: routeLook }] : []), reconnect];
+    case "identity-unread":
+      // Waiting still, the host looks at the identity and version again; disconnected, the
+      // route's look does, with the endpoint and version first.
+      if (connection.status === "connected")
+        return [{ label: "Look again", run: quietly({ type: "checkAccess" }) }];
+      return routeLook
+        ? [{ label: "Look again", run: routeLook }]
+        : review
+          ? [{ label: "Review", run: review }]
+          : [];
+    case "identity-changed":
+      // The route retired (§8): its review, never a reconnect to that gateway.
+      return review ? [{ label: "Review", run: review }] : [];
+    default:
+      return [];
+  }
+}
+
 /**
  * The words and actions for the waiting state and the outcomes after an
  * approval; null for the states each bar words for itself (idle, requesting,
@@ -31,9 +83,9 @@ export function approvalShelf(
   size?: "sm",
   /** Whether this host has setup's looks (the desktop app): Review and Look again open them. */
   looks = true,
+  openSettings: (() => void) | null = null,
 ): ApprovalShelf | null {
   const upgrade: ScopeUpgradeState = connection.upgrade;
-  const connected = connection.status === "connected";
   const button = (label: string, onClick: () => void, primary = false) => (
     <button
       type="button"
@@ -46,17 +98,18 @@ export function approvalShelf(
     </button>
   );
   const quietly = (command: Parameters<Send>[0]) => () => void send(command).catch(() => {});
-  // The route's own look (§6): that computer's screens again over SSH, this computer's look
-  // here. An address route has none.
-  const routeLook: Parameters<Send>[0] | null = !looks
-    ? null
-    : upgrade.place === "ssh"
-      ? { type: "setupRetryRoute" }
-      : upgrade.place === "here"
-        ? { type: "setupLook" }
-        : null;
-  const reconnect = button("Reconnect", quietly({ type: "retry" }));
-  const look = routeLook ? button("Look again", quietly(routeLook)) : null;
+  const actions = approvalActions(connection, send, looks, openSettings);
+  const shown = actions.length ? (
+    <>
+      {actions.map((each) => (
+        <span key={each.label} style={{ display: "contents" }}>
+          {button(each.label, each.run)}
+        </span>
+      ))}
+    </>
+  ) : null;
+  // Check again needs a read of the gateway's list, which an address route has none of.
+  const canCheck = upgrade.place !== "address";
   switch (upgrade.status) {
     case "pending":
       return {
@@ -82,7 +135,6 @@ export function approvalShelf(
       // the gateway now shows the access) once; nothing here is still under way.
       return null;
     case "unconfirmed":
-      // The route's look first, as §6 shows it; reconnecting is its own, explicit, choice.
       return {
         tone: "danger",
         body: (
@@ -90,12 +142,7 @@ export function approvalShelf(
             <b>{APPROVAL_WORDS.unconfirmed.title}</b> {APPROVAL_WORDS.unconfirmed.detail}
           </>
         ),
-        action: (
-          <>
-            {look}
-            {reconnect}
-          </>
-        ),
+        action: shown,
         offline: true,
       };
     case "stale":
@@ -103,7 +150,7 @@ export function approvalShelf(
         body: APPROVAL_WORDS.stale,
         action: (
           <>
-            {button("Check again", quietly({ type: "checkAccess" }))}
+            {canCheck && button("Check again", quietly({ type: "checkAccess" }))}
             {button("Request again", ask)}
           </>
         ),
@@ -111,24 +158,9 @@ export function approvalShelf(
     case "other-request":
       return { body: APPROVAL_WORDS.otherRequest, action: button("Request again", ask) };
     case "identity-unread":
-      // Waiting still, the host looks at the identity and version again; disconnected, the
-      // route's look does, with the endpoint and version first.
-      return {
-        tone: "danger",
-        body: APPROVAL_WORDS.identityUnread,
-        action: connected
-          ? button("Look again", quietly({ type: "checkAccess" }))
-          : (look ?? reconnect),
-        offline: true,
-      };
+      return { tone: "danger", body: APPROVAL_WORDS.identityUnread, action: shown, offline: true };
     case "identity-changed":
-      // Disconnected, the route retired (§8): its review, never a reconnect to that gateway.
-      return {
-        tone: "danger",
-        body: APPROVAL_WORDS.identityChanged,
-        action: routeLook ? button("Review", quietly(routeLook)) : null,
-        offline: true,
-      };
+      return { tone: "danger", body: APPROVAL_WORDS.identityChanged, action: shown, offline: true };
     case "list-unread":
       return {
         tone: "danger",

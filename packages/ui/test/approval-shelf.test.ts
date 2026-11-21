@@ -11,7 +11,8 @@ import {
 } from "@clawtrate/core";
 import { isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { approvalShelf } from "../src/ApprovalWait.tsx";
+import { approvalActions, approvalShelf } from "../src/ApprovalWait.tsx";
+import { stripFor } from "../src/StatusStrip.tsx";
 
 type Props = { children?: ReactNode; onClick?: () => void };
 
@@ -33,6 +34,7 @@ function shelf(
   upgrade: Partial<ScopeUpgradeState>,
   connection: Partial<ConnectionState> = {},
   looks = true,
+  settings: string[] = [],
 ) {
   const sent: BridgeCommand[] = [];
   const send = async (command: BridgeCommand) => void sent.push(command);
@@ -47,6 +49,7 @@ function shelf(
     () => sent.push({ type: "requestAccess" }),
     undefined,
     looks,
+    () => settings.push("opened"),
   );
   const actions = buttons(result?.action);
   const press = (label: string) => {
@@ -62,8 +65,9 @@ describe("F-500: the outcomes' actions do what they say", () => {
     expect(ssh.labels).toEqual(["Look again", "Reconnect"]);
     expect(ssh.press("Look again")).toEqual({ type: "setupRetryRoute" });
     expect(ssh.press("Reconnect")).toEqual({ type: "retry" });
+    // On this computer, the look for the saved profile at its address, never another profile.
     expect(shelf({ status: "unconfirmed", place: "here" }).press("Look again")).toEqual({
-      type: "setupLook",
+      type: "setupReviewHere",
     });
     // An address route has no look of its own: only Reconnect.
     expect(shelf({ status: "unconfirmed", place: "address" }).labels).toEqual(["Reconnect"]);
@@ -74,8 +78,52 @@ describe("F-500: the outcomes' actions do what they say", () => {
     expect(ssh.labels).toEqual(["Review"]);
     expect(ssh.press("Review")).toEqual({ type: "setupRetryRoute" });
     expect(shelf({ status: "identity-changed", place: "here" }).press("Review")).toEqual({
-      type: "setupLook",
+      type: "setupReviewHere",
     });
+    // An address route: Review opens Settings, which names the address and offers another gateway.
+    const opened: string[] = [];
+    const address = shelf({ status: "identity-changed", place: "address" }, {}, true, opened);
+    expect(address.labels).toEqual(["Review"]);
+    address.press("Review");
+    expect(opened).toEqual(["opened"]);
+  });
+
+  it("the status strip offers the bar's own first action, never Reconnect to another gateway", () => {
+    for (const [status, place, label] of [
+      ["identity-changed", "ssh", "Review"],
+      ["identity-changed", "here", "Review"],
+      ["identity-changed", "address", "Review"],
+      ["unconfirmed", "ssh", "Look again"],
+      ["unconfirmed", "address", "Reconnect"],
+    ] as const) {
+      const connection: ConnectionState = {
+        ...initialConnectionState,
+        status: "error",
+        error: {
+          code: "APPROVAL_IDENTITY_CHANGED",
+          message: "This route now leads to a different gateway.",
+          hint: null,
+        },
+        upgrade: { ...initialScopeUpgrade, status, place },
+      };
+      const state = {
+        connection,
+        discovery: { status: "ready" },
+        setup: { route: { phase: "disconnected" } },
+      } as never;
+      const strip = stripFor(state, "live" as never, null);
+      expect(strip?.action).toBe("approval");
+      const sent: BridgeCommand[] = [];
+      const first = approvalActions(
+        connection,
+        (async (c: BridgeCommand) => void sent.push(c)) as never,
+        true,
+        () => {},
+      )[0];
+      expect(first?.label).toBe(label);
+      const bar = shelf({ status, place });
+      expect(bar.labels[0]).toBe(label);
+    }
   });
 
   it("an identity that couldn't be read: Look again looks again, while waiting or after", () => {

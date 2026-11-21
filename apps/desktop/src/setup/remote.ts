@@ -52,7 +52,13 @@ import {
 } from "@clawtrate/core";
 
 import type { ForwardState, ForwardSupervisor } from "../main/ssh/forward.ts";
-import { sameService, serviceOnPort, type GatewayService } from "../main/ssh/look.ts";
+import {
+  sameService,
+  serviceOnPort,
+  type GatewayService,
+  type GatewayStatus,
+  type LookFacts,
+} from "../main/ssh/look.ts";
 import { routeWebSocket } from "../main/ssh/socket.ts";
 import type { SshFailure } from "../main/ssh/ssh-output.ts";
 import type { HostKeyCheck, Route, SshTransport } from "../main/ssh/transport.ts";
@@ -348,8 +354,10 @@ export class RemoteSetup {
    * route's profile running a supported version on exactly the route's
    * gateway port there; then IDENTITY and, only when it returns `expected`,
    * LIST, each a constant script for that profile and port, run with the
-   * program the LOOK found. The route must still hold the same channel after
-   * both reads, or nothing read counts. Null for an address that is no route's
+   * program the LOOK found. Just before LIST and again after it the forward
+   * must be current on its socket and a fresh LOOK must report the same
+   * listener (the service's process, every listener on the port, the running
+   * version, the program and its checksum), or nothing read counts. Null for an address that is no route's
    * channel (the client takes a route's missing read as an identity it
    * couldn't read). Reads only.
    */
@@ -373,6 +381,20 @@ export class RemoteSetup {
       (this.live?.channel === channel || this.pending?.channel === channel);
     const look = await transport.look(route);
     if (!look.ok || !stillHeld()) return unread;
+    const proved = listenerFacts(look.facts, record.profile, record.gatewayPort);
+    // The same listener as the LOOK proved, through a forward that is current on its socket:
+    // asked just before LIST and again after it, and a list on either side of a change is discarded.
+    const sameListener = async () => {
+      if (!stillHeld() || !this.isCurrent(channel)) return false;
+      const again = await transport.look(route);
+      return (
+        again.ok &&
+        stillHeld() &&
+        this.isCurrent(channel) &&
+        proved !== null &&
+        listenerFacts(again.facts, record.profile, record.gatewayPort) === proved
+      );
+    };
     // The endpoint and its version, established again for the route's own profile alone.
     const facts = sshLook({
       ...look.facts,
@@ -409,10 +431,13 @@ export class RemoteSetup {
     // Another gateway at the route's endpoint: its device list is never asked for.
     if (request.expected !== null && identity.deviceId !== request.expected)
       return { ok: false, step: "list", exitCode: null, identity };
+    const changed = { ok: false, step: "list", exitCode: null, identity } as const;
+    if (!(await sameListener())) return changed;
     const listed = await read("list");
     if (!stillHeld()) return unread;
     const list = listed.text === null ? null : parseDeviceList(listed.text);
     if (!list) return { ok: false, step: "list", exitCode: listed.exitCode || null, identity };
+    if (!(await sameListener())) return changed;
     return { ok: true, identity, list };
   }
 
@@ -1810,3 +1835,25 @@ const targetFacts = (target: Route["target"]) => ({
   identityAgent: target.identityAgent,
   pubkeyAuthentication: target.pubkeyAuthentication,
 });
+
+/**
+ * What a LOOK says of the listener at a route's gateway port, for its profile,
+ * as one comparable string: the service's process, every process listening
+ * on the port, the running version, and the program with its checksum. Null
+ * when the LOOK doesn't establish one service holding the port alone.
+ */
+function listenerFacts(facts: LookFacts, profile: string, port: number): string | null {
+  const gateway = facts.gateways.find(
+    (each): each is GatewayStatus =>
+      !("unreadable" in each) && each.profile === profile && each.port === port,
+  );
+  const found = serviceOnPort(facts, port);
+  if (!gateway || !found.ok || found.service.profile !== profile) return null;
+  return JSON.stringify([
+    gateway.service?.pid ?? null,
+    gateway.listenerPids,
+    gateway.version,
+    facts.program,
+    facts.programSum,
+  ]);
+}

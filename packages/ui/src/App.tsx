@@ -1,5 +1,6 @@
 import { isApprovalDisconnect, type ConnectionError, type HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { OpenSettingsContext } from "./settings-open.tsx";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
@@ -144,19 +145,21 @@ export function App({
         />
       )}
       {screen === "shell" ? (
-        <Shell
-          state={state}
-          info={info}
-          theme={theme}
-          onTheme={setTheme}
-          bubbles={bubbles}
-          onBubbles={setBubbles}
-          onUnreadCount={onUnreadCount}
-          updateEntry={showUpdateFooter(updated.snapshot, updated.pending)}
-          onOpenSettings={openSettings}
-          inert={settingsOpen}
-          onCaughtUp={setCaughtUp}
-        />
+        <OpenSettingsContext.Provider value={openSettings}>
+          <Shell
+            state={state}
+            info={info}
+            theme={theme}
+            onTheme={setTheme}
+            bubbles={bubbles}
+            onBubbles={setBubbles}
+            onUnreadCount={onUnreadCount}
+            updateEntry={showUpdateFooter(updated.snapshot, updated.pending)}
+            onOpenSettings={openSettings}
+            inert={settingsOpen}
+            onCaughtUp={setCaughtUp}
+          />
+        </OpenSettingsContext.Provider>
       ) : (
         <ConnectScreen
           connection={state.connection}

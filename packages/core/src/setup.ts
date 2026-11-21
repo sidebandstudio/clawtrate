@@ -367,6 +367,12 @@ export type SetupHost = {
    * it, refuses it by name, or asks its own dialog for the account first.
    */
   there?(destination: string): Promise<void>;
+  /**
+   * Review and Look again after an approval for a gateway set up on this
+   * computer (§9): the look for the connection's saved profile alone,
+   * checking that its gateway is still at the saved address.
+   */
+  reviewHere?(): Promise<void>;
   /** Trust the key first contact captured, after the host's own dialog. */
   trustKey?(): Promise<void>;
   /** Replace a changed key, after the host's dialog and its checkbox. */

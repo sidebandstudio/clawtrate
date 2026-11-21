@@ -94,9 +94,10 @@ function computer() {
       ...(reply ?? { exitCode: 1 }),
     };
   };
+  // 4242 is the gateway the look found; 4343 another live process that can take its port.
   const identify: Identify = (pid) =>
-    pid === 4242
-      ? { state: "alive", identity: "Mon Nov 16 21:27:01 2026" }
+    pid === 4242 || pid === 4343
+      ? { state: "alive", identity: `Mon Nov 16 21:27:01 2026 ${pid}` }
       : { state: "exited", how: "absent" };
   const gateway = new FakeGateway();
   gateway.connectReply = (params) => {
@@ -188,10 +189,13 @@ describe("F-500: after a relaunch, a gateway set up on this computer is still re
     // The endpoint and version first, then the identity, then the list.
     expect(run.slice(0, 1)).toEqual(["--version"]);
     expect(run).toContain("gateway status --json");
-    expect(run.slice(-2)).toEqual([
-      `gateway call gateway.identity.get --expect-url ${URL} --json`,
-      `gateway call device.pair.list --expect-url ${URL} --json`,
-    ]);
+    const identityAt = run.indexOf(`gateway call gateway.identity.get --expect-url ${URL} --json`);
+    const listAt = run.indexOf(`gateway call device.pair.list --expect-url ${URL} --json`);
+    expect(identityAt).toBeGreaterThan(0);
+    expect(listAt).toBeGreaterThan(identityAt);
+    // The listener is checked between the two reads and again after the list.
+    expect(run.slice(identityAt, listAt)).toContain("gateway status --json");
+    expect(run.slice(listAt)).toContain("gateway status --json");
     expect(JSON.parse(c.storage.data.get(tokenKey(URL))!).token).toBe("rotated-token");
     later.client.stop();
   });
@@ -235,6 +239,60 @@ describe("F-500: after a relaunch, a gateway set up on this computer is still re
     expect(later.client.state.connection.upgrade.status).toBe("identity-unread");
     expect(c.requests.slice(before).some((request) => request.args.includes("call"))).toBe(false);
     expect(c.storage.data.get(tokenKey(URL))).toBe(saved);
+    later.client.stop();
+  });
+
+  for (const during of ["gateway.identity.get", "device.pair.list"] as const) {
+    it(`another process taking the port after ${during}, while the old one stays alive, discards the read and keeps nothing new`, async () => {
+      const c = computer();
+      await setUpHere(c);
+      const saved = c.storage.data.get(tokenKey(URL));
+      const later = await c.launch();
+      await until(() => later.client.state.connection.gatewayId === GATEWAY);
+      await later.client.requestAccess();
+      await until(() => later.client.state.connection.upgrade.status === "pending");
+      // That read answers as before; from then on the port's listener is process 4343.
+      const key = `gateway call ${during} --expect-url ${URL} --json`;
+      const reply = c.replies[key]!;
+      Object.defineProperty(c.replies, key, {
+        get: () => {
+          c.replies["gateway status --json"] = {
+            stdout: statusJson({ port: PORT, listenerPid: 4343 }),
+          };
+          return reply;
+        },
+      });
+      c.approve();
+      await until(() => later.client.state.connection.status === "error");
+      expect(later.client.state.connection.upgrade.status).toBe("unconfirmed");
+      expect(c.storage.data.get(tokenKey(URL))).toBe(saved);
+      // A change before the list: the list was never asked of the new listener.
+      if (during === "gateway.identity.get")
+        expect(c.requests.some((r) => r.args.includes("device.pair.list"))).toBe(false);
+      later.client.stop();
+    });
+  }
+
+  it("Review and Look again look for the saved profile alone, at its saved address", async () => {
+    const c = computer();
+    await setUpHere(c);
+    const later = await c.launch();
+    // The same look for the saved profile finds its gateway at the saved address.
+    await later.setup.reviewOf({ profile: "default", url: URL });
+    expect(later.setup.current).toMatchObject({ phase: "found", look: { outcome: "running" } });
+    // Another profile is never looked at for it, even where the default profile's gateway runs.
+    const asked = c.requests.length;
+    await later.setup.reviewOf({ profile: "clawtrate", url: URL });
+    expect(later.setup.current.look?.outcome).not.toBe("running");
+    expect(
+      c.requests
+        .slice(asked)
+        .some((r) => !r.args.includes("clawtrate") && r.args.includes("status")),
+    ).toBe(false);
+    // The saved profile's gateway now elsewhere: this changed since it was set up.
+    c.replies["gateway status --json"] = { stdout: statusJson({ port: PORT + 1 }) };
+    await later.setup.reviewOf({ profile: "default", url: URL });
+    expect(later.setup.current).toMatchObject({ phase: "failed", failure: { kind: "changed" } });
     later.client.stop();
   });
 });

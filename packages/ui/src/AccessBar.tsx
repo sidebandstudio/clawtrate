@@ -4,6 +4,7 @@ import { useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { CommandLine } from "./ConnectScreen.tsx";
 import { approvalShelf, WaitingRow } from "./ApprovalWait.tsx";
+import { useOpenSettings } from "./settings-open.tsx";
 import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 
 /**
@@ -28,6 +29,7 @@ export function AccessBar({
   info: HostInfo;
 }) {
   const send = useCommand();
+  const openSettings = useOpenSettings();
   const ask = () => void send({ type: "requestAccess" }).catch(() => {});
   const upgrade = connection.upgrade;
 
@@ -36,7 +38,7 @@ export function AccessBar({
   let action: ReactNode = null;
   const shelf = info.readOnly
     ? null
-    : approvalShelf(connection, send, ask, undefined, info.setup !== undefined);
+    : approvalShelf(connection, send, ask, undefined, info.setup !== undefined, openSettings);
   if (shelf) {
     body = shelf.body;
     action = shelf.action;
