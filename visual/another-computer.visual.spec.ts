@@ -21,8 +21,18 @@ const SCREENS = [
   "there-sign-in",
   "there-code-failed",
   "there-app-files",
+  "there-contradictory",
+  "there-resume",
+  "there-resume-failed",
 ];
-const STRIPS = ["route-restoring", "route-restored", "route-unreachable", "route-key-changed"];
+const STRIPS = [
+  "route-restoring",
+  "route-restored",
+  "route-unreachable",
+  "route-key-changed",
+  "route-failed",
+  "route-different",
+];
 
 const sent = (page: Page) =>
   page.evaluate(() =>
@@ -75,7 +85,7 @@ test.describe("behaviour", () => {
     await expect(field).toHaveAttribute("placeholder", "devbox or you@devbox.example");
     await expect(
       page.getByText(
-        "Clawtrate uses your SSH keys and the host's settings from your SSH configuration, and never asks for a password.",
+        "Clawtrate uses SSH keys and a limited set of settings from your SSH configuration. It never asks for a password.",
       ),
     ).toBeVisible();
     await field.fill("-oProxyCommand=x");
@@ -89,7 +99,9 @@ test.describe("behaviour", () => {
       JSON.stringify({ type: "setupThere", destination: "-oProxyCommand=x" }),
       JSON.stringify({ type: "setupThere", destination: "you@devbox.example" }),
     ]);
-    await expect(page.getByRole("heading", { name: "On you@devbox.example" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "On you@devbox.example (SSH port 22)" }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible();
   });
 
@@ -97,10 +109,16 @@ test.describe("behaviour", () => {
     page,
   }) => {
     await openFixture(page, "setup=there-refused", "light");
-    await expect(page.getByText("devbox is reached through another computer.")).toBeVisible();
+    await expect(page.getByText("The SSH settings for devbox include ProxyJump.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Advanced" })).toBeVisible();
     await openFixture(page, "setup=there-hostkey", "light");
     await expect(page.getByRole("heading", { name: "Is this devbox?" })).toBeVisible();
+    await expect(
+      page.getByText(
+        "Clawtrate has no trusted key for you@devbox.example, SSH port 22. This is the key SSH presented.",
+        { exact: false },
+      ),
+    ).toBeVisible();
     await expect(page.getByTestId("setup-fingerprint")).toContainText(
       "SHA256:Q3v8Lw0e Xk2Rj9Ta Nf5Hc1Ub Ym7Pd4Gs Zi6Ko2Ea Vr8",
     );
@@ -112,11 +130,15 @@ test.describe("behaviour", () => {
     page,
   }) => {
     await openFixture(page, "setup=there-changed", "light");
-    await expect(page.getByText("devbox's key has changed")).toBeVisible();
+    await expect(
+      page.getByText(
+        "SSH presented a key that differs from the saved key for you@devbox.example (SSH port 22).",
+      ),
+    ).toBeVisible();
     await expect(page.getByTestId("setup-fingerprint")).toHaveCount(2);
-    await expect(page.getByText("Trusted, pinned 2026-10-02")).toBeVisible();
-    await expect(page.getByText("Presented now")).toBeVisible();
-    await page.getByRole("button", { name: "Replace the trusted key…" }).click();
+    await expect(page.getByText("Saved ED25519 key, pinned 2026-10-02")).toBeVisible();
+    await expect(page.getByText("Presented now: ED25519 key")).toBeVisible();
+    await page.getByRole("button", { name: "Replace the saved key…" }).click();
     expect(await sent(page)).toContain(JSON.stringify({ type: "setupReplaceKey" }));
   });
 
@@ -140,7 +162,7 @@ test.describe("behaviour", () => {
   }) => {
     await openFixture(page, "setup=route-restoring", "light");
     const strip = page.getByTestId("status-strip");
-    await expect(strip).toContainText("Restoring the connection to devbox");
+    await expect(strip).toContainText("Restoring the connection to you@devbox.example");
     await strip.getByRole("button", { name: "Retry now" }).click();
     expect(await sent(page)).toContain(JSON.stringify({ type: "setupRetryRoute" }));
     await openFixture(page, "setup=route-up", "light");
@@ -152,5 +174,31 @@ test.describe("behaviour", () => {
     await expect(settings.getByRole("button", { name: "Use another gateway" })).toHaveCount(0);
     await settings.getByRole("button", { name: "Remove this gateway…" }).click();
     expect(await sent(page)).toContain(JSON.stringify({ type: "setupRemoveRoute" }));
+  });
+
+  test("F-498 F-499: at launch, the saved route opens with its token and no QR step; one that couldn't be restored can be removed from its screen", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=there-resume", "light");
+    await expect(page.getByText("Opening the SSH forward")).toBeVisible();
+    await expect(page.getByText("Connecting with the saved device token")).toBeVisible();
+    await expect(page.getByText(/one-time code/)).toHaveCount(0);
+    await openFixture(page, "setup=there-resume-failed", "light");
+    await page.getByRole("button", { name: "Remove you@devbox.example from Clawtrate…" }).click();
+    expect(await sent(page)).toContain(JSON.stringify({ type: "setupRemoveRoute" }));
+  });
+
+  test("F-498: the strip says a route couldn't be restored, or that a different gateway answered, with Review", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=route-failed", "light");
+    const strip = page.getByTestId("status-strip");
+    await expect(strip).toContainText(
+      "Couldn't restore the connection to OpenClaw on you@devbox.example",
+    );
+    await strip.getByRole("button", { name: "Review" }).click();
+    expect(await sent(page)).toContain(JSON.stringify({ type: "setupRetryRoute" }));
+    await openFixture(page, "setup=route-different", "light");
+    await expect(strip).toContainText("A different OpenClaw gateway answered");
   });
 });
