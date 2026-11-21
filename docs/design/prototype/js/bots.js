@@ -304,7 +304,9 @@
 
   function openCreate(opener) {
     B.create.opener = opener || document.activeElement;
-    if (B.create.status !== "creating" && B.create.status !== "slow") B.create.status = p("create") && !B.create.opened ? p("create") : "idle";
+    // An attempt in flight, or one whose reply settled nothing, stays as it is when New bot reopens:
+    // only "Review bots" ends an unconfirmed attempt. A refusal can be tried again.
+    if (!["creating", "slow", "unconfirmed"].includes(B.create.status)) B.create.status = p("create") && !B.create.opened ? p("create") : "idle";
     B.create.opened = true;
     renderCreate();
     if (!createDialog.open) createDialog.showModal();
@@ -442,7 +444,7 @@
   }
 
   function create() {
-    if (B.create.status === "creating" || B.create.status === "slow") return;
+    if (["creating", "slow", "unconfirmed"].includes(B.create.status)) return;
     if (hostCreate(B.draft).refused) return;
     const want = p("create");
     B.create.status = "creating";
@@ -484,18 +486,21 @@
     full: "The gateway reports no routine approval in the default command policy.",
     "read-only": "The gateway reports that the default command policy disables commands.",
   };
-  function taskNote(n, s) {
+  // Each new bot's own recovery: a retry acts on the bot whose note it is in, never on the last one made.
+  const recovery = {};
+  function taskNote(n, s, id = "") {
+    const retry = (label, action) => (s.identified && isAdmin() ? button(label, `data-b="${action}" data-bot="${id}" data-size="sm"`) : "");
     const box = (tone, state, html, actions = "") =>
       `<div class="b-note b-created"${tone ? ` data-tone="${tone}"` : ""} data-b-created="${state}">${icon(tone ? "warning" : state === "reading" ? "clock" : "check")}<div>${html}${actions ? `<div class="b-actions">${actions}</div>` : ""}</div></div>`;
     if (s.state === "reading") return box("", "reading", `<p>Checking what was written…</p>`);
     if (s.state === "restrictfail")
-      return box("danger", "restrictfail", `<p><b>Couldn't confirm ${n}'s settings.</b> Clawtrate sends nothing to ${n} until they are confirmed.</p>`, s.identified ? button("Write them again", 'data-b="restrict-again" data-size="sm"') : "");
+      return box("danger", "restrictfail", `<p><b>Couldn't confirm ${n}'s settings.</b> Clawtrate sends nothing to ${n} until they are confirmed.</p>`, retry("Write them again", "restrict-again"));
     if (s.state === "unconfirmed")
       return box(
         "warn",
         "unconfirmed",
         `<p><b>Clawtrate couldn't confirm ${n}'s command setting.</b> Review the gateway's settings before sending a task.${s.read ? ` Its saved command setting is ${PERM_WORDS[s.read]}.` : ""}</p>`,
-        button("Review settings", 'data-b="review-settings" data-size="sm"') + (s.identified ? button("Write it again", 'data-b="perm-again" data-size="sm"') : ""),
+        button("Review settings", 'data-b="review-settings" data-size="sm"') + retry("Write it again", "perm-again"),
       );
     return box("", "confirmed", `<p data-b-saved>${n}'s saved command setting is ${PERM_WORDS[s.read]}.</p><p data-b-label>${s.label === "none" ? `The gateway didn't report a default command policy for ${n}.` : LABEL_WORDS[s.label]}</p>`);
   }
@@ -514,7 +519,7 @@
     const perm = B.draft.perm;
     const task = { id: `${id}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true, hold: true };
     app.bots.push({ id, name, label: "", tasks: [task] });
-    B.created = { id, name, perm, task };
+    B.created = recovery[id] = { id, name, perm, task };
     B.create = { step: "look", status: "idle", opener: null, created: true };
     B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium", perm: null };
     createDialog.close();
@@ -524,8 +529,16 @@
     restrictive(id, name, perm, task);
   }
 
+  // A change of access redraws each new bot's note, so its retry is offered only with admin.
+  function refreshNotes() {
+    for (const r of Object.values(recovery)) if (r.task.noteState) r.task.note = taskNote(esc(r.name), r.task.noteState, r.id);
+    app.render();
+  }
+
   function noteOn(task, name, s) {
-    task.note = taskNote(esc(name), s);
+    const id = Object.values(recovery).find((r) => r.task === task)?.id || "";
+    task.noteState = s;
+    task.note = taskNote(esc(name), s, id);
     task.hold = s.state !== "confirmed";
     app.render();
   }
@@ -534,8 +547,8 @@
   function restrictive(id, name, perm, task) {
     writes.push({ op: "config.patch", step: 2, id, mode: "deny", deny: ["gateway", "plugins", "automations", "browser", "message", "t3code__*"], fallbacks: [] });
     setTimeout(() => {
-      if (p("create") === "partial" && !B.created.restrictRetried) {
-        B.created.restrictRetried = true;
+      if (p("create") === "partial" && !recovery[id].restrictRetried) {
+        recovery[id].restrictRetried = true;
         noteOn(task, name, { state: "restrictfail", identified: p("retry") !== "gone" });
         announce(`Couldn't confirm ${name}'s settings`);
         return;
@@ -971,6 +984,7 @@
     B.access = "admin";
     B.req = "none";
     B.grantedNote = true;
+    refreshNotes();
     rerender();
     announce("Admin access granted. You can change settings.");
     CT.botsChanged?.();
@@ -1108,8 +1122,11 @@
     clearTimeout(flowTimer);
     B.connect = null;
     B.settings.edit = false;
+    // Focus returns within the close event itself. The browser has already put focus back where
+    // it was before the dialog opened (a menu item now hidden, so the page's body), and the close
+    // event can arrive well after the dialog closes, so nothing may wait for a later task.
     const to = B.settings.opener && document.contains(B.settings.opener) && B.settings.opener.offsetParent ? B.settings.opener : $(".gateway-pill");
-    setTimeout(() => to?.focus?.(), 0);
+    to?.focus?.();
   });
 
   document.addEventListener("input", (event) => {
@@ -1257,8 +1274,10 @@
         create();
         break;
       case "review-bots":
-        // Close and refresh the rail: what the gateway lists, nothing assumed.
+        // Close and refresh the rail: what the gateway lists, nothing assumed. The attempt ends,
+        // and what was entered for it goes with it: another bot starts from a new draft.
         B.create = { step: "look", status: "idle", opener: null };
+        B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium", perm: null };
         createDialog.close();
         app.render();
         break;
@@ -1268,9 +1287,10 @@
         break;
       case "perm-again":
       case "restrict-again": {
-        // Only for the bot Create returned, after a fresh read identifies it: one write, never Create.
-        const c = B.created;
-        if (!c || p("retry") === "gone") break;
+        // Only for the bot whose note this is, after a fresh read identifies it, and only with admin:
+        // one write, never Create.
+        const c = recovery[t.closest("[data-b]").dataset.bot];
+        if (!c || !isAdmin() || p("retry") === "gone") break;
         noteOn(c.task, c.name, { state: "reading" });
         if (action === "restrict-again") restrictive(c.id, c.name, c.perm, c.task);
         else policy(c.id, c.name, c.perm, c.task, true);
@@ -1587,7 +1607,8 @@
   // For the checks: what the host wrote, its Create guard, a change of access while a dialog is open, and the first-bot reading.
   const setAccess = (tier) => {
     B.access = tier;
+    refreshNotes();
     if (createDialog.open) renderCreate();
   };
-  window.bots = { B, accounts: () => accounts, binding, openCreate, openSettings, connectTo, grantAdmin, writes: () => writes.map((w) => ({ ...w })), hostCreate, setAccess, first: () => ({ eligible: FIRST.eligible }) };
+  window.bots = { B, accounts: () => accounts, binding, openCreate, create, openSettings, connectTo, grantAdmin, writes: () => writes.map((w) => ({ ...w })), hostCreate, setAccess, first: () => ({ eligible: FIRST.eligible }) };
 })();

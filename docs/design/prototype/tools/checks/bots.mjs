@@ -268,8 +268,19 @@ await p.waitForTimeout(1100);
 check("CR a lost Create reply: not confirmed, with Review bots", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Clawtrate couldn't confirm whether Viral was created. Review the gateway's bot list.") && (await evalOr(p, () => !!document.querySelector('[data-b="review-bots"]') && !document.querySelector('[data-b="create"]'))));
 check("CR the lost reply is announced", (await said(p)).includes("Clawtrate couldn't confirm whether Viral was created"), await said(p));
 check("CR no policy or model patch is sent from that attempt, and no bot is assumed", ops(await writesOf(p)) === "agents.create" && (await viralCount(p)) === 0);
+await p.keyboard.press("Escape");
+await evalOr(p, () => window.bots.openCreate(document.querySelector("#new-button")));
+await p.waitForTimeout(100);
+check("CR reopening New bot after a lost reply keeps the attempt unconfirmed, with no Create", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Clawtrate couldn't confirm whether Viral was created.") && (await evalOr(p, () => !document.querySelector('[data-b="create"]'))));
+await evalOr(p, () => window.bots.create?.());
+await p.locator('[data-b="create"]').first().dispatchEvent("click").catch(() => {});
+await p.waitForTimeout(900);
+check("CR and sends no second agents.create for that attempt", ops(await writesOf(p)) === "agents.create");
 await tap(p, '[data-b="review-bots"]');
 check("CR Review bots closes and shows what the gateway lists", !(await dlg(p)) && (await viralCount(p)) === 0);
+await evalOr(p, () => window.bots.openCreate(document.querySelector("#new-button")));
+await p.waitForTimeout(100);
+check("CR after Review bots, New bot starts from a new draft", (await dlg(p)) && (await text(p, "#create-title")) === "New bot" && (await evalOr(p, () => document.querySelector("#b-name").value === "" && window.bots.B.draft.perm === null)));
 await p.close();
 p = await open(`${AP}&perm=ask&create=failed`);
 await tap(p, '[data-b="create"]');
@@ -301,6 +312,44 @@ check("CR with Review settings and, for the identified bot, Write it again", awa
 await tap(p, '[data-b="perm-again"]');
 check("CR Write it again repeats only the policy write: no second Create, one Viral", (await settled(p, "confirmed")) && ops(await writesOf(p)) === "agents.create,config.patch:2,config.patch:3,config.patch:3" && (await viralCount(p)) === 1 && (await text(p, "[data-b-saved]")).includes("Run without routine approvals"));
 await p.close();
+// Each retry acts on its own bot: Alpha's, after Beta was made, and only with admin.
+{
+  p = await open("readback=fail");
+  const make = async (name) => {
+    await evalOr(p, () => window.bots.openCreate(document.querySelector("#new-button")));
+    await p.fill("#b-name", name).catch(() => {});
+    await tap(p, '[data-b="next"]');
+    await tap(p, '[data-b-choose="xai:default"]');
+    await tap(p, '[data-b="to-approvals"]');
+    await tap(p, '[data-b-perm="ask"]');
+    await tap(p, '[data-b="create"]');
+    await p.waitForFunction((id) => window.app.bots.find((b) => b.id === id)?.tasks[0]?.noteState?.state === "unconfirmed", name.toLowerCase(), { timeout: 5000 }).catch(() => {});
+  };
+  await make("Alpha");
+  await make("Beta");
+  await evalOr(p, () => window.app.selectBot("alpha"));
+  await p.waitForTimeout(150);
+  const before = ((await writesOf(p)) || []).length;
+  await tap(p, '[data-b="perm-again"]');
+  await p.waitForTimeout(900);
+  const retried = ((await writesOf(p)) || []).slice(before);
+  check("CR Write it again on Alpha's note, after Beta was made, writes Alpha's policy alone", retried.length === 1 && retried[0].op === "config.patch" && retried[0].step === 3 && retried[0].id === "alpha", JSON.stringify(retried));
+  await evalOr(p, () => window.app.selectBot("beta"));
+  await evalOr(p, () => window.bots.setAccess("write"));
+  await p.waitForTimeout(150);
+  check("CR below admin the retry isn't offered, and the composer stays held", (await evalOr(p, () => !document.querySelector('[data-b="perm-again"]'))) && (await held(p)));
+  const below = ((await writesOf(p)) || []).length;
+  await evalOr(p, () => {
+    const b = document.createElement("button");
+    b.dataset.b = "perm-again";
+    b.dataset.bot = "beta";
+    document.querySelector("#transcript").append(b);
+    b.click();
+  });
+  await p.waitForTimeout(900);
+  check("CR below admin a retry that reaches the handler writes nothing", ((await writesOf(p)) || []).length === below);
+  await p.close();
+}
 p = await open(`${AP}&perm=ask&readback=fail&retry=fail`);
 await tap(p, '[data-b="create"]');
 check("CR a failed read: couldn't confirm, naming no setting", (await settled(p, "unconfirmed")) && !(await text(p, "[data-b-created]")).includes("Its saved command setting"));
@@ -317,6 +366,17 @@ await evalOr(p, () => window.bots.setAccess("write"));
 await p.waitForTimeout(100);
 check("AP access dropping below admin while the step is open removes the choices and Create", await evalOr(p, () => !document.querySelector("[data-b-perm]") && !document.querySelector('[data-b="create"]') && !!document.querySelector("#create-dialog .access-bar")));
 await p.close();
+
+// The note that says what Create confirmed is in view, not below the fold, at desktop and phone width.
+for (const [at, viewport, query] of [["1440", { width: 1440, height: 900 }, ""], ["390", { width: 390, height: 844 }, "&width=phone"]]) {
+  for (const [state, extra] of [["confirmed", ""], ["unconfirmed", "&readback=fail"]]) {
+    p = await open(`open=create&step=approvals&name=Viral&chosen=xai:default&perm=ask${extra}${query}`, viewport);
+    await p.click('[data-b="create"]');
+    const shown = await settled(p, state);
+    check(`CR at ${at}: the ${state} note is in view above the composer`, shown && (await evalOr(p, () => { const r = document.querySelector("[data-b-created]").getBoundingClientRect(); const c = document.querySelector(".composer-input").getBoundingClientRect(); return r.height > 0 && r.top >= 0 && r.bottom <= c.top && r.right <= innerWidth; })));
+    await p.close();
+  }
+}
 
 // F-005: the first-bot prompt only on a confirmed unused implicit main.
 p = await open("state=nobots");
@@ -405,9 +465,24 @@ await p.click('[data-b="disconnect"]');
 check("P1 disconnecting asks, naming the bots that use it", (await dlg(p, "confirm-dialog")) && (await text(p, "#confirm-text")).includes("Otto and Marlow use it"));
 await p.click('[data-b="confirm-ok"]');
 check("P1 after disconnecting, those bots have no account", await p.evaluate(() => window.bots.binding.otto.account === null && window.bots.binding.marlow.account === null && !window.bots.accounts().some((a) => a.id === "openai:work")));
-await p.keyboard.press("Escape");
-await p.waitForTimeout(50);
-check("P1 closing Settings returns focus to the gateway row", !(await dlg(p, "settings-dialog")) && (await p.evaluate(() => document.activeElement.classList.contains("gateway-pill"))));
+// Closing Settings: focus is back on its opener when the dialog's close event is handled, with no
+// fixed wait. The listener added here runs after the page's own, so it sees what that one left.
+const closeFocus = async (p, close) => {
+  await p.evaluate(() => {
+    window.__closeFocus = null;
+    document.getElementById("settings-dialog").addEventListener("close", () => (window.__closeFocus = document.activeElement === document.body ? "body" : document.activeElement.className), { once: true });
+  });
+  await close();
+  const closed = await p.waitForFunction(() => window.__closeFocus !== null, null, { timeout: 3000 }).then(() => true, () => false);
+  return closed && !(await dlg(p, "settings-dialog")) && (await p.evaluate(() => String(window.__closeFocus).includes("gateway-pill") && document.activeElement.classList.contains("gateway-pill")));
+};
+check("P1 closing Settings with Escape after a disconnect: its close event returns focus to the gateway row", await closeFocus(p, () => p.keyboard.press("Escape")));
+await p.close();
+p = await open();
+await p.click(".gateway-pill");
+await p.click('[data-action="b-settings"]');
+await p.click('[data-b-section="accounts"]');
+check("P1 closing Settings with its Close button: its close event returns focus to the gateway row", await closeFocus(p, () => p.click('#settings-dialog [data-b="close"]:visible')));
 await p.close();
 p = await open("open=settings&section=accounts&access=read");
 check("P1 read-only Settings: ids, not labels, and no Connect", await p.evaluate(() => !document.querySelector('#settings-dialog [data-b="connect"]') && document.querySelector("#settings-dialog .b-choice-title .mono")?.textContent === "openai:work" && document.querySelector("#settings-dialog .access-bar").textContent.includes("Read-only.")));

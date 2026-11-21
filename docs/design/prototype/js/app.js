@@ -437,7 +437,8 @@
         `<div class="skeleton" style="width:46%;margin-left:auto;margin-top:22px"></div>` +
         `<div class="skeleton" style="width:62%;height:88px;margin-top:16px"></div><div class="skeleton" style="width:38%"></div></div>`;
     } else if (t.fresh && !t.html) {
-      el.innerHTML = emptyState(b, "Nothing here yet", `Say what you need, and ${b.name} will take it from there.`) + (t.note || "");
+      // A page built on this one may add a note to a new task (bots.html: what Create confirmed), drawn in the empty state so it stays in view.
+      el.innerHTML = emptyState(b, "Nothing here yet", `Say what you need, and ${b.name} will take it from there.`, t.note || "");
     } else {
       const body =
         t.html ??
