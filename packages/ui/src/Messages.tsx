@@ -6,6 +6,7 @@
 // since the gateway keeps a reply only as a reference with no thread of its own.
 
 import {
+  MAX_OUTBOX,
   namesOutgoing,
   type MessageReaction,
   type OutgoingMessage,
@@ -509,6 +510,32 @@ function RepliesLink({ message }: { message: MessageRef }) {
   );
 }
 
+type ReplyReceipt = Pick<OutgoingMessage, "id" | "mode" | "runId">;
+
+/** Keep all live receipts and the newest sends missing from the outbox, up to its own limit. */
+export function reconcileReplyReceipts(
+  receipts: Map<string, ReplyReceipt>,
+  transcript: Pick<Transcript, "outbox" | "items">,
+): string[] {
+  const delivered: string[] = [];
+  const absent: string[] = [];
+  for (const [id, previous] of receipts) {
+    const outgoing = transcript.outbox.find((message) => message.id === id);
+    const receipt = outgoing ? { id, mode: outgoing.mode, runId: outgoing.runId } : previous;
+    // The outbox can drop a reply before history arrives. Only its gateway key proves delivery.
+    if (transcript.items.some((item) => namesOutgoing(item.idempotencyKey ?? null, receipt))) {
+      receipts.delete(id);
+      delivered.push(id);
+    } else if (outgoing) {
+      receipts.set(id, receipt);
+    } else {
+      absent.push(id);
+    }
+  }
+  for (const id of absent.slice(0, Math.max(0, absent.length - MAX_OUTBOX))) receipts.delete(id);
+  return delivered;
+}
+
 /**
  * A message and its replies, with a field to reply from. The gateway keeps no thread, so it is
  * assembled here from its own reply references and nothing else: the message, then each row
@@ -539,20 +566,13 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     (field.current ?? panel.current)?.focus();
   }, [messageId, writable]);
   /** The replies sent from here that history does not hold yet, as the outbox last showed each. */
-  const sent = useRef(new Map<string, Pick<OutgoingMessage, "id" | "mode" | "runId">>());
+  const sent = useRef(new Map<string, ReplyReceipt>());
   const [added, setAdded] = useState(0);
   const watched = env?.transcript;
   const announce = env?.announce;
   useEffect(() => {
     if (!watched || !announce) return;
-    for (const [id, last] of sent.current) {
-      const now = watched.outbox.find((each) => each.id === id) ?? last;
-      sent.current.set(id, now);
-      // Said to be sent only once history holds the row the gateway stored under its key.
-      if (!watched.items.some((item) => namesOutgoing(item.idempotencyKey ?? null, now))) continue;
-      sent.current.delete(id);
-      announce("Reply sent");
-    }
+    reconcileReplyReceipts(sent.current, watched).forEach(() => announce("Reply sent"));
   }, [watched, announce, added]);
   if (!env) return null;
   const transcript = env.transcript;
