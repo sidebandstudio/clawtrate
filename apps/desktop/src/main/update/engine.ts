@@ -53,6 +53,8 @@ export type UpdateState =
       readonly releaseDate: string;
       readonly received: number;
       readonly total: number;
+      /** After the last byte: moving the file into place, then reading it back. */
+      readonly step?: "moving" | "verifying";
     }
   | {
       /** The downloaded bytes matched the feed's size and digest. */
@@ -311,8 +313,15 @@ export class UpdateEngine {
     const name = `Clawtrate-${version}-${this.key}.${FILE_EXTENSION[this.key]}`;
     const partial = join(dir, `${name}.${randomUUID()}.partial`);
     const target = join(dir, name);
-    const progress = (received: number) =>
-      this.report({ kind: "downloading", version, releaseDate, received, total: file.size });
+    const progress = (received: number, step?: "moving" | "verifying") =>
+      this.report({
+        kind: "downloading",
+        version,
+        releaseDate,
+        received,
+        total: file.size,
+        ...(step && { step }),
+      });
 
     progress(0);
     const transfer = (this.transfer = new Transfer(
@@ -413,13 +422,14 @@ export class UpdateEngine {
       if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
       if (received !== file.size) throw new DownloadFailed("size-mismatch");
       if (hash.digest("base64") !== file.sha512) throw new DownloadFailed("hash-mismatch");
-      if (received !== reported) progress(received);
+      progress(received, "moving");
       try {
-        await rename(partial, target);
+        await renameWhenUnlocked(partial, target);
         renamed = true;
       } catch {
         throw new DownloadFailed("write-failed");
       }
+      progress(received, "verifying");
       const proof = await inspectUpdateFile(target, file.size);
       if (!proof) throw new DownloadFailed("size-mismatch");
       if (proof.sha512 !== file.sha512) throw new DownloadFailed("hash-mismatch");
@@ -438,6 +448,20 @@ export class UpdateEngine {
       return this.report(failure("download", error));
     }
     return this.report({ kind: "ready", version, releaseDate, path: target });
+  }
+}
+
+/** A virus scanner can hold a just-written Windows file for a moment and refuse the rename. */
+async function renameWhenUnlocked(from: string, to: string): Promise<void> {
+  // Waits 50 + 100 + 200 + 400 + 800 ms, about 1.5 s, before the last attempt's error stands.
+  for (let wait = 50; ; wait *= 2) {
+    try {
+      return await rename(from, to);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (wait > 800 || (code !== "EBUSY" && code !== "EPERM" && code !== "EACCES")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
   }
 }
 
