@@ -182,7 +182,8 @@ the same bootstrap token again, on another device: {"code":"AUTH_BOOTSTRAP_TOKEN
 (c) node.describe after removal: unknown nodeId
 (c) on the gateway after removal: []
 (c) its saved node token after removal: {"code":"AUTH_DEVICE_TOKEN_MISMATCH"}
-X as an operator after the revocation: {"role":"operator","scopes":["operator.read"]}
+(b) the operator key beside the revoked node key, on its saved operator token: {"role":"operator","scopes":["operator.read"]}
+(a) X, the operator key upgraded to the node role, on its saved operator token: {"code":"PAIRING_REQUIRED"}
 ```
 
 - A device paired as an operator, holding only its operator device token, cannot connect as a node at all: the gateway refuses before any request is filed.
@@ -191,6 +192,7 @@ X as an operator after the revocation: {"role":"operator","scopes":["operator.re
 - **On a key of its own** (b), the token paired the device in the node role with no further approval, and approved its first command surface (`message-handler-CRCo2VX0.mjs` lines 2687 and 2730: a device approved through a bootstrap token gets its first surface approved with admin, pairing and write). The node then reconnected on its own device token.
 - **Stop, and Stop with removal** (c). A node that disconnected reconnected on its saved node token, with no new code. After admin removed it, `node.describe` answered `unknown nodeId`, the gateway no longer listed the device, and its saved token was refused (`AUTH_DEVICE_TOKEN_MISMATCH`), the same error a revoked token gives.
 - **Recovery.** With that node token revoked, the key was refused (`AUTH_DEVICE_TOKEN_MISMATCH`), and a new code on the same key opened a role-upgrade request. A new key with a new code is the path that was shown to pair without one, as in (b). The revoked entry stays in the gateway's device list until removed.
+- **The operator key after the node's revocation.** On saved tokens only, with no new pairing: an operator key of its own beside the revoked node key still connected (Clawtrate's model). X, the operator key that took the node role in (a), was refused with `PAIRING_REQUIRED` on its saved operator token. An earlier run reported X connecting, but the probe had paired it again; it no longer does. This is one more reason the node has a key of its own.
 - The setup code names the gateway's address (`url`). Nothing here establishes a route for a node credential without an admin connection; `openclaw devices join-code` on the gateway's computer makes a join address for the same profile (`devices-cli-join-DtKSjN8T.mjs`), which was not tried.
 
 ## 2. What a device offers

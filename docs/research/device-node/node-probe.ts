@@ -806,7 +806,10 @@ async function roleCredential() {
   say("(a) X as a node again, its node device token only:", "conn" in xAgain ? { hello: xAgain.conn.hello } : { code: (xAgain.refused.details as Record<string, unknown>)?.code });
   if ("conn" in xAgain) await xAgain.conn.close();
 
-  // (b) A key of its own for the node: a device that is only a node.
+  // (b) A key of its own for the node: a device that is only a node, beside an operator key of its own (Clawtrate's model).
+  const own = identity();
+  const ownOp = await operator("own-operator", ["read"], own);
+  await ownOp.close();
   const n = identity();
   const token3 = await mintNodeCode(admin);
   const fresh = await node("N-own-key", n, { bootstrap: token3 });
@@ -846,11 +849,14 @@ async function roleCredential() {
   say("(b) recovery with a new code:", "conn" in recovered ? { hello: recovered.conn.hello } : { code: (recovered.refused.details as Record<string, unknown>)?.code, reason: (recovered.refused.details as Record<string, unknown>)?.reason });
   if ("conn" in recovered) await recovered.conn.close();
   await op.close();
-  // X stands for this device's operator key, separate from the node key whose token was revoked
-  // (Clawtrate's model). Its saved operator token only: a refusal is reported, never re-paired.
-  const opAgain = await connectOnce({ label: "X-operator", id, role: "operator", scopes: ["operator.read"], shared: false });
-  say("this device's separate operator key, on its saved token, after the node key's revocation:", "conn" in opAgain ? opAgain.conn.hello : { code: (opAgain.refused.details as Record<string, unknown>)?.code });
-  if ("conn" in opAgain) await opAgain.conn.close();
+  // Saved operator tokens only: a refusal is reported, never re-paired.
+  const savedOperator = async (label: string, key: Identity) => {
+    const again = await connectOnce({ label, id: key, role: "operator", scopes: ["operator.read"], shared: false });
+    if ("conn" in again) await again.conn.close();
+    return "conn" in again ? again.conn.hello : { code: (again.refused.details as Record<string, unknown>)?.code };
+  };
+  say("(b) the operator key beside the revoked node key, on its saved operator token:", await savedOperator("own-operator", own));
+  say("(a) X, the operator key upgraded to the node role, on its saved operator token:", await savedOperator("X-operator", id));
   for (const c of [writer, admin]) await c.close();
 }
 
