@@ -24,6 +24,8 @@ import {
   MAX_SIGNIN_SECRETS,
 } from "./accounts.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
+import { KEPT_SCOPE_CHARS } from "./permissions.ts";
+import { MAX_KEPT_RULE_SCOPES } from "./permissions-engine.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
   FOREIGN_RUNS_PER_SESSION,
@@ -260,6 +262,14 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  // What a bot may do (`permissions-engine.ts`): this client's last read of the rules plugin's
+  // rules, by scope (every bot's and the 8 bots read last), names checked and patterns cut where
+  // they enter (`keptScope`), so a page can say which rules aren't held while the plugin is silent.
+  "permissions.kept": {
+    max: MAX_KEPT_RULE_SCOPES,
+    each: ID + KEPT_SCOPE_CHARS,
+    row: "bookkeeping",
+  },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
@@ -282,6 +292,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "permissions.ctx": "the client's own functions, handed to the permissions engine",
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
@@ -295,6 +306,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  permissions: "PermissionsEngine",
   routines: "RoutinesEngine",
   usage: "UsageEngine",
   machines: "MachinesEngine",

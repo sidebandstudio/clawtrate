@@ -1085,8 +1085,15 @@ button.b-open > .icon {
   margin: 0 0 10px -8px;
 }
 
+.b-subhead > .icon-button {
+  flex: none;
+}
+
+/* A long title (a tool server's name) wraps inside the panel. */
 .b-subhead h3 {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
 }

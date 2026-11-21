@@ -258,6 +258,12 @@ export const MoreIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const PlugIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75" />
+  </Icon>
+);
+
 export const SmileIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="8" cy="8" r="5.75" />

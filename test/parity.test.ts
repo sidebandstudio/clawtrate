@@ -51,6 +51,16 @@ describe("the parity table", () => {
     LISTING,
   );
 
+  it("the native command approval row names its empty-rules fixture", () => {
+    const row = readFileSync(join(ROOT, "docs/parity.md"), "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("| F-414 |"))!;
+    const dependency = row.split("|").at(-3)!;
+    // Its check loads P5 with no rules; the cell's other "without P5" is the alternative route.
+    expect(dependency).toContain("native path, with no P5 rules for the bot or every bot");
+    expect(dependency).not.toContain("native path, without P5");
+  });
+
   it("reads ids, platforms and statuses from table rows", () => {
     const rows = parseTable(
       [

@@ -80,11 +80,11 @@ describe("device access", () => {
     expect(client.state.connection.canWrite).toBe(false);
     const connects = fake.gateway.connects as Array<{ scopes: string[] }>;
     expect(connects.at(-1)!.scopes).toEqual(wanted);
-    // The admin request stays its own: it asks for admin with the interactive tier.
+    // The admin request stays its own: it adds admin to what the connection holds, and nothing else.
     await client.requestAccess("admin");
     await until(() => fake.gateway.calls("device.scopes.requestUpgrade").length === 2);
     expect(fake.gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({
-      scopes: [...ADMIN_SCOPES, PAIRING_SCOPE],
+      scopes: [READ_SCOPE, "operator.admin", PAIRING_SCOPE],
     });
     client.stop();
   });
@@ -125,7 +125,8 @@ describe("device access", () => {
 
   for (const [second, tier, held] of [
     ["interactive", INTERACTIVE_SCOPES, "canWrite"],
-    ["admin", ADMIN_SCOPES, "canAdmin"],
+    // From read, admin adds only operator.admin, which the gateway reads as covering the rest.
+    ["admin", [READ_SCOPE, "operator.admin"], "canAdmin"],
   ] as const) {
     it(`F-157: a request for ${second} made while device access is pending keeps its own outcome`, async () => {
       const fake = new AccountsGateway();

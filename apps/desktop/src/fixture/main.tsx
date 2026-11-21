@@ -25,6 +25,7 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { permissionParams } from "./permissions.ts";
 import { checkInParams } from "./check-ins.ts";
 import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
@@ -85,6 +86,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   desktopUpdates: fixtureUpdates(params),
   files: fileParams(params),
   accounts: accountParams(params),
+  permissions: permissionParams(params),
   checkIns: checkInParams(params),
   routines: routineParams(params),
   usage: usageParams(params),
