@@ -157,6 +157,42 @@ describe("a setup plan against the consent given, after its last wait", () => {
     client.stop();
   });
 
+  it.each(["code expires", "listener changes"] as const)(
+    "F-492: a pending pairing sends nothing when its %s during the final storage read",
+    async (change) => {
+      const gateway = readGateway();
+      const storage = gatedStorage();
+      const pairing = code();
+      let now = pairing.expiresAtMs - 1;
+      let sameListener = true;
+      const client = new ClawtrateClient({ ...testHost(gateway, storage), now: () => now }, FAST);
+      const key = tokenKey(URL);
+      let reads = 0;
+      await client.start();
+      try {
+        await client.connectWithSetupCode(pairing, {
+          check: () => sameListener,
+          verify: async () => {
+            if (++reads === 2) storage.hold(key);
+            return true;
+          },
+        });
+        await until(() => storage.waiting(key) > 0);
+        if (change === "code expires") now = pairing.expiresAtMs;
+        else sameListener = false;
+        storage.release(key);
+        await until(
+          () => client.state.connection.status === "error" || gateway.connects.length > 0,
+        );
+        expect(gateway.connects).toHaveLength(0);
+        expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+      } finally {
+        storage.release(key);
+        client.stop();
+      }
+    },
+  );
+
   for (const change of ["appears", "goes"] as const) {
     it(`F-492: a saved pairing that ${change === "appears" ? "appears" : "goes"} while the last listener read is pending sends nothing`, async () => {
       const gateway = readGateway();
