@@ -21,6 +21,8 @@ export type PlanContext = {
   sessionKey: string | null;
   /** Tool results since the user's message, in order. */
   results: { name: string; text: string }[];
+  /** The user's message, as the scripted model matched it. */
+  prompt?: string;
   /**
    * The origin of the instance's scripted pages, when its bots have browsers
    * of their own (scripted-pages.ts); null otherwise.
@@ -395,6 +397,21 @@ export const SCENARIOS: Scenario[] = [
       think("I will read my instructions."),
       tool("read", { path: "AGENTS.md" }),
       say("I read my instructions file."),
+    ],
+  },
+  {
+    name: "reply-to",
+    phrase: "answer that message",
+    summary:
+      "Text beside a folder listing, then an answer tagged as a reply to the message id after the directive. The gateway keeps that id on the answer's row (`openclawDelivery.replyToId`), never on a row with a call.",
+    steps: () => [
+      say("I will look first, then answer that message."),
+      tool("ls", { path: "." }),
+      (ctx) => {
+        const id = /#reply-to\s+([\w-]+)/.exec(ctx.prompt ?? "")?.[1];
+        const text = `This answers ${id ?? "no message: none was named"}.`;
+        return [say(id ? `[[reply_to:${id}]] ${text}` : text)];
+      },
     ],
   },
   {
