@@ -196,9 +196,14 @@ const test = base.extend<{
         );
       }
     } finally {
-      const failure = join(dir, "profile", "folder-error.txt");
-      if (existsSync(failure))
-        console.error("Update folder:", readFileSync(failure, "utf8").slice(0, 4096));
+      // A locked or unreadable diagnostic must not skip the cleanup.
+      try {
+        const failure = join(dir, "profile", "folder-error.txt");
+        if (existsSync(failure))
+          console.error("Update folder:", readFileSync(failure, "utf8").slice(0, 4096));
+      } catch (error) {
+        console.error("Update folder diagnostic unreadable:", error);
+      }
       resume.resolve();
       await cleanup.disposeAsync();
     }

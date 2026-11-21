@@ -76,16 +76,14 @@ async function inspectBundle(
   }
 }
 
-type Stage = (
-  url: string,
-  signal: AbortSignal,
-  handed: () => void,
-  submitted: () => void,
-) => Promise<void>;
+type Stage = (url: string, signal: AbortSignal, handed: () => void) => Promise<void>;
+
+/** The macOS updater reported an error, or that there is no update, or refused the call. */
+class UpdaterRefused extends Error {}
 
 // Native errors can still arrive after the operation ends.
 const ignoreLateError = () => {};
-const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
+const stageWithElectron: Stage = async (url, signal, handed) => {
   const { autoUpdater } = await import("electron");
   signal.throwIfAborted();
   if (!autoUpdater.listeners("error").includes(ignoreLateError))
@@ -94,7 +92,7 @@ const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
     let finished = false;
     let checking = false;
     const abort = () => finish(() => reject(signal.reason));
-    const failed = () => finish(() => reject(Error("System updater stopped")));
+    const failed = () => finish(() => reject(new UpdaterRefused("System updater stopped")));
     const ready = () => {
       if (!checking) return;
       finish(() => {
@@ -124,10 +122,9 @@ const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
       autoUpdater.setFeedURL({ url, serverType: "default" });
       if (finished) return;
       checking = true;
-      submitted();
       autoUpdater.checkForUpdates();
-    } catch (error) {
-      finish(() => reject(error));
+    } catch {
+      finish(() => reject(new UpdaterRefused("System updater refused the call")));
     }
   });
 };
@@ -162,8 +159,10 @@ export async function serveMacArchive(
           sha256: archive.sha256,
         }),
       );
-    } else if (req.url === prefix + "/archive.zip" && feedRead && !archiveRead) {
+    } else if (req.url === prefix + "/archive.zip" && feedRead && !archiveRead && !stop.aborted) {
+      // From here the updater may stage the update. Before it, it cannot have.
       archiveRead = true;
+      submitted();
       res.writeHead(200, {
         "Content-Type": "application/zip",
         "Content-Length": archive.proof.size,
@@ -195,10 +194,7 @@ export async function serveMacArchive(
       stopped.promise,
     ]);
     host = "127.0.0.1:" + (listener.address() as AddressInfo).port;
-    await Promise.race([
-      stage("http://" + host + prefix + "/feed", stop, handed, submitted),
-      stopped.promise,
-    ]);
+    await Promise.race([stage("http://" + host + prefix + "/feed", stop, handed), stopped.promise]);
   } finally {
     clearTimeout(timer);
     stop.removeEventListener("abort", abort);
@@ -270,6 +266,10 @@ export function macInstaller(
       try {
         await serveMacArchive(archive, signal, stage, handed, deadlineMs, submitted);
         return null;
+      } catch (error) {
+        // A refusal after the archive request is reported as unconfirmed by the caller.
+        if (error instanceof UpdaterRefused) return "mac-updater-refused";
+        throw error;
       } finally {
         await archive.file.close();
       }

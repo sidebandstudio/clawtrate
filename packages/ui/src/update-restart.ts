@@ -15,6 +15,8 @@ const reasons: Record<Exclude<Reason, "no-verified-download">, string> = {
   "mac-architecture": "The downloaded Mac app is for a different processor.",
   "attempt-not-saved": "Couldn't save the restart attempt on this device.",
   "installer-failed": "Couldn't hand the update to the installer.",
+  "mac-updater-refused":
+    "The macOS updater refused the update before receiving it. Nothing was installed.",
 };
 
 export function refusalLine(reason: Reason) {

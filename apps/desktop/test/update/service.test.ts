@@ -699,6 +699,23 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
   },
 );
 
+it("retires the watch and the held archive when the verified file cannot be read again", async () => {
+  const installer = { ...installStandIn(), retire: vi.fn() };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: id });
+  installer.retire.mockClear();
+  // The read fails while the watch still sees the same file.
+  vi.spyOn(UpdateEngine.prototype, "recheckFile").mockResolvedValueOnce(false);
+  expect(await service.recheckVerified(id)).toBe(false);
+  expect(installer.retire).toHaveBeenCalledTimes(1);
+  expect(service.get()).toMatchObject({
+    state: { kind: "failed", reason: "artifact-changed" },
+    install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+  });
+});
+
 it("reads the last JSON value for a repeated track", async () => {
   const service = await start();
   const feed = JSON.stringify(document("1.1.0", "stable"));
@@ -907,34 +924,36 @@ it.each([
   },
 );
 
-it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
-  "refuses a %s file between offering Restart and acting on it",
-  async (change) => {
-    const installer = installStandIn();
-    const service = await start({ installer });
-    const id = await offer(service);
-    await service.download(id);
-    const folder = join(updates, id);
-    const path = join(folder, readdirSync(folder)[0]!);
-    if (change === "truncated") writeFileSync(path, fixture.body.subarray(0, 1));
-    if (change === "changed") writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
-    if (change === "hardlink") linkSync(path, path + ".other");
-    if (change === "replaced" || change === "symlink") {
-      renameSync(path, path + ".old");
-      if (change === "symlink") symlinkSync(path + ".old", path);
-      else writeFileSync(path, fixture.body);
-    }
-    expect(await service.restart(id)).toMatchObject({
-      outcome: "stale",
-      snapshot: {
-        state: { kind: "failed", stage: "download", reason: "artifact-changed" },
-        install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
-      },
-    });
-    expect(installer.launch).not.toHaveBeenCalled();
-    expect(await store().get("attempt")).toBeNull();
-  },
-);
+// A file symbolic link on Windows needs Developer Mode or the symbolic link privilege.
+it.each(
+  ["changed", "replaced", "truncated", "hardlink"].concat(
+    process.platform === "win32" ? [] : ["symlink"],
+  ),
+)("refuses a %s file between offering Restart and acting on it", async (change) => {
+  const installer = installStandIn();
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id);
+  const path = join(folder, readdirSync(folder)[0]!);
+  if (change === "truncated") writeFileSync(path, fixture.body.subarray(0, 1));
+  if (change === "changed") writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
+  if (change === "hardlink") linkSync(path, path + ".other");
+  if (change === "replaced" || change === "symlink") {
+    renameSync(path, path + ".old");
+    if (change === "symlink") symlinkSync(path + ".old", path);
+    else writeFileSync(path, fixture.body);
+  }
+  expect(await service.restart(id)).toMatchObject({
+    outcome: "stale",
+    snapshot: {
+      state: { kind: "failed", stage: "download", reason: "artifact-changed" },
+      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+    },
+  });
+  expect(installer.launch).not.toHaveBeenCalled();
+  expect(await store().get("attempt")).toBeNull();
+});
 
 it("accepts Restart from the first eligible verified snapshot after inspection", async () => {
   const installer = installStandIn();
@@ -992,20 +1011,10 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
   const quitAfterLaunch = vi.fn();
   const entered = Promise.withResolvers<void>(),
     resume = Promise.withResolvers<void>();
+  let launched: { file: unknown; attempt: string | null } | undefined;
+  // Assertions stay in the test body: the service would turn a throw here into a launch failure.
   installer.launch = vi.fn(async (file) => {
-    expect(file).toMatchObject({
-      track: "stable",
-      version: "1.1.0",
-      sha512: fixture.sha512,
-      size: fixture.body.length,
-    });
-    expect(JSON.parse((await store().get("attempt"))!)).toMatchObject({
-      target: "1.1.0",
-      from: "1.0.0",
-      track: "stable",
-      phase: "handoff",
-      time: expect.stringMatching(/Z$/),
-    });
+    launched = { file, attempt: await store().get("attempt") };
     entered.resolve();
     await resume.promise;
     return null;
@@ -1017,7 +1026,20 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
   const pending = service.restart(id);
   expect(service.get().state.kind).toBe("preparing");
   expect((await service.restart(id)).outcome).toBe("busy");
-  await entered.promise;
+  await Promise.race([entered.promise, pending]);
+  expect(launched?.file).toMatchObject({
+    track: "stable",
+    version: "1.1.0",
+    sha512: fixture.sha512,
+    size: fixture.body.length,
+  });
+  expect(JSON.parse(launched!.attempt!)).toMatchObject({
+    target: "1.1.0",
+    from: "1.0.0",
+    track: "stable",
+    phase: "handoff",
+    time: expect.stringMatching(/Z$/),
+  });
   expect(service.get().state.kind).toBe("handing-off");
   for (const command of [
     service.check("stable", service.get().revision),
@@ -1111,23 +1133,42 @@ it("quit during signature inspection retires Restart without a handoff", async (
 it.skipIf(process.platform === "win32").each(["success", "failure", "quit"])(
   "one confirmed Mac handoff serves the preflight archive once (%s)",
   async (action) => {
+    type Feed = { url: string; size: number; sha256: string };
     let url: string | undefined;
+    let seen:
+      | {
+          state: string;
+          attempt: string | null;
+          feed: Feed;
+          repeatedFeed: number;
+          length: string | null;
+          body: Buffer;
+          repeatedArchive: number;
+          unrelated: number;
+        }
+      | undefined;
     const inspected = vi.fn(async () => null);
+    // The service keeps handed-to-system whatever the stage throws, so only record here.
     const installer = macInstaller("arm64", inspected, async (address, _signal, handed) => {
       url = address;
       handed();
-      expect(service.get().state.kind).toBe("handed-to-system");
-      expect(await store().get("attempt")).not.toBeNull();
-      const response = await fetch(address);
-      const feed = (await response.json()) as { url: string; size: number; sha256: string };
-      expect((await fetch(address)).status).toBe(404);
+      const state = service.get().state.kind;
+      const attempt = await store().get("attempt");
+      const feed = (await (await fetch(address)).json()) as Feed;
+      const repeatedFeed = (await fetch(address)).status;
       const archive = await fetch(feed.url);
-      expect(archive.headers.get("content-length")).toBe(String(fixture.body.length));
-      expect(Buffer.from(await archive.arrayBuffer())).toEqual(fixture.body);
-      expect(feed.size).toBe(fixture.body.length);
-      expect(feed.sha256).toBe(createHash("sha256").update(fixture.body).digest("hex"));
-      expect((await fetch(feed.url)).status).toBe(404);
-      expect((await fetch(new URL("/unrelated", address))).status).toBe(404);
+      const length = archive.headers.get("content-length");
+      const body = Buffer.from(await archive.arrayBuffer());
+      seen = {
+        state,
+        attempt,
+        feed,
+        repeatedFeed,
+        length,
+        body,
+        repeatedArchive: (await fetch(feed.url)).status,
+        unrelated: (await fetch(new URL("/unrelated", address))).status,
+      };
       if (action === "failure") throw Error("Staging response lost");
     });
     const service = await start({ installer });
@@ -1148,6 +1189,19 @@ it.skipIf(process.platform === "win32").each(["success", "failure", "quit"])(
     }
     expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
     expect((await service.restart(id)).outcome).toBe("busy");
+    expect(seen).toMatchObject({
+      state: "handed-to-system",
+      attempt: expect.any(String),
+      feed: {
+        size: fixture.body.length,
+        sha256: createHash("sha256").update(fixture.body).digest("hex"),
+      },
+      repeatedFeed: 404,
+      length: String(fixture.body.length),
+      repeatedArchive: 404,
+      unrelated: 404,
+    });
+    expect(seen!.body).toEqual(fixture.body);
     expect(url).toBeDefined();
     await expect(fetch(url!)).rejects.toThrow();
     service.shutdown();
@@ -1202,6 +1256,28 @@ it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
     expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("nightly");
   },
 );
+
+it("reads a valid attempt from a store without a projection when its last check is bad", async () => {
+  const saved: Record<string, string> = {
+    lastCheck: "{",
+    attempt: JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-12T10:00:00.000Z",
+      phase: "handoff",
+    }),
+  };
+  const service = await start({
+    version: "1.1.0",
+    store: { get: async (key) => saved[key] ?? null, set: async () => {} },
+  });
+  expect(service.get()).toMatchObject({
+    preferenceIssue: "preferences-not-read",
+    lastCheck: null,
+    lastAttempt: { kind: "target-running", target: "1.1.0", running: "1.1.0" },
+  });
+});
 
 it("keeps the handoff visible through actual exit after a definite launch failure", async () => {
   const installer = installStandIn();
@@ -1301,27 +1377,66 @@ it.skipIf(process.platform === "win32")(
       quitAndInstall: vi.fn(),
     });
     vi.doMock("electron", () => ({ autoUpdater: updater }));
+    // The stand-in updater reads what Squirrel would: the feed, then perhaps the archive.
+    async function read(feed: string, archive: boolean) {
+      const { url } = (await (await fetch(feed)).json()) as { url: string };
+      if (archive) await (await fetch(url)).arrayBuffer();
+    }
     try {
-      for (const scenario of ["feed-error", "throw", "deadline", "ready"] as const) {
-        updater.setFeedURL.mockImplementation(() => {
+      for (const scenario of [
+        "feed-error",
+        "throw",
+        "error-after-feed",
+        "deadline",
+        "error-after-archive",
+        "deadline-after-archive",
+        "ready",
+      ] as const) {
+        let feed = "";
+        updater.setFeedURL.mockImplementation(({ url }: { url: string }) => {
+          feed = url;
           if (scenario === "feed-error") updater.emit("error", Error("refused"));
         });
         updater.checkForUpdates.mockClear().mockImplementation(() => {
           if (scenario === "throw") throw Error("refused");
           if (scenario === "ready") updater.emit("update-downloaded");
+          if (scenario === "error-after-feed" || scenario === "error-after-archive")
+            void read(feed, scenario === "error-after-archive").then(() =>
+              // Squirrel's read-only volume check fails here, before the archive request.
+              updater.emit("error", Error("refused")),
+            );
+          if (scenario === "deadline-after-archive") void read(feed, true);
         });
         updater.quitAndInstall.mockImplementation(() => {
           updater.emit("error", Error("late"));
         });
-        const installer = macInstaller("arm64", async () => null, undefined, 100);
+        const installer = macInstaller("arm64", async () => null, undefined, 1000);
         const states: string[] = [];
         const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
         const id = await offer(service);
         await service.download(id);
         const result = (await service.restart(id)).snapshot.state;
-        if (scenario === "feed-error") {
-          expect(updater.checkForUpdates).not.toHaveBeenCalled();
-          expect(result).toMatchObject({ kind: "handoff-failed", reason: "installer-failed" });
+        if (scenario === "feed-error") expect(updater.checkForUpdates).not.toHaveBeenCalled();
+        if (
+          scenario === "feed-error" ||
+          scenario === "throw" ||
+          scenario === "error-after-feed" ||
+          scenario === "deadline"
+        ) {
+          // No archive was served, so nothing can have been staged: the person can check again.
+          expect(result).toEqual({
+            kind: "handoff-failed",
+            version: "1.1.0",
+            reason: scenario === "deadline" ? "installer-failed" : "mac-updater-refused",
+          });
+          expect((await service.restart(id)).outcome).toBe("stale");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("accepted");
+          expect((await service.chooseTrack("stable")).outcome).toBe("accepted");
+          const again = await offer(service);
+          expect((await service.download(again)).snapshot.state).toMatchObject({
+            kind: "verified",
+            offerId: again,
+          });
         } else {
           expect(result).toEqual({
             kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",

@@ -97,8 +97,13 @@ export class DesktopUpdateService {
       selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
       if (stored) lastCheck = stored.prefs.lastCheck ?? null;
       else {
-        const raw = await options.store.get("lastCheck");
-        if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+        // A bad last check must not hide the attempt read below.
+        try {
+          const raw = await options.store.get("lastCheck");
+          if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+        } catch {
+          preferenceIssue = "preferences-not-read";
+        }
       }
       try {
         const raw = stored ? null : await options.store.get("attempt");
@@ -164,7 +169,8 @@ export class DesktopUpdateService {
     else if (
       state.kind === "handoff-failed" &&
       state.reason !== "attempt-not-saved" &&
-      state.reason !== "installer-failed"
+      state.reason !== "installer-failed" &&
+      state.reason !== "mac-updater-refused"
     )
       install = { kind: "unavailable-in-this-build", reason: state.reason };
     this.pendingInstall = null;
@@ -271,6 +277,7 @@ export class DesktopUpdateService {
     const valid = await engine.recheckFile(offerId, this.snapshot.selectedTrack, state.version);
     if (this.engine !== engine || this.snapshot.state !== state) return false;
     if (!valid) {
+      this.retireFile();
       this.publish({
         kind: "failed",
         stage: "download",
@@ -502,7 +509,10 @@ export class DesktopUpdateService {
     )
       return this.reply("invalid");
     const version = state.version;
-    const fail = (reason: UpdateInstallRefusal | "attempt-not-saved" | "installer-failed") => {
+    const fail = (
+      reason:
+        UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused",
+    ) => {
       this.retireFile();
       this.publish({ kind: "handoff-failed", version, reason });
       return this.reply("accepted");

@@ -14,6 +14,7 @@ import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { macSigningRequested, windowsSigningRequested } from "../apps/desktop/packaging/signing.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { appEnv } from "./desktop-driver.ts";
 import { packagedExecutable } from "./global-setup.ts";
@@ -120,8 +121,17 @@ test("opens its window from the packaged app on the connect screen", async () =>
       window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
     ).clawtrateHost.desktopUpdates.get(),
   );
+  // The signing variables that configured the build, as in apps/desktop/packaging/update-defines.ts.
+  const signed = WINDOWS ? windowsSigningRequested(process.env) : macSigningRequested(process.env);
   expect(updates).toMatchObject({
-    install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
+    install: {
+      kind: "unavailable-in-this-build",
+      reason: !signed
+        ? "build-not-signed"
+        : WINDOWS
+          ? "windows-install-pending-trial"
+          : "no-verified-download",
+    },
     lastAttempt: null,
   });
   expect(

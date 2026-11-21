@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setHooks, withScheduler } from "../src/routine-gateway.ts";
 import { addScriptedRoutines, SCRIPTED_ROUTINES } from "../src/routines.ts";
 import { SCENARIOS } from "../src/scenarios.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
@@ -24,5 +25,44 @@ describe("the scripted routines", () => {
     });
     expect(ids).toEqual(["kept", "new:Weekly backup check"]);
     expect(calls).toEqual(["cron.list", "cron.add"]);
+  });
+});
+
+describe("the routine-editing settings", () => {
+  it("turn the scheduler on for a check and off again even when the check fails", async () => {
+    const patches: string[] = [];
+    let on = false;
+    const call = async (method: string, params: unknown) => {
+      if (method === "config.get") return { hash: "h1", config: {} };
+      if (method === "cron.status") return { enabled: on };
+      if (method === "config.patch") {
+        const { raw, baseHash } = params as { raw: string; baseHash: string };
+        patches.push(`${raw} ${baseHash}`);
+        on = (JSON.parse(raw) as { cron: { enabled: boolean } }).cron.enabled;
+      }
+      return {};
+    };
+    await expect(
+      withScheduler(call, () => {
+        expect(on).toBe(true);
+        return Promise.reject(new Error("check failed"));
+      }),
+    ).rejects.toThrow("check failed");
+    expect(on).toBe(false);
+    expect(patches).toEqual(['{"cron":{"enabled":true}} h1', '{"cron":{"enabled":false}} h1']);
+  });
+
+  it("give hooks a fresh token when turned on, and none when turned off", async () => {
+    const raws: Array<{ hooks: Record<string, unknown> }> = [];
+    const call = async (method: string, params: unknown) => {
+      if (method === "config.patch") raws.push(JSON.parse((params as { raw: string }).raw));
+      if (method === "config.get") return { config: { hooks: raws.at(-1)?.hooks } };
+      return {};
+    };
+    const token = await setHooks(call, true);
+    expect(token).toMatch(/^[\w-]{32}$/u);
+    expect(raws[0]).toEqual({ hooks: { enabled: true, token, path: "/hooks" } });
+    expect(await setHooks(call, false)).toBeNull();
+    expect(raws[1]).toEqual({ hooks: { enabled: false } });
   });
 });

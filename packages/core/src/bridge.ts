@@ -32,7 +32,24 @@ import {
   type CheckInDraft,
   type CheckInRead,
 } from "./check-ins.ts";
-import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
+import {
+  MAX_DRAFT_KEY_CHARS,
+  MAX_ROUTINE_TEXT_CHARS,
+  type BotRoutines,
+  type CalendarRuns,
+  type GatewayHooks,
+  type NewRoutine,
+  type Routine,
+  type RoutineFields,
+  type RoutineRevision,
+  type RoutineRemove,
+  type RoutineRun,
+  type RoutineRunNow,
+  type RoutineSchedule,
+  type RoutineSaveCheck,
+  type RoutineWrite,
+  type RunConversation,
+} from "./routines.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
@@ -187,6 +204,42 @@ export type BridgeCommand =
       runAt: number;
       sessionKey: string | null;
     }
+  // Changing routines (automation.md sections 9 and 10). The engine refuses each below admin.
+  // `gateway` is the one a draft was opened on: a write waits for it to match.
+  | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
+  /**
+   * After a create whose answer never came: the routine its draft made, found
+   * by the draft's key, against `input`. Refused when any other gateway answers.
+   */
+  | { type: "checkRoutineCreate"; key: string; input: RoutineFields; gateway: string | null }
+  /** After an edit whose answer never came, as `updateRoutine` was sent it. */
+  | {
+      type: "checkRoutineUpdate";
+      id: string;
+      original: RoutineFields;
+      edit: RoutineFields;
+      expected: RoutineFields;
+      gateway: string | null;
+    }
+  /**
+   * One routine as the gateway has it now; reads only. With `gateway`, a
+   * read-back of a write: answered by any other gateway, it is refused.
+   */
+  | { type: "readRoutine"; id: string; gateway?: string | null }
+  /** `original` is what the editor opened with; only what differs from it is written. */
+  | {
+      type: "updateRoutine";
+      id: string;
+      original: RoutineFields;
+      edit: RoutineFields;
+      expected: RoutineRevision;
+      gateway: string | null;
+    }
+  /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
+  | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
+  | { type: "runRoutineNow"; id: string; listedOn: number }
+  | { type: "removeRoutine"; id: string; listedOn: number }
+  | { type: "readGatewayHooks" }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
   | { type: "refreshAccounts" }
@@ -311,77 +364,106 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                 ? TranscriptItem | null
                 : C extends { type: "retryCreation" }
                   ? { key: string }
-                  : C extends { type: "readBotRoutines" }
-                    ? BotRoutines
-                    : C extends { type: "readRoutineRuns" }
-                      ? RoutineRun[]
-                      : C extends { type: "readCalendarRuns" }
-                        ? CalendarRuns
-                        : C extends { type: "readRunConversation" }
-                          ? RunConversation
-                          : C extends { type: "listTaskFiles" }
-                            ? TaskFileList
-                            : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                              ? FileRead
-                              : C extends { type: "listWorkspace" }
-                                ? WorkspacePage
-                                : C extends { type: "readCheckoutDiff" }
-                                  ? CheckoutDiff
-                                  : C extends { type: "readFileChunk" }
-                                    ? { data: string }
-                                    : C extends { type: "cancelSignIn" }
-                                      ? { cancelled: boolean }
-                                      : C extends { type: "dismissSignIn" }
-                                        ? { dismissed: boolean }
-                                        : C extends { type: "saveApiKey" }
-                                          ? { profileId: string | null }
-                                          : C extends { type: "createBot" | "finishBot" }
-                                            ? { botId: string; missing: MissingStep[] }
-                                            : C extends { type: "newTask" | "newMainTask" }
-                                              ? { key: string }
-                                              : C extends { type: "archiveTask" }
-                                                ? ArchiveResult
-                                                : C extends { type: "listArchived" }
-                                                  ? ArchivedList
-                                                  : C extends { type: "readComposerMenu" }
-                                                    ? MenuRow[]
-                                                    : C extends { type: "readUsage" }
-                                                      ? UsageReport | UsageBusy
-                                                      : C extends { type: "listRoutines" }
-                                                        ? BudgetRoutine[]
-                                                        : C extends { type: "readPlacement" }
-                                                          ? BotPlacement
-                                                          : C extends { type: "readMachines" }
-                                                            ? MachinesView
+                  : C extends { type: "createRoutine" | "updateRoutine" | "setRoutineEnabled" }
+                    ? RoutineWrite
+                    : C extends { type: "readRoutine" }
+                      ? Routine | null
+                      : C extends { type: "runRoutineNow" }
+                        ? RoutineRunNow
+                        : C extends { type: "removeRoutine" }
+                          ? RoutineRemove
+                          : C extends { type: "readGatewayHooks" }
+                            ? GatewayHooks | null
+                            : C extends { type: "readBotRoutines" }
+                              ? BotRoutines
+                              : C extends { type: "readRoutineRuns" }
+                                ? RoutineRun[]
+                                : C extends { type: "readCalendarRuns" }
+                                  ? CalendarRuns
+                                  : C extends { type: "readRunConversation" }
+                                    ? RunConversation
+                                    : C extends { type: "listTaskFiles" }
+                                      ? TaskFileList
+                                      : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                                        ? FileRead
+                                        : C extends { type: "listWorkspace" }
+                                          ? WorkspacePage
+                                          : C extends { type: "readCheckoutDiff" }
+                                            ? CheckoutDiff
+                                            : C extends { type: "readFileChunk" }
+                                              ? { data: string }
+                                              : C extends { type: "cancelSignIn" }
+                                                ? { cancelled: boolean }
+                                                : C extends { type: "dismissSignIn" }
+                                                  ? { dismissed: boolean }
+                                                  : C extends { type: "saveApiKey" }
+                                                    ? { profileId: string | null }
+                                                    : C extends {
+                                                          type: "createBot" | "finishBot";
+                                                        }
+                                                      ? { botId: string; missing: MissingStep[] }
+                                                      : C extends {
+                                                            type: "newTask" | "newMainTask";
+                                                          }
+                                                        ? { key: string }
+                                                        : C extends { type: "archiveTask" }
+                                                          ? ArchiveResult
+                                                          : C extends { type: "listArchived" }
+                                                            ? ArchivedList
                                                             : C extends {
-                                                                  type: "setCommandMachine";
+                                                                  type: "readComposerMenu";
                                                                 }
-                                                              ? ConfigSave
-                                                              : C extends {
-                                                                    type: "setBotWorkspace";
-                                                                  }
-                                                                ? {
-                                                                    workspace: string | null;
-                                                                    asTyped: boolean;
-                                                                  }
+                                                              ? MenuRow[]
+                                                              : C extends { type: "readUsage" }
+                                                                ? UsageReport | UsageBusy
                                                                 : C extends {
-                                                                      type: "setMachineDefaults";
+                                                                      type: "listRoutines";
                                                                     }
-                                                                  ? ApprovalsFile
+                                                                  ? BudgetRoutine[]
                                                                   : C extends {
-                                                                        type: "refreshCheckIns";
-                                                                        botId: string;
+                                                                        type: "readPlacement";
                                                                       }
-                                                                    ? CheckInRead | null
+                                                                    ? BotPlacement
                                                                     : C extends {
-                                                                          type: "listMemory";
+                                                                          type: "readMachines";
                                                                         }
-                                                                      ? MemoryList
+                                                                      ? MachinesView
                                                                       : C extends {
-                                                                            type: "readMemory";
+                                                                            type: "setCommandMachine";
                                                                           }
-                                                                        ? MemoryDocument
-                                                                        : void;
+                                                                        ? ConfigSave
+                                                                        : C extends {
+                                                                              type: "setBotWorkspace";
+                                                                            }
+                                                                          ? {
+                                                                              workspace:
+                                                                                string | null;
+                                                                              asTyped: boolean;
+                                                                            }
+                                                                          : C extends {
+                                                                                type: "setMachineDefaults";
+                                                                              }
+                                                                            ? ApprovalsFile
+                                                                            : C extends {
+                                                                                  type: "refreshCheckIns";
+                                                                                  botId: string;
+                                                                                }
+                                                                              ? CheckInRead | null
+                                                                              : C extends {
+                                                                                    type: "listMemory";
+                                                                                  }
+                                                                                ? MemoryList
+                                                                                : C extends {
+                                                                                      type: "readMemory";
+                                                                                    }
+                                                                                  ? MemoryDocument
+                                                                                  : C extends {
+                                                                                        type:
+                                                                                          | "checkRoutineCreate"
+                                                                                          | "checkRoutineUpdate";
+                                                                                      }
+                                                                                    ? RoutineSaveCheck
+                                                                                    : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -654,6 +736,69 @@ function profileId(value: unknown): string {
   return value;
 }
 
+function record(value: unknown, what: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error(`invalid ${what}`);
+  return value as Record<string, unknown>;
+}
+
+const nullable = <T>(value: unknown, read: (value: unknown) => T): T | null =>
+  value === null || value === undefined ? null : read(value);
+
+function routineSchedule(value: unknown): RoutineSchedule {
+  const schedule = record(value, "schedule");
+  const kind = schedule.kind;
+  if (kind !== "cron" && kind !== "every" && kind !== "at" && kind !== "other")
+    throw new Error("invalid schedule");
+  const everyMs = schedule.everyMs;
+  if (
+    everyMs !== null &&
+    everyMs !== undefined &&
+    !(Number.isSafeInteger(everyMs) && (everyMs as number) > 0)
+  )
+    throw new Error("invalid schedule");
+  // The gateway's own schedule facts: a copy carries them so it runs when the
+  // original did; the form itself never writes them.
+  const pacing = (value: unknown): number | undefined => {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      throw new Error("invalid schedule");
+    return value;
+  };
+  const anchorMs = pacing(schedule.anchorMs);
+  const staggerMs = pacing(schedule.staggerMs);
+  return {
+    kind,
+    expr: nullable(schedule.expr, (each) => shortText(each, 256, "schedule")),
+    tz: nullable(schedule.tz, (each) => shortText(each, 128, "time zone")),
+    everyMs: (everyMs as number | null | undefined) ?? null,
+    at: nullable(schedule.at, (each) => shortText(each, 64, "time")),
+    name: nullable(schedule.name, (each) => shortText(each, 64, "schedule")),
+    ...(anchorMs !== undefined ? { anchorMs } : {}),
+    ...(staggerMs !== undefined ? { staggerMs } : {}),
+  };
+}
+
+function oneOf<T extends string>(value: unknown, options: readonly T[], what: string): T {
+  if (!options.includes(value as T)) throw new Error(`invalid ${what}`);
+  return value as T;
+}
+
+/** The gateway a draft was opened on, or null when the editor did not know it. */
+function optionalGateway(value: unknown): string | null {
+  return value === null || value === undefined ? null : shortText(value, 256, "gateway");
+}
+
+function routineFields(value: Record<string, unknown>): RoutineFields {
+  return {
+    name: shortText(value.name, 256, "name"),
+    text: shortText(value.text, MAX_ROUTINE_TEXT_CHARS, "instruction"),
+    schedule: routineSchedule(value.schedule),
+    target: oneOf(value.target, ["isolated", "main", "other"] as const, "target"),
+    delivery: oneOf(value.delivery, ["none", "announce", "webhook", "other"] as const, "delivery"),
+  };
+}
+
 function shortText(value: unknown, max: number, what: string): string {
   if (typeof value !== "string" || value.length > max) throw new Error(`invalid ${what}`);
   return value;
@@ -745,6 +890,67 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : id(command.sessionKey, "session key"),
       };
+    case "createRoutine": {
+      const input = record(command.input, "routine");
+      return {
+        type: "createRoutine",
+        input: { ...routineFields(input), botId: botId(input.botId) },
+        key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
+        gateway: optionalGateway(command.gateway),
+      };
+    }
+    case "checkRoutineCreate":
+      return {
+        type: "checkRoutineCreate",
+        key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
+        input: routineFields(record(command.input, "routine")),
+        gateway: optionalGateway(command.gateway),
+      };
+    case "checkRoutineUpdate":
+      return {
+        type: "checkRoutineUpdate",
+        id: id(command.id, "routine id"),
+        original: routineFields(record(command.original, "routine")),
+        edit: routineFields(record(command.edit, "routine")),
+        expected: routineFields(record(command.expected, "routine")),
+        gateway: optionalGateway(command.gateway),
+      };
+    case "updateRoutine": {
+      const expected = record(command.expected, "routine revision");
+      const updatedAt = expected.updatedAt;
+      if (updatedAt !== null && (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)))
+        throw new Error("invalid routine revision");
+      return {
+        type: "updateRoutine",
+        id: id(command.id, "routine id"),
+        original: routineFields(record(command.original, "routine")),
+        edit: routineFields(record(command.edit, "routine")),
+        expected: { ...routineFields(expected), updatedAt },
+        gateway: optionalGateway(command.gateway),
+      };
+    }
+    case "setRoutineEnabled":
+      return {
+        type: "setRoutineEnabled",
+        id: id(command.id, "routine id"),
+        enabled: flag(command.enabled),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+      };
+    case "runRoutineNow":
+    case "removeRoutine":
+      return {
+        type: command.type,
+        id: id(command.id, "routine id"),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+      };
+    case "readRoutine":
+      return {
+        type: command.type,
+        id: id(command.id, "routine id"),
+        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
+      };
+    case "readGatewayHooks":
+      return { type: "readGatewayHooks" };
     case "refreshAccounts":
     case "cancelSignIn":
     case "dismissSignIn":
@@ -1327,6 +1533,31 @@ class ViewerSession implements BridgeSession {
             sessionKey: command.sessionKey,
           }),
         );
+      case "createRoutine":
+        return client.createRoutine(command.input, command.key, owner, command.gateway);
+      case "checkRoutineCreate":
+        return client.checkRoutineCreate(command.key, command.input, command.gateway);
+      case "checkRoutineUpdate":
+        return client.checkRoutineUpdate(command.id, command, command.gateway);
+      case "readRoutine":
+        return client.readRoutine(command.id, command.gateway);
+      case "updateRoutine":
+        return client.updateRoutine(
+          command.id,
+          command.original,
+          command.edit,
+          command.expected,
+          owner,
+          command.gateway,
+        );
+      case "setRoutineEnabled":
+        return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
+      case "runRoutineNow":
+        return client.runRoutineNow(command.id, owner, command.listedOn);
+      case "removeRoutine":
+        return client.removeRoutine(command.id, owner, command.listedOn);
+      case "readGatewayHooks":
+        return client.readGatewayHooks();
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":
