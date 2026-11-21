@@ -20,7 +20,7 @@ The owner has authorized publishing Mac betas. The track reads "Beta" in the app
 
 ### Cut a beta
 
-From a clean checkout of `main` at the commit to release:
+Use a dedicated, clean checkout of `main` at the commit to release. Keep other builds in separate checkouts until preparation finishes. The candidate temporarily changes `apps/desktop/package.json`, and electron-vite writes to `apps/desktop/out/`.
 
 ```sh
 git switch main && git pull --ff-only
@@ -41,7 +41,7 @@ A run only ever removes its own lock file and those of runs that have certainly 
 1. chooses the version: the checked-in version with its patch raised, the UTC day and the next run number that no tag, draft or staged release has used, for example `0.1.1-beta.20261120.1`. It refuses a version that is not newer than every tag. It then creates `.release/beta/<version>/`, only if no one has, with this run's marker inside (`.clawtrate-release-run`, holding its pid and a random token). If the folder appears first, it stops and leaves it as it is;
 2. makes a signing folder, `clawtrate-signing-XXXXXX`, in the state folder, and a keychain in it that locks itself after an hour unused and when the Mac sleeps. The certificate and its password go to `/usr/bin/security` on its standard input, one command at a time, each one's status checked. The notary key's path, id and issuer go to `/usr/bin/xcrun notarytool` on its standard input. No secret is ever in a command's arguments or environment. The certificate's file is deleted as soon as its import returns, and the key's file (`notary.p8`) as soon as `notarytool` has stored it, so neither exists when the build starts. If making that folder or recording the run in it fails, the run removes what it had reserved;
 3. builds and signs both apps with `candidate-build.ts`, the same build the release candidates use. The build gets only ordinary variables (`PATH`, `HOME`, the locale and caches), the keychain, the identity's hash, the notary profile's name, the Beta feed address and the build date.
-   - electron-builder writes into `build/` in the signing folder (`CLAWTRATE_PACKAGE_OUTPUT`), never into `apps/desktop/dist`, so a beta and an ordinary `pnpm package:mac` never share output.
+   - electron-builder writes the beta's packaged artifacts into `build/` in the signing folder (`CLAWTRATE_PACKAGE_OUTPUT`). Ordinary `pnpm package:mac` writes its packaged artifacts to `apps/desktop/dist`.
    - For the build only, the keychain goes first on your keychain search list, with your other keychains after it in their order and your default keychain unchanged. electron-builder asks `codesign` for the identity by name with `--keychain`, and `codesign` finds no identity in a keychain that is not on the list. The list as it was is recorded in the signing folder first.
    - When the build ends, the run reads the list again before writing anything. If it is exactly what the run put there, the recorded list goes back. If it holds the run's keychain among other changes, made by you or another tool meanwhile, only the run's keychain comes off and those changes stay. If it is already the recorded list, nothing is written. If it cannot be read, or no longer holds the run's keychain, the run writes nothing. What it writes counts only once it reads back as written.
    - Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
@@ -73,7 +73,7 @@ A run killed outright (`kill -9`, a crash or a power cut) leaves its lock file a
 - at any later point: the keychain. Its password died with the run, but it stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps;
 - also the build output, and `search-list.json`, your keychain search list from before the build.
 
-Killed during the build, the run also leaves its keychain first on your search list.
+If the release process was force-killed during the build, its detached build group can still be signing or notarizing. Before retrying or removing anything, confirm that the build and its workers have exited. The `pid` file identifies only the release process. If you cannot establish which workers belonged to that run, leave its files and keychain list in place. After a machine restart, those workers have exited.
 
 The next `pnpm release:beta` does this before anything else:
 
@@ -121,7 +121,11 @@ sys.exit(0 if after == target else "The list does NOT read back as written: remo
 PY
 ```
 
-Compare the lists it prints. Remove anything only when it says the list is already the recorded one, or when the list read back is the one written and that is the recorded list, or the recorded list plus only the changes made since. Then remove that folder, and that run's lock file once `ps` shows its pid has ended:
+Compare the lists it prints. If the list already matches the record, or the command verifies the list it wrote, recovery is complete.
+
+If the release preserved your edits but its readback failed, its keychain may already be absent and the list may differ from the original record. Check the current list against the target from the failed run's restore message, path by path and in order. If they match and the release keychain is absent, recovery is complete. If you cannot verify the target, keep the recovery files.
+
+Once recovery is complete and the run and its workers have exited, remove that folder and its lock file:
 
 ```sh
 rm -rf "$S"/clawtrate-signing-XXXXXX           # that folder only
