@@ -58,7 +58,16 @@ async function walk(name, start, stepsList, end) {
   let ok = true;
   let where = start;
   for (const [action, expect] of stepsList) {
-    await action(p);
+    // A step that can't be taken (its control is missing) fails this walk, not the run.
+    const took = await Promise.race([
+      Promise.resolve().then(() => action(p)).then(() => true, () => false),
+      new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
+    ]);
+    if (!took) {
+      ok = false;
+      where = `${await screenOf(p)} (a step couldn't be taken)`;
+      break;
+    }
     if (expect && !(await at(p, expect))) {
       ok = false;
       where = `${await screenOf(p)} (expected ${expect})`;
@@ -178,6 +187,40 @@ await walk(
   ],
 );
 await walk("advanced: the address-and-token form as built", "first", [[link("Advanced"), "connect.html"]]);
+await walk(
+  "approve from here, over SSH: the host checks and confirms, approves, reads back, then access is granted",
+  "approve",
+  [
+    [btn("Approve from here…"), null],
+    [hostIs("approveRequest"), null],
+    [hostConfirm, "approving"],
+  ],
+  "approved",
+);
+await walk(
+  "approve from here, this computer: the same, for Clawtrate's profile",
+  "approve-here",
+  [
+    [btn("Approve from here…"), null],
+    [hostIs("approveRequest"), null],
+    [hostConfirm, "approving"],
+  ],
+  "approved",
+);
+await walk("a stale request: Request again asks anew", "approve-stale", [[link("Request again"), "approve"]]);
+await walk("a mismatched request: Request again asks anew", "approve-mismatch", [[link("Request again"), "approve"]]);
+await walk("a premature request: Try again checks again", "approve-early", [[link("Try again"), "approve"]]);
+await walk("couldn't approve: Try again is a new confirmation", "approve-failed", [[btn("Try again"), null], [hostIs("approveRequest"), null], [hostConfirm, "approving"]], "approved");
+await walk("something else was granted: Connect again pairs read-only anew", "approve-differs", [[link("Connect again"), "found-there"]]);
+{
+  const p = await open("screen=approve");
+  await p.locator('[data-host="approveRequest"]').first().click({ timeout: 3000 }).catch(() => {});
+  const opened = await p.waitForSelector('[data-host-dialog="approveRequest"]', { timeout: 3000 }).then(() => true, () => false);
+  if (opened) await p.locator("[data-host-cancel]").click();
+  await p.waitForTimeout(100);
+  check("approve: Cancel in the host's dialog approves nothing and leaves the request waiting", opened && (await screenOf(p)) === "approve" && !(await p.$("[data-host-scrim]")) && (await text(p)).includes("Approve from here…"));
+  await p.close();
+}
 
 // Part 2: every state, its words ---------------------------------------------------------------
 const WORDS = {
@@ -206,7 +249,16 @@ const WORDS = {
   "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.", "as a LaunchAgent that starts when you log in", "Nothing is asked for: no account and no model key.", "Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version.", "Set up OpenClaw…"],
   installing: ["Setting up OpenClaw", "Download and check OpenClaw 2026.10.6", "Install Node.js and OpenClaw", "Node.js 24.22.1, checked", "Set up the gateway", "Start and check", "The times are samples."],
   "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Show details", "Error", "Node.js check", "Exit status"],
-  approve: ["Waiting for the gateway's owner.", "On devbox, approve this request for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now", "Cancel request"],
+  approve: ["Waiting for the gateway's owner.", "If that's you, approve it from here.", "Approve from here…", "Or approve it on devbox yourself", "On devbox, approve this request for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now", "Cancel request"],
+  "approve-here": ["Waiting for the gateway's owner.", "Approve from here…", "Or approve it on this computer yourself", "On this computer, approve this request for Clawtrate's profile:", "openclaw --profile clawtrate devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942"],
+  "approve-address": ["Waiting for the gateway's owner.", "Run this on the gateway's computer, with --profile <name> if the gateway doesn't use the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now"],
+  approving: ["Approving on devbox…", "Request e5eb4aa8", "Clawtrate checks what the gateway granted before it keeps anything."],
+  approved: ["Access granted", "· you can send, stop and answer", "Message Otto"],
+  "approve-stale": ["This request is no longer waiting.", "Nothing was approved.", "Request again"],
+  "approve-early": ["The gateway hasn't listed this request yet.", "Nothing was approved. Try again in a moment.", "Try again"],
+  "approve-mismatch": ["The gateway's request doesn't match what you asked for,", "so Clawtrate approved nothing.", "Request again", "Or approve it on devbox yourself"],
+  "approve-failed": ["Couldn't approve on devbox.", "OpenClaw exited with code 1. Nothing was approved.", "Try again", "Or approve it on devbox yourself"],
+  "approve-differs": ["The gateway granted something other than what you approved,", "so Clawtrate removed this device from the gateway and disconnected.", "Connect again"],
   restoring: ["Restoring the connection to devbox", "· showing saved messages", "Retry now"],
   "route-changed": ["This address now leads to a different gateway", "Review"],
   phone: ["Connect a phone", "Clawtrate doesn't make codes for phones yet.", "A phone needs an encrypted address it can reach. Set one up with OpenClaw's network-exposure instructions.", "OpenClaw's network-exposure instructions", "A setup code stays valid until it is used or expires, even after you close where it was shown."],
@@ -252,6 +304,7 @@ const HOST_WORDS = {
   start: ["Start OpenClaw on this computer?", "Starts the LaunchAgent ai.openclaw.gateway. It keeps running after Clawtrate closes."],
   install: ["Set up OpenClaw on this computer?", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."],
   removeRoute: ["Remove devbox from Clawtrate?", "leaves OpenClaw on devbox running", "Also stop OpenClaw on devbox (Clawtrate started it)"],
+  approveRequest: ["Approve this device's request on the default gateway on devbox?", "Clawtrate on this Mac · 5AE2-3AFF", "It adds:", "Send messages and start tasks", "Answer approvals", "Answer questions", "Clawtrate runs openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942 on devbox, then checks what the gateway granted.", "If it granted anything else, Clawtrate removes this device from the gateway and disconnects.", "Approve"],
 };
 check("every host dialog is checked", hostOps.every((op) => op in HOST_WORDS) && Object.keys(HOST_WORDS).every((op) => hostOps.includes(op)), hostOps.join(", "));
 for (const [op, words] of Object.entries(HOST_WORDS)) {
@@ -284,7 +337,7 @@ await p.close();
 // Part 4: what each state may and may not offer ---------------------------------------------------
 const offers = async (query, label, fn) => {
   p = await open(query);
-  check(label, await p.evaluate(fn));
+  check(label, await p.evaluate(fn).catch(() => false));
   await p.close();
 };
 await offers("screen=found", "found: Connect asks the host; nothing pairs from the page", () => document.querySelector('[data-host="pair"]')?.textContent === "Connect" && !document.querySelector('a[href*="connecting"]'));
@@ -296,7 +349,16 @@ await offers("screen=hostkey-changed", "changed key: no way to trust it without 
 await offers("screen=unreachable", "SSH refusal: Try again submits the field, and Advanced is a direct link", () => document.querySelector('#ssh-form button[type="submit"]')?.textContent === "Try again" && [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
 await offers("screen=refused", "sign-in refused: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
 await offers("screen=there-config", "a refused setting: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
-await offers("screen=approve", "approve: no automatic approval, the profile named", () => !document.querySelector("[data-host]") && document.body.textContent.includes("for the default profile"));
+await offers("screen=approve", "approve over SSH: Approve from here asks the host; nothing approves from the page", () => document.querySelector('[data-host="approveRequest"]')?.textContent === "Approve from here…" && !document.querySelector('a[href*="approving"], a[href*="approved"]'));
+await offers("screen=approve", "approve over SSH: the profile-qualified command stays, folded", () => document.querySelector("details.s-disclosure")?.open === false && document.querySelector("details.s-disclosure").textContent.includes("for the default profile"));
+await offers("screen=approve-here", "approve on this computer: the command names Clawtrate's profile", () => document.querySelector('[data-host="approveRequest"]') !== null && document.body.textContent.includes("openclaw --profile clawtrate devices approve"));
+await offers("screen=approve-address", "approve on an address route: no Approve from here, only the command", () => !document.querySelector("[data-host]") && document.body.textContent.includes("with --profile <name>"));
+await offers("screen=approve-here&host=approveRequest", "approve on this computer: the host's dialog names this computer and the profile", () => document.querySelector("[data-host-dialog]")?.textContent.includes("Clawtrate gateway on this computer?") && document.querySelector("[data-host-dialog]").textContent.includes("openclaw --profile clawtrate devices approve"));
+for (const screen of ["approve-stale", "approve-early", "approve-mismatch", "approve-differs"])
+  await offers(`screen=${screen}`, `${screen}: offers no way to approve without a new check`, () => !document.querySelector('[data-host="approveRequest"]') && !document.querySelector('a[href*="approving"]'));
+await offers("screen=approve-failed", "approve-failed: Try again is a new host confirmation", () => document.querySelector('[data-host="approveRequest"]')?.textContent === "Try again");
+await offers("screen=approve-differs", "approve-differs: a danger note, and Connect again pairs read-only from the found card", () => document.querySelector('.access-bar[data-tone="danger"]') !== null && document.querySelector('a[href*="screen=found-there"]')?.textContent === "Connect again");
+await offers("screen=approving", "approving: busy, with no action that could approve twice", () => document.querySelector("[data-approve-wait]")?.getAttribute("aria-busy") === "true" && !document.querySelector(".access-bar button, .access-bar a"));
 await offers("screen=untested", "untested version: Advanced, and no Connect or code", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html") && !document.querySelector('[data-host="pair"]') && !document.querySelector('a[href*="connecting"]'));
 await offers("screen=canttell", "can't tell: Advanced, and no Start", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html") && !document.querySelector('[data-host="start"]'));
 await offers("screen=stopped", "proven stopped: Start asks the host", () => document.querySelector('[data-host="start"]') !== null);
@@ -403,13 +465,29 @@ await p.close();
 
 // Part 7: widths, themes, motion -----------------------------------------------------------------
 for (const [label, width] of [["1100", 1100], ["800", 800], ["phone", 390]]) {
-  for (const screen of ["first", "found", "hostkey", "hostkey-changed", "install-confirm", "installing", "approve", "settings", "phone", "code-pairing"]) {
+  for (const screen of ["first", "found", "hostkey", "hostkey-changed", "install-confirm", "installing", "approve", "approve-here", "approve-address", "approving", "approved", "approve-stale", "approve-early", "approve-mismatch", "approve-failed", "approve-differs", "settings", "phone", "code-pairing"]) {
     p = await open(`screen=${screen}&width=${label === "phone" ? "phone" : "full"}`, { width, height: 844 });
     check(`${screen} at ${label}: no sideways scroll`, await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await p.close();
   }
 }
 await offers("screen=first&width=phone", "first at phone width: rows are touch-sized", () => document.querySelector(".b-choice").getBoundingClientRect().height >= 64);
+for (const [label, width, query] of [["1440", 1440, "width=full"], ["phone", 390, "width=phone"]]) {
+  p = await open(`screen=approve&${query}`, { width, height: 844 });
+  check(`approve at ${label}: Approve from here is in view, no sideways scroll`, await p.evaluate(() => {
+    const r = document.querySelector('[data-host="approveRequest"]')?.getBoundingClientRect();
+    if (!r) return false;
+    return r.width > 0 && r.bottom <= innerHeight && r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth + 1;
+  }));
+  await p.locator('[data-host="approveRequest"]').first().click({ timeout: 3000 }).catch(() => {});
+  check(`approve at ${label}: the host's dialog fits`, await p.evaluate(() => {
+    const r = document.querySelector("[data-host-dialog]")?.getBoundingClientRect();
+    if (!r) return false;
+    return r.left >= 0 && r.right <= innerWidth + 1;
+  }));
+  await p.close();
+}
+await offers("screen=approve&width=phone", "approve at phone width: Approve from here is touch-sized", () => (document.querySelector('[data-host="approveRequest"]')?.getBoundingClientRect().height ?? 0) >= 48);
 await offers("screen=iphone", "iphone: shown at phone width with touch sizes", () => document.documentElement.dataset.width === "phone" && document.documentElement.dataset.input === "touch");
 p = await open("screen=installing", { theme: "dark" });
 check("installing, dark: the page uses the dark theme", await p.evaluate(() => document.documentElement.dataset.theme === "dark" && getComputedStyle(document.body).backgroundColor !== "rgb(255, 255, 255)"));

@@ -129,6 +129,11 @@
   // Each: the message, the detail, an optional checkbox that must be ticked,
   // the confirming button's words, and where it leads.
 
+  // The approve screens: over SSH on devbox (default), or on this computer
+  // for Clawtrate's own profile (?screen=approve-here, or route=here).
+  const approveLocal = screen === "approve-here" || params.get("route") === "here";
+  const approveCommand = () => `openclaw ${approveLocal ? "--profile clawtrate " : ""}devices approve ${REQUEST}`;
+
   const HOST = {
     sshAccount: {
       message: `Look for OpenClaw as ${full}, port 22?`,
@@ -176,6 +181,18 @@
         "<p>Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.</p>",
       confirm: "Set up",
       to: () => go("installing", { play: "1" }),
+    },
+    // Approve from here (setup.md section 9): this device's own request, checked
+    // on the gateway's computer before the dialog opens and read back after.
+    approveRequest: {
+      message: `Approve this device's request on the ${approveLocal ? "Clawtrate gateway on this computer" : `default gateway on ${host}`}?`,
+      detail:
+        `<p>Clawtrate on this Mac · <span class="s-device-inline">5AE2-3AFF</span></p>` +
+        `<p>It adds:</p><ul class="s-host-list"><li>Send messages and start tasks</li><li>Answer approvals</li><li>Answer questions</li></ul>` +
+        `<p>Clawtrate runs <code>${esc(approveCommand())}</code> on ${approveLocal ? "this computer" : host}, then checks what the gateway granted. ` +
+        `If it granted anything else, Clawtrate removes this device from the gateway and disconnects.</p>`,
+      confirm: "Approve",
+      to: () => go("approving", { play: "1", ...(approveLocal ? { route: "here" } : {}) }),
     },
     removeRoute: {
       message: "Remove devbox from Clawtrate?",
@@ -538,13 +555,37 @@
     (foot ? `<div class="s-mock-foot">${foot}</div>` : "") +
     `</div>`;
 
-  const accessRequested = () =>
-    `<div class="access-bar" role="status" data-s-title tabindex="-1"><div class="access-row">${icon("clock")}` +
-    `<span class="shelf-text"><b>Waiting for the gateway's owner.</b> On devbox, approve this request for the default profile:</span></div>` +
-    `<div class="command command-line"><code>openclaw devices approve ${REQUEST}</code>${copyButton("Copy approve command", `openclaw devices approve ${REQUEST}`)}</div>` +
+  // The access bar while the gateway waits (section 9). Where Clawtrate can run a
+  // command on the gateway's computer it offers "Approve from here", with the
+  // command folded under it; on an address route it shows only the command.
+  const whereRun = () => (approveLocal ? "On this computer, approve this request for Clawtrate's profile:" : `On ${host}, approve this request for the default profile:`);
+  const foldedCommand = () =>
+    disclosure(`Or approve it on ${approveLocal ? "this computer" : host} yourself`, `<p class="s-hint s-left">${whereRun()}</p>` + command(approveCommand(), "Copy approve command"));
+  const waitRow = (extra = "") =>
     `<div class="access-row"><span class="access-id">Request e5eb4aa8<span class="access-wait">checking again in 4s</span></span><span class="spacer"></span>` +
     `<button type="button" class="button" data-variant="quiet" data-size="sm">Check now</button>` +
-    `<button type="button" class="button" data-variant="quiet" data-size="sm">Cancel request</button></div></div>`;
+    `<button type="button" class="button" data-variant="quiet" data-size="sm">Cancel request</button>${extra}</div>`;
+  const bar = (inner, tone = "") => `<div class="access-bar" role="status" data-s-title tabindex="-1"${tone ? ` data-tone="${tone}"` : ""}>${inner}</div>`;
+  const barText = (glyphName, html) => `<div class="access-row">${icon(glyphName)}<span class="shelf-text">${html}</span></div>`;
+
+  const accessRequested = () =>
+    bar(
+      barText("clock", "<b>Waiting for the gateway's owner.</b> If that's you, approve it from here.") +
+        `<div class="access-row s-approve-row"><button type="button" class="button" data-variant="primary" data-size="sm" data-host="approveRequest">Approve from here…</button></div>` +
+        foldedCommand() +
+        waitRow(),
+    );
+  const accessRequestedAddress = () =>
+    bar(
+      barText("clock", "<b>Waiting for the gateway's owner.</b> Run this on the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile:") +
+        `<div class="command command-line"><code>openclaw devices approve ${REQUEST}</code>${copyButton("Copy approve command", `openclaw devices approve ${REQUEST}`)}</div><p class="copy-status" aria-live="polite"></p>` +
+        waitRow(),
+    );
+  const approveOutcome = (lead, text, actionsHtml, { tone = "", folded = false } = {}) =>
+    bar(barText(tone === "danger" ? "warning" : "clock", `<b>${lead}</b>${text ? ` ${text}` : ""}`) + `<div class="access-row s-approve-row">${actionsHtml}</div>` + (folded ? foldedCommand() : ""), tone);
+  const barButton = (label, to, extra = {}, variant = "") =>
+    `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="sm" href="${go(to, { ...(approveLocal ? { route: "here" } : {}), ...extra })}">${label}</a>`;
+  const composerStub = (name = "Otto") => `<div class="s-mock-composer" aria-label="Message ${name}">Message ${name}</div>`;
 
   const gatewayRows = () =>
     `<ul class="s-rows" aria-label="Gateway">` +
@@ -560,6 +601,47 @@
 
   const OVER = {
     approve: () => mockApp("", accessRequested()),
+    "approve-here": () => mockApp("", accessRequested()),
+    "approve-address": () => mockApp("", accessRequestedAddress()),
+    approving: () =>
+      mockApp(
+        "",
+        bar(
+          barText("clock", `<span data-approve-wait aria-busy="true">Approving on ${approveLocal ? "this computer" : host}…</span>`) +
+            `<p class="s-hint s-left">Request e5eb4aa8 · Clawtrate checks what the gateway granted before it keeps anything.</p>`,
+        ),
+      ),
+    approved: () =>
+      mockApp(
+        `<div class="status-strip" role="status" data-s-title tabindex="-1"><span class="status-dot" data-status="connected"></span>` +
+          `<span class="status-strip-text"><b>Access granted</b><span>· you can send, stop and answer</span></span></div>`,
+        composerStub(),
+      ),
+    "approve-stale": () => mockApp("", approveOutcome("This request is no longer waiting.", "Nothing was approved.", barButton("Request again", "approve"))),
+    "approve-early": () =>
+      mockApp("", approveOutcome("The gateway hasn't listed this request yet.", "Nothing was approved. Try again in a moment.", barButton("Try again", "approve"))),
+    "approve-mismatch": () =>
+      mockApp("", approveOutcome("The gateway's request doesn't match what you asked for,", "so Clawtrate approved nothing.", barButton("Request again", "approve"), { folded: true })),
+    "approve-failed": () =>
+      mockApp(
+        "",
+        approveOutcome(
+          `Couldn't approve on ${approveLocal ? "this computer" : host}.`,
+          "OpenClaw exited with code 1. Nothing was approved.",
+          `<button type="button" class="button" data-size="sm" data-host="approveRequest">Try again</button>`,
+          { folded: true },
+        ),
+      ),
+    "approve-differs": () =>
+      mockApp(
+        "",
+        approveOutcome(
+          "The gateway granted something other than what you approved,",
+          "so Clawtrate removed this device from the gateway and disconnected.",
+          barButton("Connect again", approveLocal ? "found" : "found-there", {}, "primary"),
+          { tone: "danger" },
+        ),
+      ),
     restoring: () =>
       mockApp(
         `<div class="status-strip" data-tone="warn" role="status" data-s-title tabindex="-1"><span class="status-dot"></span>` +
@@ -736,7 +818,15 @@
     "connecting-here": "app",
     "connecting-there": "app",
     installing: "found",
+    approving: "approved",
   };
+  // Approving: the host's two steps, then the read-back's result.
+  if (id === "approving" && params.get("play") === "1") {
+    setTimeout(() => {
+      const wait = root.querySelector("[data-approve-wait]");
+      if (wait) wait.textContent = "Checking what the gateway granted…";
+    }, 1200);
+  }
   if (params.get("play") === "1" && id in NEXT) {
     setTimeout(() => {
       const to = NEXT[id];

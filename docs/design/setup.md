@@ -13,7 +13,7 @@ Four facts from the research shape the design:
 - **A first pairing on the gateway's own computer, or through an SSH forward to it, is approved by the gateway without a prompt**, and ends with exactly the scopes the device asks for (research §1, §3).
 - **Clawtrate does not read the gateway's shared token.** OpenClaw's commands refuse to show it to a program. The same user could read OpenClaw's configuration file, and the design deliberately does not. Instead the host makes a one-time setup code on the gateway's computer and redeems it at once, after the person's consent (research §1, §3).
 - **A setup code is a bearer credential with a ceiling, not a read-only credential.** On loopback a `--limited` code was redeemed for read and write when both were asked for. A `--voice-node` code was redeemed for read, or for read and Talk, and refused write; it is meant for voice clients and carries a node role. So Clawtrate uses `--voice-node` only privately in the host, redeemed at once for its own read request, and never hands a code out (research §3.1).
-- **Asking for more than read access through `device.scopes.requestUpgrade` always waits for approval**, even on the gateway's own computer (research §2). In this version the person approves it on the gateway's computer with the command Clawtrate shows, for the named profile.
+- **Asking for more than read access through `device.scopes.requestUpgrade` always waits for approval**, even on the gateway's own computer (research §2). Where Clawtrate can run a command on that computer (this computer, or over SSH), it offers "Approve from here": after its own dialog it runs the gateway's own approve command for exactly that request, and keeps the new access only if exactly that was granted (section 9, research §2.1). Elsewhere the person runs the command Clawtrate shows, for the named profile.
 
 The prototype walks every path of this version to its outcome: `prototype/setup.html`, with the state in the address (`prototype/README.md`). The styles are in `prototype/css/setup.css`, the behaviour in `prototype/js/setup.js`, and `prototype/tools/checks/setup.mjs` clicks through every walk and asserts where each click leads, as well as the words and structure of every state.
 
@@ -57,7 +57,7 @@ what the look found               one screen, one primary action, or none
   not found (macOS, Linux, here)    Set up OpenClaw (what is checked and what isn't; the host confirms)
   not found (another computer)      not offered in this version
 the app                           read-only; the status strip says when a forward is being restored
-  access bar (bots.md §2)           the profile-qualified approve command to run on the gateway's computer
+  access bar (bots.md §2)           Approve from here (this computer, SSH; the host confirms), or the profile-qualified command
   Settings, Gateway                 the route, Private access with Tailscale (read-only), Remove this gateway
 first launch (iPhone)             Scan or Paste a setup code; review the address; wait for approval
 ```
@@ -100,6 +100,7 @@ Every operation that registers a device or changes something is confirmed in a d
 | Start                 | Start OpenClaw on this computer?                                      | The service's name; "It keeps running after Clawtrate closes."                                                                                                                                                                     |
 | Set up                | Set up OpenClaw on this computer?                                     | "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions." |
 | Remove a route        | Remove devbox from Clawtrate?                                         | What is forgotten, and what keeps running                                                                                                                                                                                          |
+| Approve a request     | Approve this device's request on the default gateway on devbox?       | The device and its code, each scope it adds, the command, and what happens if anything else is granted (section 9)                                                                                                                 |
 
 The web preview host has no native dialogs, so it offers none of these operations. Looking on this computer works everywhere.
 
@@ -319,9 +320,93 @@ After OpenSSH reports that it is setting up the local listener, Clawtrate probes
 
 Wherever the gateway waits for its owner (F-500): the access bar's "Requested" state (`bots.md` §2), the pairing screen of section 7, a pasted code's pairing (section 13) and the iPhone's waiting screen.
 
-In this version the approval is manual. The page shows the approve command for the selected profile, in the command block with its copy button, and says where to run it: "On devbox, approve this request for the default profile:" over `openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942` (Clawtrate's own profile: `openclaw --profile clawtrate devices approve …`). On an address route, where Clawtrate doesn't know the profile: "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile." The waiting line and "Check now" follow the pairing screen; the waiting and retry state is as built.
+**Where Clawtrate can run a command on the gateway's computer**, it offers **"Approve from here"**. That means a route to a gateway of the tested version on this computer (one the look found, or one Clawtrate set up) or on another computer over SSH, for a request of this device. The host does what the person would do in a terminal there: it runs the gateway's own `devices approve` for the selected profile. It does so only after it has checked the request against what the person asked for, and only after its own dialog. Then it reads the device's record back and keeps the new access only if exactly what was approved holds. An address typed in Advanced and a pasted code are routes without a shell (section 2, Routes), so they keep the command to run on the gateway's computer, as below.
 
-"Approve from here", which would run the approve command for the person, is not in this version: OpenClaw's approve command can follow a compatible replacement of the request, so the exact request, device, role and scopes can't yet be enforced at the moment of approval (research §2). It waits for that check (F-500, `todo`).
+This keeps rule 5. The first connection is still read-only, and each tier above it is a request the gateway's owner approves. Here the owner is the person at this screen, confirming in the host's dialog what they would otherwise type. Nothing is approved silently, and nothing that wasn't shown is approved. The approve command authenticates with OpenClaw's own credentials on that computer, as it does when the person runs it, so Clawtrate still never reads the shared token.
+
+### Where it is offered
+
+| Wait                                                               | Route                           | What the person sees                                                                 |
+| ------------------------------------------------------------------ | ------------------------------- | ------------------------------------------------------------------------------------ |
+| The access bar's Requested state, for write or for admin           | This computer, SSH              | "Approve from here…" (primary), and under it, folded, the command to run there       |
+| The pairing screen (`autoApproveLocal: false`, section 7)          | This computer, SSH              | The same, in place of the command block                                              |
+| Any of the above                                                   | Address (Advanced, pasted code) | The command block, as below; no "Approve from here"                                  |
+| The iPhone's waiting screen; a phone's request                     | any                             | The command block. Approving a phone from the desktop is not in this version (F-507) |
+| A gateway of an untested version, or one the look couldn't resolve | any                             | The command block (rule 10)                                                          |
+
+**The command, where it is shown.** It is in the command block with its copy button, and the page says where to run it: "On devbox, approve this request for the default profile:" over `openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942` (Clawtrate's own profile: `openclaw --profile clawtrate devices approve …`). On an address route, where Clawtrate doesn't know the profile: "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile." The waiting line and "Check now" follow the pairing screen; the waiting and retry state is as built. With "Approve from here", the bar reads "**Waiting for the gateway's owner.** If that's you, approve it from here.", then "Approve from here…" (primary), then the command folded under "Or approve it on devbox yourself" ("…on this computer yourself"), so a person who prefers the terminal still has it. The request id, "Check now" and "Cancel request" stay as they are.
+
+### Before the dialog: the host checks the request
+
+"Approve from here…" is a `setup.prepare {operation: "approveRequest", routeId, requestId}` (section 19). The interface passes only the route and the request id the client holds; everything else comes from the host's own state. The host lists the pending requests on the gateway's computer (`openclaw [--profile clawtrate] devices list --json`, here or by the APPROVE script over SSH, research §2.1) and opens its dialog only when all of these hold:
+
+| Check                                                                                                                                        | Why                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| The route's gateway is of the tested version, and the identity read on this connection (`gateway.identity.get`) is the route's               | The command acts on the gateway the person is connected to, not another on that computer |
+| A pending entry has exactly the request id the client holds                                                                                  | A stale or superseded id approves nothing (research §2.1)                                |
+| Its `deviceId` and `publicKey` are this device's                                                                                             | Only this device's own request                                                           |
+| Its `clientId` is `gateway-client`, `clientMode` `ui`, `role` `operator` and `roles` exactly `["operator"]`                                  | Clawtrate's own client, the operator role alone                                          |
+| Its `scopes`, as a set, are exactly what this request asked for: the interactive tier (read, write, approvals, questions), or that and admin | Nothing broader or narrower than the bar named                                           |
+| No other pending entry has this device's id                                                                                                  | The command's local fallback can follow a same-device replacement (research §2.1)        |
+| The device's paired record has the operator role and the scopes the connection holds now                                                     | The expected record after approval is that, plus what was asked                          |
+
+While the operation is prepared and while it runs, the host holds its own client's access requests: the client does not ask again, so this device files no new request in between. The checks run again on the dialog's answer (section 2, The host's confirmation, step 3).
+
+**When a check fails, nothing is approved and no dialog opens.** The bar says why, in fixed copy:
+
+| Fact                                                                                                            | The bar says                                                                                                        | Actions                              |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| The id isn't pending, and the device's record already holds what was asked                                      | Granted (`bots.md` §2): someone approved it                                                                         | none                                 |
+| The id isn't pending, and the record doesn't hold it (stale: expired, rejected, replaced)                       | "**This request is no longer waiting.** Nothing was approved."                                                      | "Request again"                      |
+| The request id isn't known yet, or the list doesn't show it yet (premature)                                     | "**The gateway hasn't listed this request yet.** Nothing was approved. Try again in a moment."                      | "Try again"                          |
+| The entry differs: another device, client, role, or other scopes; or another entry for this device (mismatched) | "**The gateway's request doesn't match what you asked for,** so Clawtrate approved nothing."                        | "Request again"; the command, folded |
+| The identity or the version differs                                                                             | "**This route now leads to a different gateway,** so Clawtrate approved nothing."                                   | "Review" (section 8)                 |
+| The list couldn't be read                                                                                       | "**Couldn't read the gateway's requests on devbox.** OpenClaw exited with code 1." (over SSH: section 5's failures) | "Try again"; the command, folded     |
+
+### The dialog
+
+| Operation       | The dialog's message                                            | Its detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approve request | Approve this device's request on the default gateway on devbox? | The device, by name and device code: "Clawtrate on this Mac · 5AE2-3AFF". "It adds:" and one line per added scope, in words: "Send messages and start tasks", "Answer approvals", "Answer questions"; for admin, also "Change the gateway's settings, bots and accounts (admin)". Then "Clawtrate runs `openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942` on devbox, then checks what the gateway granted. If it granted anything else, Clawtrate removes this device from the gateway and disconnects." |
+
+On this computer the message ends "…on this computer?", and the command carries the profile (`openclaw --profile clawtrate devices approve …`). The buttons are "Cancel" and "Approve". Cancel leaves the request waiting, with the bar as it was.
+
+### After the answer: approve once, then read back
+
+1. The host lists the pending requests again; if anything differs from what the dialog showed, nothing runs, and the bar says "This changed since you looked. Look again." with "Approve from here…" again (a new operation).
+2. It runs `openclaw [--profile clawtrate] devices approve <requestId> --json` once, here as an argument array, over SSH by the APPROVE script.
+3. It accepts the result only when the command exited 0 and its JSON has `requestId` equal to that id, `device.deviceId` equal to this device's, and no `resolved` field (research §2.1).
+4. Whatever the result, it reads `devices list --json` again and finds this device's paired record. The approval holds only when the record has `role` `operator`, `roles` `["operator"]`, `approvedVia` `owner`, and `scopes` and its operator token's `scopes` exactly the scopes it held before plus those asked, as sets.
+5. Only then does the host keep the rotated device token. Like the first pairing's (section 7), it is staged in memory and written for this route after the read-back agrees. The client reconnects with what was granted, and the bar shows Granted.
+
+While it runs, the bar shows a wait in place of its actions: "Approving on devbox…", then "Checking what the gateway granted…", over the line "Request e5eb4aa8 · Clawtrate checks what the gateway granted before it keeps anything." No action is offered while it runs. Back and the rest of the screen stay usable.
+
+**Outcomes**, in fixed copy:
+
+| Fact                                                                                                   | What happens                                                                                                                                                                           | The bar says                                                                                                                                              | Actions                                               |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Exit 0, the same id, and the record holds exactly what was approved                                    | The token is kept; the client reconnects                                                                                                                                               | The bar's Granted state (`bots.md` §2, `conversation.md` §3), then the screen's own action                                                                | none                                                  |
+| Exit 1, "No pending device request matches", between the dialog and the run                            | Nothing was approved by Clawtrate. If the record already holds what was asked, as Granted                                                                                              | "**This request is no longer waiting.** Nothing was approved."                                                                                            | "Request again"                                       |
+| Any other exit, or output that isn't the expected JSON, and the record shows nothing new               | Nothing more is run                                                                                                                                                                    | "**Couldn't approve on devbox.** OpenClaw exited with code 1. Nothing was approved."                                                                      | "Try again" (a new confirmation); the command, folded |
+| Another request id, a `resolved` field, or a record with anything other than exactly what was approved | The rotated token is never written. The host disconnects and runs `devices remove <this device's id>` on that computer, as the dialog said. The route's read-only token is dropped too | On `--danger-soft`: "**The gateway granted something other than what you approved,** so Clawtrate removed this device from the gateway and disconnected." | "Connect again" (section 7, read-only)                |
+| The removal itself failed                                                                              | As above, and the device stays listed on the gateway                                                                                                                                   | The same, then "Clawtrate couldn't remove this device. On devbox, run:" and `openclaw devices remove <deviceId>` in the command block                     | "Connect again"                                       |
+| The SSH connection failed                                                                              | Nothing ran, or it is unknown whether the approve ran; the host reads back on the next connection                                                                                      | Section 5's failures                                                                                                                                      | as there                                              |
+
+Nothing above retries by itself. Every retry is a new `setup.prepare` and a new dialog.
+
+### What is read and written, and at which tier
+
+| Step                     | Where                   | What                                                                   | Needs                                                                                                             |
+| ------------------------ | ----------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| The request              | The client's connection | `device.scopes.requestUpgrade`, its request id; `gateway.identity.get` | `operator.read` (the connection as it is)                                                                         |
+| The check, the read-back | The gateway's computer  | `openclaw [--profile clawtrate] devices list --json`                   | The OpenClaw CLI's own credentials there (`operator.pairing`)                                                     |
+| The approval             | The gateway's computer  | `openclaw [--profile clawtrate] devices approve <requestId> --json`    | The CLI's own credentials; the gateway approves a request only within its caller's scopes (`device.pair.approve`) |
+| The removal              | The gateway's computer  | `openclaw [--profile clawtrate] devices remove <deviceId> --json`      | The CLI's own credentials                                                                                         |
+| The new token            | This computer           | Written to the route's token store after the read-back                 | (host)                                                                                                            |
+
+### Not in this version
+
+Approving another device (a phone of F-507), rejecting a request, approving on an address route or a gateway of another version, and approving without the host's dialog. Approving a request that waits while Clawtrate isn't open is also out: the host acts only on this device's own live request.
 
 ## 10. Setting OpenClaw up (macOS and Linux, on this computer)
 
@@ -454,36 +539,46 @@ One gateway can be reached by several routes: this computer, SSH, an address on 
 
 ## 17. What each fact drives
 
-| Fact                                                                               | Source (research) | Shown                                                                                          |
-| ---------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| No program in the fixed places, no `~/.openclaw`, no service                       | §6.4, §6.9        | "Clawtrate didn't find OpenClaw here"                                                          |
-| No program, but state or a service                                                 | §6.9              | "OpenClaw seems to be set up here, but Clawtrate can't find its program"                       |
-| `openclaw --version`, `gateway.version` from `gateway status --json`               | §6.4              | The version; tested, untested or too old                                                       |
-| `service.label`, `loaded`, `runtime.status`                                        | §6.4, §6.8        | The service fact, as observed; Start only when proven stopped                                  |
-| `gateway.port`, `bindMode`, `rpc.ok`                                               | §6.4              | "OpenClaw is running", or "installed but not running"                                          |
-| `extraServices` (with `--deep` only)                                               | §6.9              | "Clawtrate also saw another OpenClaw service here"                                             |
-| `ssh` exit 255 and its error output                                                | §7                | The three failures; "key has changed"; anything else "ssh stopped (exit 255)"                  |
-| The capture file written with `-NT`, `accept-new`, `PreferredAuthentications=none` | §7.2              | The fingerprint of first contact; "Presented now"                                              |
-| `Found key in <file>:<line>`, from a lookup on the resolved host and port          | §7.2              | A key the person already trusts, pinned silently                                               |
-| `openclaw qr --json --voice-node`, host-private                                    | §3.1              | Connect's code, never shown                                                                    |
-| The operator role and exactly `operator.read` granted                              | §1, §3.1          | Connected, read-only                                                                           |
-| `AUTH_BOOTSTRAP_TOKEN_INVALID`                                                     | §3                | "The one-time code didn't work"                                                                |
-| `device.scopes.requestUpgrade` request id, pending                                 | §2                | The access bar's Requested state with the profile-qualified command                            |
-| `install-cli.sh` NDJSON step names, Node step `skip`                               | §6.2, §6.8        | The install's steps; "The installer didn't use the checked Node.js"                            |
-| Installed `entry.js` equals the checked tarball's                                  | §6.8              | (a check of the builder's tests, not a screen)                                                 |
-| Onboarding JSON `ok`, `classification`                                             | §6.3              | "Set up the gateway" done or failed                                                            |
-| `gateway.identity.get`                                                             | §5                | Routes grouped; "leads to a different gateway"                                                 |
-| HTTP 403 `proxy_attribution_required`                                              | §3                | "The gateway only accepts connections through a proxy it trusts" (shown on Advanced's failure) |
+| Fact                                                                                   | Source (research) | Shown                                                                                          |
+| -------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| No program in the fixed places, no `~/.openclaw`, no service                           | §6.4, §6.9        | "Clawtrate didn't find OpenClaw here"                                                          |
+| No program, but state or a service                                                     | §6.9              | "OpenClaw seems to be set up here, but Clawtrate can't find its program"                       |
+| `openclaw --version`, `gateway.version` from `gateway status --json`                   | §6.4              | The version; tested, untested or too old                                                       |
+| `service.label`, `loaded`, `runtime.status`                                            | §6.4, §6.8        | The service fact, as observed; Start only when proven stopped                                  |
+| `gateway.port`, `bindMode`, `rpc.ok`                                                   | §6.4              | "OpenClaw is running", or "installed but not running"                                          |
+| `extraServices` (with `--deep` only)                                                   | §6.9              | "Clawtrate also saw another OpenClaw service here"                                             |
+| `ssh` exit 255 and its error output                                                    | §7                | The three failures; "key has changed"; anything else "ssh stopped (exit 255)"                  |
+| The capture file written with `-NT`, `accept-new`, `PreferredAuthentications=none`     | §7.2              | The fingerprint of first contact; "Presented now"                                              |
+| `Found key in <file>:<line>`, from a lookup on the resolved host and port              | §7.2              | A key the person already trusts, pinned silently                                               |
+| `openclaw qr --json --voice-node`, host-private                                        | §3.1              | Connect's code, never shown                                                                    |
+| The operator role and exactly `operator.read` granted                                  | §1, §3.1          | Connected, read-only                                                                           |
+| `AUTH_BOOTSTRAP_TOKEN_INVALID`                                                         | §3                | "The one-time code didn't work"                                                                |
+| `device.scopes.requestUpgrade` request id, pending                                     | §2                | The access bar's Requested state with the profile-qualified command                            |
+| The pending entry's fields; `devices approve --json`; stale and superseded ids refused | §2.1              | "Approve from here": its checks, its dialog, its outcomes                                      |
+| The CLI's same-device replacement (`resolved`), in its local fallback only             | §2.1 (source)     | A different id or a `resolved` field is a mismatch; the record is read back                    |
+| The device's paired record after approval (`scopes`, `approvedVia: owner`)             | §2.1              | Granted only when exactly what was approved holds; otherwise the device is removed             |
+| `install-cli.sh` NDJSON step names, Node step `skip`                                   | §6.2, §6.8        | The install's steps; "The installer didn't use the checked Node.js"                            |
+| Installed `entry.js` equals the checked tarball's                                      | §6.8              | (a check of the builder's tests, not a screen)                                                 |
+| Onboarding JSON `ok`, `classification`                                                 | §6.3              | "Set up the gateway" done or failed                                                            |
+| `gateway.identity.get`                                                                 | §5                | Routes grouped; "leads to a different gateway"                                                 |
+| HTTP 403 `proxy_attribution_required`                                                  | §3                | "The gateway only accepts connections through a proxy it trusts" (shown on Advanced's failure) |
 
 ## 18. Parity rows
 
 The rows this design governs are in `docs/parity.md`. Statuses do not change. In this version:
 
-- **F-500, F-506 and F-507** stay `todo`: no code is handed to a phone and nothing is approved for the person.
+- **F-500** is designed in section 9 and stays `todo` until it is built and checked: this device's own requests only, on this computer and over SSH. Its row proposal is in the table below.
+- **F-506 and F-507** stay `todo`: no code is handed to a phone, and a phone's request is not approved from the desktop.
 - **F-510 to F-512** stay `todo`: the Tailscale row is read-only, with OpenClaw's own instructions.
 - **F-501 to F-505** are macOS and Linux only, on this computer; remote setup, cancelling (F-502) and removal (F-514) wait for their proofs. **F-517** is for installing on Windows, `todo`.
 - **F-513** keeps ordered failover and failback, with one token per route.
 - **F-003 and F-009** keep their `desktop done` scope for what the existing check drives.
+
+**Proposed rows** (not applied to `docs/parity.md`; the status stays `todo` until the build's checks pass):
+
+| Row   | Proposed target                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | The fact behind it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Its check, when built                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-500 | better: when this device's access request (write or admin) or its first pairing waits for approval on a gateway of the tested version that Clawtrate reaches on this computer or over SSH, it offers "Approve from here" for exactly that request. The host checks on that computer that the pending entry has that request id, this device's id and public key, client `gateway-client`, the operator role alone and exactly the scopes shown, that no other entry for this device is pending, and that the gateway's identity is the route's. Its own dialog names the gateway, the account, the device and each added scope. It reads the entry again and runs the gateway's approve command once, then reads the device's record back. It keeps the new token only when exactly the approved scopes hold; otherwise it removes this device from the gateway and disconnects. Any difference before the approval approves nothing. A phone's request and an address route keep the command to run on the gateway's computer. | Replaced dependency: available: `devices list --json` gives the pending entry's `requestId`, `deviceId`, `publicKey`, `clientId`, `clientMode`, `role`, `roles` and `scopes` (live, research §2.1); `devices approve <id> --json` returns `{requestId, device}` with the record's scopes and `approvedVia: "owner"` (live); a stale, a never-pending and a superseded id each exit 1 and approve nothing (live); only the CLI's local fallback can approve a same-device replacement, shown by a different `requestId` and `resolved` (source, `devices-cli.runtime-CllfBpVQ.mjs` lines 173-232, 273-288). | On a named instance through this computer's route and through a test `sshd`: the access bar's Requested state ends Granted with no command typed, and the record reads back with exactly the interactive tier, then exactly admin. A stale, a premature, a superseded and a mismatched (extra scope) request each approve nothing. A read-back that differs (a fixture) writes no token and removes the device. An address route offers no "Approve from here". |
 
 ## 19. For builders
 
@@ -511,7 +606,7 @@ The rows this design governs are in `docs/parity.md`. Statuses do not change. In
 | `setup.readCode {text}`                 | read    | Decodes and validates a pasted code in the host; returns its address, expiry and validity, never its token                                |
 | `setup.prepare {operation, routeId, …}` | prepare | Builds the operation from the host's own state and shows the host's dialog; the interface gets only "confirmed", "cancelled" or "changed" |
 
-Operations: `sshAccount {destination}` (then the look over SSH), `trustKey`, `replaceKey`, `pair`, `start`, `install`, `removeRoute {stopGateway}`. A retry is a new `setup.prepare`.
+Operations: `sshAccount {destination}` (then the look over SSH), `trustKey`, `replaceKey`, `pair`, `start`, `install`, `removeRoute {stopGateway}`, `approveRequest {requestId}` (section 9). A retry is a new `setup.prepare`.
 
 **Validated arguments** (rule 2):
 
@@ -519,6 +614,7 @@ Operations: `sshAccount {destination}` (then the look over SSH), `trustKey`, `re
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SSH destination          | `^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`: the user, when present, never starts with `-`; the host never starts with `-` or `.`; no `:`, `/`, spaces or quotes |
 | Request id               | `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`                                                                                                                               |
+| Device id                | `^[0-9a-f]{64}$`, this device's own, from the host's identity, never from the interface                                                                                                        |
 | Port                     | An integer from 1024 to 65535, read from `gateway status --json`                                                                                                                               |
 | Fingerprint              | `^SHA256:[A-Za-z0-9+/]{43}$`, computed by the host from captured key bytes, never taken from the interface                                                                                     |
 | Version                  | `^OpenClaw (\d{4})\.(\d{1,2})\.(\d{1,3})( \([0-9a-f]{7,12}\))?$`                                                                                                                               |
@@ -566,6 +662,8 @@ Host clawtrate-route-<id>
 | `openclaw`                      | `[--profile clawtrate] --version`; `[--profile clawtrate] gateway status --json [--deep]`                                   | This computer, reads                                                |
 | `openclaw`                      | `[--profile clawtrate] qr --json --voice-node --url ws://127.0.0.1:<port>`                                                  | This computer, Connect, after the host's dialog                     |
 | `openclaw`                      | `[--profile clawtrate] gateway start`                                                                                       | This computer, after the host's dialog                              |
+| `openclaw`                      | `[--profile clawtrate] devices list --json`                                                                                 | This computer, Approve from here: the check and the read-back       |
+| `openclaw`                      | `[--profile clawtrate] devices approve <requestId> --json`; on a mismatch `devices remove <deviceId> --json`                | This computer, Approve from here, after the host's dialog           |
 | `/bin/bash`                     | `<program folder>/install/install-cli.sh --json --runtime-only --npm --version <checked tarball> --prefix <program folder>` | Install, macOS and Linux, after the host's dialog and the pre-check |
 | `<program folder>/bin/openclaw` | `--profile clawtrate onboard …` (section 10)                                                                                | Install                                                             |
 
@@ -576,6 +674,7 @@ Host clawtrate-route-<id>
 - LOOK finds the program in the fixed places only; prints `uname -s`, `uname -m`, `uname -n`, `--version`, `gateway status --json`, and whether `~/.openclaw` and a service exist.
 - CODE runs `openclaw qr --json --voice-node --url "ws://127.0.0.1:$port"` for the selected profile.
 - START and STOP follow the same pattern, one fixed OpenClaw command each.
+- APPROVE takes a mode (`list`, `approve` or `remove`), a request id and this device's id, each validated, and runs `devices list --json`, `devices approve "$request" --json` or `devices remove "$device" --json` for the selected profile. It prints the command's exit status and its JSON, one line each.
 
 **Remote output**: bounded per script (for the LOOK, its largest whole output and a separate allowance for login noise) and 30 s, parsed line by line as JSON; a line that isn't valid JSON of the expected shape ends the step as "Can't tell".
 
@@ -623,12 +722,26 @@ The packages, in this order, each with checks of its security and failure cases 
 | The iPhone                      | `iphone`                | `iphone-review`                                                                                          | `iphone-waiting`                                           |
 | Advanced                        | `first`                 | "Advanced"                                                                                               | `connect.html`, the form as built                          |
 
+Approving a request (section 9), with `approve` over SSH on devbox and `approve-here` on this computer:
+
+| Walk                             | From               | Through                                         | To                           |
+| -------------------------------- | ------------------ | ----------------------------------------------- | ---------------------------- |
+| Approve from here, over SSH      | `approve`          | "Approve from here…", the host's approve dialog | `approving`, then `approved` |
+| Approve from here, this computer | `approve-here`     | the same, the dialog naming this computer       | `approving`, then `approved` |
+| Cancelling the dialog            | `approve`          | "Approve from here…", Cancel                    | `approve`, still waiting     |
+| A stale request                  | `approve-stale`    | "Request again"                                 | `approve`                    |
+| A mismatched request             | `approve-mismatch` | "Request again"                                 | `approve`                    |
+| A premature request              | `approve-early`    | "Try again"                                     | `approve`                    |
+| Couldn't approve                 | `approve-failed`   | "Try again"                                     | the host's approve dialog    |
+| Something else was granted       | `approve-differs`  | "Connect again"                                 | `found-there`                |
+| An address route                 | `approve-address`  | (no "Approve from here")                        | the command, as before       |
+
 `iphone-done` is drawn as a labelled future example: no walk reaches it.
 
 ## 20. Not covered here
 
 - Setting OpenClaw up on Windows (F-517), on musl Linux or FreeBSD, or on another computer over SSH; cancelling a setup; removing OpenClaw (F-514).
-- Handing a code to a phone (F-506), approving for the person (F-500), and the Tailscale switch (F-510 to F-512).
+- Handing a code to a phone (F-506), approving a phone's request from the desktop (F-507), approving on an address route, and the Tailscale switch (F-510 to F-512).
 - SSH through a jump host (`ProxyJump`, `ProxyCommand`), and settings outside the subset of section 5. The person uses a setup code or Advanced.
 - OpenClaw profiles other than the default and `clawtrate`: Advanced reaches them.
 - Updating OpenClaw from Clawtrate, and changing the gateway's bind.
