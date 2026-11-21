@@ -247,12 +247,17 @@ export class SetupController implements SetupHost {
     }
     if (phase === "connecting" || phase === "failed") {
       this.stopWatching();
-      void this.closeOwned();
-      this.publish(
-        this.state.look
-          ? { ...initialSetupState, phase: "found", look: this.state.look }
-          : initialSetupState,
-      );
+      // The screen stays until the cleanup settles: the found card only once setup's connection
+      // is closed, for this Back; a cleanup that failed says so (closeOwned), and Back tries again.
+      const attempt = this.attempt;
+      void this.closeOwned().then((closed) => {
+        if (!closed || attempt !== this.attempt) return;
+        this.publish(
+          this.state.look
+            ? { ...initialSetupState, phase: "found", look: this.state.look }
+            : initialSetupState,
+        );
+      });
     }
   }
 

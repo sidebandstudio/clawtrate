@@ -225,11 +225,11 @@ describe("Back, when closing setup's connection fails", () => {
       expect(storage.data.has("connection")).toBe(true);
       setup.cancel();
       await until(() => deleteSetting.mock.calls.length === 1);
-      // Connect while that cleanup is under way: it waits for the same one, asks nothing.
-      const connecting = setup.connect();
+      // While that cleanup is under way the screen stays as it was: no card to Connect from yet.
+      expect(setup.current.phase).toBe("connecting");
+      await expect(setup.connect()).rejects.toThrow(/nothing to connect to/);
       firstDelete.reject(new Error("fixture settings write failed"));
-      await connecting;
-      expect(setup.current.phase).toBe("failed");
+      await until(() => setup.current.phase === "failed");
       expect(setup.current.failure?.kind).toBe("cleanup");
       expect(deleteSetting).toHaveBeenCalledTimes(1);
       expect(confirm).toHaveBeenCalledTimes(1);
