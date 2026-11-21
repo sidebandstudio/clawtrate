@@ -533,11 +533,15 @@ export function routineCommand(
         return { status: "saved", routine: made };
       });
     }
-    case "findCreatedRoutine": {
-      const made = drafts.get(command.key) ?? null;
-      if (made) replace(made);
-      return later(300, () => made);
-    }
+    case "findCreatedRoutine":
+      // As the engine does: a find answered on another gateway is refused.
+      return later(300, () => null).then(() => {
+        if (command.gateway !== undefined && !bound(command.gateway))
+          throw new Error("Another gateway is connected now.");
+        const made = drafts.get(command.key) ?? null;
+        if (made) replace(made);
+        return made;
+      });
     case "readRoutine":
       // As the engine does: a read-back answered on another gateway is refused.
       return answer(command.id, () => null)

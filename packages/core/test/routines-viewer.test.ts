@@ -94,27 +94,27 @@ describe("a routine row's action from a viewer behind the host", () => {
   });
 });
 
-describe("a zone change's read-back from a viewer behind the host", () => {
-  async function switched() {
-    const gateway = grantingGateway();
-    let identity = "gateway-1";
-    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
-    gateway.handlers["cron.status"] = () => ({ enabled: true });
-    gateway.handlers["cron.list"] = () => ({ jobs: [job()], hasMore: false });
-    const { client } = await openTask({ gateway, storage: adminStorage() });
-    await until(() => client.state.connection.gatewayId === "gateway-1");
-    const viewer = createBridgeSession(client);
-    const reconnect = async () => {
-      // Another gateway answers at the same address, with a routine by the same id.
-      identity = "gateway-2";
-      const connects = gateway.connects.length;
-      gateway.sockets.at(-1)!.close();
-      await until(() => gateway.connects.length > connects);
-      await until(() => client.state.connection.gatewayId === "gateway-2");
-    };
-    return { gateway, client, viewer, reconnect };
-  }
+async function switched() {
+  const gateway = grantingGateway();
+  let identity = "gateway-1";
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
+  gateway.handlers["cron.status"] = () => ({ enabled: true });
+  gateway.handlers["cron.list"] = () => ({ jobs: [job()], hasMore: false });
+  const { client } = await openTask({ gateway, storage: adminStorage() });
+  await until(() => client.state.connection.gatewayId === "gateway-1");
+  const viewer = createBridgeSession(client);
+  const reconnect = async () => {
+    // Another gateway answers at the same address, with a routine by the same id.
+    identity = "gateway-2";
+    const connects = gateway.connects.length;
+    gateway.sockets.at(-1)!.close();
+    await until(() => gateway.connects.length > connects);
+    await until(() => client.state.connection.gatewayId === "gateway-2");
+  };
+  return { gateway, client, viewer, reconnect };
+}
 
+describe("a zone change's read-back from a viewer behind the host", () => {
   it("F-196: a read-back sent after the host reached another gateway is refused, not confirmed", async () => {
     const { gateway, client, viewer, reconnect } = await switched();
     gateway.handlers["cron.get"] = () => job();
@@ -139,6 +139,24 @@ describe("a zone change's read-back from a viewer behind the host", () => {
     held.resolve(job());
     // The closed connection fails the read; the engine's epoch check stands behind it.
     await expect(read).rejects.toThrow();
+    viewer.dispose();
+    client.stop();
+  });
+});
+
+describe("the editor's check of a save in doubt, from a viewer behind the host", () => {
+  it("F-189: a find sent after the host reached another gateway is refused, not found or missing", async () => {
+    const { gateway, client, viewer, reconnect } = await switched();
+    gateway.handlers["cron.list"] = () => ({
+      jobs: [{ ...job(), declarationKey: "clawtrate:draft-1" }],
+      hasMore: false,
+    });
+    await reconnect();
+    const lists = gateway.calls("cron.list").length;
+    await expect(
+      viewer.apply({ type: "findCreatedRoutine", key: "draft-1", gateway: "gateway-1" }),
+    ).rejects.toThrow("Another gateway is connected now");
+    expect(gateway.calls("cron.list")).toHaveLength(lists);
     viewer.dispose();
     client.stop();
   });

@@ -1079,6 +1079,24 @@ describe("F-189: creating a routine", () => {
     expect((await found.routines.findCreated("draft-1"))?.id).toBe("mine");
   });
 
+  it("F-189: a find answered after the connection changed is refused, though the answer has the draft's routine", async () => {
+    let answer!: (value: unknown) => void;
+    const access = { ...ADMIN, identity: "gateway-1" as string | null };
+    const { routines } = engine(
+      { "cron.list": () => new Promise((resolve) => (answer = resolve)) },
+      initialRoutinesState,
+      access,
+    );
+    const find = routines.findCreated("draft-1", "gateway-1");
+    void find.catch(() => {});
+    await Promise.resolve();
+    // The connection drops and another gateway answers while the list is out.
+    routines.onClose();
+    access.identity = "gateway-2";
+    answer({ jobs: [job({ id: "mine", declarationKey: "clawtrate:draft-1" })], hasMore: false });
+    await expect(find).rejects.toThrow("Another gateway is connected now");
+  });
+
   it("writes a one-time schedule as a time with its offset, never a zone beside it", () => {
     const original = fieldsOf(parseRoutine(job())!);
     const at = {

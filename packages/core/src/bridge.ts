@@ -204,8 +204,11 @@ export type BridgeCommand =
   // Changing routines (automation.md sections 9 and 10). The engine refuses each below admin.
   // `gateway` is the one a draft was opened on: a write waits for it to match.
   | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
-  /** The routine a draft made, found by the draft's key: after a create whose answer never came. */
-  | { type: "findCreatedRoutine"; key: string }
+  /**
+   * The routine a draft made, found by the draft's key: after a create whose
+   * answer never came. With `gateway`, refused when any other gateway answers.
+   */
+  | { type: "findCreatedRoutine"; key: string; gateway?: string | null }
   /**
    * One routine as the gateway has it now; reads only. With `gateway`, a
    * read-back of a write: answered by any other gateway, it is refused.
@@ -876,6 +879,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "findCreatedRoutine",
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
+        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
       };
     case "updateRoutine": {
       const expected = record(command.expected, "routine revision");
@@ -1492,7 +1496,7 @@ class ViewerSession implements BridgeSession {
       case "createRoutine":
         return client.createRoutine(command.input, command.key, owner, command.gateway);
       case "findCreatedRoutine":
-        return client.findCreatedRoutine(command.key);
+        return client.findCreatedRoutine(command.key, command.gateway);
       case "readRoutine":
         return client.readRoutine(command.id, command.gateway);
       case "updateRoutine":

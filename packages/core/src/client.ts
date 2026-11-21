@@ -4123,8 +4123,8 @@ export class ClawtrateClient {
   }
 
   /** The routine a draft made, if the gateway lists it. */
-  findCreatedRoutine(key: string): Promise<Routine | null> {
-    return this.routines.findCreated(key);
+  findCreatedRoutine(key: string, gateway?: string | null): Promise<Routine | null> {
+    return this.routines.findCreated(key, gateway);
   }
 
   updateRoutine(

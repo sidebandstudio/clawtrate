@@ -976,18 +976,24 @@ export class RoutinesEngine {
 
   /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
   async readOne(id: string, gateway?: string | null): Promise<Routine | null> {
-    // A read-back names the gateway its write went to. Another gateway may be
-    // connected by the time it is sent or answered, and its routine by the
-    // same id says nothing about that write.
+    return (await this.onGateway(gateway, () => this.readRevised(id)))?.routine ?? null;
+  }
+
+  /**
+   * A read-back names the gateway its write went to. Another gateway may be
+   * connected by the time it is sent or answered, and its routines say nothing
+   * about that write. One that names no confirmed gateway confirms nothing:
+   * null is not an identity.
+   */
+  private async onGateway<T>(gateway: string | null | undefined, read: () => Promise<T>) {
     const epoch = this.epoch;
-    // A read-back that names no confirmed gateway confirms nothing: null is not an identity.
     const elsewhere = () =>
       gateway !== undefined &&
       (gateway === null || epoch !== this.epoch || this.ctx.identity() !== gateway);
     if (elsewhere()) throw new Error(UNCONFIRMED);
-    const read = await this.readRevised(id);
+    const value = await read();
     if (elsewhere()) throw new Error(UNCONFIRMED);
-    return read?.routine ?? null;
+    return value;
   }
 
   /** A routine with the gateway's token for its definition, which `cron.update` can be held to. */
@@ -1013,7 +1019,11 @@ export class RoutinesEngine {
   }
 
   /** The routine a draft made, if the gateway lists it: found by the draft's own key, nothing else. */
-  async findCreated(key: string): Promise<Routine | null> {
+  findCreated(key: string, gateway?: string | null): Promise<Routine | null> {
+    return this.onGateway(gateway, () => this.findByKey(key));
+  }
+
+  private async findByKey(key: string): Promise<Routine | null> {
     let offset = 0;
     for (;;) {
       const result = asRecord(
