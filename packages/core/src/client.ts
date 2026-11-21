@@ -220,6 +220,7 @@ import {
   WRITE_SCOPE,
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
+import { validateGatewayUrl } from "./gateway-url.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -638,13 +639,7 @@ function isMissingScope(error: unknown): boolean {
   );
 }
 
-export function validateGatewayUrl(raw: string): string {
-  const url = new URL(raw.trim());
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error("The gateway URL must start with ws:// or wss://");
-  }
-  return url.toString().replace(/\/$/, "");
-}
+export { validateGatewayUrl };
 
 export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
   return {

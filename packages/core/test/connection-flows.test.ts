@@ -3,6 +3,7 @@ import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
+import { MAX_GATEWAY_URL_CHARS } from "../src/gateway-url.ts";
 import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
 import {
   FakeGateway,
@@ -548,10 +549,52 @@ describe("connecting", () => {
     client.stop();
   });
 
+  it("F-457: a normalized address stays whole for Forget, including after a restart", async () => {
+    const raw = URL + "/" + "é".repeat(400);
+    const address = URL + "/" + "%C3%A9".repeat(400);
+    expect(address.length).toBeGreaterThan(2_048);
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    const first = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const resumed = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await createBridgeSession(first).apply(parseBridgeCommand({ type: "connect", url: raw }));
+      expect(savedSettings(storage)?.url).toBe(address);
+      expect(first.state.connection.gatewayUrl).toBe(address);
+      await expect(
+        first.connect({ url: URL + "/" + "a".repeat(MAX_GATEWAY_URL_CHARS) }),
+      ).rejects.toThrow("The gateway address is too long.");
+      expect(savedSettings(storage)?.url).toBe(address);
+      first.stop();
+      await resumed.start();
+      const shown = resumed.state.connection.gatewayUrl;
+      expect(shown).toBe(address);
+      const viewer = createBridgeSession(resumed);
+      // The connection form can submit its prefilled address to pair again, too.
+      await viewer.apply(parseBridgeCommand({ type: "connect", url: shown }));
+      await expect(
+        viewer.apply(
+          parseBridgeCommand({
+            type: "disconnect",
+            gatewayUrl: address.slice(0, -1) + "F",
+          }),
+        ),
+      ).rejects.toThrow("The selected gateway changed");
+      await viewer.apply(parseBridgeCommand({ type: "disconnect", gatewayUrl: shown }));
+      expect(savedSettings(storage)).toBeNull();
+    } finally {
+      first.stop();
+      resumed.stop();
+    }
+  });
+
   it("a forget names the gateway it means", () => {
     expect(() => parseBridgeCommand({ type: "disconnect" })).toThrow("invalid url");
     expect(() =>
-      parseBridgeCommand({ type: "disconnect", gatewayUrl: `ws://${"a".repeat(2048)}` }),
+      parseBridgeCommand({
+        type: "disconnect",
+        gatewayUrl: `ws://${"a".repeat(MAX_GATEWAY_URL_CHARS)}`,
+      }),
     ).toThrow("invalid url");
   });
 
