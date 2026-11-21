@@ -99,7 +99,7 @@ after approval: {"status":"connected","scopes":["operator.read","operator.write"
 
 On a loopback connection with `autoApproveLocal` at its default, the request waited. `openclaw devices approve <requestId>`, run through the development tool's runner (that is, on the gateway's computer), printed one line, `Approved <deviceId> (<requestId>)`, exited 0, and the client, still connected, held the interactive tier. The device's record then read `approvedVia: "owner"`.
 
-So "Approve from here" (F-500) is the gateway's own `openclaw devices approve <requestId>`, run by the host on the gateway's computer (this computer, or over SSH) after the person confirms. The request id comes from `device.scopes.requestUpgrade`.
+So on 2026.10.6 the approval is a manual step: the person runs `openclaw devices approve <requestId>` for the gateway's profile on its computer, with the request id from `device.scopes.requestUpgrade`. That command can follow a replacement request (section 2.1), so it is not the exact path "Approve from here" (F-500) needs. An in-product approval depends on a command that approves exactly the intended request id, bound to the verified gateway endpoint, that cannot be redirected to a replacement, and that uses the gateway's own authorization on its computer. Section 2.1 found none on 2026.10.6.
 
 ### 2.1 Approving from the host: what the command checks, and what it follows (live, 2026-11-20)
 

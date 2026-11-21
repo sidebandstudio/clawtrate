@@ -136,7 +136,13 @@
   // an exact approval path that OpenClaw 2026.10.6 doesn't have.
   const approveRoute = screen === "approve-here" ? "here" : screen === "approve-address" ? "address" : "ssh";
   const approveFlow = screen === "approve-pairing" ? "pairing" : params.get("flow") === "admin" ? "admin" : "upgrade";
-  const approveCommand = () => `openclaw ${approveRoute === "here" ? "--profile clawtrate " : ""}devices approve ${REQUEST}`;
+  // The route's selected profile (rule 11): approve-here is Clawtrate's own unless profile=default;
+  // an SSH route is the default unless profile=clawtrate. The found card and its pairing keep it.
+  const approveProfile = params.get("profile") || (approveRoute === "here" ? "clawtrate" : "default");
+  const ownProfile = approveProfile === "clawtrate";
+  const profileWords = ownProfile ? "Clawtrate's profile" : "the default profile";
+  const gatewayWords = (on) => `${ownProfile ? "Clawtrate" : "default"} gateway on ${on}`;
+  const approveCommand = () => `openclaw ${ownProfile && approveRoute !== "address" ? "--profile clawtrate " : ""}devices approve ${REQUEST}`;
   const ADDED = {
     upgrade: ["Send messages and start tasks", "Answer approvals", "Answer questions"],
     admin: ["Send messages and start tasks", "Answer approvals", "Answer questions", "Change the gateway's settings, bots and accounts. This is admin access."],
@@ -167,13 +173,13 @@
       to: () => go("looking-there", { play: "1", next: "found-there", name: typedRaw }),
     },
     pair: {
-      message: "Pair this device read-only with the default gateway on this computer?",
+      message: `Pair this device read-only with the ${params.get("profile") === "clawtrate" ? "Clawtrate" : "default"} gateway on this computer?`,
       detail: "<p>The gateway saves this device.</p>",
       confirm: "Pair",
       to: () => go("connecting-here", { play: "1" }),
     },
     pairThere: {
-      message: `Pair this device read-only with the default gateway on ${full}?`,
+      message: `Pair this device read-only with the ${params.get("profile") === "clawtrate" ? "Clawtrate" : "default"} gateway on ${full}?`,
       detail: "<p>The gateway saves this device.</p>",
       confirm: "Pair",
       to: () => go("connecting-there", { play: "1", name: typedRaw }),
@@ -197,10 +203,10 @@
     approveRequest: {
       message:
         approveFlow === "pairing"
-          ? `Pair this device with the default gateway on ${approveRoute === "here" ? "this computer" : full}?`
-          : `Approve this device's request on the ${approveRoute === "here" ? "Clawtrate gateway on this computer" : `default gateway on ${full}`}?`,
+          ? `Pair this device with the ${gatewayWords(approveRoute === "here" ? "this computer" : full)}?`
+          : `Approve this device's request on the ${gatewayWords(approveRoute === "here" ? "this computer" : full)}?`,
       detail:
-        `<p>Profile: ${approveRoute === "here" ? "clawtrate" : "default"}${approveRoute === "here" ? "" : ` · ${full}, port 22`} · this device <span class="s-device-inline">5AE2-3AFF</span></p>` +
+        `<p>Profile: ${approveProfile}${approveRoute === "here" ? "" : ` · ${full}, port 22`} · this device <span class="s-device-inline">5AE2-3AFF</span></p>` +
         (approveFlow === "pairing" ? "" : `<p>It adds:</p>`) +
         `<ul class="s-host-list" data-added>${ADDED[approveFlow].map((x) => `<li>${x}</li>`).join("")}</ul>` +
         `<p>Clawtrate approves request e5eb4aa8 on ${approveRoute === "here" ? "this computer" : host}, then checks what the gateway granted.</p>`,
@@ -237,7 +243,7 @@
 
   const runningFacts = (where = "On this computer only", version = "2026.10.6") => [
     ["Version", version],
-    ["Profile", "default"],
+    ["Profile", params.get("profile") === "clawtrate" ? "clawtrate" : "default"],
     ["Listens", where],
     ["Service", "LaunchAgent, starts when you log in"],
   ];
@@ -786,8 +792,8 @@
       (approveRoute === "address"
         ? "Run this on the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile:"
         : approveRoute === "here"
-          ? "In Terminal on this computer, run this for Clawtrate's profile:"
-          : `On ${host}, run this for the default profile:`) +
+          ? `In Terminal on this computer, run this for ${profileWords}:`
+          : `On ${host}, run this for ${profileWords}:`) +
       `</p>` +
       command(approveCommand(), "Copy approve command");
     const granted = () =>
@@ -814,7 +820,8 @@
       "refused-granted": { text: `Clawtrate did not approve this request. The gateway now shows the requested access. ${granted()}`, granted: true },
       uncertain: { text: `Couldn't confirm approval on ${where}. The outcome isn't known yet.`, actions: () => act("Check again", "recheck") },
     };
-    const lookAgain = () => `<a class="button" data-size="sm" href="${go(approveRoute === "here" ? "found" : "found-there")}">Look again</a>`;
+    // Looking again stays with the route's profile: the found card and its pairing name it.
+    const lookAgain = () => `<a class="button" data-size="sm" href="${go(approveRoute === "here" ? "found" : "found-there", { profile: approveProfile })}">Look again</a>`;
     const render = () => {
       let html = "";
       if (state.phase === "waiting") {

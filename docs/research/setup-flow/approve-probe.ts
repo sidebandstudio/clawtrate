@@ -78,7 +78,8 @@ const upgradeOf = (c: any) => ({ status: c.state.connection.upgrade.status, requ
 async function approve() {
   const client = await pairedClient();
   say("connected:", { status: client.state.connection.status, scopes: client.state.connection.scopes });
-  const me = list().paired?.find((d: any) => d.displayName === "Clawtrate Desktop" && (d.scopes ?? []).length === 1);
+  // This client's own record, by its device id: another device may share the display name.
+  const me = list().paired?.find((d: any) => d.deviceId === client.state.connection.deviceId);
   say("my record before:", pick(me));
   // Premature: an id that is not pending (the device has asked for nothing yet).
   const fake = "00000000-0000-4000-8000-000000000000";
@@ -167,26 +168,46 @@ async function stricter() {
   const got: any = await op.request("config.get", {});
   const bots = Object.keys(got?.config?.agents?.entries ?? {});
   say("bots in config:", bots);
+  // The probe bot, made if absent; its mode is set to "full" and read back either way, and a mode it
+  // already had is put back at the end.
   let bot = bots.find((b) => b === "probe-ask");
+  const existed = Boolean(bot);
+  const priorMode = existed ? got?.config?.agents?.entries?.[bot!]?.tools?.exec?.mode : undefined;
   if (!bot) {
     const c: any = await op.request("agents.create", { name: "Probe Ask", model: "scripted/dev-1" });
     bot = c.agentId;
-    const g: any = await op.request("config.get", {});
-    await op.request("config.patch", { raw: JSON.stringify({ agents: { entries: { [bot!]: { tools: { exec: { mode: "full" } } } } } }), baseHash: g.hash });
-    await sleep(1500);
   }
-  say("full, before tightening:", eff(bot!));
+  const setMode = async (mode: string | null) => {
+    const g: any = await op.request("config.get", {});
+    const exec = mode === null ? { mode: null } : { mode };
+    await op.request("config.patch", { raw: JSON.stringify({ agents: { entries: { [bot!]: { tools: { exec } } } } }), baseHash: g.hash });
+    await sleep(1500);
+    const back: any = await op.request("config.get", {});
+    return back?.config?.agents?.entries?.[bot!]?.tools?.exec?.mode;
+  };
+  const readBack = await setMode("full");
+  if (readBack !== "full") throw new Error(`probe-ask did not read back as full (${String(readBack)})`);
+  say("full, written and read back, before tightening:", eff(bot!));
   const ap: any = await op.request("exec.approvals.get", {});
   say("exec.approvals.get keys:", Object.keys(ap ?? {}), "defaults:", ap?.file?.defaults, "resolvedDefaults:", ap?.resolvedDefaults);
-  const file = { ...(ap?.file ?? { version: 1 }), defaults: { ...(ap?.file?.defaults ?? {}), security: "allowlist", ask: "on-miss" } };
-  await op.request("exec.approvals.set", { file, baseHash: ap.hash });
-  await sleep(500);
-  say("after the host file asks on a miss:", eff(bot!));
-  const ap2: any = await op.request("exec.approvals.get", {});
-  await op.request("exec.approvals.set", { file: { ...(ap2.file), defaults: ap?.file?.defaults ?? {} }, baseHash: ap2.hash });
-  await sleep(500);
-  say("host file restored:", eff(bot!));
-  await op.close();
+  const savedDefaults = ap?.file?.defaults ?? {};
+  try {
+    const file = { ...(ap?.file ?? { version: 1 }), defaults: { ...savedDefaults, security: "allowlist", ask: "on-miss" } };
+    await op.request("exec.approvals.set", { file, baseHash: ap.hash });
+    await sleep(500);
+    say("after the host file asks on a miss:", eff(bot!));
+  } finally {
+    // The host file goes back to what it was, with a fresh hash, whatever happened above.
+    try {
+      const fresh: any = await op.request("exec.approvals.get", {});
+      await op.request("exec.approvals.set", { file: { ...fresh.file, defaults: savedDefaults }, baseHash: fresh.hash });
+      await sleep(500);
+      say("host file restored:", eff(bot!));
+      if (existed) say("probe-ask's own mode put back:", await setMode(priorMode ?? null));
+    } finally {
+      await op.close();
+    }
+  }
 }
 
 async function listBots() {

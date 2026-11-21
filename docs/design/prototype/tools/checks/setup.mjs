@@ -437,7 +437,7 @@ await p.close();
 // kept. CT.approvalLog counts what a host would do: approvals, saved tokens, removals.
 const logOf = (p) => p.evaluate(() => ({ ...(window.CT.approvalLog || { missing: true }) }));
 const approvalText = (p) => text(p, "[data-approval]");
-const evalOr = (p, fn) => p.evaluate(fn).catch(() => false);
+const evalOr = (p, fn, arg) => p.evaluate(fn, arg).catch(() => false);
 // A control that isn't there fails the check that needs it, not the run.
 const tap = (p, selector) => p.locator(selector).first().click({ timeout: 2000 }).catch(() => {});
 const ownerApproves = async (p) => {
@@ -504,6 +504,27 @@ await p.close();
 p = await open("screen=approve-pairing&result=exact");
 await ownerApproves(p);
 check("first pairing, manual: paired read-only only after the read-back", (await approvalText(p)).includes("Paired, read-only.") && (await logOf(p)).tokenSaved);
+await p.close();
+
+// The command is for the route's selected profile, and Copy copies exactly what is shown.
+for (const [query, words, cmd] of [
+  ["screen=approve-here&profile=default", "In Terminal on this computer, run this for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942"],
+  ["screen=approve-here", "In Terminal on this computer, run this for Clawtrate's profile:", "openclaw --profile clawtrate devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942"],
+  ["screen=approve&profile=clawtrate", "On devbox, run this for Clawtrate's profile:", "openclaw --profile clawtrate devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942"],
+]) {
+  p = await open(query);
+  check(`${query}: the profile's words, and Copy copies the command shown`, await evalOr(p, ([w, c]) => document.querySelector("[data-where]")?.textContent === w && document.querySelector("[data-approval] .command code")?.textContent === c && document.querySelector("[data-approval] .command [data-copy]")?.dataset.copy === c, [words, cmd]));
+  await p.close();
+}
+// Recovering from an unconfirmed result on Clawtrate's own gateway stays with that gateway.
+p = await open("screen=approve-here&result=other");
+await ownerApproves(p);
+await tap(p, '[data-approval] a[href*="screen=found"]');
+await p.waitForTimeout(200);
+check("Look again from Clawtrate's own gateway: the found card names the clawtrate profile", (await screenOf(p)) === "found" && (await text(p, ".facts")).includes("clawtrate"));
+await tap(p, '[data-host="pair"]');
+await p.waitForSelector('[data-host-dialog="pair"]', { timeout: 2000 }).catch(() => {});
+check("and its pairing dialog names the Clawtrate gateway, not the default one", (await text(p, "[data-host-dialog]")).includes("Pair this device read-only with the Clawtrate gateway on this computer?"));
 await p.close();
 
 // The future "Approve from here" (exact=1): only where an exact path is proven.
