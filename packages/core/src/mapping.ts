@@ -365,6 +365,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         if (!text.trim()) return;
         const messageId = str(info.id);
         const replyTo = replyReference(info);
+        const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
         items.push({
           id,
           role: "user",
@@ -374,6 +375,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(cutByGateway ? { truncated: true } : {}),
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
         });
         return;
       }
@@ -403,6 +405,13 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
               block.messageId = rowId;
               item.messageId = rowId;
             }
+        }
+        // An answer the gateway delivered as a reply names what it answers on its own row
+        // (`openclawDelivery.replyToId`), so only that row's bubbles join the thread.
+        const answers = str(asRecord(message.openclawDelivery)?.replyToId);
+        if (answers) {
+          for (const block of blocks)
+            if (block.kind === "text" && block.text.trim()) block.replyToId = answers;
         }
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
@@ -440,9 +449,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
 /**
  * A user row's reply reference (`__openclaw.replyToId`). Its text is the preview stored beside it
  * (`replyToPreview {text, senderLabel?}`), or else the message history attached at read time
- * (`replyToMessage {ok, message}`). Cut to its bound here. Nothing else makes a row a reply. An
- * assistant row's own reference (`openclawDelivery.replyToId`) is not read: a bot's turn is one
- * item of several rows here, and its membership needs a reference on each row's bubble.
+ * (`replyToMessage {ok, message}`). Cut to its bound here. Nothing else makes a user row a reply.
  */
 function replyReference(info: RawRecord): TranscriptItem["replyTo"] | null {
   const id = str(info.replyToId);
