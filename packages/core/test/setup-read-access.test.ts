@@ -180,9 +180,11 @@ describe("an upgrade is held to what it asked for", () => {
       scopes: ["operator.admin"],
     });
     await until(() => client.state.connection.upgrade.status !== "pending");
-    expect(client.state.connection.upgrade.status).not.toBe("approved");
-    expect(client.state.connection.upgrade.error).toContain("operator.admin");
-    expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).adminHeld).toBeUndefined();
+    // Other than exactly what was asked: unconfirmed, and the rotated token isn't kept (setup §9).
+    expect(client.state.connection.upgrade.status).toBe("unconfirmed");
+    const kept = JSON.parse(storage.data.get(tokenKey(URL_A))!);
+    expect(kept.token).not.toBe("rotated");
+    expect(kept.adminHeld).toBeUndefined();
     client.stop();
   });
 });
