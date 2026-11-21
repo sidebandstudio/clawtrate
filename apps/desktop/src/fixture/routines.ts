@@ -332,7 +332,13 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
   };
 }
 
-const run = (routine: Routine, runAt: number, over: Partial<RoutineRun> = {}): RoutineRun => ({
+const run = (
+  routine: Routine,
+  runAt: number,
+  over: Partial<RoutineRun> = {},
+  // What names the run in its own session key; the gateway uses the run's session id.
+  session: string | number = runAt,
+): RoutineRun => ({
   jobId: routine.id,
   runId: `run-${routine.id}-${runAt}`,
   runAt,
@@ -352,7 +358,7 @@ const run = (routine: Routine, runAt: number, over: Partial<RoutineRun> = {}): R
   sessionKey:
     routine.target === "main"
       ? null
-      : (routine.sharedSessionKey ?? `agent:${routine.botId}:cron:${routine.id}:run:${runAt}`),
+      : (routine.sharedSessionKey ?? `agent:${routine.botId}:cron:${routine.id}:run:${session}`),
   manual: false,
   ...over,
 });
@@ -410,9 +416,9 @@ export function fixtureRuns(routine: Routine, now: number, params: RoutineParams
   });
 }
 
-/** The newest run's conversation is kept; older ones are past the gateway's retention. */
-function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunConversation {
-  if (runs[0]?.runId !== runId)
+/** A run's conversation, given the instruction it ran with when the gateway kept it. */
+function conversation(ran: RoutineRun | undefined, text: string | undefined): RunConversation {
+  if (!ran || text === undefined)
     return {
       status: "none",
       reason: "not-kept",
@@ -420,13 +426,13 @@ function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunC
     };
   return {
     status: "kept",
-    message: `${routine.text}\nCurrent time: Monday, November 16th, 2026 - 8:00 AM (America/New_York)\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.`,
+    message: `${text}\nCurrent time: Monday, November 16th, 2026 - 8:00 AM (America/New_York)\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.`,
     messageCut: false,
     items: [
       {
         id: "convo-1",
         role: "assistant",
-        timestamp: runs[0]!.runAt + 900,
+        timestamp: ran.runAt + 900,
         model: "dev-1",
         blocks: [
           { kind: "reasoning", text: "First I should read yesterday's notes." },
@@ -442,7 +448,7 @@ function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunC
       {
         id: "convo-2",
         role: "assistant",
-        timestamp: runs[0]!.runAt + 2_400,
+        timestamp: ran.runAt + 2_400,
         model: "dev-1",
         blocks: [
           {
@@ -462,7 +468,7 @@ const applied = (routine: Routine, fields: RoutineFields): Routine => ({
   updatedAt: Date.now(),
 });
 
-const createdId = (key: string) => `routine-${key.slice(0, 8)}`;
+const createdId = (key: string) => `routine-${key}`;
 
 /** One fixture bridge's answers to the routine commands, or undefined for any other command. */
 export function routineCommands(now: number, params: RoutineParams) {
@@ -474,9 +480,19 @@ export function routineCommands(now: number, params: RoutineParams) {
    * routine as it is now.
    */
   const recorded = new Map<string, RoutineRun[]>();
+  /** The instruction given to each run whose conversation the gateway keeps, by run id. */
+  const transcripts = new Map<RoutineRun["runId"], string>();
+  /** Manual runs started here: the `<n>` of the gateway's `manual:<id>:<ms>:<n>`. */
+  let manualRuns = 0;
+  /** Each id's removals: a removed routine's run never lands on one made again with its id. */
+  const removals = new Map<string, number>();
   const runsOf = (routine: Routine) => {
     let runs = recorded.get(routine.id);
-    if (!runs) recorded.set(routine.id, (runs = fixtureRuns(routine, now, params)));
+    if (!runs) {
+      recorded.set(routine.id, (runs = fixtureRuns(routine, now, params)));
+      // Of the seeded runs, only the newest one's conversation is within the gateway's retention.
+      if (runs[0]) transcripts.set(runs[0].runId, routine.text);
+    }
     return runs;
   };
   return (
@@ -551,6 +567,8 @@ export function routineCommands(now: number, params: RoutineParams) {
           return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
         }
         return later(400, () => {
+          // A retry that lands supersedes an earlier create in doubt with this key.
+          drafts.delete(command.key);
           created(made);
           return { status: "saved", routine: made };
         });
@@ -590,6 +608,8 @@ export function routineCommands(now: number, params: RoutineParams) {
           return Promise.resolve({ status: "not-sent", reason: "gateway" });
         const routine = kept(command.id);
         if (!routine) return Promise.resolve({ status: "deleted" });
+        // Its runs so far ran on the schedule it has now: record them before an edit changes it.
+        runsOf(routine);
         const end = outcome();
         if (end === "conflict") {
           const theirs = {
@@ -610,10 +630,12 @@ export function routineCommands(now: number, params: RoutineParams) {
           replace(applied(routine, command.edit));
           return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
         }
-        const next = applied(routine, command.edit);
         return later(400, () => {
           // Deleted while the update was out: the gateway no longer has it to update.
-          if (!kept(command.id)) return { status: "deleted" };
+          const current = kept(command.id);
+          if (!current) return { status: "deleted" };
+          // Only the edited fields: a run that ended while the edit was out stays ended.
+          const next = applied(current, command.edit);
           replace(next);
           return { status: "saved", routine: next };
         });
@@ -623,12 +645,14 @@ export function routineCommands(now: number, params: RoutineParams) {
         if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
         if (params.pause === "fail")
           return later(500, () => ({ status: "refused", error: "missing scope: operator.admin" }));
-        const next = {
-          ...routine,
-          enabled: command.enabled,
-          nextRunAt: command.enabled ? now + DAY : null,
-        };
         return later(300, () => {
+          const current = kept(command.id);
+          if (!current) return { status: "deleted" };
+          const next = {
+            ...current,
+            enabled: command.enabled,
+            nextRunAt: command.enabled ? now + DAY : null,
+          };
           replace(next);
           return { status: "saved", routine: next };
         });
@@ -637,13 +661,14 @@ export function routineCommands(now: number, params: RoutineParams) {
         const routine = kept(command.id);
         if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
         if (params.run === "already") return later(300, () => ({ status: "already-running" }));
-        if (params.run === "fail")
-          return later(300, () => ({
-            status: "refused",
-            error: `Automation not found: ${routine.id}. List automations and retry with a current job id.`,
-          }));
+        const notFound = () => ({
+          status: "refused",
+          error: `Automation not found: ${routine.id}. List automations and retry with a current job id.`,
+        });
+        if (params.run === "fail") return later(300, notFound);
         if (params.run === "held")
           return later(300, () => {
+            if (!kept(routine.id)) return notFound();
             // The gateway took the request; the run itself starts later, so the
             // view first says the routine is queued, then running.
             setTimeout(() => {
@@ -653,16 +678,24 @@ export function routineCommands(now: number, params: RoutineParams) {
             return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
           });
         return later(300, () => {
+          // Deleted before the request reached it: the gateway has no such job to run.
+          const current = kept(routine.id);
+          if (!current) return notFound();
           const startedAt = Date.now();
-          const runId = `manual:${routine.id}:${startedAt}:1`;
-          // The runs before this one, as recorded while the routine was as it was then.
-          const earlier = runsOf(routine);
-          replace({ ...routine, runningAt: startedAt });
+          // Counted, as the gateway does, so two runs in one millisecond (a frozen clock) differ.
+          const n = (manualRuns += 1);
+          const runId = `manual:${routine.id}:${startedAt}:${n}`;
+          const removed = removals.get(routine.id);
+          transcripts.set(runId, current.text);
+          replace({ ...current, runningAt: startedAt });
           setTimeout(() => {
             const ran = kept(routine.id);
-            if (!ran) return;
-            // Recorded as the run it is, on top of the runs before it, which stay as they were.
-            recorded.set(routine.id, [run(ran, startedAt, { runId, manual: true }), ...earlier]);
+            if (!ran || removals.get(routine.id) !== removed) return;
+            // On top of the history as it is now, which a run that ended first may have added to.
+            recorded.set(routine.id, [
+              run(ran, startedAt, { runId, manual: true }, `${startedAt}-${n}`),
+              ...runsOf(ran),
+            ]);
             replace({ ...ran, runningAt: null, lastRunAt: startedAt, lastStatus: "ok" });
           }, 2500);
           return { status: "started", runId };
@@ -675,6 +708,7 @@ export function routineCommands(now: number, params: RoutineParams) {
         return later(300, () => {
           put((all) => all.filter((each) => each.id !== command.id));
           recorded.delete(command.id);
+          removals.set(command.id, (removals.get(command.id) ?? 0) + 1);
           return { status: "removed" };
         });
       }
@@ -705,9 +739,10 @@ export function routineCommands(now: number, params: RoutineParams) {
         if (!routine) return Promise.reject(new Error("unknown routine"));
         if (!command.sessionKey)
           return Promise.resolve({ status: "none", reason: "no-session", error: null });
-        return answer(command.id, () =>
-          conversation(routine, runsOf(routine), command.runId ?? ""),
-        );
+        return answer(command.id, () => {
+          const ran = runsOf(routine).find((each) => each.runId === command.runId);
+          return conversation(ran, ran && transcripts.get(ran.runId));
+        });
       }
       default:
         return undefined;

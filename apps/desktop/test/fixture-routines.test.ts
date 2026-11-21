@@ -56,9 +56,37 @@ const fields = (name: string): RoutineFields => ({
   delivery: "none",
 });
 
+const editOf = (routine: Routine, change: Partial<RoutineFields>) => {
+  const original: RoutineFields = {
+    name: routine.name,
+    text: routine.text,
+    schedule: routine.schedule,
+    target: routine.target,
+    delivery: routine.delivery,
+  };
+  return {
+    type: "updateRoutine",
+    id: routine.id,
+    original,
+    edit: { ...original, ...change },
+    expected: { ...original, updatedAt: routine.updatedAt },
+    gateway: GATEWAY,
+  } as BridgeCommand;
+};
+
+const conversationOf = (run: RoutineRun) =>
+  ({
+    type: "readRunConversation",
+    id: run.jobId,
+    runId: run.runId,
+    runAt: run.runAt,
+    sessionKey: run.sessionKey,
+  }) as BridgeCommand;
+
 describe("the fixture's routine host", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("finds a create in doubt only on the bridge it was sent to", async () => {
@@ -183,5 +211,174 @@ describe("the fixture's routine host", () => {
     const kept = routines().filter((each) => each.id === first.routine.id);
     expect(kept).toHaveLength(1);
     expect(kept[0]!.name).toBe("Weekly reading list, short");
+  });
+
+  it("creates whose draft keys start alike make two routines", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host();
+    const create = (key: string) =>
+      ask<{ status: string; routine: Routine }>({
+        type: "createRoutine",
+        input: { ...fields(key), botId: "otto" },
+        key,
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    const first = await create("draft-0001");
+    const second = await create("draft-0002");
+    expect(second.routine.id).not.toBe(first.routine.id);
+    expect(routines().filter((each) => each.name.startsWith("draft-"))).toHaveLength(2);
+  });
+
+  it("an edit answered after a run ended keeps the run ended", async () => {
+    vi.useFakeTimers();
+    const { send, routines } = host();
+    const digest = () => routines().find((each) => each.id === DIGEST)!;
+    void send({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    // The run starts at 300 ms and ends at 2.8 s; the edit goes out while it runs and lands after.
+    await vi.advanceTimersByTimeAsync(2_600);
+    expect(digest().runningAt).not.toBeNull();
+    const update = send(editOf(digest(), { name: "Morning digest, short" }));
+    await vi.runAllTimersAsync();
+    expect(await update).toMatchObject({ status: "saved" });
+    expect(digest()).toMatchObject({ name: "Morning digest, short", runningAt: null });
+  });
+
+  it("a pause answered after a delete reports the routine deleted", async () => {
+    vi.useFakeTimers();
+    const { send, routines } = host();
+    const remove = send({ type: "removeRoutine", id: DIGEST } as BridgeCommand);
+    const pause = send({ type: "setRoutineEnabled", id: DIGEST, enabled: false } as BridgeCommand);
+    await vi.runAllTimersAsync();
+    expect(await remove).toEqual({ status: "removed" });
+    expect(await pause).toEqual({ status: "deleted" });
+    expect(routines().some((each) => each.id === DIGEST)).toBe(false);
+  });
+
+  it("two runs started on a frozen clock get their own ids and session keys", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const { ask } = host();
+    const runNow = () =>
+      ask<{ runId: string }>({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    const first = await runNow();
+    const second = await runNow();
+    expect(second.runId).not.toBe(first.runId);
+    const [newest, previous] = await ask<RoutineRun[]>({
+      type: "readRoutineRuns",
+      id: DIGEST,
+    } as BridgeCommand);
+    expect([newest!.runId, previous!.runId]).toEqual([second.runId, first.runId]);
+    expect(newest!.sessionKey).not.toBe(previous!.sessionKey);
+  });
+
+  it("Run now answered after a delete is refused", async () => {
+    vi.useFakeTimers();
+    const { send } = host();
+    const remove = send({ type: "removeRoutine", id: DIGEST } as BridgeCommand);
+    const started = send({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    await vi.runAllTimersAsync();
+    expect(await remove).toEqual({ status: "removed" });
+    expect(await started).toMatchObject({ status: "refused" });
+  });
+
+  it("a run's conversation shows the instruction it ran with after the routine is edited", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host();
+    await ask({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    const digest = routines().find((each) => each.id === DIGEST)!;
+    await ask(editOf(digest, { text: "Only list what needs an answer today." }));
+    const [ran] = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    expect(await ask(conversationOf(ran!))).toMatchObject({
+      status: "kept",
+      message: expect.stringMatching(/^Summarise the notes I added yesterday/u),
+    });
+  });
+
+  it("the newest scheduled run's conversation stays readable after Run now", async () => {
+    vi.useFakeTimers();
+    const { ask } = host();
+    const runs = () => ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    const [scheduled] = await runs();
+    expect(await ask(conversationOf(scheduled!))).toMatchObject({ status: "kept" });
+    await ask({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    const [manual, before] = await runs();
+    expect(before).toEqual(scheduled);
+    expect(await ask(conversationOf(before!))).toMatchObject({ status: "kept" });
+    expect(await ask(conversationOf(manual!))).toMatchObject({ status: "kept" });
+  });
+
+  it("a retry that saves after a create in doubt is what Check now finds", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host({ save: "noanswer" });
+    const create = (name: string) =>
+      ask<{ status: string; routine: Routine }>({
+        type: "createRoutine",
+        input: { ...fields(name), botId: "otto" },
+        key: "draft-0001",
+        gateway: GATEWAY,
+      } as BridgeCommand);
+    expect(await create("First")).toMatchObject({ status: "unknown" });
+    const saved = await create("Second");
+    expect(saved.status).toBe("saved");
+    const check = { type: "checkRoutineCreate", key: "draft-0001", gateway: GATEWAY };
+    expect(await ask({ ...check, input: fields("Second") } as BridgeCommand)).toMatchObject({
+      status: "matches",
+    });
+    expect(routines().find((each) => each.id === saved.routine.id)!.name).toBe("Second");
+  });
+
+  it("two Run now calls that overlap both stay in the history", async () => {
+    vi.useFakeTimers();
+    const { send, ask } = host();
+    const runNow = () =>
+      send<{ runId: string }>({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
+    const first = runNow();
+    await vi.advanceTimersByTimeAsync(310);
+    const second = runNow();
+    await vi.runAllTimersAsync();
+    const runs = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    expect(runs.slice(0, 2).map((each) => each.runId)).toEqual([
+      (await second).runId,
+      (await first).runId,
+    ]);
+  });
+
+  it("a schedule edit before the history is read leaves the runs before it as they ran", async () => {
+    vi.useFakeTimers();
+    const { ask, routines } = host();
+    const BACKUP = "routine-backup";
+    const backup = routines().find((each) => each.id === BACKUP)!;
+    await ask(editOf(backup, { schedule: { ...backup.schedule, expr: "0 5 * * 1" } }));
+    const [last, before] = await ask<RoutineRun[]>({
+      type: "readRoutineRuns",
+      id: BACKUP,
+    } as BridgeCommand);
+    // Daily, as it was scheduled when they ran, not weekly as it is now.
+    expect(last!.runAt - before!.runAt).toBe(24 * 60 * 60_000);
+  });
+
+  it("a run of a removed routine never lands on one made again under its id", async () => {
+    vi.useFakeTimers();
+    const { send, ask, routines } = host();
+    const create = {
+      type: "createRoutine",
+      input: { ...fields("Reading list"), botId: "otto" },
+      key: "draft-0001",
+      gateway: GATEWAY,
+    } as BridgeCommand;
+    const { routine } = await ask<{ routine: Routine }>(create);
+    const started = send({ type: "runRoutineNow", id: routine.id } as BridgeCommand);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await started).toMatchObject({ status: "started" });
+    // Removed and made again while the run is still going.
+    void send({ type: "removeRoutine", id: routine.id } as BridgeCommand);
+    await vi.advanceTimersByTimeAsync(300);
+    void send(create);
+    await vi.runAllTimersAsync();
+    expect(routines().find((each) => each.id === routine.id)).toMatchObject({
+      lastRunAt: null,
+      runningAt: null,
+    });
+    expect(await ask({ type: "readRoutineRuns", id: routine.id } as BridgeCommand)).toEqual([]);
   });
 });
