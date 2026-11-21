@@ -606,6 +606,12 @@ export class MachinesEngine {
 
   private async config(): Promise<{ config: RawRecord; hash: string | null; raw: RawRecord }> {
     const raw = rec(await this.ctx.request("config.get", {}));
+    // A settings file the gateway can't read or parse is answered `valid: false` with an empty
+    // `config`: read as settings, that would be every setting unset.
+    if (raw.valid === false)
+      throw new Error(
+        "The gateway reports that its settings file isn't valid, so it can't be read.",
+      );
     return { config: rec(raw.config), hash: str(raw.hash, MAX_REASON_CHARS), raw };
   }
 

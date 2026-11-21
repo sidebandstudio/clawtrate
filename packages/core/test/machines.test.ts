@@ -516,6 +516,26 @@ describe("where a bot runs: the engine", () => {
     expect(result).not.toHaveProperty("active");
   });
 
+  it("F-046: a settings file the gateway can't read is no setting, after a lost answer and when the page reads again", async () => {
+    const gw = unanswered(CLOSED, true);
+    const get = gw.handlers["config.get"]!;
+    // As OpenClaw 2026.10.6 answers when its settings file fails to parse or read.
+    gw.handlers["config.get"] = (params) => ({
+      ...(get(params) as Json),
+      valid: false,
+      config: {},
+    });
+    expect(await save(gw)).toEqual({
+      status: "unknown",
+      message: "gateway closed (1006): ",
+      place: null,
+    });
+    const unreadable =
+      "The gateway reports that its settings file isn't valid, so it can't be read.";
+    await expect(engine(gw).readPlacement("otto")).rejects.toThrow(unreadable);
+    await expect(engine(gw).readMachines()).rejects.toThrow(unreadable);
+  });
+
   it("F-047: the inventory names accounts, tool servers and, with admin only, secrets; none is a permission", async () => {
     const gw = gateway({
       config: {

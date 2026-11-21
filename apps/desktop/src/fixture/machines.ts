@@ -14,7 +14,8 @@
 //            never answers, or fails
 //   devices=noscope   no device access
 //   override=1        media-box's file has an entry for Otto that asks every time
-//   mwrite=refused|conflict|unanswered|unconfirmed|pending|notapplied   how a change goes
+//   mwrite=refused|conflict|unanswered|unreadable|unconfirmed|pending|notapplied   how a change
+//            goes; unreadable: its answer is lost and the gateway's settings file can't be read
 //   mslow=<bot>       that bot's placement read never answers
 //   plugins=none      the settings hold no plugin entries to inspect
 //   pairing=grant     a request for device access is approved after a moment, or on release if
@@ -202,6 +203,7 @@ export function machineCommands(now: number, params: MachineParams) {
   const admin = (state: ClawtrateState) => state.connection.canAdmin;
   /** The fixture's configuration revision: a save moves it on. */
   let revision = 1;
+  let unreadable = false;
   const pairing = (state: ClawtrateState) =>
     state.connection.scopes.includes("operator.pairing") ||
     (params.devices !== "noscope" && state.connection.canAdmin);
@@ -357,6 +359,12 @@ export function machineCommands(now: number, params: MachineParams) {
       case "readPlacement":
         if (params.machine === "loading" || params.slow === command.botId)
           return new Promise(() => {});
+        if (unreadable)
+          return later(0, () => {
+            throw new Error(
+              "The gateway reports that its settings file isn't valid, so it can't be read.",
+            );
+          });
         if (params.machine === "error")
           return later(300, () => {
             throw new Error("The gateway did not answer.");
@@ -383,6 +391,14 @@ export function machineCommands(now: number, params: MachineParams) {
               message: "config changed since last load; re-run config.get and retry",
             };
           refuse();
+          if (params.write === "unreadable") {
+            unreadable = true;
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: null,
+            };
+          }
           revision += 1;
           w.exec[command.botId] =
             command.host === "node"

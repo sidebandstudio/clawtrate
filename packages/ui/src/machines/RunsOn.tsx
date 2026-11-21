@@ -234,11 +234,27 @@ export function RunsOnPage({
       />
     </div>
   ) : null;
+  // A save's outcome stays shown when the read after it fails.
+  const saveLines = (
+    <>
+      {error && (
+        <p className="b-field-error" role="alert" data-testid="runs-on-error-line">
+          {error}
+        </p>
+      )}
+      {note && (
+        <p className="b-hint" data-testid="runs-on-save-note">
+          {note}
+        </p>
+      )}
+    </>
+  );
 
   if (read.status !== "ready") {
     return (
       <div className="b-tab m-page" data-testid="runs-on-page">
         {head}
+        {saveLines}
         {read.status === "loading" ? (
           <div
             aria-busy="true"
@@ -388,16 +404,7 @@ export function RunsOnPage({
         }}
         testId="runs-on-machine"
       />
-      {error && (
-        <p className="b-field-error" role="alert" data-testid="runs-on-error-line">
-          {error}
-        </p>
-      )}
-      {note && (
-        <p className="b-hint" data-testid="runs-on-save-note">
-          {note}
-        </p>
-      )}
+      {saveLines}
       <p className="m-sentence">
         {origin}
         {onNode && commands.nodeInherited

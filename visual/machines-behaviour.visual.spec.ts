@@ -275,6 +275,29 @@ test("F-046: a save whose answer never came says it couldn't be confirmed and wh
   await expect(announcer(page)).toHaveText("Save not confirmed");
 });
 
+test("F-046: a save whose answer never came, on a gateway that can't read its settings file, says the setting couldn't be read, and still does once the page reads again", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unreadable`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // The read after the save fails too: the page says so, and the save's outcome stays with it.
+  const failed = page.getByTestId("runs-on-error");
+  await expect(failed.getByRole("heading")).toHaveText("Couldn't load where Otto runs");
+  await expect(failed).toContainText(
+    "The gateway reports that its settings file isn't valid, so it can't be read.",
+  );
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "The setting couldn't be read back either.",
+  );
+  await expect(page.getByTestId("runs-on-machine")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+});
+
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({
   page,
 }) => {
