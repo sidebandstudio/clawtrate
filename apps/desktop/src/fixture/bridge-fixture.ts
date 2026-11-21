@@ -591,7 +591,7 @@ export function createFixtureBridge(
         throw new Error("Changing memory requires admin access.");
       return memory(command);
     }
-    const routine = routineCommand(command, () => state, now, routineParams);
+    const routine = routineCommand(command, () => state, now, routineParams, set);
     if (routine) {
       sent.push(command);
       return routine;
