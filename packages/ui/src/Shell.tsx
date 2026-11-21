@@ -272,11 +272,17 @@ export function Shell({
 
   // Keep exactly the selected task's transcript open on the host.
   const taskKey = task?.key ?? null;
+  const heldKey = useRef<string | null>(null);
   useEffect(() => {
     if (!taskKey) return;
+    heldKey.current = taskKey;
     void send({ type: "openSession", key: taskKey });
-    return () => void send({ type: "closeSession", key: taskKey });
+    return () => {
+      heldKey.current = null;
+      void send({ type: "closeSession", key: taskKey });
+    };
   }, [taskKey, send]);
+  const holds = useCallback((key: string) => heldKey.current === key, []);
 
   // Opening a task reads it on the gateway too (F-022), and so do new replies while it
   // is open and leaving it. The engine makes that read only while the connection
@@ -728,6 +734,7 @@ export function Shell({
         <SearchPalette
           state={state}
           mac={mac}
+          holds={holds}
           onOpen={openFromSearch}
           onClose={() => closePalette(true)}
         />

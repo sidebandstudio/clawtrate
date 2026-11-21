@@ -77,6 +77,18 @@ const release = (page: Page) =>
     (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
   );
 
+/** Release what the fixture holds, then the open and close commands sent for a task, in order. */
+const sessionsAfter = (page: Page, key: string) =>
+  page.evaluate(async (key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.release();
+    // What a released answer starts runs in promise callbacks: one task later, it has been sent.
+    await new Promise((resolve) => setTimeout(resolve));
+    return fixture.sent
+      .filter((each) => each.key === key && /^(open|close)Session$/.test(each.type))
+      .map((each) => each.type);
+  }, key);
+
 test.use(contextFor(WIDE, "light"));
 
 test("F-033: Cmd/Ctrl+K opens the palette from anywhere, the rail's Search button opens it too, and Escape returns focus", async ({
@@ -355,15 +367,33 @@ test("F-033: Try again on the selected task's failed history leaves that task op
   await expect(user).toContainText("Opening…");
   await page.keyboard.press("Escape");
   await expect(palette(page)).toHaveCount(0);
-  // The shell holds the task it shows; the palette never closes a task it didn't open.
-  const sessions = await page.evaluate(
-    (key) =>
-      (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.sent
-        .filter((each) => each.key === key && /^(open|close)Session$/.test(each.type))
-        .map((each) => each.type),
-    key,
-  );
-  expect(sessions.at(-1)).toBe("openSession");
+  // The shell still shows the task, so the retry reopens it once its close is answered,
+  // and the palette never closes a task it didn't open.
+  expect((await sessionsAfter(page, key)).at(-1)).toBe("openSession");
+});
+
+test("F-033: a retry of the selected task's history doesn't reopen it once the shell has moved to another task", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", `scene=main&${OTTO_DISK}&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await fail(page, key);
+  await user.click();
+  await expect(user).toContainText("Couldn't load this conversation");
+  await hold(page);
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  await expect(user).toContainText("Opening…");
+  // Another task is chosen while the retry's close is still unanswered.
+  await field(page).fill("router");
+  await expect(options(page, "tasks").first()).toHaveAccessibleName(/^Task Router firmware, Otto/);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".title-pill-task")).toHaveText("Router firmware");
+  // The shell released the old task; the retry's answer must not take it back.
+  expect((await sessionsAfter(page, key)).at(-1)).toBe("closeSession");
 });
 
 test("F-033: closing search stops the per-bot searches still queued", async ({ page }) => {

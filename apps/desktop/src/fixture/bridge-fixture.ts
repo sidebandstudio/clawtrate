@@ -711,6 +711,8 @@ export function createFixtureBridge(
         return;
       }
       case "closeSession":
+        // Answered as a delayed answer, so a test can hold a close while the page moves on.
+        return new Promise<void>((resolve) => deferred(resolve, 0));
       case "requestAccess":
         return;
       case "resolveApproval": {
