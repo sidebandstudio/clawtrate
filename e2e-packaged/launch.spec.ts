@@ -14,6 +14,7 @@ import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { macSigningRequested, windowsSigningRequested } from "../apps/desktop/packaging/signing.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { appEnv } from "./desktop-driver.ts";
 import { packagedExecutable } from "./global-setup.ts";
@@ -22,6 +23,7 @@ import {
   mainWindowTitle,
   taskbarOverlayDescription,
   windowsProcesses,
+  type OverlayRead,
 } from "./windows.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -113,6 +115,32 @@ test("opens its window from the packaged app on the connect screen", async () =>
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+  // This checks the packaged build capability before a verified offer exists.
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  // The signing variables that configured the build, as in apps/desktop/packaging/update-defines.ts.
+  const signed = WINDOWS ? windowsSigningRequested(process.env) : macSigningRequested(process.env);
+  expect(updates).toMatchObject({
+    install: {
+      kind: "unavailable-in-this-build",
+      reason: !signed
+        ? "build-not-signed"
+        : WINDOWS
+          ? "windows-install-pending-trial"
+          : "no-verified-download",
+    },
+    lastAttempt: null,
+  });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.restart("absent"),
+    ),
+  ).toMatchObject({ outcome: "stale", snapshot: { lastAttempt: null } });
   // A packaged app does not look for the development gateway.
   await expect(page.getByRole("button", { name: "Use the development gateway" })).toHaveCount(0);
 
@@ -203,10 +231,25 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
         window as unknown as { clawtrateHost: { setBadge(n: number): void } }
       ).clawtrateHost.setBadge(value);
     }, count);
-  await setBadge(3);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("3 unread");
-  await setBadge(0);
-  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("");
+  const reads: OverlayRead[] = [];
+  let step = { phase: "set", expected: "3 unread" };
+  try {
+    await setBadge(3);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+    step = { phase: "clear", expected: "" };
+    await setBadge(0);
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
+      .toBe(step.expected);
+  } catch (error) {
+    await test.info().attach("taskbar-overlay", {
+      body: JSON.stringify({ ...step, lastReads: reads.slice(-5) }, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
 });
 
 test("hands a second launch to the running app instead of starting another", async () => {
@@ -290,7 +333,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
   expect(endpoint.url).toMatch(/^ws:\/\/127\.0\.0\.1:(19[2-9]\d\d)$/);
 
   await page.getByPlaceholder("Gateway address").fill(endpoint.url);
-  await page.getByPlaceholder("Token, for the first pairing only").fill(endpoint.token);
+  await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
   await page.getByRole("button", { name: "Connect" }).click();
 
   // A fresh device identity must be approved on the gateway, over the real protocol.

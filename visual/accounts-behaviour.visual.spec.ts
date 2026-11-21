@@ -2,8 +2,9 @@
 // 19): the "+" menu and ⌘N, focus in and out of the dialogs, the radio groups'
 // one tab stop and arrows, the selects, Escape that belongs to the innermost
 // thing, the access bar for admin, and what a read-only connection shows.
+import type { ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -180,6 +181,81 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   ).toBeVisible();
 });
 
+for (const first of ["pairing", "interactive"] as const) {
+  test(`F-157: late ${first} answers leave a newer admin grant in place`, async ({ page }) => {
+    await page.clock.install({ time: NOW });
+    await openFixture(
+      page,
+      `scene=main&${OTTO_DISK}&access=read&admin=grant&pairing=grant`,
+      "light",
+    );
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    await page.evaluate(async (first) => {
+      const { clawtrateFixture: bridge } = window as unknown as {
+        clawtrateFixture: ClawtrateBridge & { hold(): void; release(): void };
+      };
+      await bridge.send(
+        first === "pairing"
+          ? { type: "requestAccess", tier: "pairing" }
+          : { type: "requestAccess" },
+      );
+      bridge.hold();
+      await bridge.send({ type: "requestAccess", tier: "admin" });
+      bridge.release();
+    }, first);
+    const connection = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState()
+            .connection,
+      );
+    const granted = await connection();
+    expect(granted.scopes).toContain("operator.admin");
+    await page.clock.runFor(300);
+    expect((await connection()).upgrade.status).toBe("approved");
+    await page.clock.runFor(1_000);
+    expect((await connection()).scopes).toEqual(granted.scopes);
+  });
+}
+
+test("F-472: an approval released before the request turns pending stays approved", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&admin=grant`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  const bar = page.getByTestId("admin-bar");
+  // Timers stop here, so the pending step cannot fire before the release, however slow the page.
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
+  await bar.getByRole("button", { name: "Request admin access" }).click();
+  // Released before the fixture's 400 ms pending step: the approval comes first.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
+  await expect(bar).toContainText("Admin access granted.");
+  // The pending step's timer then fires, and must not take the approval back.
+  await page.clock.runFor(1_500);
+  const status = await page.evaluate(() => {
+    let value = "";
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(f: (s: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      value = state.connection.upgrade.status;
+      return state;
+    });
+    return value;
+  });
+  expect(status).toBe("approved");
+  await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();
+});
+
 test("F-472: below admin the rows show but cannot be chosen, and the access bar takes Create's place; what was chosen survives the request", async ({
   page,
 }) => {
@@ -195,12 +271,20 @@ test("F-472: below admin the rows show but cannot be chosen, and the access bar 
   await expect(bar).toContainText(
     "Admin access needed. Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask.",
   );
+  // The owner's approval is held until the check has seen the pending state: that state lasts
+  // only until the approval, so a fixed delay is never long enough on a loaded machine.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
   await bar.getByRole("button", { name: "Request admin access" }).click();
   await expect(bar).toContainText("Waiting for the gateway's owner.");
   await expect(bar.getByTestId("command")).toContainText("openclaw devices approve");
   expect(
     (await sent(page)).some((each) => each.type === "requestAccess" && each.tier === "admin"),
   ).toBe(true);
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
   await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.");
   // Granted: labels arrive, the name is kept, and the rows can be chosen.
   await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();

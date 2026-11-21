@@ -1,10 +1,8 @@
-// What Home and a bot's task list show, from the engine's state and the shared
-// reading of a row (`@clawtrate/ui/summary`, `@clawtrate/ui/arrangement`): the
-// same summary, time, preview, order and accessible names as the desktop's rail.
+// What Home and a bot's task list show, from the engine's state.
 // Pure, so the unit tests cover it.
 
 import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
-import { arrange, fromSidebar, type RosterPrefs } from "@clawtrate/ui/arrangement";
+import { arrange, fromSidebar, type RosterPrefs } from "./presentation/arrangement.ts";
 import {
   botLabel,
   botPreview,
@@ -15,8 +13,8 @@ import {
   taskTime,
   TASK_WORDS,
   type RunState,
-} from "@clawtrate/ui/summary";
-import { isUnread, type SeenMap } from "@clawtrate/ui/unread";
+} from "./presentation/summary.ts";
+import { isUnread, type SeenMap } from "../../../packages/ui/src/unread.ts";
 
 export type BotRow = {
   bot: Bot;

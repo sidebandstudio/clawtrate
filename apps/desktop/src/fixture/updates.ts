@@ -25,10 +25,18 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
+    unsigned: { kind: "offered", ...offer },
+    ready: { kind: "verified", version, size: 120000, offerId: offer.offerId },
+    preparing: { kind: "preparing", ...offer },
+    "handing-off": { kind: "handing-off", ...offer },
+    "handed-to-system": { kind: "handed-to-system", ...offer },
+    "handoff-unconfirmed": { kind: "handoff-unconfirmed", version, offerId: offer.offerId },
+    "installer-failed": { kind: "handoff-failed", version, reason: "installer-failed" },
     "not-checked": { kind: "not-checked" },
     checking: { kind: "checking" },
     "nothing-newer": { kind: "nothing-newer" },
     offered: { kind: "offered", ...offer },
+    inspecting: { kind: "downloading", version, received: 120000, expected: 120000 },
     downloading: { kind: "downloading", version, received: 41000, expected: 120000 },
     verified: { kind: "verified", version, size: 120000, offerId: offer.offerId },
     preferences: { kind: "not-checked" },
@@ -53,8 +61,31 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
         : params.get("tracks") === "one"
           ? [runningTrack]
           : ["stable", "nightly"];
+  const after = params.get("after");
+  const observed =
+    after === "unreadable"
+      ? null
+      : after === "target-running"
+        ? version
+        : after === "unconfirmed"
+          ? "0.3.0"
+          : runningVersion;
+  const supportsRestart = kind === "ready" || kind === "offered" || kind === "inspecting";
+  function installFor(state: DesktopUpdateState): DesktopUpdateSnapshot["install"] {
+    if (supportsRestart && state.kind === "verified")
+      return { kind: "restart-available", offerId: state.offerId, completesOnQuit: true };
+    return {
+      kind: "unavailable-in-this-build",
+      reason: supportsRestart
+        ? "no-verified-download"
+        : kind === "unsupported"
+          ? "no-installer-path"
+          : "build-not-signed",
+    };
+  }
+  const initialState = after === "unreadable" ? states.invalid : states[kind];
   let snapshot: DesktopUpdateSnapshot = {
-    state: states[kind],
+    state: initialState,
     revision: 0,
     preferenceIssue:
       kind === "preferences"
@@ -65,8 +96,8 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
             ? "last-check-not-saved"
             : null,
     pendingTrack: kind === "pending" ? "nightly" : null,
-    runningVersion: kind === "invalid" ? null : runningVersion,
-    runningTrack: kind === "invalid" ? null : runningTrack,
+    runningVersion: kind === "invalid" ? null : observed,
+    runningTrack: kind === "invalid" || after === "unreadable" ? null : runningTrack,
     selectedTrack: tracks.length ? selectedTrack : null,
     tracks: tracks.map((track) => ({
       track,
@@ -80,11 +111,30 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           readAt: "2026-11-16T22:41:00Z",
         }
       : null,
-    install: { kind: "unavailable-in-this-build" },
+    lastAttempt:
+      after === "target-running" ||
+      after === "old-version-running" ||
+      after === "unconfirmed" ||
+      after === "unreadable"
+        ? {
+            kind: after === "unreadable" ? "unconfirmed" : after,
+            from: runningVersion,
+            target: version,
+            track: selectedTrack,
+            running: observed,
+          }
+        : null,
+    install: installFor(initialState),
   };
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
-  function publish(patch: Partial<DesktopUpdateSnapshot>) {
-    snapshot = { ...snapshot, ...patch, revision: snapshot.revision + 1 };
+  function publish(patch: Partial<Omit<DesktopUpdateSnapshot, "install">>) {
+    const state = patch.state ?? snapshot.state;
+    snapshot = {
+      ...snapshot,
+      ...patch,
+      install: installFor(state),
+      revision: snapshot.revision + 1,
+    };
     for (const listener of listeners) listener(snapshot);
   }
   const reply = (outcome: DesktopUpdateOutcome) => ({ outcome, snapshot });
@@ -116,6 +166,14 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       if (params.get("save") === "failed")
         publish({ pendingTrack: null, preferenceIssue: "track-not-saved" });
       else publish({ pendingTrack: null, selectedTrack: track });
+      return reply("accepted");
+    },
+    restart: async (id) => {
+      if (snapshot.state.kind !== "verified" || snapshot.state.offerId !== id)
+        return reply("stale");
+      if (snapshot.install.kind !== "restart-available" || snapshot.install.offerId !== id)
+        return reply("invalid");
+      publish({ state: { kind: "preparing", version: snapshot.state.version, offerId: id } });
       return reply("accepted");
     },
     download: async (id) => {

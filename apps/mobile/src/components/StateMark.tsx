@@ -3,7 +3,7 @@
 // faint when it was stopped or waits its turn. The row's accessible name says
 // the state in words; the mark only shows it.
 
-import type { RunState } from "@clawtrate/ui/summary";
+import type { RunState } from "../presentation/summary.ts";
 import { View } from "react-native";
 import { useTheme } from "../theme/index.ts";
 

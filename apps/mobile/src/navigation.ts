@@ -5,7 +5,7 @@
 // Home, whatever the bot's number of tasks. Pure, so the unit tests cover it.
 
 import type { ClawtrateState, ConnectionError } from "@clawtrate/core";
-import { screenFor } from "@clawtrate/ui/screen";
+import { screenFor } from "../../../packages/ui/src/screen.ts";
 
 export type Route =
   { name: "home" } | { name: "bot"; botId: string } | { name: "task"; botId: string; key: string };

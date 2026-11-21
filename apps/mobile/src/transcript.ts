@@ -23,10 +23,10 @@ import {
   type TranscriptItem,
 } from "@clawtrate/core";
 import { actionWords } from "@clawtrate/core";
-import { CONVERSATION_WORDS, stampBefore } from "@clawtrate/ui/conversation-words";
-import { stampTime } from "@clawtrate/ui/format";
-import { statusLineFor } from "@clawtrate/ui/live";
-import { STATE_WORDS } from "@clawtrate/ui/summary";
+import { CONVERSATION_WORDS, stampBefore } from "./presentation/conversation-words.ts";
+import { stampTime } from "../../../packages/ui/src/format.ts";
+import { statusLineFor } from "../../../packages/ui/src/live.ts";
+import { STATE_WORDS } from "./presentation/summary.ts";
 
 export type ChatRow =
   | { kind: "stamp"; id: string; text: string }
@@ -105,7 +105,6 @@ export function runningWords(
     const view = statusLineFor(run, transcript, {
       connected: link.connected,
       interactive: false,
-      closed: link.closed,
     });
     // Text that streams with no tool running is the bot writing, not thinking.
     const writing =
@@ -113,7 +112,10 @@ export function runningWords(
       view.callId === null &&
       run.text.trim() !== "" &&
       view.phrase === actionWords.PHRASES.thinking;
-    return { text: writing ? actionWords.PHRASES.writing : view.phrase, tone };
+    const phrase = link.closed
+      ? view.phrase.replace(/^Reconnecting\./, "Disconnected.")
+      : view.phrase;
+    return { text: writing ? actionWords.PHRASES.writing : phrase, tone };
   }
   if (task.status !== "running") return null;
   // The gateway's row says it runs before this client has seen the run. That is

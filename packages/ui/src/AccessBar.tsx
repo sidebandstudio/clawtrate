@@ -1,5 +1,4 @@
 import type { ConnectionState, HostInfo } from "@clawtrate/core";
-import { readOnlyWords } from "./conversation-words.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import { useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
@@ -35,8 +34,8 @@ export function AccessBar({
   if (info.readOnly) {
     body = (
       <>
-        <b>{readOnlyWords(bot).lead}</b>
-        {readOnlyWords(bot).rest}
+        <b>Read-only.</b> You can follow {bot}'s work here. Approvals and questions aren't shown on
+        this connection.
       </>
     );
   } else {
@@ -101,8 +100,8 @@ export function AccessBar({
       case "idle":
         body = (
           <>
-            <b>{readOnlyWords(bot).lead}</b>
-            {readOnlyWords(bot).rest}
+            <b>Read-only.</b> You can follow {bot}'s work here. Approvals and questions aren't shown
+            on this connection.
           </>
         );
         action = (

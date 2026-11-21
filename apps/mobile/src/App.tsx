@@ -3,11 +3,10 @@
 // shell stays up through every reconnect once it has something to show.
 
 import type { ConnectionError, Task } from "@clawtrate/core";
-import { markSeen, type SeenMap } from "@clawtrate/ui/unread";
+import { markSeen, type SeenMap } from "../../../packages/ui/src/unread.ts";
 import { useCallback, useEffect, useState } from "react";
 import { StatusBar, useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { PrivacyCover } from "./components/PrivacyCover.tsx";
 import { BotTasks } from "./screens/BotTasks.tsx";
 import { Chat } from "./screens/Chat.tsx";
 import { Address, Pairing, Protocol, Setup, Welcome } from "./screens/Connect.tsx";
@@ -23,6 +22,7 @@ import {
   type Route,
 } from "./navigation.ts";
 import { RuntimeContext, startRuntime, useClawtrateState } from "./runtime.ts";
+import { useSwitcherProbe } from "./switcher-probe.ts";
 import { ThemeContext, themeFor } from "./theme/index.ts";
 
 /** A clock for the rows' relative times: once a minute is enough. */
@@ -57,38 +57,19 @@ function Screens() {
 
   if (!inShell(state, kept)) {
     const { connection } = state;
+    const chooseAnother = () => {
+      const { gatewayUrl } = connection;
+      if (gatewayUrl !== null) void startRuntime().send({ type: "disconnect", gatewayUrl });
+      another();
+    };
     switch (connectView(state, kept, addressOpen)) {
       case "protocol":
-        return (
-          <Protocol
-            connection={connection}
-            error={kept!}
-            onAnother={() => {
-              another();
-              void startRuntime().send({ type: "disconnect" });
-            }}
-          />
-        );
+        return <Protocol connection={connection} error={kept!} onAnother={chooseAnother} />;
       case "pairing":
-        return (
-          <Pairing
-            connection={connection}
-            onAnother={() => {
-              another();
-              void startRuntime().send({ type: "disconnect" });
-            }}
-          />
-        );
+        return <Pairing connection={connection} onAnother={chooseAnother} />;
       case "setup":
         return (
-          <Setup
-            connection={connection}
-            discovery={state.discovery}
-            onAnother={() => {
-              another();
-              void startRuntime().send({ type: "disconnect" });
-            }}
-          />
+          <Setup connection={connection} discovery={state.discovery} onAnother={chooseAnother} />
         );
       case "address":
         return <Address connection={connection} onBack={() => setAddressOpen(false)} />;
@@ -149,7 +130,8 @@ function Screens() {
   );
 }
 
-export function App() {
+export function App({ switcherProbePort }: { switcherProbePort?: number }) {
+  useSwitcherProbe(switcherProbePort);
   const [runtime] = useState(startRuntime);
   const scheme = useColorScheme();
   const theme = themeFor(scheme);
@@ -159,7 +141,6 @@ export function App() {
         <SafeAreaProvider>
           <StatusBar barStyle={theme.scheme === "dark" ? "light-content" : "dark-content"} />
           <Screens />
-          <PrivacyCover />
         </SafeAreaProvider>
       </ThemeContext.Provider>
     </RuntimeContext.Provider>

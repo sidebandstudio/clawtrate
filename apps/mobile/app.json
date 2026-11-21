@@ -21,6 +21,7 @@
       }
     },
     "plugins": [
+      "./config/with-switcher-privacy.mjs",
       "expo-secure-store",
       [
         "expo-font",

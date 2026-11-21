@@ -3,7 +3,7 @@
 // and name between them; then the status strip.
 
 import type { Bot, ClawtrateState } from "@clawtrate/core";
-import { gatewayDot, gatewayState } from "@clawtrate/ui/gateway-state";
+import { gatewayDot, gatewayState } from "../presentation/gateway-state.ts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 import { S, TOUCH, useTheme } from "../theme/index.ts";

@@ -1,19 +1,135 @@
-import type { ClawtrateState, Task } from "@clawtrate/core";
+import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
-import { markSeen, type SeenMap } from "./unread.ts";
+import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 
-export {
-  botLabel,
-  STATE_WORDS,
-  summarize,
-  TASK_CAP,
-  TASK_CAP_ONE_PANE,
-  taskState,
-  visibleTasks,
-  type BotSummary,
-  type RunState,
-} from "./summary.ts";
+/** Rows shown under an unfolded bot before "Show all". */
+export const TASK_CAP = 6;
+
+export type RunState =
+  "waiting" | "failed" | "blocked" | "done-with-failures" | "working" | "stopped" | "queued";
+
+export type BotSummary = {
+  /** The task with the latest activity, across all of the bot's tasks. */
+  latest: Task | null;
+  /** Any task is unread, other than the one on screen. */
+  unread: boolean;
+  /**
+   * The most urgent state among the tasks: waiting for you, failed or blocked,
+   * done with failures (until that task is opened), working. Done and unread is
+   * the unread dot; idle is nothing.
+   */
+  state: RunState | null;
+};
+
+/** Not opened since its latest activity. */
+function unseen(task: Task, seen: SeenMap): boolean {
+  const lastSeen = seen[task.key];
+  return lastSeen === undefined || (task.updatedAt ?? 0) > lastSeen;
+}
+
+/** A task's own state, as its row's mark says it. Opening a task clears done with failures. */
+export function taskState(task: Task, seen: SeenMap, onScreenKey: string | null): RunState | null {
+  switch (task.status) {
+    case "running":
+      return "working";
+    case "waiting":
+    case "failed":
+    case "blocked":
+      return task.status;
+    case "done-with-failures":
+    case "stopped":
+      // Until the next run, or until the task is opened (conversation.md, section 4).
+      return task.key !== onScreenKey && unseen(task, seen) ? task.status : null;
+    case "queued":
+      return "queued";
+    default:
+      return null;
+  }
+}
+
+/** The order of section 4 for the avatar: a queued task counts as idle. */
+const URGENCY: RunState[] = [
+  "waiting",
+  "failed",
+  "blocked",
+  "done-with-failures",
+  "working",
+  "stopped",
+];
+
+/**
+ * What a bot's row says about all of its tasks. The three signals are
+ * independent, so a folded bot never hides work in an older task.
+ */
+export function summarize(
+  tasks: Task[],
+  seen: SeenMap,
+  onScreenKey: string | null,
+  /** What this viewer read, for unread: the gateway's word alone on a connection that writes. */
+  unreadSeen: SeenMap = seen,
+): BotSummary {
+  let latest: Task | null = null;
+  for (const task of tasks) {
+    if (!latest || (task.updatedAt ?? 0) > (latest.updatedAt ?? 0)) latest = task;
+  }
+  const states = new Set(tasks.map((task) => taskState(task, seen, onScreenKey)));
+  return {
+    latest,
+    unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, unreadSeen)),
+    // Failed and blocked share a place; failed is named first.
+    state: URGENCY.find((state) => states.has(state)) ?? null,
+  };
+}
+
+/** How a state is spoken in a row's name. */
+export const STATE_WORDS: Record<RunState, string> = {
+  waiting: "waiting for you",
+  failed: "a run failed",
+  blocked: "blocked",
+  "done-with-failures": "done with failures",
+  working: "working",
+  stopped: "stopped",
+  queued: "queued",
+};
+
+/**
+ * A bot's accessible name: its name and state first, as assistive tools read a
+ * busy bot ("Otto, working"), then its tasks and what else is true: "Otto,
+ * working, 14 tasks, unread".
+ */
+export function botLabel(
+  bot: Bot,
+  count: number,
+  summary: BotSummary,
+  extra: { primary?: boolean; label?: string | null } = {},
+): string {
+  return (
+    bot.name +
+    (summary.state ? `, ${STATE_WORDS[summary.state]}` : "") +
+    `, ${count} ${count === 1 ? "task" : "tasks"}` +
+    (summary.unread ? ", unread" : "") +
+    (extra.label ? `, ${extra.label}` : "") +
+    (extra.primary ? ", primary bot" : "")
+  );
+}
+
+/** The rows under an unfolded bot: the first six, always including the current task. */
+export function visibleTasks<T extends { key: string }>(
+  tasks: T[],
+  currentKey: string | null,
+  showAll: boolean,
+  cap: number = TASK_CAP,
+): T[] {
+  if (showAll || tasks.length <= cap) return tasks;
+  const top = tasks.slice(0, cap);
+  const current = tasks.find((task) => task.key === currentKey);
+  if (current && !top.includes(current)) top[cap - 1] = current;
+  return top;
+}
+
+/** Rows shown under an unfolded bot in one pane, so the rest of the list stays in view. */
+export const TASK_CAP_ONE_PANE = 3;
 
 function readJson<T extends object>(key: string): T {
   try {
@@ -42,7 +158,11 @@ const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
  * them; a read-only connection, whose reads the gateway never hears, keeps its
  * own memory of what it read.
  */
-export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
+export function useSelection(
+  state: ClawtrateState,
+  gatewayOwnsUnread = false,
+  conversationVisible = true,
+) {
   const [botId, setBotId] = useState<string | null>(() => readPreference("bot"));
   const [taskByBot, setTaskByBot] = useState<Record<string, string>>(() => readJson("tasks"));
   const [seen, setSeen] = useState<SeenMap>(() => readJson(SEEN_KEY));
@@ -57,19 +177,34 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
     [bot, state.tasksByBot],
   );
+  const gatewayId = state.connection.gatewayId;
+  const [linked, setLinked] = useState<{ task: Task; gatewayId: string | null } | null>(null);
   const remembered = bot ? taskByBot[bot.id] : undefined;
-  const task = tasks.find((t) => t.key === remembered) ?? tasks[0] ?? null;
+  if (
+    linked?.gatewayId === gatewayId &&
+    state.tasksByBot[linked.task.botId]?.some((t) => t.key === linked.task.key)
+  )
+    setLinked(null);
+  const task =
+    tasks.find((t) => t.key === remembered) ??
+    (linked?.gatewayId === gatewayId &&
+    linked.task.key === remembered &&
+    linked.task.botId === bot?.id
+      ? linked.task
+      : null) ??
+    tasks[0] ??
+    null;
 
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
   const markRead = useCallback(() => {
-    if (!task || keptUnread.has(task.key)) return;
+    if (!conversationVisible || !task || keptUnread.has(task.key)) return;
     setSeen((current) => {
       const next = markSeen(current, task);
       if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
       return next;
     });
-  }, [task, keptUnread]);
+  }, [task, keptUnread, conversationVisible]);
 
   /**
    * A read the gateway refused or that failed: this viewer forgets having read
@@ -140,7 +275,8 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
 
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
   const selectTask = useCallback(
-    (id: string, key: string) => {
+    (id: string, key: string, linkedTask: Task | null = null) => {
+      setLinked(linkedTask && { task: linkedTask, gatewayId });
       // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
       // so a newer task of the bot does not take its place.
       if (id === bot?.id && key === remembered) return;
@@ -165,20 +301,21 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
         return next;
       });
     },
-    [bot, task, remembered, markRead, setFolded],
+    [bot, task, remembered, gatewayId, markRead, setFolded],
   );
 
   const isOpen = useCallback(
-    (id: string) =>
-      (state.tasksByBot[id]?.length ?? 0) > 1 && (held.has(id) || (id === bot?.id && !openFolded)),
+    (id: string, hasRoutineRows = false) =>
+      (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) &&
+      (held.has(id) || (id === bot?.id && !openFolded)),
     [state.tasksByBot, held, bot, openFolded],
   );
 
   /** Fold or unfold by hand, without changing the selection. */
   const toggleFold = useCallback(
-    (id: string) => {
-      if ((state.tasksByBot[id]?.length ?? 0) < 2) return;
-      if (isOpen(id)) {
+    (id: string, hasRoutineRows = false) => {
+      if (!hasRoutineRows && (state.tasksByBot[id]?.length ?? 0) < 2) return;
+      if (isOpen(id, hasRoutineRows)) {
         updateHeld((ids) => ids.delete(id));
         if (id === bot?.id) setFolded(true);
       } else {
@@ -191,10 +328,10 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
 
   /** Make one bot the only one unfolded among `group` (the pinned bots: their block has one owner). */
   const unfoldOnly = useCallback(
-    (id: string, group: string[]) => {
+    (id: string, group: string[], hasRoutineRows = false) => {
       updateHeld((ids) => {
         for (const other of group) if (other !== id) ids.delete(other);
-        if ((state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
+        if (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
       });
       if (bot && bot.id !== id && group.includes(bot.id)) setFolded(true);
       if (bot?.id === id) setFolded(false);

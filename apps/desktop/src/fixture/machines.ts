@@ -14,10 +14,12 @@
 //            never answers, or fails
 //   devices=noscope   no device access
 //   override=1        media-box's file has an entry for Otto that asks every time
-//   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
+//   mwrite=refused|conflict|unanswered|unreadable|unconfirmed|pending|notapplied   how a change
+//            goes; unreadable: its answer is lost and the gateway's settings file can't be read
 //   mslow=<bot>       that bot's placement read never answers
 //   plugins=none      the settings hold no plugin entries to inspect
-//   pairing=grant     a request for device access is approved after a moment
+//   pairing=grant     a request for device access is approved after a moment, or on release if
+//                     a test holds answers
 
 import {
   type ApprovalsFile,
@@ -181,17 +183,6 @@ function world(now: number, params: MachineParams) {
   };
 }
 
-const later = <T>(ms: number, value: () => T) =>
-  new Promise<T>((resolve, reject) =>
-    setTimeout(() => {
-      try {
-        resolve(value());
-      } catch (error) {
-        reject(error);
-      }
-    }, ms),
-  );
-
 /**
  * The machine commands, answered on the fixture's world. Returns undefined for
  * a command that is not one of them.
@@ -201,6 +192,7 @@ export function machineCommands(now: number, params: MachineParams) {
   const admin = (state: ClawtrateState) => state.connection.canAdmin;
   /** The fixture's configuration revision: a save moves it on. */
   let revision = 1;
+  let unreadable = false;
   const pairing = (state: ClawtrateState) =>
     state.connection.scopes.includes("operator.pairing") ||
     (params.devices !== "noscope" && state.connection.canAdmin);
@@ -349,12 +341,30 @@ export function machineCommands(now: number, params: MachineParams) {
     command: BridgeCommand,
     get: () => ClawtrateState,
     set: (state: ClawtrateState) => void,
+    deferred: (run: () => void, ms: number) => void,
   ): Promise<unknown> | undefined {
     const state = get();
+    // Every answer is one a test can hold, to look at what shows until it comes.
+    const later = <T>(ms: number, value: () => T) =>
+      new Promise<T>((resolve, reject) =>
+        deferred(() => {
+          try {
+            resolve(value());
+          } catch (error) {
+            reject(error);
+          }
+        }, ms),
+      );
     switch (command.type) {
       case "readPlacement":
         if (params.machine === "loading" || params.slow === command.botId)
           return new Promise(() => {});
+        if (unreadable)
+          return later(0, () => {
+            throw new Error(
+              "The gateway reports that its settings file isn't valid, so it can't be read.",
+            );
+          });
         if (params.machine === "error")
           return later(300, () => {
             throw new Error("The gateway did not answer.");
@@ -370,17 +380,39 @@ export function machineCommands(now: number, params: MachineParams) {
       case "setCommandMachine":
         return later(300, (): ConfigSave => {
           if (!admin(state)) throw new Error("Changing where a bot runs needs admin access.");
+          if (params.write === "refused")
+            return {
+              status: "refused",
+              message: "invalid config: agents.entries.otto.tools.exec.node",
+            };
+          if (params.write === "conflict" || command.baseHash !== `c${revision}`)
+            return {
+              status: "refused",
+              message: "config changed since last load; re-run config.get and retry",
+            };
           refuse();
-          if (command.baseHash !== `c${revision}`)
-            throw new Error(
-              "Couldn't save where its commands run. The gateway answered: config changed since last load; re-run config.get and retry",
-            );
+          if (params.write === "unreadable") {
+            unreadable = true;
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: null,
+            };
+          }
           revision += 1;
           w.exec[command.botId] =
             command.host === "node"
               ? { host: "node", node: command.nodeId }
               : { host: "gateway", node: null };
+          // The change landed and its answer was lost: what reading it back shows is all there is.
+          if (params.write === "unanswered")
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: place(command.botId),
+            };
           return {
+            status: "saved",
             place: place(command.botId),
             active:
               params.write === "pending"
@@ -461,14 +493,19 @@ export function machineCommands(now: number, params: MachineParams) {
           approveCommand: null,
           error: null,
         });
-        setTimeout(() => {
-          upgrade({
-            status: "pending",
-            requestId: "8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
-            approveCommand: "openclaw devices approve 8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
-          });
-          if (params.pairing === "grant")
-            setTimeout(() => {
+        // The request's pending state and the owner's approval are answers a test can hold.
+        deferred(
+          () =>
+            upgrade({
+              status: "pending",
+              requestId: "8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
+              approveCommand: "openclaw devices approve 8c2d4e6f-1a3b-4c5d-9e7f-0a1b2c3d4e5f",
+            }),
+          300,
+        );
+        if (params.pairing === "grant")
+          deferred(
+            () =>
               set({
                 ...get(),
                 connection: {
@@ -476,9 +513,9 @@ export function machineCommands(now: number, params: MachineParams) {
                   scopes,
                   upgrade: { ...get().connection.upgrade, status: "approved" },
                 },
-              });
-            }, 600);
-        }, 300);
+              }),
+            900,
+          );
         return Promise.resolve();
       }
       default:

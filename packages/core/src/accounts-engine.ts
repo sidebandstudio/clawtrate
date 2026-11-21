@@ -1578,7 +1578,7 @@ const CERTAIN_REFUSALS = new Set([
   "CONFLICT",
 ]);
 
-function isCertainRefusal(error: unknown): boolean {
+export function isCertainRefusal(error: unknown): boolean {
   return error instanceof GatewayProtocolRequestError && CERTAIN_REFUSALS.has(error.code);
 }
 

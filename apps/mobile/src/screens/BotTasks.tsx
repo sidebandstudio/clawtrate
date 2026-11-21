@@ -4,8 +4,8 @@
 // this build does not ask for, so it is not shown.
 
 import type { Bot, ClawtrateState } from "@clawtrate/core";
-import { noTasksBody, TASK_WORDS } from "@clawtrate/ui/summary";
-import type { SeenMap } from "@clawtrate/ui/unread";
+import { noTasksBody, TASK_WORDS } from "../presentation/summary.ts";
+import type { SeenMap } from "../../../../packages/ui/src/unread.ts";
 import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Avatar } from "../components/Avatar.tsx";

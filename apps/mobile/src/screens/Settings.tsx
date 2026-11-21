@@ -1,12 +1,12 @@
 // Settings, a sheet over the shell, with the desktop's Gateway pane in its words
-// (`@clawtrate/ui/gateway-state`): the address, the state and its dot, this
+// (`presentation/gateway-state.ts`): the address, the state and its dot, this
 // device, the scopes the gateway granted, the gateway's version, the error when
 // there is one; Disconnect, which keeps the pairing, Reconnect, and Use another
 // gateway, which forgets this one.
 
 import type { ConnectionState } from "@clawtrate/core";
-import { isCleartext, scopeWords } from "@clawtrate/ui/connect-words";
-import { gatewayLabel } from "@clawtrate/ui/format";
+import { isCleartext, scopeWords } from "../presentation/connect-words.ts";
+import { gatewayLabel } from "../../../../packages/ui/src/format.ts";
 import {
   addressWords,
   gatewayActions,
@@ -17,12 +17,11 @@ import {
   pairingNote,
   serverWords,
   SETTINGS_WORDS as W,
-} from "@clawtrate/ui/gateway-state";
+} from "../presentation/gateway-state.ts";
 import { useState, type ReactNode } from "react";
 import { Modal, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
-import { PrivacyCover } from "../components/PrivacyCover.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
 import { Cleartext } from "./Connect.tsx";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
@@ -219,7 +218,7 @@ export function Settings({
                   testID="disconnect"
                 />
               )}
-              {actions.forget && (
+              {actions.forget && connection.gatewayUrl !== null && (
                 <Button
                   label={W.useAnother}
                   variant="quiet"
@@ -228,7 +227,8 @@ export function Settings({
                   onPress={() => {
                     onClose();
                     onForget();
-                    void send({ type: "disconnect" });
+                    const { gatewayUrl } = connection;
+                    if (gatewayUrl !== null) void send({ type: "disconnect", gatewayUrl });
                   }}
                 />
               )}
@@ -259,7 +259,6 @@ export function Settings({
           </ScrollView>
         )}
       </SafeAreaView>
-      <PrivacyCover />
     </Modal>
   );
 }

@@ -2,22 +2,25 @@
 // panes: the list of sections, and the chosen one. Its Gateway pane shows the
 // connection as it is (address, state, this device, the scopes the gateway
 // granted) and offers Reconnect and Disconnect; Accounts lists the gateway's
-// accounts. A modal dialog: focus stays inside it, Escape closes it, and
-// focus returns to where it was.
+// accounts; Check-ins shows each bot's check-ins. A modal dialog: focus stays
+// inside it, Escape closes it, and focus returns to where it was.
 
 import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
   type Bot,
+  type CheckInsState,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
@@ -25,30 +28,60 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { CommandLine } from "./ConnectScreen.tsx";
+import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
-import {
-  addressWords,
-  gatewayActions,
-  gatewayDot,
-  gatewayProblem,
-  gatewayState,
-  grantedWords,
-  pairingNote,
-  serverWords,
-  SETTINGS_WORDS as W,
-} from "./gateway-state.ts";
+import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 
-export { gatewayProblem, gatewayState } from "./gateway-state.ts";
+/** The connection's state, as the Gateway pane names it. */
+export function gatewayState(connection: ConnectionState): string {
+  switch (connection.status) {
+    case "connected":
+      // Re-pairing: the gateway holds this device's new authorization until its owner decides.
+      return connection.upgrade.status === "requesting" || connection.upgrade.status === "pending"
+        ? "Pairing pending"
+        : "Connected";
+    case "pairing":
+      return "Pairing pending";
+    case "disconnected":
+      return "Disconnected";
+    case "idle":
+      return "Not connected";
+    case "error":
+      return "Offline";
+    case "connecting":
+    case "reconnecting":
+      // An attempt under way is connecting; waiting for the next one is offline.
+      return connection.retryAt === null ? "Connecting" : "Offline";
+  }
+}
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "updates";
+/** The pane's error line: pairing rejected or expired, unreachable, protocol incompatible. */
+function gatewayProblem(connection: ConnectionState): { title: string; message: string } | null {
+  const error = connection.error;
+  if (!error) return null;
+  if (error.code === "PROTOCOL_MISMATCH") {
+    return { title: "This gateway speaks another protocol", message: error.message };
+  }
+  if (error.code === "PAIRING_ENDED") {
+    return { title: failureTitle(error.code), message: error.message };
+  }
+  if (connection.status === "connected") return null;
+  return {
+    title: "Can't reach the gateway",
+    message: [error.message, error.hint].filter(Boolean).join(" "),
+  };
+}
+
+type Section =
+  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["checkins", "Check-ins"],
   ["updates", "Updates"],
 ];
 
@@ -115,11 +148,45 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
 
+function GatewayConnectionButton({ action }: { action: "retry" | "suspend" }) {
+  const send = useCommand();
+  const [failed, setFailed] = useState(false);
+  const reconnect = action === "retry";
+  const apply = () => {
+    setFailed(false);
+    void send({ type: action }).then(
+      () => setFailed(false),
+      () => setFailed(true),
+    );
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="button"
+        data-variant={reconnect ? "primary" : undefined}
+        onClick={apply}
+      >
+        {reconnect ? "Reconnect" : "Disconnect"}
+      </button>
+      {failed && (
+        <div className="form-error" role="alert">
+          {reconnect
+            ? "Could not reconnect to this gateway."
+            : "Could not disconnect from this gateway."}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function Settings({
   connection,
   info,
   accounts,
+  checkIns,
   bots,
+  waitingMessages,
   initialUpdates,
   updateReading,
   onClose,
@@ -127,7 +194,9 @@ export function Settings({
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
+  checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
+  waitingMessages: string;
   initialUpdates: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
@@ -142,16 +211,22 @@ export function Settings({
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
-    setSectionState(next);
-    setPane("section");
-    requestAnimationFrame(() =>
-      dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus(),
-    );
+    // Focus the mounted heading during navigation, before the next key can reach a control.
+    flushSync(() => {
+      setSectionState(next);
+      setPane("section");
+    });
+    dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
+  const { forget, failure: forgetProblem } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
-  const actions = gatewayActions(connection);
-  const server = serverWords(connection);
+  const canReconnect = state === "Offline" || state === "Disconnected";
+  const canDisconnect =
+    connection.status === "connected" ||
+    connection.status === "connecting" ||
+    connection.status === "reconnecting";
   const deviceName =
     info.deviceName ?? (info.kind === "desktop" ? "Clawtrate Desktop" : "Clawtrate Web");
   // Re-pair (F-456): ask the gateway's owner for this device's interactive access. The old
@@ -191,7 +266,14 @@ export function Settings({
     )?.focus();
   });
 
-  const dot = gatewayDot(state);
+  const dot =
+    state === "Connected"
+      ? "connected"
+      : state === "Connecting" || state === "Pairing pending"
+        ? "connecting"
+        : state === "Offline"
+          ? "error"
+          : "disconnected";
 
   const toNav = (
     <button
@@ -216,7 +298,7 @@ export function Settings({
     <button
       type="button"
       className="icon-button b-close settings-close"
-      aria-label={W.close}
+      aria-label="Close settings"
       title="Close (Esc)"
       onClick={onClose}
     >
@@ -225,7 +307,7 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({
-    refreshOnOpen: !initialUpdates || section !== "updates",
+    refreshOnOpen: section !== "updates",
     accounts,
     bots,
     connection,
@@ -242,38 +324,52 @@ export function Settings({
     announce,
     toNav,
   });
+  const checkInsSection = useCheckInsSection({
+    active: section === "checkins",
+    checkIns,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
       <dl className="facts" data-testid="gateway-facts">
         <div>
-          <dt>{W.address}</dt>
-          <dd title={addressWords(connection.gatewayUrl)}>{addressWords(connection.gatewayUrl)}</dd>
+          <dt>Address</dt>
+          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? "None yet"}</dd>
         </div>
         <div>
-          <dt>{W.state}</dt>
+          <dt>State</dt>
           <dd className="settings-state" data-testid="gateway-state">
             <span className="status-dot" data-status={dot} aria-hidden="true" />
             {state}
           </dd>
         </div>
         <div>
-          <dt>{W.device}</dt>
+          <dt>This device</dt>
           <dd>
             {deviceName}
             {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
           </dd>
         </div>
         <div>
-          <dt>{W.scopes}</dt>
+          <dt>Granted scopes</dt>
           <dd data-testid="granted-scopes" className="b-wrap-value">
-            {grantedWords(connection)}
+            {connection.status === "connected" && connection.scopes.length > 0
+              ? connection.scopes.join(", ")
+              : "None while not connected"}
           </dd>
         </div>
-        {server && (
+        {connection.serverVersion && (
           <div>
-            <dt>{W.server}</dt>
-            <dd>{server}</dd>
+            <dt>Gateway</dt>
+            <dd>
+              OpenClaw {connection.serverVersion}
+              {connection.protocol !== null ? ` · protocol ${connection.protocol}` : ""}
+            </dd>
           </div>
         )}
       </dl>
@@ -306,35 +402,31 @@ export function Settings({
         </div>
       )}
       <div className="settings-actions">
-        {actions.reconnect && (
-          <button
-            type="button"
-            className="button"
-            data-variant="primary"
-            onClick={() => void send({ type: "retry" })}
-          >
-            {W.reconnect}
-          </button>
+        {canReconnect && <GatewayConnectionButton key={`retry:${gatewayUrl}`} action="retry" />}
+        {canDisconnect && (
+          <GatewayConnectionButton key={`suspend:${gatewayUrl}`} action="suspend" />
         )}
-        {actions.disconnect && (
-          <button type="button" className="button" onClick={() => void send({ type: "suspend" })}>
-            {W.disconnect}
-          </button>
-        )}
-        {actions.forget && (
+        {gatewayUrl && (
           <button
             type="button"
             className="button"
             data-variant="quiet"
             onClick={() => {
-              onClose();
-              void send({ type: "disconnect" });
+              // Settings stays open until the gateway is forgotten, to say if it was not.
+              void forget(gatewayUrl).then((forgotten) => {
+                if (forgotten) onClose();
+              });
             }}
           >
-            {W.useAnother}
+            Use another gateway
           </button>
         )}
       </div>
+      {forgetProblem && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {forgetProblem}
+        </div>
+      )}
       {canRePair && (
         <div className="settings-repair-actions">
           <button
@@ -349,11 +441,15 @@ export function Settings({
       )}
       {connection.gatewayUrl && (
         <p className="settings-note">
-          {pairingNote(gatewayLabel(connection.gatewayUrl), {
-            admin: connection.canAdmin,
-            holdsAll,
-            readOnly: info.readOnly,
-          })}
+          {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
+          disconnected.{" "}
+          {connection.canAdmin
+            ? "This device holds admin access, which it asked for to change bots and accounts."
+            : holdsAll
+              ? "This device can send, stop and answer."
+              : info.readOnly
+                ? "This device asks for read access only."
+                : "This device reads. Re-pair to ask for sending, stopping and answering."}
         </p>
       )}
     </>
@@ -365,25 +461,27 @@ export function Settings({
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : section === "conversation"
-          ? {
-              title: "Conversation",
-              back: toNav,
-              body: <ConversationPane announce={announce} />,
-              foot: null,
-            }
-          : section === "usage"
-            ? usageSection
-            : section === "machines"
-              ? machinesSection
-              : section === "updates"
-                ? {
-                    title: "Updates",
-                    back: toNav,
-                    foot: null,
-                    body: <Updates {...updateReading} />,
-                  }
-                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : section === "checkins"
+          ? checkInsSection
+          : section === "conversation"
+            ? {
+                title: "Conversation",
+                back: toNav,
+                body: <ConversationPane announce={announce} />,
+                foot: null,
+              }
+            : section === "usage"
+              ? usageSection
+              : section === "machines"
+                ? machinesSection
+                : section === "updates"
+                  ? {
+                      title: "Updates",
+                      back: toNav,
+                      foot: null,
+                      body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
+                    }
+                  : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

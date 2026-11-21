@@ -22,6 +22,8 @@ pnpm package:win
 
 `pnpm package:win` writes `apps/desktop/dist/Clawtrate-<version>-win-x64.exe`, the installer, and `apps/desktop/dist/win-unpacked`, the app it installs, which runs as it is. electron-builder downloads Electron into `%LOCALAPPDATA%\electron\Cache` and its NSIS and 7-Zip tools into `%LOCALAPPDATA%\electron-builder\Cache` (or `ELECTRON_BUILDER_CACHE`), about 175 MB together.
 
+The release-candidate plan checks for Windows PE executable structure. Before upload, the Windows build job reads the PE header of `apps/desktop/dist/win-unpacked/Clawtrate.exe` and requires AMD64. The plan can carry that observation from the build record.
+
 `pnpm check:packaged` then starts `win-unpacked\Clawtrate.exe` with a temporary data folder; with `CLAWTRATE_PACKAGED_APP` set to the folder the installer installed into, it starts that app instead, as CI does. Run it from a terminal in your own desktop session, since it opens the app's window; Playwright needs no browser download for it. On Windows it checks that the window is titled Clawtrate, the page comes from the app's archive and shows the connect screen, the page has no Node and stays on its own content, the bridge and the content security policy, that the executable's fuses are the ones packaging sets, that the renderers run at untrusted integrity (the sandbox), that a count sent through `setBadge` puts an overlay on its taskbar button and zero clears it, that a second launch hands over to the running app, and that the app closes when asked and leaves nothing running. The four tests that need a development gateway are reported as skipped: the development gateway controller does not run on Windows ([docs/decisions.md](../decisions.md#packaging) says why). The first run can spend half a minute in the sandbox test while PowerShell compiles the small helper that reads the processes' integrity levels.
 
 ## Signing and notarizing
@@ -57,7 +59,7 @@ The build fixes the update sources in the Electron main process. Check fetches t
 - `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL` supplies the Nightly HTTPS feed independently of Stable. Each feed must serve its artifacts from its own origin without redirects or credentials.
 - `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. The engine’s age helper uses this date for a later required-update feature.
 
-After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. The generator sets the feed track from the package version, `X.Y.Z` for stable or `X.Y.Z-nightly.YYYYMMDD.N` for nightly, with a calendar year from 1000 to 9999 and a numeric run number N. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same HTTPS origin, including the same port, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
+After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. The generator sets the feed track from the package version, `X.Y.Z` for stable or `X.Y.Z-nightly.YYYYMMDD.N` for nightly, with a calendar year from 1000 to 9999 and a numeric run number N. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing. Before offering either track, follow the [owner procedure](releases.md#owner-procedure) and its in-place installation gate. A feed and its files must be served directly from the same HTTPS origin, including the same port, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
 
 ## Opening an unsigned build
 
@@ -77,3 +79,5 @@ pnpm brand:icons
 ```
 
 To change the logo, replace that one file and run both commands. A unit test fails if the generated icons are older than the logo. The interface's accent color is taken from the mark and defined in `packages/ui/src/styles/tokens.css`.
+
+The installed updater trial must establish cache-only trust using the actual signing leaf. Signed Windows builds keep Restart unavailable pending the installed sharing and in-place upgrade trial.

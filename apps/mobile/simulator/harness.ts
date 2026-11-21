@@ -252,7 +252,11 @@ function simctl(...args: string[]) {
  * (so the pairing screen shows the dev tool's approve command). `fresh` first
  * resets the device's Keychain: the app starts with no gateway and a new key.
  */
-export function launch(options: { fresh?: boolean; devGateway: string }) {
+export function launch(options: {
+  fresh?: boolean;
+  devGateway: string;
+  switcherProbePort?: number;
+}) {
   quit();
   if (options.fresh) simctl("keychain", env.device, "reset");
   simctl(
@@ -263,6 +267,9 @@ export function launch(options: { fresh?: boolean; devGateway: string }) {
     options.devGateway,
     "-ClawtrateDevGatewayInstance",
     env.instance,
+    ...(options.switcherProbePort === undefined
+      ? []
+      : ["-ClawtrateSwitcherProbePort", String(options.switcherProbePort)]),
   );
 }
 
@@ -340,7 +347,7 @@ export async function switcherSnapshot(after: number) {
     encoding: "utf8",
   });
   if (converted.status !== 0) throw new Error(`Could not read the snapshot: ${converted.stderr}`);
-  return decodePng(readFileSync(png));
+  return { ...decodePng(readFileSync(png)), savedAt: snapshot.time };
 }
 
 /** The screen now, whole, as pixels. */

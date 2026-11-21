@@ -2,9 +2,11 @@
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
+import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
@@ -26,11 +28,8 @@ export type PairingRequest = {
   requestId: string;
   deviceId: string;
   message: string;
-  /**
-   * What the person approving runs. The host chooses it, because it knows which gateway this is;
-   * null when the gateway's request id is not in its own form, so no command is built from it.
-   */
-  approveCommand: string | null;
+  /** What the person approving runs. The host chooses it, because it knows which gateway this is. */
+  approveCommand: string;
   /** Where and by whom the command is run, when that is not obvious. */
   approveNote: string | null;
   requestedScopes: string[];
@@ -222,6 +221,11 @@ export type TranscriptBlock =
        * rows shows several bubbles, each with its own.
        */
       messageId?: string;
+      /**
+       * The gateway's id of the message this bubble's row answers (`openclawDelivery.replyToId`):
+       * its thread. OpenClaw 2026.10.6 keeps one only on a row with no tool call.
+       */
+      replyToId?: string;
     }
   | { kind: "reasoning"; text: string }
   | {
@@ -255,9 +259,14 @@ export type TranscriptItem = {
   messageId?: string;
   /**
    * The message this user row replies to, as the gateway's history says (`__openclaw.replyToId`),
-   * with its preview of it. A bot's turn carries none here (see `replyReference` in `mapping.ts`).
+   * with its preview of it. A bot's turn carries none here: each of its bubbles has its own.
    */
   replyTo?: ReplyReference;
+  /**
+   * The key the gateway stored this user row under (`__openclaw.idempotencyKey`): what ties it to a
+   * message this client sent (`namesOutgoing`).
+   */
+  idempotencyKey?: string;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
@@ -364,6 +373,11 @@ export type ClawtrateState = {
    */
   accounts: AccountsState;
   /**
+   * The gateway's scheduled jobs, check-in jobs left out (`routines.ts`): read
+   * on every connect from `cron.list` and kept current by the `cron` event.
+   */
+  routines: RoutinesState;
+  /**
    * A secondary alarm: roughly what the state takes, against the arithmetic
    * bound of `state-bounds.ts`. The bound holds by construction; `near` only
    * says it is being approached.
@@ -380,6 +394,12 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
+   * their own settings and the save under way. Absent until a screen reads them
+   * (`refreshCheckIns`).
+   */
+  checkIns?: CheckInsState;
   /**
    * Warning budgets as the gateway keeps them for this person, each one's count
    * for its current period, and the limits providers report (`usage.ts`).
@@ -471,6 +491,7 @@ export const initialState: ClawtrateState = {
   unroutedApprovalsOmitted: 0,
   creations: [],
   accounts: initialAccountsState,
+  routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
   usage: initialUsage,

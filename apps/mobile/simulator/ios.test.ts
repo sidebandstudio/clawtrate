@@ -15,12 +15,12 @@ import {
   pairingLede,
   PRODUCT_NAME,
   SLOGAN,
-} from "@clawtrate/ui/connect-words";
-import { ENSEMBLE } from "@clawtrate/ui/character";
-import { noTasksBody, TASK_WORDS } from "@clawtrate/ui/summary";
-import { CONVERSATION_WORDS } from "@clawtrate/ui/conversation-words";
-import { stampTime } from "@clawtrate/ui/format";
-import { addressWords } from "@clawtrate/ui/gateway-state";
+} from "../src/presentation/connect-words.ts";
+import { ENSEMBLE } from "../src/presentation/character.ts";
+import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
+import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
+import { stampTime } from "../../../packages/ui/src/format.ts";
+import { addressWords } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { REDACTED } from "../src/host/secrets.ts";
 import { TASKS_FAILED } from "../src/lists.ts";
@@ -152,6 +152,29 @@ const hostOf = (url: string) => url.replace(/^ws:\/\//, "");
 /** A stamp's words as a pattern: the clock's space may be any space. */
 const stampPattern = (at: number) => lit(stampTime(at)).replace(/\s/g, ".");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function expectSwitcherCover({
+  data,
+  width,
+  height,
+}: Awaited<ReturnType<typeof switcherSnapshot>>) {
+  const bg = rgb(LIGHT.bg);
+  const mark = rgb("#3decc7");
+  let plain = 0;
+  let markPixels = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const color = [data[i]!, data[i + 1]!, data[i + 2]!];
+    if (near(color, bg, 4)) plain += 1;
+    else if (near(color, mark, 12)) {
+      const x = (i / 4) % width;
+      const y = Math.floor(i / 4 / width);
+      if (Math.abs(x - width / 2) < width / 10 && Math.abs(y - height / 2) < width / 10)
+        markPixels += 1;
+    }
+  }
+  expect(plain / (data.length / 4)).toBeGreaterThan(0.95);
+  expect(markPixels).toBeGreaterThan(20);
+}
 
 let proxy: Proxy;
 /** The gateway as the app reaches it: through the check's proxy, which can drop it. */
@@ -431,6 +454,63 @@ describe("the iOS app", () => {
     ]);
     const paired = (await devices()).paired.find((d) => d.deviceId === deviceId);
     expect(paired?.scopes).toEqual(["operator.read"]);
+  });
+
+  it("on iPhone, the app switcher shows the privacy cover after leaving Home", async () => {
+    // The app switcher's picture of the app is the cover: the background and the mark.
+    const left = Date.now();
+    await steps("to-home-screen", [{ pressKey: "home" }]);
+    expectSwitcherCover(await switcherSnapshot(left));
+    activate();
+    await steps("back-in-front", [waitFor({ id: "home" }, 30_000)]);
+  });
+
+  it("on iPhone, the app switcher covers Settings while JavaScript is blocked", async () => {
+    const probe = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        probe.once("listening", resolve);
+        probe.once("error", reject);
+      });
+      const address = probe.address();
+      if (!address || typeof address === "string") throw new Error("No switcher probe port");
+      launch({ devGateway: gateway, switcherProbePort: address.port });
+      await steps("settings-before-block", [
+        waitFor({ id: "home" }, 30_000),
+        tap({ id: "settings-button" }),
+        waitFor({ id: "settings" }, 20_000),
+        see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
+      ]);
+
+      const js = await until("the Simulator JS probe", async () => [...probe.clients][0]);
+      let blocked: { startedAt: number; unblockAt: number } | undefined;
+      let resumed = false;
+      js.on("message", (message) => {
+        const text = String(message);
+        if (text === "resumed") resumed = true;
+        else blocked = JSON.parse(text) as typeof blocked;
+      });
+      js.send("block");
+      const { startedAt, unblockAt } = await until("the JS callback to block", async () => blocked);
+      const backgroundedAt = Date.now();
+      expect(backgroundedAt).toBeGreaterThanOrEqual(startedAt);
+      await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }]);
+      const snapshot = await switcherSnapshot(backgroundedAt);
+      expect(snapshot.savedAt).toBeLessThan(unblockAt);
+      expectSwitcherCover(snapshot);
+
+      activate();
+      await until("the blocked JS callback to return", async () => resumed || null);
+      await steps("settings-after-block", [
+        waitFor({ id: "settings" }, 20_000),
+        see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
+        tap({ id: "settings-close" }),
+        waitFor({ id: "home" }, 20_000),
+      ]);
+    } finally {
+      for (const client of probe.clients) client.terminate();
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
   });
 
   it("F-015 F-017 F-019: on iPhone, Home lists every bot by its latest activity with its avatar, name, label pill, latest line and time, and the primary bot with its star", async () => {
@@ -931,7 +1011,7 @@ describe("the iOS app", () => {
     }
   });
 
-  it("on iPhone, Settings shows the gateway, this device and the read scope it holds, and the fonts' licenses; the app switcher sees a cover; a reinstall offers the old gateway as a choice; Disconnect keeps the pairing until Reconnect, and Use another gateway forgets the gateway but keeps the device", async () => {
+  it("on iPhone, Settings shows the gateway, this device and the read scope it holds, and the fonts' licenses; a reinstall offers the old gateway as a choice; Disconnect keeps the pairing until Reconnect, and Use another gateway forgets the gateway but keeps the device", async () => {
     await steps("settings", [
       tap({ id: "settings-button" }),
       waitFor({ id: "settings" }, 20_000),
@@ -974,22 +1054,6 @@ describe("the iOS app", () => {
     expect(infoPlist("NSLocalNetworkUsageDescription")).toBe(
       config.expo.ios.infoPlist.NSLocalNetworkUsageDescription,
     );
-
-    // The app switcher's picture of the app is the cover: the background and the mark.
-    const left = Date.now();
-    await steps("to-home-screen", [{ pressKey: "home" }]);
-    const snapshot = await switcherSnapshot(left);
-    const bg = rgb(LIGHT.bg);
-    let plain = 0;
-    for (let i = 0; i < snapshot.data.length; i += 4)
-      if (near([snapshot.data[i]!, snapshot.data[i + 1]!, snapshot.data[i + 2]!], bg, 4))
-        plain += 1;
-    expect(plain / (snapshot.data.length / 4)).toBeGreaterThan(0.95);
-    activate();
-    await steps("back-in-front", [
-      waitFor({ id: "home" }, 30_000),
-      notSee({ id: "privacy-cover" }),
-    ]);
 
     await steps("disconnect", [
       tap({ id: "settings-button" }),

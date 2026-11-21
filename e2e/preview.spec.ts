@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,8 +101,13 @@ async function openTask(page: Page, bot: string, task: string) {
       await showAll.click();
     await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
   }
-  // The task's history read decides the heading: seconds on a loaded machine.
   await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible({
+    timeout: 20_000,
+  });
+  // The heading shows while the history is still being read, and a count taken then misses
+  // the task's earlier turns; live runs can show before the read ends, too. The read takes
+  // seconds on a loaded machine.
+  await expect(page.getByTestId("transcript")).toHaveAttribute("data-status", "ready", {
     timeout: 20_000,
   });
 }
@@ -112,7 +118,7 @@ async function openTask(page: Page, bot: string, task: string) {
  * repeated check never meets an earlier run's task.
  */
 async function gatewayTask(botId: string, label: string): Promise<{ key: string; title: string }> {
-  const suffix = Math.random().toString(16).slice(2, 6);
+  const suffix = randomBytes(4).toString("hex");
   const title = `${label} ${suffix}`;
   const key = `agent:${botId}:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
   await gatewayCall("sessions.create", { key, agentId: botId, label: title });
@@ -1593,6 +1599,70 @@ test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, ea
   await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
 });
 
+test("F-067: on a real gateway, a progress row and two answers delivered as replies to different messages: each answer appears only in the thread of the message it answers, live and after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Answers in threads");
+  type Row = {
+    role: string;
+    content?: unknown;
+    openclawDelivery?: { replyToId?: string };
+    __openclaw?: { id?: string };
+  };
+  const rows = async () =>
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 50 }))
+      .messages;
+  const userRows = async () => (await rows()).filter((row) => row.role === "user").length;
+  // The outbox sends a message once write access is held, after Enter returns: idle means
+  // the turn is done only once the gateway holds the message.
+  const send = async (words: string) => {
+    const before = await userRows();
+    await composer(page).fill(words);
+    await page.keyboard.press("Enter");
+    await expect.poll(userRows, { timeout: 60_000 }).toBe(before + 1);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  };
+  const questions = ["The first question. #text", "The second question. #text"];
+  for (const words of questions) await send(words);
+  const parents = (await rows())
+    .filter((row) => row.role === "user")
+    .map((row) => row.__openclaw!.id!);
+  expect(parents).toHaveLength(2);
+  // Each turn: text beside a call, a row the gateway marks as no reply, then the answer it marks
+  // as a reply to one of the two messages.
+  for (const parent of parents) await send(`#reply-to ${parent}`);
+  const answers = (await rows()).filter((row) => row.openclawDelivery?.replyToId);
+  expect(answers.map((row) => row.openclawDelivery!.replyToId)).toEqual(parents);
+
+  const eachInItsThread = async () => {
+    for (const [index, parent] of parents.entries()) {
+      const message = page.locator(`[data-testid="message"][data-message="${parent}"]`);
+      const link = message.getByTestId("replies-link");
+      await expect(link).toHaveText("1 reply", { timeout: 30_000 });
+      await link.click();
+      const thread = page.getByRole("dialog", { name: "Thread" });
+      await expect(thread.getByTestId("thread-message")).toHaveText([
+        new RegExp(questions[index]!.replace(/[.#]/g, "\\$&")),
+        new RegExp(`This answers ${parent}\\.`),
+      ]);
+      await expect(thread.getByTestId("thread-message").last()).toHaveAttribute(
+        "data-role",
+        "assistant",
+      );
+      await expect(thread).not.toContainText("I will look first");
+      await page.keyboard.press("Escape");
+      await expect(thread).toHaveCount(0);
+    }
+  };
+  await eachInItsThread();
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await eachInItsThread();
+});
+
 test("F-071 F-070: / lists the bot's own skills by name and the gateway's commands, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({
   page,
 }) => {
@@ -2286,13 +2356,13 @@ const actionLines = (page: Page) =>
     nodes.map((node) => node.getAttribute("aria-label")!.replace(/, ([0-9.]+ seconds|done)$/, "")),
   );
 
-// These runs go to a task no other check sends to, so nothing another check leaves behind
-// (a stopped run, a refused send) changes them.
+// These runs go to a task of their own, so nothing another check leaves behind (a stopped run,
+// a refused send, another check's reads) changes them.
 test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five files fold into one card, the status line says the running card and brings it into view, and the run ends with a run line", async ({
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
+  const { title } = await ownTaskOf(page, "pip", "Pip", "Go through the workspace");
   await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
   await page.keyboard.press("Enter");
   // While the slow tool runs: the reads are one card, the slow call its own card, running.
@@ -2335,11 +2405,12 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   // History reloaded: the page is loaded again and reads the task anew; the same cards.
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
   // Every card is the same. History keeps no `details` for a tool-server result, but the
-  // gateway's map of tool names (`tools.effective`) still names the server and tool.
-  expect(await actionLines(page)).toEqual(ended);
+  // gateway's map of tool names (`tools.effective`) still names the server and tool, once the
+  // task's read of it, made after the history loads, has been answered.
+  await expect.poll(() => actionLines(page), { timeout: 30_000 }).toEqual(ended);
   expect(ended).toContain("Used coder, slow task");
 });
 
@@ -2348,12 +2419,10 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 }) => {
   test.setTimeout(180_000);
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
-  // This run's line is one more than the task has now; earlier checks left runs here.
-  const lines = await page.getByTestId("run-line").count();
+  const { title } = await ownTaskOf(page, "pip", "Pip", "Read it all");
   await composer(page).fill(`Read it all. ${Array(7).fill("#read-six").join(" ")}`);
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("run-line")).toHaveCount(lines + 1, { timeout: 120_000 });
+  await expect(page.getByTestId("run-line")).toHaveCount(1, { timeout: 120_000 });
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 120_000 });
   const run = page.getByTestId("run-line").last();
   await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 42 actions$/);
@@ -2371,7 +2440,7 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByText("Read it all.", { exact: false }).last()).toBeVisible({
     timeout: 30_000,
   });

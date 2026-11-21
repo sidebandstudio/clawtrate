@@ -1,4 +1,5 @@
-import { expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { writeFileSync } from "node:fs";
 
 /** Where the fixture is served: 5341 unless `CLAWTRATE_FIXTURE_PORT` names another. */
 export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
@@ -46,6 +47,18 @@ export async function openFixture(page: Page, query: string, theme: Theme): Prom
     .poll(() => page.evaluate(() => document.fonts.check('15px "Figtree Variable"')))
     .toBe(true);
 }
+
+// The fixture's answers are held and then let through by the check, not left to a page timer:
+// on a loaded machine the check can look too late, or the timer can stay unfired for longer than
+// the check waits (#248, #252).
+export const hold = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
+export const release = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
 
 /** Let layout, ResizeObservers and the follow-to-end logic settle. */
 export async function settle(page: Page): Promise<void> {
@@ -98,44 +111,85 @@ export async function paintedFinal(page: Page): Promise<void> {
       { message: "fonts loaded and images decoded" },
     )
     .toBe(true);
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            new Promise<boolean>((resolve) => {
-              const geometry = () => {
-                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
-                const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
-                return JSON.stringify([
-                  transcript
-                    ? [transcript.scrollTop, transcript.scrollHeight, transcript.clientHeight]
-                    : null,
-                  rows.map((row) => {
-                    const box = row.getBoundingClientRect();
-                    return [box.top, box.height];
-                  }),
-                ]);
-              };
-              const atEnd = () => {
-                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
-                return (
-                  !transcript ||
-                  transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
-                );
-              };
-              const seen = [geometry()];
-              const frame = () => {
-                seen.push(geometry());
-                if (seen.length < 4) requestAnimationFrame(frame);
-                else resolve(new Set(seen).size === 1 && atEnd());
-              };
-              requestAnimationFrame(frame);
-            }),
-        ),
-      { message: "the transcript at its end and the shelf, unchanged for three frames" },
-    )
-    .toBe(true);
+  // When the wait times out, keep what each frame looked like so the artifact shows
+  // whether the transcript stopped following the end or the shelf kept moving.
+  const frames: Array<{
+    scrollTop: number | null;
+    scrollHeight: number | null;
+    clientHeight: number | null;
+    shelf: number[][];
+  }> = [];
+  try {
+    await expect
+      .poll(
+        async () => {
+          const attempt = await page.evaluate(
+            () =>
+              new Promise<{
+                atEnd: boolean;
+                frames: Array<{
+                  scrollTop: number | null;
+                  scrollHeight: number | null;
+                  clientHeight: number | null;
+                  shelf: number[][];
+                }>;
+              }>((resolve) => {
+                const geometry = () => {
+                  const transcript = document.querySelector<HTMLElement>(
+                    "[data-testid=transcript]",
+                  );
+                  const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
+                  return {
+                    scrollTop: transcript ? transcript.scrollTop : null,
+                    scrollHeight: transcript ? transcript.scrollHeight : null,
+                    clientHeight: transcript ? transcript.clientHeight : null,
+                    shelf: rows.map((row) => {
+                      const box = row.getBoundingClientRect();
+                      return [box.left, box.top, box.width, box.height];
+                    }),
+                  };
+                };
+                const atEnd = () => {
+                  const transcript = document.querySelector<HTMLElement>(
+                    "[data-testid=transcript]",
+                  );
+                  return (
+                    !transcript ||
+                    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
+                  );
+                };
+                const seen = [geometry()];
+                const frame = () => {
+                  seen.push(geometry());
+                  if (seen.length < 4) requestAnimationFrame(frame);
+                  else {
+                    // Record the full boxes, but keep the wait on the original vertical layout.
+                    const layouts = seen.map(({ shelf, ...transcript }) =>
+                      JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
+                    );
+                    resolve({ atEnd: new Set(layouts).size === 1 && atEnd(), frames: seen });
+                  }
+                };
+                requestAnimationFrame(frame);
+              }),
+          );
+          frames.push(...attempt.frames);
+          return attempt.atEnd;
+        },
+        { message: "the transcript at its end and the shelf, unchanged for three frames" },
+      )
+      .toBe(true);
+  } catch (error) {
+    // A body attachment reaches disk only through the trace, so write the file where
+    // the artifact is gathered from and attach it by path.
+    const path = test.info().outputPath("painted-final-frames.json");
+    writeFileSync(path, JSON.stringify(frames, null, 2));
+    await test.info().attach("painted-final-frames", {
+      path,
+      contentType: "application/json",
+    });
+    throw error;
+  }
 }
 
 /** On a phone the conversation covers the list; show the list. */

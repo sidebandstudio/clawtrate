@@ -5,8 +5,8 @@
 // gateway for its bots and tasks again, as Retry now does.
 
 import type { ClawtrateState } from "@clawtrate/core";
-import { LIST_WORDS, listNote } from "@clawtrate/ui/summary";
-import type { SeenMap } from "@clawtrate/ui/unread";
+import { LIST_WORDS, listNote } from "../presentation/summary.ts";
+import type { SeenMap } from "../../../../packages/ui/src/unread.ts";
 import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";

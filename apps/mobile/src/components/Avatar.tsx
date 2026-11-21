@@ -1,6 +1,6 @@
 // A bot's avatar: its picture cropped to a circle when the gateway gives one,
 // otherwise its character, drawn from the same shapes and hash as the desktop
-// (`@clawtrate/ui/character`). The primary bot carries the star at its lower
+// (`presentation/character.ts`). The primary bot carries the star at its lower
 // right (F-015), a neutral disc as on the desktop.
 
 import type { Bot } from "@clawtrate/core";
@@ -15,7 +15,7 @@ import {
   type CharacterSpec,
   type FaceState,
   type Shape,
-} from "@clawtrate/ui/character";
+} from "../presentation/character.ts";
 import { useEffect, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, Image, View } from "react-native";
 import Svg, { Circle, Ellipse, G, Path, Rect } from "react-native-svg";

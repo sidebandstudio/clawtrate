@@ -20,6 +20,7 @@ export const DEV_GATEWAY_INSTANCE_ARG = "ClawtrateDevGatewayInstance";
 /** A dev-gateway instance name: the tool's own rule (`INSTANCE_NAME_PATTERN`). */
 const INSTANCE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/;
 /** The development gateway listens on loopback only. */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LOOPBACK_URL = /^ws:\/\/127\.0\.0\.1:\d{1,5}$/;
 
 /** The development gateway named by the launch arguments, when both are well formed. */
@@ -46,5 +47,10 @@ export function approvalInstructionsFor(
               : `pnpm dev-gateway approve --instance ${hint.instance}`,
           note: null,
         }
-      : defaultApprovalInstructions(gatewayUrl, requestId);
+      : REQUEST_ID.test(requestId)
+        ? defaultApprovalInstructions(gatewayUrl, requestId)
+        : {
+            command: "",
+            note: "The gateway's owner approves this device among the gateway's pending requests, on the machine where the gateway runs.",
+          };
 }

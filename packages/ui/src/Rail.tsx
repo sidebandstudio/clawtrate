@@ -3,6 +3,7 @@ import type {
   Bot,
   ConnectionState,
   DiscoveryState,
+  Routine,
   SidebarState,
   Task,
 } from "@clawtrate/core";
@@ -20,12 +21,14 @@ import {
 import { Avatar } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
-import { gatewayLabel } from "./format.ts";
+import { gatewayLabel, rowTime } from "./format.ts";
+import { forgetFailure } from "./forget.ts";
 import {
   ArchiveIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronIcon,
+  ClockIcon,
   CloseIcon,
   CopyIcon,
   EditIcon,
@@ -56,26 +59,18 @@ import {
   type DialogSpec,
 } from "./RailActions.tsx";
 import { arrange, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
-import type { SelectionModel } from "./selection.ts";
 import {
   botLabel,
-  botPreview,
-  botTime,
-  LIST_WORDS,
-  listNote,
   summarize,
-  taskLabel,
   taskState,
-  taskTime,
   TASK_CAP,
   TASK_CAP_ONE_PANE,
   visibleTasks,
-  waitingWords,
+  type BotSummary,
   type RunState,
-} from "./summary.ts";
+  type SelectionModel,
+} from "./selection.ts";
 import { isUnread } from "./unread.ts";
-
-export { waitingWords } from "./summary.ts";
 
 /** The gateway's state in words, for the footer, its menu and its accessible name. */
 export function presenceWords(connection: ConnectionState, catchingUp: boolean): string {
@@ -144,6 +139,66 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
 
 type Tip = { text: string; top: number; left: number };
 
+/** A routine run counts as working; anything more urgent the bot's tasks show wins (automation.md section 8). */
+function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
+  return running && (!summary.state || summary.state === "stopped")
+    ? { ...summary, state: "working" }
+    : summary;
+}
+
+/** A routine run's row stays under its bot this long after it finished (Clawtrate's choice, the gateway's default retention). */
+const ROUTINE_ROW_MS = 24 * 60 * 60 * 1000;
+
+function recentRoutineRuns(bot: Bot, routines: Routine[], now: number): Routine[] {
+  return routines.filter(
+    (each) =>
+      each.botId === bot.id &&
+      each.target === "isolated" &&
+      each.payload === "agentTurn" &&
+      (each.runningAt !== null ||
+        (each.lastRunAt !== null && now - (each.lastEndedAt ?? each.lastRunAt) < ROUTINE_ROW_MS)),
+  );
+}
+
+function RoutineRow({
+  routine,
+  now,
+  onOpen,
+}: {
+  routine: Routine;
+  now: number;
+  onOpen: (id: string, runAt: number | null) => void;
+}) {
+  const failed = routine.runningAt === null && routine.lastStatus === "error";
+  const at = routine.runningAt ?? routine.lastRunAt!;
+  return (
+    <li>
+      <button
+        type="button"
+        className="task routine-task"
+        data-testid="routine-task"
+        data-routine={routine.id}
+        data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
+        aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
+        onClick={() => onOpen(routine.id, at)}
+      >
+        <ClockIcon className="task-pin" />
+        <span className="task-title">{routine.name}</span>
+        <time className="task-time" aria-hidden="true">
+          {routine.runningAt !== null ? "now" : rowTime(at, now)}
+        </time>
+        <span className="task-mark" aria-hidden="true">
+          {routine.runningAt !== null ? (
+            <StateMark state="working" />
+          ) : failed ? (
+            <StateMark state="failed" />
+          ) : null}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 /**
  * A row's menu as a control of its own, for touch, where there is no right-click
  * or Menu key: shown only with a coarse pointer (styles: `.row-more`), at least
@@ -166,6 +221,15 @@ function MoreButton({ label, onOpen }: { label: string; onOpen: (trigger: HTMLEl
 }
 
 /** How a task's state ends its row's accessible name (conversation.md, section 20). */
+const SPOKEN: Record<RunState, string> = {
+  working: ", working",
+  waiting: ", needs you",
+  blocked: ", blocked",
+  failed: ", last run failed",
+  "done-with-failures": ", done with failures",
+  stopped: ", stopped",
+  queued: ", queued",
+};
 
 /** What a bot's rows can do: set only when the connection writes. */
 type TaskActions = {
@@ -179,6 +243,8 @@ type TaskActions = {
 function TaskRows({
   bot,
   tasks,
+  routineRuns,
+  onOpenRoutineRun,
   selection,
   onOpenTask,
   onTip,
@@ -187,9 +253,12 @@ function TaskRows({
   archived,
   cap,
   now,
+  onScreenKey,
 }: {
   bot: Bot;
   tasks: Task[];
+  routineRuns: Routine[];
+  onOpenRoutineRun?: ((id: string, runAt: number | null) => void) | undefined;
   selection: SelectionModel;
   onOpenTask: (botId: string, key: string) => void;
   onTip: (tip: Tip | null) => void;
@@ -204,9 +273,22 @@ function TaskRows({
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
   now: number;
+  /** The task whose conversation is on screen: none while Routines covers it. */
+  onScreenKey: string | null;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
   const all = selection.showAll.has(bot.id);
+  const rows = [
+    ...tasks.map((task) => ({ key: task.key, at: task.updatedAt, pinned: task.pinned, task })),
+    ...routineRuns.map((routine) => ({
+      key: `routine:${routine.id}`,
+      at: routine.runningAt ?? routine.lastRunAt,
+      pinned: false,
+      routine,
+    })),
+  ].sort(
+    (a, b) => Number(b.pinned === true) - Number(a.pinned === true) || (b.at ?? 0) - (a.at ?? 0),
+  );
   const showTip = (element: HTMLElement, text: string) => {
     const title = element.querySelector(".task-title");
     if (!title || title.scrollWidth <= title.clientWidth) return onTip(null);
@@ -220,12 +302,26 @@ function TaskRows({
   };
   return (
     <ul className="task-list" aria-label={`${bot.name}'s tasks`} data-testid="task-list">
-      {visibleTasks(tasks, currentKey, all, cap).map((task) => {
+      {visibleTasks(rows, currentKey, all, cap).map((row) => {
+        if ("routine" in row)
+          return (
+            <RoutineRow
+              key={row.key}
+              routine={row.routine}
+              now={now}
+              onOpen={(id, at) => onOpenRoutineRun?.(id, at)}
+            />
+          );
+        const { task } = row;
         const current = task.key === currentKey;
         const unread =
-          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
+          (task.key !== onScreenKey || selection.keptUnread.has(task.key)) &&
+          isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
-        const spoken = taskLabel(task, state, unread);
+        const spoken =
+          task.title +
+          (task.pinned ? ", pinned" : "") +
+          (state ? SPOKEN[state] : unread ? ", unread" : "");
         if (actions?.renaming === task.key) {
           return (
             <li key={task.key}>
@@ -251,7 +347,9 @@ function TaskRows({
               aria-current={current ? "true" : undefined}
               aria-label={spoken}
               aria-description={
-                task.updatedAt === null ? undefined : `Last activity ${taskTime(task, now)}`
+                task.updatedAt === null
+                  ? undefined
+                  : `Last activity ${task.status === "running" ? "now" : rowTime(task.updatedAt, now)}`
               }
               onClick={() => onOpenTask(bot.id, task.key)}
               onDoubleClick={actions ? () => actions.onRename(task) : undefined}
@@ -269,7 +367,7 @@ function TaskRows({
               <span className="task-title">{task.title}</span>
               {task.updatedAt !== null && (
                 <time className="task-time" aria-hidden="true">
-                  {taskTime(task, now)}
+                  {task.status === "running" ? "now" : rowTime(task.updatedAt, now)}
                 </time>
               )}
               {/* One slot for at most one mark, kept even when empty so times line up. */}
@@ -292,14 +390,14 @@ function TaskRows({
           </li>
         );
       })}
-      {tasks.length > cap && (
+      {rows.length > cap && (
         <li>
           <button
             type="button"
             className="task task-more"
             onClick={() => selection.toggleShowAll(bot.id)}
           >
-            <span className="task-title">{all ? "Show fewer" : `Show all ${tasks.length}`}</span>
+            <span className="task-title">{all ? "Show fewer" : `Show all ${rows.length}`}</span>
           </button>
         </li>
       )}
@@ -355,6 +453,18 @@ type MenuState =
   | { kind: "task"; botId: string; key: string; trigger: HTMLElement; x: number; y: number }
   | { kind: "archived"; task: ArchivedTask; trigger: HTMLElement; x: number; y: number };
 
+/** What a bot's line two says while one of its tasks waits for the person (F-021). */
+export function waitingWords(tasks: Task[]): string | null {
+  const waiting = tasks.filter((task) => task.status === "waiting");
+  if (waiting.length === 0) return null;
+  const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
+  return first.waitingFor === "question"
+    ? "Waiting for you: a question"
+    : first.waitingFor === "approval"
+      ? "Waiting for you: approve a command"
+      : "Waiting for you";
+}
+
 /** Drop the separators a menu would start or end with, or show twice in a row. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
   return entries.filter(
@@ -385,6 +495,10 @@ export function Rail({
   interactive = false,
   sidebar,
   newTaskHint = "⌘T",
+  routines = [],
+  routinesOpen = false,
+  onOpenRoutines,
+  onOpenRoutineRun,
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -417,6 +531,12 @@ export function Rail({
   sidebar?: SidebarState | undefined;
   /** The New task shortcut as this host takes it: ⌘T in the desktop app, ⌥T in a browser. */
   newTaskHint?: string;
+  /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
+  routines?: Routine[];
+  routinesOpen?: boolean;
+  onOpenRoutines?: () => void;
+  /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
+  onOpenRoutineRun?: (id: string, runAt: number | null) => void;
 }) {
   const send = useCommand();
   const bridge = useBridge();
@@ -445,7 +565,7 @@ export function Rail({
   const gateway = gatewayLabel(connection.gatewayUrl);
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
-  const onScreenKey = selection.task?.key ?? null;
+  const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";
   const sortLabel = SORT_ORDERS.find((order) => order.id === roster.prefs.sort)!.label;
 
@@ -486,11 +606,13 @@ export function Rail({
       ],
     [matches, arranged],
   );
+  const pinHasRoutines = (botId: string) =>
+    arranged.pinned.some(
+      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
+    );
   const owner = matches
     ? undefined
-    : arranged.pinned.find(
-        (bot) => selection.isOpen(bot.id) && (tasksByBot[bot.id]?.length ?? 0) > 1,
-      );
+    : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
 
   useEffect(() => {
     if (!announcement) return;
@@ -730,13 +852,14 @@ export function Rail({
 
   // A pinned tile. The grid has one task block, with one owner at a time.
   const clickPin = (bot: Bot, count: number) => {
-    if (count < 2) {
+    const hasRoutines = pinHasRoutines(bot.id);
+    if (count < 2 && !hasRoutines) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (bot.id === owner?.id) {
-      selection.toggleFold(bot.id);
+      selection.toggleFold(bot.id, hasRoutines);
     } else if (onePane || bot.id === selection.bot?.id) {
-      selection.unfoldOnly(bot.id, pinnedIds);
+      selection.unfoldOnly(bot.id, pinnedIds, hasRoutines);
     } else {
       selection.selectBot(bot.id);
       selection.release(pinnedIds.filter((id) => id !== bot.id));
@@ -813,7 +936,8 @@ export function Rail({
   // move to the previous or next bot. The drawer, while open, keeps them out.
   useEffect(() => {
     const open = (bot: Bot) => {
-      if (bot.id === selection.bot?.id) return;
+      // Routines covers the conversation: the selected bot's is not on screen yet.
+      if (bot.id === selection.bot?.id && !routinesOpen) return;
       const inList = listRef.current?.contains(document.activeElement) ?? false;
       selection.selectBot(bot.id);
       onOpen();
@@ -867,7 +991,7 @@ export function Rail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- newTask reads the latest render's state
-  }, [inert, openSearch, onOpen, selection, ordered, interactive]);
+  }, [inert, openSearch, onOpen, selection, ordered, interactive, routinesOpen]);
 
   const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
@@ -943,6 +1067,7 @@ export function Rail({
     const botId = row.dataset.bot ?? null;
     const isPin = row.classList.contains("pin");
     const isBot = isPin || row.classList.contains("bot");
+    const hasPinRoutines = isPin && botId !== null && pinHasRoutines(botId);
     if (
       event.altKey &&
       event.shiftKey &&
@@ -968,9 +1093,14 @@ export function Rail({
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       rows[event.key === "Home" ? 0 : rows.length - 1]?.focus();
-    } else if (event.key === "ArrowRight" && isBot && botId && !selection.isOpen(botId)) {
+    } else if (
+      event.key === "ArrowRight" &&
+      isBot &&
+      botId &&
+      !selection.isOpen(botId, hasPinRoutines)
+    ) {
       event.preventDefault();
-      if (isPin) selection.unfoldOnly(botId, pinnedIds);
+      if (isPin) selection.unfoldOnly(botId, pinnedIds, hasPinRoutines);
       else selection.toggleFold(botId);
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -983,7 +1113,8 @@ export function Rail({
         } else {
           row.closest(".bot-group")?.querySelector<HTMLElement>(":scope > .bot")?.focus();
         }
-      } else if (botId && selection.isOpen(botId)) selection.toggleFold(botId);
+      } else if (botId && selection.isOpen(botId, hasPinRoutines))
+        selection.toggleFold(botId, hasPinRoutines);
     } else if (
       isBot &&
       botId &&
@@ -1018,6 +1149,8 @@ export function Rail({
     }
   };
 
+  // Disconnect forgets the gateway this menu names, so it is offered only with its address.
+  const forgetUrl = connection.gatewayUrl;
   const gatewayEntries: MenuEntry[] = [
     {
       kind: "head",
@@ -1071,15 +1204,21 @@ export function Rail({
         onOpenSettings();
       },
     },
-    {
-      kind: "item",
-      label: "Disconnect",
-      tone: "danger",
-      onSelect: () => {
-        setMenu(null);
-        void send({ type: "disconnect" });
-      },
-    },
+    ...(forgetUrl
+      ? [
+          {
+            kind: "item",
+            label: "Disconnect",
+            tone: "danger",
+            onSelect: () => {
+              setMenu(null);
+              void send({ type: "disconnect", gatewayUrl: forgetUrl }).catch((error: unknown) =>
+                runner.tell({ tone: "danger", text: forgetFailure(error) }),
+              );
+            },
+          } satisfies MenuEntry,
+        ]
+      : []),
   ];
 
   const sortEntries: MenuEntry[] = [
@@ -1388,7 +1527,7 @@ export function Rail({
   const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
     const unread =
       isUnread(task, selection.unreadSeen) &&
-      (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
+      (task.key !== onScreenKey || selection.keptUnread.has(task.key));
     const trigger = menu?.trigger ?? null;
     const close = () => setMenu(null);
     return tidy([
@@ -1515,6 +1654,18 @@ export function Rail({
 
   const gatewayName = `${gateway}, ${words.replace("…", "").toLowerCase()}. Open the gateway menu.`;
 
+  // Since it began waiting, while a task waits for the person (conversation.md,
+  // section 20); "now" while any of the bot's tasks runs; else the latest activity.
+  const time = (tasks: Task[], summary: BotSummary) => {
+    const waiting = tasks
+      .filter((task) => task.status === "waiting" && task.waitingSince !== undefined)
+      .map((task) => task.waitingSince!);
+    if (waiting.length > 0) return rowTime(Math.min(...waiting), now);
+    return tasks.some((task) => task.status === "running")
+      ? "now"
+      : rowTime(summary.latest?.updatedAt ?? null, now);
+  };
+
   const onContextMenu = (bot: Bot) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     openBotMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
@@ -1545,13 +1696,24 @@ export function Rail({
         }
       : {};
 
+  const runningRoutine = (botId: string) =>
+    routines.find((each) => each.botId === botId && each.runningAt !== null) ?? null;
+
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
+    const running = runningRoutine(bot.id);
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      running,
+    );
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
+    const routineRuns =
+      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
+    const latest = summary.latest;
     return (
       <li
         key={bot.id}
@@ -1596,11 +1758,18 @@ export function Rail({
             <span className="bot-line">
               <span className="bot-name">{bot.name}</span>
               {bot.theme && <span className="bot-label">{bot.theme}</span>}
-              <time className="bot-time">{botTime(tasks, summary, now)}</time>
+              <time className="bot-time">{time(tasks, summary)}</time>
             </span>
             <span className="bot-line">
               <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
-                {botPreview(tasks, summary, discovery.status === "loading")}
+                {waiting ??
+                  (running
+                    ? `Running ${running.name}`
+                    : latest
+                      ? (latest.preview ?? latest.title)
+                      : discovery.status === "loading"
+                        ? "Loading tasks"
+                        : "No tasks yet")}
               </span>
               {summary.unread && <span className="unread-dot" />}
             </span>
@@ -1624,18 +1793,21 @@ export function Rail({
             openBotMenu(bot.id, trigger, rect.right - 232, rect.bottom, true);
           }}
         />
-        {(open || (place !== "search" && interactive && archivedOpen.has(bot.id))) && (
+        {(showTasks || routineRuns.length > 0) && (
           <TaskRows
             bot={bot}
-            tasks={tasks}
+            tasks={showTasks ? tasks : []}
+            routineRuns={routineRuns}
+            onOpenRoutineRun={onOpenRoutineRun}
             selection={selection}
             onOpenTask={openTask}
             onTip={setTip}
             onTaskMenu={openTaskMenu}
-            actions={taskActions}
+            actions={showTasks ? taskActions : null}
             archived={archivedProps(bot)}
             cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
+            onScreenKey={onScreenKey}
           />
         )}
       </li>
@@ -1644,8 +1816,11 @@ export function Rail({
 
   const renderPin = (bot: Bot) => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
-    const several = tasks.length > 1;
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      runningRoutine(bot.id),
+    );
+    const several = tasks.length > 1 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button
@@ -1681,8 +1856,6 @@ export function Rail({
     );
   };
 
-  const note = listNote(bots.length, discovery);
-
   const updateButton = updateEntry && (
     <button
       type="button"
@@ -1712,6 +1885,18 @@ export function Rail({
         {updateButton}
         {query === null ? (
           <>
+            {onOpenRoutines && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Routines"
+                title="Routines"
+                aria-current={routinesOpen ? "page" : undefined}
+                onClick={onOpenRoutines}
+              >
+                <ClockIcon />
+              </button>
+            )}
             <button
               type="button"
               className="icon-button"
@@ -1794,12 +1979,16 @@ export function Rail({
         onScroll={() => setTip(null)}
         aria-busy={discovery.status === "loading" && bots.length === 0 ? true : undefined}
       >
-        {note && (
-          <li className="rail-empty" data-state={note.state}>
-            <strong>{note.title}</strong>
-            {note.body}
-          </li>
-        )}
+        {bots.length === 0 &&
+          (discovery.status === "loading" ? (
+            <li className="rail-empty">
+              <strong>Loading bots</strong>Loading this gateway's bots.
+            </li>
+          ) : (
+            <li className="rail-empty">
+              <strong>No bots</strong>Bots appear here once the gateway has one.
+            </li>
+          ))}
         {matches ? (
           <>
             {bots.length > 0 && matches.length === 0 && (
@@ -1827,6 +2016,8 @@ export function Rail({
                 <TaskRows
                   bot={owner}
                   tasks={tasksByBot[owner.id] ?? []}
+                  routineRuns={recentRoutineRuns(owner, routines, now)}
+                  onOpenRoutineRun={onOpenRoutineRun}
                   selection={selection}
                   onOpenTask={openTask}
                   onTip={setTip}
@@ -1835,6 +2026,7 @@ export function Rail({
                   archived={archivedProps(owner)}
                   cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
                   now={now}
+                  onScreenKey={onScreenKey}
                 />
               </li>
             )}
@@ -1870,7 +2062,7 @@ export function Rail({
             )}
           </>
         )}
-        {discovery.partial && <li className="list-note">{LIST_WORDS.partial}</li>}
+        {discovery.partial && <li className="list-note">Showing the most recent tasks only.</li>}
       </ul>
       <p className="visually-hidden" role="status">
         {announcement}

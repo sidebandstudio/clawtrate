@@ -29,9 +29,7 @@ import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTu
 import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
-import { CONVERSATION_WORDS as W, emptyBody, stampBefore } from "./conversation-words.ts";
-import { contextWords, fullDate, stampTime } from "./format.ts";
-import { noTasksBody, TASK_WORDS } from "./summary.ts";
+import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -90,6 +88,8 @@ function TaskContext({ task }: { task: Task }) {
     </p>
   );
 }
+
+const STAMP_GAP_MS = 10 * 60_000;
 
 /** What the reading of an action needs beyond each call: the bots' names, as the cards name them. */
 function useReading(): ReadingContext {
@@ -253,12 +253,24 @@ function TranscriptView({
   // following; only the reader moving up stops it.
   const following = useRef(true);
   const followTop = useRef<number | null>(null);
+  // The transcript's floor (its ::after) keeps the scrollable area at least one
+  // view below where the end was put, so the browser never clamps the scroll
+  // under a followed end when the content shrinks or the view grows. A clamp
+  // that lands while the pin's own scroll event is queued is reported by that
+  // event in the next frame, before the resize observer has followed the change;
+  // if the content grew again in between, it read as the reader moving up and
+  // following stopped short of the end (#219).
+  const pinAt = useCallback((top: number | null) => {
+    followTop.current = top;
+    scroller.current?.style.setProperty("--follow-floor", `${top ?? 0}px`);
+  }, []);
   const toEnd = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
+    element.style.setProperty("--follow-floor", "0px");
     element.scrollTop = element.scrollHeight;
-    followTop.current = element.scrollTop;
-  }, []);
+    pinAt(element.scrollTop);
+  }, [pinAt]);
 
   // What the reader has just opened stays in view (section 18): following the
   // end never pushes the line of a card, a fold or a row they opened above the
@@ -278,6 +290,20 @@ function TranscriptView({
   const follow = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
+    // The browser reports a scroll a frame late, so an update can arrive before it. A view
+    // moved up from where the end was put, and not near the end, was scrolled away by the
+    // reader, and onScroll will stop following it: so does this, instead of pulling it back.
+    // A hidden transcript measures zero, so it counts as near and keeps following.
+    if (
+      followTop.current !== null &&
+      element.scrollTop < followTop.current - 1 &&
+      element.scrollHeight - element.scrollTop - element.clientHeight >= NEAR_BOTTOM_PX
+    ) {
+      pinAt(null);
+      following.current = false;
+      setAtEnd(false);
+      return;
+    }
     const held = opened.current;
     const line =
       held?.isConnected && held.open ? (held.querySelector(":scope > summary") ?? held) : null;
@@ -291,10 +317,10 @@ function TranscriptView({
     const over = lineTop() - line.getBoundingClientRect().top;
     if (over <= 0) return;
     element.scrollTop -= over;
-    followTop.current = null;
+    pinAt(null);
     following.current = false;
     setAtEnd(false);
-  }, [toEnd]);
+  }, [toEnd, pinAt]);
 
   const onScroll = useCallback(() => {
     const element = scroller.current;
@@ -304,11 +330,11 @@ function TranscriptView({
       following.current && followTop.current !== null && element.scrollTop >= followTop.current - 1;
     const near = kept || distance < NEAR_BOTTOM_PX;
     if (kept && distance > 1) toEnd();
-    else followTop.current = near ? element.scrollTop : null;
+    else pinAt(near ? element.scrollTop : null);
     following.current = near;
     setAtEnd(near);
     if (near) setSeenSize(contentSize);
-  }, [contentSize, toEnd]);
+  }, [contentSize, toEnd, pinAt]);
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
@@ -331,7 +357,10 @@ function TranscriptView({
   const endingsBefore = live.endingsBefore;
   for (const item of transcript.items) {
     const at = item.timestamp;
-    if (at !== null && stampBefore(previous, at)) {
+    if (
+      at !== null &&
+      (previous === null || at - previous > STAMP_GAP_MS || daysAgo(previous, at) !== 0)
+    ) {
       rows.push(
         <div className="stamp" key={`stamp-${item.id}`}>
           {stampTime(at, now)}
@@ -369,6 +398,7 @@ function TranscriptView({
         role="region"
         aria-label="Transcript"
         data-testid="transcript"
+        data-status={transcript.status}
       >
         <div className="transcript-inner">
           <CardScope taskKey={task.key} transcript={transcript}>
@@ -513,8 +543,6 @@ type LiveOptions = {
   /** What the reading needs beyond each call, as the cards read it. */
   reading?: ReadingContext;
   connected: boolean;
-  /** The person closed the connection: the status line says Disconnected, not Reconnecting. */
-  closed?: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
   onRequestAccess: (() => void) | null;
@@ -956,7 +984,13 @@ export function Conversation({
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
       );
   } else if (taskCount === 0) {
-    body = <EmptyState bot={bot} title={TASK_WORDS.none} body={noTasksBody(bot.name)} />;
+    body = (
+      <EmptyState
+        bot={bot}
+        title="No tasks yet"
+        body={`Conversations with ${bot.name} will be listed here.`}
+      />
+    );
   } else if (!task) {
     body = (
       <EmptyState
@@ -971,12 +1005,18 @@ export function Conversation({
     );
   } else if (!online && (!transcript || itemCount === 0) && !hasLive) {
     // Nothing was saved for this task, and nothing can load until the gateway is back.
-    body = <EmptyState bot={bot} title={W.waitingTitle} body={W.waitingBody} />;
+    body = (
+      <EmptyState
+        bot={bot}
+        title="Waiting for the gateway"
+        body="This conversation loads when the connection returns."
+      />
+    );
   } else if (!transcript || (transcript.status === "loading" && itemCount === 0 && !hasLive)) {
     body = (
       <div className="transcript-wrap">
         <div className="transcript" data-testid="transcript">
-          <div className="transcript-inner" aria-busy="true" aria-label={W.loading}>
+          <div className="transcript-inner" aria-busy="true" aria-label="Loading conversation">
             <h1 className="task-line" tabIndex={-1}>
               {task.title}
             </h1>
@@ -990,14 +1030,20 @@ export function Conversation({
     );
   } else if (transcript.status === "error" && itemCount === 0 && !hasLive) {
     body = (
-      <EmptyState bot={bot} title={W.loadFailed} body={transcript.error}>
+      <EmptyState bot={bot} title="Could not load this conversation" body={transcript.error}>
         <button type="button" className="button" onClick={onReload}>
-          {W.tryAgain}
+          Try again
         </button>
       </EmptyState>
     );
   } else if (itemCount === 0 && !hasLive) {
-    body = <EmptyState bot={bot} title={W.emptyTitle} body={emptyBody(bot.name)} />;
+    body = (
+      <EmptyState
+        bot={bot}
+        title="Nothing here yet"
+        body={`Messages between you and ${bot.name} in this task will appear here.`}
+      />
+    );
   } else {
     body = (
       <TranscriptView
@@ -1007,7 +1053,6 @@ export function Conversation({
         transcript={transcript}
         liveOptions={{
           connected: caughtUp,
-          closed: connection.status === "disconnected",
           interactive,
           onRequestAccess: info.readOnly
             ? null
@@ -1020,9 +1065,9 @@ export function Conversation({
         note={
           refreshNote && (
             <p className="load-note" role="alert">
-              {W.refreshFailed}
+              Couldn't refresh this conversation. Showing what was loaded before.
               <button type="button" className="button" data-size="sm" onClick={onReload}>
-                {W.tryAgain}
+                Try again
               </button>
             </p>
           )
@@ -1046,8 +1091,8 @@ export function Conversation({
             type="button"
             className="icon-button back-button"
             onClick={onBack}
-            aria-label={TASK_WORDS.back}
-            title={TASK_WORDS.back}
+            aria-label="Back to bots"
+            title="Back to bots"
           >
             <BackIcon />
           </button>

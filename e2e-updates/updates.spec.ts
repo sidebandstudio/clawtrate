@@ -1,10 +1,11 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { expect, test as base, type Page } from "@playwright/test";
+import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   statSync,
   mkdtempSync,
   readdirSync,
@@ -13,11 +14,13 @@ import {
   symlinkSync,
   rmSync,
   writeFileSync,
+  mkdirSync,
   cpSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
+import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
@@ -27,6 +30,7 @@ import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
 type TestApp = {
   page: Page;
+  relaunch: (version: string) => Promise<Page>;
   server: Awaited<ReturnType<typeof feedServer>>;
   filePath: string;
   body: Buffer;
@@ -35,6 +39,12 @@ type TestApp = {
   manifest: Record<string, unknown>;
   rendererRequests: string[];
 };
+
+type ProbeWindow = Window & {
+  clawtrateHost: { desktopUpdates: DesktopUpdates };
+  seenUpdates: string[];
+};
+
 async function stopElectron(app: ChildProcess) {
   const { pid } = app;
   if (!pid || app.exitCode !== null || app.signalCode !== null) return;
@@ -59,8 +69,12 @@ async function stopElectron(app: ChildProcess) {
     clearTimeout(timer);
   }
 }
-const test = base.extend<{ desktopApp: TestApp }>({
-  desktopApp: async ({ playwright }, use) => {
+const test = base.extend<{
+  desktopApp: TestApp;
+  installer: "unsigned" | "mac" | "mac-unconfirmed" | "manual";
+}>({
+  installer: ["manual", { option: true }],
+  desktopApp: async ({ playwright, installer }, use, testInfo) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
     const require = createRequire(join(desktop, "package.json"));
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-update-app-")));
@@ -108,47 +122,59 @@ const test = base.extend<{ desktopApp: TestApp }>({
         },
       );
       cpSync(join(desktop, "resources"), join(dir, "resources"), { recursive: true });
-      writeFileSync(
-        join(dir, "package.json"),
-        JSON.stringify({
-          name: "update-screen-test",
-          version: "0.1.0",
-          type: "module",
-          main: "out/main/index.js",
-        }),
-      );
       symlinkSync(
         join(desktop, "node_modules"),
         join(dir, "node_modules"),
         process.platform === "win32" ? "junction" : "dir",
       );
       const profile = join(dir, "profile");
-      const app = spawn(
-        require("electron"),
-        [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
-        {
-          cwd: dir,
-          env: {
-            ...env,
-            CLAWTRATE_DEV_INSTANCE: "update-ui-test",
-          },
-          stdio: "ignore",
-        },
-      );
-      cleanup.defer(() => stopElectron(app));
-      await once(app, "spawn");
-      const port = await debuggingPort(profile, app);
-      const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
-      cleanup.defer(() => browser.close());
-      const context = browser.contexts()[0]!;
-      const page = context.pages()[0] ?? (await context.waitForEvent("page"));
-      await page.locator(".app").waitFor();
       const rendererRequests: string[] = [];
-      page.on("request", (r) => {
-        if (/^https?:/.test(r.url())) rendererRequests.push(r.url());
-      });
+      let previous: ChildProcess | undefined;
+      async function launch(version: string) {
+        if (previous) {
+          await stopElectron(previous);
+          rmSync(join(profile, "DevToolsActivePort"), { force: true });
+        }
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            name: "update-screen-test",
+            version,
+            type: "module",
+            main: "out/main/index.js",
+          }),
+        );
+        const app = spawn(
+          require("electron"),
+          [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
+          {
+            cwd: dir,
+            env: {
+              ...env,
+              UPDATE_SCREEN_TEST_INSTALLER: installer,
+              CLAWTRATE_DEV_INSTANCE: "update-ui-test",
+            },
+            stdio: "ignore",
+          },
+        );
+        previous = app;
+        cleanup.defer(() => stopElectron(app));
+        await once(app, "spawn");
+        const port = await debuggingPort(profile, app);
+        const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
+        cleanup.defer(() => browser.close());
+        const context = browser.contexts()[0]!;
+        const page = context.pages()[0] ?? (await context.waitForEvent("page"));
+        await page.locator(".app").waitFor();
+        page.on("request", (r) => {
+          if (/^https?:/.test(r.url())) rendererRequests.push(r.url());
+        });
+        return page;
+      }
+      const page = await launch("0.1.0");
       await use({
         page,
+        relaunch: launch,
         server,
         filePath,
         body,
@@ -157,12 +183,41 @@ const test = base.extend<{ desktopApp: TestApp }>({
         manifest,
         rendererRequests,
       });
+      if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
+        const reading = await page.evaluate(async () => {
+          const { state, preferenceIssue } = await (
+            window as unknown as ProbeWindow
+          ).clawtrateHost.desktopUpdates.get();
+          return { state, preferenceIssue };
+        });
+        console.log(
+          "Update status at failure",
+          JSON.stringify({ requests: server.requests, ...reading }),
+        );
+      }
     } finally {
+      // A locked or unreadable diagnostic must not skip the cleanup.
+      try {
+        const failure = join(dir, "profile", "folder-error.txt");
+        if (existsSync(failure))
+          console.error("Update folder:", readFileSync(failure, "utf8").slice(0, 4096));
+      } catch (error) {
+        console.error("Update folder diagnostic unreadable:", error);
+      }
       resume.resolve();
       await cleanup.disposeAsync();
     }
   },
 });
+
+// A failure may be visible only in the host's state, which fixture teardown closes away.
+test.afterEach(async ({ desktopApp }, testInfo) => {
+  if (testInfo.status === "passed" || testInfo.status === "skipped") return;
+  // A test that captured before its own cleanup keeps that snapshot.
+  if (testInfo.attachments.some((each) => each.name === "host-state")) return;
+  await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
+});
+
 test("F-231: checks only the chosen feed and downloads matching bytes on request", async ({
   desktopApp,
 }) => {
@@ -185,6 +240,8 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     "Downloads Clawtrate 1.1.0 from 127.0.0.1, only when you choose to.",
   );
   const download = page.getByRole("button", { name: "Download", exact: true });
+  const hold = join(desktopApp.profile, "hold-inspect");
+  writeFileSync(hold, "");
   await download.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("group", { name: "Update status" })).toBeFocused();
@@ -201,10 +258,17 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(server.requests).toEqual(["/stable", filePath]);
   await expect(line).not.toContainText("checksum");
   resume();
-  await expect(line).toHaveText(
-    "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.",
-  );
+  const checking = "Checking the downloaded update for Clawtrate 1.1.0…";
+  await expect(line).toHaveText(checking);
+  await expect(page.locator(".updates-section").getByRole("status")).toHaveText(checking);
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  rmSync(hold);
+  // Windows reads the file back in PowerShell, which first compiles its C# helper.
+  await expect(line).toHaveText(
+    "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Ready to install.",
+    { timeout: 30_000 },
+  );
+  await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   const nightly = page.getByRole("radio", { name: "Nightly" });
   await nightly.click();
   await expect(nightly).toBeChecked();
@@ -268,10 +332,43 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(rendererRequests).toEqual([]);
 });
 
-type ProbeWindow = Window & {
-  clawtrateHost: { desktopUpdates: DesktopUpdates };
-  seenUpdates: string[];
-};
+/** A failure may be visible only in the host's state, which teardown closes away. */
+async function captureHostState(
+  page: Page,
+  info: TestInfo,
+  server: TestApp["server"],
+  rendererRequests: string[],
+) {
+  try {
+    const reading = await Promise.race([
+      page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get()),
+      pause(10_000).then(() => null),
+    ]).catch((cause) => ({ error: String(cause) }));
+    const file = join(info.outputDir, "host-state.json");
+    mkdirSync(info.outputDir, { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify(
+        { reading, requests: server.requests, rendererRequests, notes: info.annotations },
+        null,
+        2,
+      ),
+    );
+    await info.attach("host-state", { path: file, contentType: "application/json" });
+  } catch {
+    // The failure under diagnosis still outranks the diagnostics.
+  }
+}
+
+/** Which element has focus, in words, for a failure's notes. */
+const focusedElement = (page: Page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el) return "none";
+    const name = el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 60) ?? "";
+    return `${el.tagName.toLowerCase()}${el.getAttribute("role") ? `[role=${el.getAttribute("role")}]` : ""} ${name}`;
+  });
+
 async function checkStable() {
   const api = (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates;
   return api.check("stable", (await api.get()).revision);
@@ -305,7 +402,10 @@ for (const stage of ["check", "download"] as const) {
       const stable = page.getByRole("radio", { name: "Stable" }),
         nightly = page.getByRole("radio", { name: "Nightly" });
       await check.focus();
+      const notes = test.info().annotations;
+      notes.push({ type: "focus before Enter", description: await focusedElement(page) });
       await page.keyboard.press("Enter");
+      notes.push({ type: "focus after Enter", description: await focusedElement(page) });
       await expect(status).toBeFocused();
       await expect.poll(() => server.requests).toEqual(["/stable"]);
       let id = "";
@@ -383,6 +483,10 @@ for (const stage of ["check", "download"] as const) {
       expect(await page.evaluate(() => (window as unknown as ProbeWindow).seenUpdates)).toContain(
         "verified",
       );
+    } catch (error) {
+      // Cleanup releases the held choice, so the failure's state is read first.
+      await captureHostState(page, test.info(), server, desktopApp.rendererRequests);
+      throw error;
     } finally {
       delayed.resolve();
       resume();
@@ -455,14 +559,13 @@ test("F-231: an older Check on the same track preserves the verified download", 
   expect(server.requests).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toContainText("its size and checksum match the update source.");
-  await expect(
-    page.getByRole("button", { name: /^(Check for Updates|Download|Restart to Update)$/ }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^(Check for Updates|Download)$/ })).toHaveCount(0);
   expect(
     await page.evaluate(() =>
       (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
     ),
   ).toEqual(verified.snapshot);
+  await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   expect(readFileSync(artifact).equals(body)).toBe(true);
   expect(server.requests).toEqual(["/stable", filePath]);
 });
@@ -507,3 +610,184 @@ if (process.platform !== "win32")
       await gateway.close();
     }
   });
+
+async function openUpdates(page: Page) {
+  await page.keyboard.press("ControlOrMeta+,");
+  if (!(await page.locator(".updates-section").isVisible()))
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+}
+async function requestFile(page: Page) {
+  await page.getByRole("button", { name: "Check for Updates", exact: true }).click();
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+}
+for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
+  test.describe(mode, () => {
+    test.use({ installer: mode });
+    test("F-231: confirms one shown offer, follows handoff and reads the version on a later launch", async ({
+      desktopApp,
+    }) => {
+      const { page, profile, server, filePath, rendererRequests, relaunch } = desktopApp;
+      desktopApp.resume();
+      await openUpdates(page);
+      expect(server.requests).toEqual([]);
+      await requestFile(page);
+      const restart = page.getByRole("button", { name: "Restart to Update", exact: true });
+      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+      const confirm = page.getByRole("button", { name: "Restart", exact: true });
+      const result = page.getByRole("group", { name: "Update status" });
+      await restart.click();
+      const dialog = page.getByRole("alertdialog", { name: "Restart to update?" });
+      await expect(dialog).toContainText(
+        "Restart asks Clawtrate to install version 1.1.0 and reopen.",
+      );
+      const mac = "If macOS stages the update, it can install the next time Clawtrate quits.";
+      if (mode !== "manual") await expect(dialog).toContainText(mac);
+      else await expect(dialog).not.toContainText(mac);
+      await expect(cancel).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(confirm).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(cancel).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(restart).toBeFocused();
+      await restart.click();
+      await cancel.click();
+      expect(existsSync(join(profile, "restart-calls"))).toBe(false);
+      const id = await page.evaluate(async () => {
+        const { install } = await (
+          window as unknown as ProbeWindow
+        ).clawtrateHost.desktopUpdates.get();
+        return install.kind === "restart-available" && install.offerId;
+      });
+      expect(typeof id).toBe("string");
+      writeFileSync(join(profile, "hold-inspect"), "");
+      writeFileSync(join(profile, "hold-launch"), "");
+      await restart.click();
+      await confirm.click();
+      async function locked(text: string) {
+        await expect(result).toContainText(text);
+        await expect(result.getByRole("button")).toHaveCount(0);
+        await expect(page.getByRole("radio", { name: "Nightly" })).toBeDisabled();
+        await expect(result).toBeFocused();
+      }
+      await locked("Preparing Clawtrate");
+      rmSync(join(profile, "hold-inspect"));
+      await locked("Handing Clawtrate");
+      rmSync(join(profile, "hold-launch"));
+      if (mode === "mac") {
+        await locked("Clawtrate handed the update to the macOS updater.");
+        for (const [version, line] of [
+          ["1.1.0", "Clawtrate 1.1.0 is running."],
+          ["0.1.0", "Clawtrate 0.1.0 is running, not 1.1.0. Check for updates to try again."],
+          ["unreadable", "Clawtrate couldn't read the running version."],
+          [
+            "1.2.0",
+            "Clawtrate 1.2.0 is running. Clawtrate couldn't confirm that it restarted into 1.1.0.",
+          ],
+        ] as const) {
+          const next = await relaunch(version);
+          await openUpdates(next);
+          await expect(next.locator(".update-result")).toContainText(line);
+        }
+      } else if (mode === "manual") {
+        await expect(result).toContainText("Couldn't hand the update to the installer.");
+        await expect(result.getByRole("button", { name: "Check for Updates" })).toBeVisible();
+        await expect(restart).toHaveCount(0);
+      } else {
+        await locked(
+          "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
+        );
+      }
+      expect(
+        readFileSync(join(profile, "restart-calls"), "utf8")
+          .trim()
+          .split("\n")
+          .map((s) => JSON.parse(s)),
+      ).toEqual([id]);
+      expect(server.requests).toEqual(["/stable", filePath]);
+      expect(rendererRequests).toEqual([]);
+    });
+  });
+}
+
+test.describe("unsigned build", () => {
+  test.use({ installer: "unsigned" });
+  test("F-231: an unsigned build shows the offer without offering or requesting its file", async ({
+    desktopApp,
+  }) => {
+    const { page, server } = desktopApp;
+    await openUpdates(page);
+    expect(server.requests).toEqual([]);
+    await page.getByRole("button", { name: "Check for Updates" }).click();
+    await expect(page.locator(".update-result dd")).toHaveText(
+      "Clawtrate 1.1.0 is offered by the update source.",
+    );
+    await expect(page.locator(".b-note")).toContainText("This build can't install updates itself.");
+    await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
+    expect(server.requests).toEqual(["/stable"]);
+    const check = page.getByRole("button", { name: "Check for Updates" });
+    await expect(check).toHaveAccessibleDescription(
+      "Checks 127.0.0.1 for a newer build, only when you choose to.",
+    );
+    await check.click();
+    await expect.poll(() => server.requests).toEqual(["/stable", "/stable"]);
+    await expect(page.locator(".update-result dd")).toHaveText(
+      "Clawtrate 1.1.0 is offered by the update source.",
+    );
+  });
+});
+
+test.describe("installer refusals", () => {
+  test.use({ installer: "manual" });
+  test("F-231: each unavailable installer reason withholds Restart after verification", async ({
+    desktopApp,
+  }) => {
+    const { page, resume, profile, server, filePath, rendererRequests } = desktopApp;
+    test.setTimeout(300_000);
+    resume();
+    await openUpdates(page);
+    const reasons = [
+      "no-verified-download",
+      "build-not-signed",
+      "windows-install-pending-trial",
+      "no-installer-path",
+      "artifact-changed",
+      "mac-designated-requirement",
+      "inspection-failed",
+      "running-signature-untrusted",
+      "installer-version",
+      "mac-archive",
+      "mac-bundle-identifier",
+      "mac-architecture",
+    ] as const;
+    const requests: string[] = [];
+    for (const reason of reasons) {
+      writeFileSync(join(profile, "inspect-refusal"), reason);
+      await page.evaluate(checkStable);
+      await page.getByRole("button", { name: "Download", exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
+            return (
+              (s.state.kind === "verified" ||
+                (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
+              s.install.kind === "unavailable-in-this-build" &&
+              s.install.reason
+            );
+          }),
+        )
+        .toBe(reason);
+      await expect(page.locator(".update-result dd")).toContainText(
+        reason === "artifact-changed"
+          ? "Couldn't verify the saved update again."
+          : "its size and checksum match",
+      );
+      await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+      requests.push("/stable", filePath);
+      expect(server.requests).toEqual(requests);
+    }
+    expect(existsSync(join(profile, "restart-calls"))).toBe(false);
+    expect(rendererRequests).toEqual([]);
+  });
+});

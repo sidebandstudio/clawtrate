@@ -1,5 +1,14 @@
 import type { DesktopUpdateSnapshot, UpdateTrack } from "@clawtrate/core";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
+import { useRef, useState } from "react";
+import { Confirm } from "./bots/Dialog.tsx";
+import {
+  downloadBlocked,
+  handoffLocked,
+  restartCapability,
+  refusalLine,
+  attemptLine,
+} from "./update-restart.ts";
 import { WarnIcon } from "./icons.tsx";
 import "./styles/updates.css";
 
@@ -28,6 +37,11 @@ export function showUpdateFooter(s: DesktopUpdateSnapshot | null, pending = s?.p
     case "offered":
     case "downloading":
     case "verified":
+    case "preparing":
+    case "handing-off":
+    case "handed-to-system":
+    case "handoff-unconfirmed":
+    case "handoff-failed":
       return true;
     case "failed":
       return s.state.stage !== "preferences";
@@ -39,7 +53,10 @@ export function showUpdateFooter(s: DesktopUpdateSnapshot | null, pending = s?.p
 function updateRow(
   s: DesktopUpdateSnapshot,
   pending: UpdateTrack | null,
-): { line: string; action?: "Check for Updates" | "Try again" | "Download" } {
+): {
+  line: string;
+  action?: "Check for Updates" | "Try again" | "Download" | "Restart to Update" | undefined;
+} {
   const { state } = s;
   const source = sourceFor(s);
   const unavailable = capabilityLine(s);
@@ -72,13 +89,39 @@ function updateRow(
     case "offered":
       return {
         line: `Clawtrate ${state.version} is offered by the update source.`,
-        action: "Download",
+        action: downloadBlocked(s.install) ? "Check for Updates" : "Download",
       };
     case "downloading":
+      if (state.received >= state.expected)
+        return { line: `Checking the downloaded update for Clawtrate ${state.version}…` };
       return {
         line: `Downloading Clawtrate ${state.version}… ${state.received.toLocaleString()} of ${state.expected.toLocaleString()} bytes`,
       };
+    case "preparing":
+      return { line: `Preparing Clawtrate ${state.version} for restart…` };
+    case "handing-off":
+      return { line: `Handing Clawtrate ${state.version} to the system updater…` };
+    case "handed-to-system":
+      return {
+        line: "Clawtrate handed the update to the macOS updater. After restart, Clawtrate reports the version that is running.",
+      };
+    case "handoff-unconfirmed":
+      return {
+        line: "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
+      };
+    case "handoff-failed":
+      return {
+        line: refusalLine(state.reason),
+        action: "Check for Updates",
+      };
     case "verified":
+      if (s.install.kind === "unavailable-in-this-build" && s.install.reason === "artifact-changed")
+        return { line: refusalLine(s.install.reason), action: "Check for Updates" };
+      if (restartCapability(s))
+        return {
+          line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Ready to install.`,
+          action: "Restart to Update",
+        };
       return {
         line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,
       };
@@ -105,6 +148,8 @@ function updateRow(
 
 function preferenceLine(s: DesktopUpdateSnapshot) {
   switch (s.preferenceIssue) {
+    case "attempt-not-read":
+      return "Couldn't read the last update attempt.";
     case "preferences-not-read":
       return "Couldn't read the saved update settings.";
     case "track-not-saved":
@@ -138,7 +183,11 @@ export function Updates({
   chooseTrack,
   check,
   download,
-}: ReturnType<typeof useDesktopUpdateSnapshot>) {
+  restart,
+  waitingMessages = "",
+}: ReturnType<typeof useDesktopUpdateSnapshot> & { waitingMessages?: string }) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const result = useRef<HTMLDivElement>(null);
   if (!s)
     return (
       <div className="updates-section">
@@ -169,8 +218,35 @@ export function Updates({
   const { line, action } = updateRow(s, pending);
   const source = sourceFor(s);
   const state = s.state;
-  const downloading = !pending && state.kind === "downloading";
+  const downloading = !pending && state.kind === "downloading" && state.received < state.expected;
   const notice = preferenceLine(s);
+  const capability = restartCapability(s);
+  const unavailable =
+    s.install.kind === "unavailable-in-this-build" ? refusalLine(s.install.reason) : null;
+  const installNotice =
+    (source ||
+      (state.kind === "failed" &&
+        state.reason === "unsupported-system" &&
+        s.install.kind === "unavailable-in-this-build" &&
+        s.install.reason === "no-installer-path")) &&
+    state.kind !== "handoff-failed" &&
+    !handoffLocked(state) &&
+    unavailable !== line
+      ? unavailable
+      : null;
+  const confirm = capability && !pending && capability.offerId === confirmId;
+  if (confirmId && !confirm) setConfirmId(null);
+  const locked = handoffLocked(state);
+  const attempt =
+    s.revision === 0 &&
+    !working &&
+    !message &&
+    !pending &&
+    s.selectedTrack === s.lastAttempt?.track &&
+    (state.kind === "not-checked" ||
+      (state.kind === "failed" && state.reason === "invalid-version"))
+      ? attemptLine(s.lastAttempt)
+      : null;
   const saving = s.pendingTrack
     ? `Saving ${names[s.pendingTrack]} as the update track…`
     : pending
@@ -182,10 +258,10 @@ export function Updates({
   return (
     <div className="updates-section">
       <p className="b-hint">Applies on this device.</p>
-      {source && s.install.kind === "unavailable-in-this-build" && (
+      {installNotice && (
         <div className="b-note" data-tone="warn">
           <WarnIcon />
-          <p>This build can't install updates itself.</p>
+          <p>{installNotice}</p>
         </div>
       )}
       {s.runningVersion && (
@@ -202,7 +278,7 @@ export function Updates({
         </dl>
       )}
       {source && s.tracks.length === 2 && (
-        <fieldset role="radiogroup" aria-label="Update track">
+        <fieldset disabled={locked || !!confirm} role="radiogroup" aria-label="Update track">
           <legend>Update track</legend>
           {s.tracks.map(({ track }) => (
             <label key={track}>
@@ -240,6 +316,7 @@ export function Updates({
         )}
       <div
         key="result"
+        ref={result}
         className="update-result"
         tabIndex={-1}
         role="group"
@@ -261,6 +338,7 @@ export function Updates({
           </div>
         </dl>
         {notice && !pending && <p>{notice}</p>}
+        {attempt && <p>{attempt}</p>}
         {message && <p>{message}</p>}
         {action && s.selectedTrack && (
           <>
@@ -271,27 +349,48 @@ export function Updates({
                 type="button"
                 className="button"
                 aria-disabled={working || undefined}
-                aria-describedby="update-source"
+                data-variant={action === "Restart to Update" ? "primary" : undefined}
+                aria-describedby={action === "Restart to Update" ? undefined : "update-source"}
                 onClick={() => {
                   if (working) return;
-                  if (state.kind === "offered") void download(state.offerId);
+                  if (capability) setConfirmId(capability.offerId);
+                  else if (action === "Download" && state.kind === "offered")
+                    void download(state.offerId);
                   else if (s.selectedTrack) void check(s.selectedTrack, s.revision);
                 }}
               >
                 {action}
               </button>
             </div>
-            <p id="update-source" className="b-hint update-source">
-              {state.kind === "offered"
-                ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.`
-                : `Checks ${source} for a newer build, only when you choose to.`}
-            </p>
+            {action !== "Restart to Update" && (
+              <p id="update-source" className="b-hint update-source">
+                {action === "Download" && state.kind === "offered"
+                  ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.`
+                  : `Checks ${source} for a newer build, only when you choose to.`}
+              </p>
+            )}
           </>
         )}
       </div>
+      {confirm && state.kind === "verified" && (
+        <Confirm
+          fallbackFocus={result}
+          title="Restart to update?"
+          action="Restart"
+          text={`Restart asks Clawtrate to install version ${state.version} and reopen.${capability.completesOnQuit ? " If macOS stages the update, it can install the next time Clawtrate quits." : ""}`}
+          details={waitingMessages}
+          onCancel={() => setConfirmId(null)}
+          onAction={() => {
+            setConfirmId(null);
+            void restart(capability.offerId);
+          }}
+        />
+      )}
       {source && <p className="b-hint">Automatic restart is unavailable in this build.</p>}
       <span className="visually-hidden" role="status">
-        {[saving ?? announcement, !pending && notice, message].filter(Boolean).join(" ")}
+        {[saving ?? announcement, installNotice, !pending && notice, attempt, message]
+          .filter(Boolean)
+          .join(" ")}
       </span>
     </div>
   );

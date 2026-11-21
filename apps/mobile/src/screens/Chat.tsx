@@ -13,7 +13,7 @@ import {
   CONVERSATION_WORDS as W,
   emptyBody,
   readOnlyWords,
-} from "@clawtrate/ui/conversation-words";
+} from "../presentation/conversation-words.ts";
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";

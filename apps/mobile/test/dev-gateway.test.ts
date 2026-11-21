@@ -31,7 +31,8 @@ describe("the approve command on the iOS pairing screen", () => {
     );
     expect(ios("wss://gateway.example", ID).command).not.toContain("dev-gateway");
     // An id the gateway sent in another form goes into no command.
-    expect(ios("wss://gateway.example", "x; rm -rf ~").command).toBeNull();
+    expect(ios("wss://gateway.example", "invalid id").command).toBe("");
+    expect(ios("wss://gateway.example", "invalid id").note).toContain("pending requests");
     expect(approvalInstructionsFor(null)("ws://127.0.0.1:19201", ID)).toEqual(
       desktopInstructions(null)("ws://127.0.0.1:19201", ID),
     );

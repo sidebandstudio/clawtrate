@@ -362,24 +362,19 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
 
   it("shows the approve command for the same instance", () => {
     const named = { url: "ws://127.0.0.1:19240", token: "t", instance: "alpha" };
-    expect(
-      approvalInstructionsFor(named)(named.url, "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55"),
-    ).toEqual({
+    expect(approvalInstructionsFor(named)(named.url, "req-1")).toEqual({
       command: "pnpm dev-gateway approve --instance alpha",
       note: null,
     });
-    expect(
-      approvalInstructionsFor(named)(DEV_GATEWAY_URL, "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55")
-        .command,
-    ).toBe("openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55");
+    expect(approvalInstructionsFor(named)(DEV_GATEWAY_URL, "req-1").command).toBe(
+      "openclaw devices approve req-1",
+    );
   });
 });
 
 describe("pairing instructions (A3)", () => {
   it("shows only the dev tooling's command for the development gateway", () => {
-    expect(
-      approvalInstructionsFor(devGateway)(DEV_GATEWAY_URL, "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55"),
-    ).toEqual({
+    expect(approvalInstructionsFor(devGateway)(DEV_GATEWAY_URL, "req-1")).toEqual({
       command: "pnpm dev-gateway approve",
       note: null,
     });
@@ -387,15 +382,10 @@ describe("pairing instructions (A3)", () => {
 
   it("shows the owner's command, with where to run it, for any other gateway", () => {
     for (const instructions of [
-      approvalInstructionsFor(devGateway)(
-        "wss://gateway.example.com",
-        "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
-      ),
-      approvalInstructionsFor(null)(DEV_GATEWAY_URL, "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55"),
+      approvalInstructionsFor(devGateway)("wss://gateway.example.com", "req-1"),
+      approvalInstructionsFor(null)(DEV_GATEWAY_URL, "req-1"),
     ]) {
-      expect(instructions.command).toBe(
-        "openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
-      );
+      expect(instructions.command).toBe("openclaw devices approve req-1");
       expect(instructions.note).toMatch(/gateway's owner .* machine where the gateway runs/);
     }
   });

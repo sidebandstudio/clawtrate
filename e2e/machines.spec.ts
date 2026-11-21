@@ -210,6 +210,18 @@ test.afterAll(async () => {
 
 test("F-046 F-047: below admin every place shows, nothing can change, and the bar asks for admin only when the person asks", async () => {
   const page = writer.page;
+  const pending = async () =>
+    (await admin.request<{ pending: Json[] }>("device.pair.list", {})).pending;
+  const before = await pending();
+  // The web host may already have a read-only repair pending from pairing in setup.
+  for (const request of before) {
+    expect(request).toMatchObject({
+      displayName: "Clawtrate Web",
+      isRepair: true,
+      role: "operator",
+      scopes: ["operator.read"],
+    });
+  }
   await runsOn(page);
   await expect(page.getByTestId("runs-on-machine")).toBeDisabled();
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
@@ -221,9 +233,12 @@ test("F-046 F-047: below admin every place shows, nothing can change, and the ba
   await expect(page.getByTestId("admin-bar")).toContainText(
     `Changing where ${OTTO} runs needs admin access.`,
   );
-  // Nothing was asked for by reading.
-  const devices = await admin.request<{ pending: unknown[] }>("device.pair.list", {});
-  expect(devices.pending).toEqual([]);
+  // An earlier request may have cleared. Reading must not create or change one.
+  for (const request of await pending()) {
+    expect(before, "reading machine settings created or changed a pairing request").toContainEqual(
+      request,
+    );
+  }
   await shots(page, "runs-on-below-admin");
 });
 
@@ -297,6 +312,36 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   await reader.page.getByRole("button", { name: "Back to settings" }).click();
   await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
   await shots(reader.page, "runs-on-read-only");
+});
+
+test("F-046: a save on a revision the gateway no longer has says nothing was saved, in the gateway's words", async () => {
+  const page = writer.page;
+  // Another writer changes Otto's setting after the page read it; the page still shows media-box.
+  // (The revision is a hash of the content, so a change put back would not make it stale.)
+  const setOtto = async (exec: Json) => {
+    const cfg = await admin.request<{ hash: string }>("config.get", {});
+    await admin.request("config.patch", {
+      raw: JSON.stringify({ agents: { entries: { otto: { tools: { exec } } } } }),
+      baseHash: cfg.hash,
+    });
+  };
+  await setOtto({ host: "gateway", node: null });
+  const stored = await config();
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "Nothing was saved. The gateway answered: config changed since last load; re-run config.get and retry",
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId("work-announcer")).toHaveText("Couldn't save");
+  expect(await config()).toEqual(stored);
+  // The page reads again and shows what the other writer stored.
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    `${OTTO}'s command machine: The gateway's machine`,
+  );
+  await shots(page, "runs-on-refused");
+  // Otto goes back to media-box for the checks after this one.
+  await setOtto({ host: "node", node: nodeId });
 });
 
 test("F-046: a host pinned to reading refuses a change sent anyway, and the gateway keeps what it had", async () => {

@@ -1,6 +1,6 @@
 // The status strip (visual-language.md, section 11): one compact pill that says
 // what happened to the connection while the shell keeps what it has. Its state
-// and words are the desktop's (`@clawtrate/ui/strip`). On the phone it sits
+// and words are defined in `presentation/strip.ts`. On the phone it sits
 // under the top controls of every shell screen, so a dropped connection is said
 // on Home and in a bot's task list as well as in the chat.
 
@@ -12,7 +12,7 @@ import {
   SYNCED_FOR_MS,
   taskInSync,
   type SyncPhase,
-} from "@clawtrate/ui/strip";
+} from "../presentation/strip.ts";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useRuntime } from "../runtime.ts";

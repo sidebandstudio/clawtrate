@@ -29,6 +29,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -45,7 +46,8 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { emptyActivity } from "./runs.ts";
+import { MAX_ROUTINE_UPDATES } from "./routines.ts";
+import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -126,6 +128,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   expiryTimers: { max: T, each: ID, row: "bookkeeping" },
   afterRunning: { max: T, each: ID, row: "bookkeeping" },
   afterAgain: { max: T, each: ID, row: "bookkeeping" },
+  // A task's `agent.wait` check in flight, and the ids of the active runs it last checked.
+  endChecking: { max: T, each: ID, row: "bookkeeping" },
+  endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
@@ -164,9 +169,19 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
-    each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
+    each:
+      ID +
+      jsonLength(emptyActivity) +
+      MAX_QUEUE_ALIASES * 2 * ID +
+      FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  foreignReads: {
+    max: MAX_FOREIGN_READ_SESSIONS,
+    each: ID + MAX_STEPS_PER_TASK * N,
+    row: "bookkeeping",
+  },
+  "foreignReads.*": { max: MAX_STEPS_PER_TASK, each: N, row: null },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,
@@ -245,6 +260,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
@@ -266,6 +282,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
@@ -278,6 +295,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  routines: "RoutinesEngine",
   usage: "UsageEngine",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
@@ -384,8 +402,19 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
-/** The two strings in the desktop updater's private preference store. */
+/** The records in the desktop updater's private preference store. */
 export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  attempt: {
+    max: 1,
+    each: JSON.stringify({
+      target: "v".repeat(50),
+      from: "v".repeat(50),
+      track: "nightly",
+      time: "2000-01-01T00:00:00.000Z",
+      phase: "handoff",
+    }).length,
+    row: "updatePreferences",
+  },
   selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
   lastCheck: {
     max: 1,

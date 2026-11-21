@@ -50,38 +50,6 @@ export default tseslint.config(
     },
   },
   {
-    // The interface's pure modules, which the iOS app imports as well: no React
-    // and no DOM, so React Native can run them (see packages/ui/package.json).
-    files: [
-      "packages/ui/src/{access,arrangement,character,connect-words,conversation-words,format,gateway-state,live,screen,strip,summary,unread}.ts",
-    ],
-    languageOptions: { globals: {} },
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: ["react", "react-dom", "react/*", "react-dom/*"],
-              message: "a pure module of the interface uses no React",
-            },
-            { group: ["*.tsx", "./*.css"], message: "a pure module imports pure modules only" },
-          ],
-        },
-      ],
-      "no-restricted-globals": [
-        "error",
-        "window",
-        "document",
-        "navigator",
-        "localStorage",
-        "process",
-        "Buffer",
-        "require",
-      ],
-    },
-  },
-  {
     // Metro reads its config as CommonJS.
     files: ["apps/mobile/metro.config.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
@@ -102,18 +70,6 @@ export default tseslint.config(
     plugins: { "react-hooks": reactHooks },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      // Only the pure modules of the interface: its components use the DOM, and React 19.3.1.
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "@clawtrate/ui",
-              message: "import a pure module, such as @clawtrate/ui/summary",
-            },
-          ],
-        },
-      ],
     },
   },
   {
@@ -121,5 +77,10 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
     plugins: { "react-hooks": reactHooks },
     rules: reactHooks.configs.recommended.rules,
+  },
+  {
+    // The website: one plain script for the browser.
+    files: ["site/**/*.js"],
+    languageOptions: { globals: { ...globals.browser } },
   },
 );

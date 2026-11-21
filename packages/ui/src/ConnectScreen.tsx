@@ -8,28 +8,15 @@ import {
   type ReactNode,
 } from "react";
 import logoUrl from "./assets/logo-mark.png";
-import { Character } from "./Avatar.tsx";
-import { ENSEMBLE } from "./character.ts";
+import { Character, type CharacterSpec } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
-import {
-  CONNECT_WORDS as W,
-  countdownWords,
-  failureTitle,
-  footWords,
-  pairingLede,
-  pairingScopes,
-  PRODUCT_NAME,
-  protocolLede,
-  scopeWords,
-  scopesDifferWords,
-  setupSteps,
-  SLOGAN,
-} from "./connect-words.ts";
+import { useForget } from "./forget.ts";
 import { gatewayLabel } from "./format.ts";
 import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 
-export { failureTitle, PRODUCT_NAME, SLOGAN } from "./connect-words.ts";
+export const PRODUCT_NAME = "Clawtrate";
+export const SLOGAN = "Your OpenClaw agents, orchestrated.";
 
 /** A command with a copy button that works over plain http too, or says how to copy by hand. */
 export function CommandLine({ command, label }: { command: string; label: string }) {
@@ -63,7 +50,7 @@ export function CommandLine({ command, label }: { command: string; label: string
       </div>
       <p className="copy-status" role="status" aria-live="polite">
         {state === "copied"
-          ? W.copied
+          ? "Copied."
           : state === "manual"
             ? `Selected. Press ${shortcut} to copy.`
             : ""}
@@ -78,8 +65,13 @@ function Countdown({ until }: { until: number | null }) {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, []);
-  return <>{countdownWords(until, now)}</>;
+  // No retry waiting means an attempt is under way.
+  if (until === null) return <> now</>;
+  const seconds = Math.max(0, Math.ceil((until - now) / 1000));
+  return <>{seconds > 0 ? ` in ${seconds}s` : " now"}</>;
 }
+
+type StepState = "done" | "current" | "pending";
 
 /**
  * Setting up a gateway, one step at a time: connecting, pairing this device,
@@ -95,9 +87,24 @@ function SetupSteps({
   /** While pairing, the step says what it is waiting for. */
   pairingText?: ReactNode;
 }) {
-  const steps = setupSteps(connection, loadingBots);
+  const gateway = gatewayLabel(connection.gatewayUrl);
+  const pairing = connection.status === "pairing";
+  const reached = pairing || loadingBots;
+  const steps: Array<{ state: StepState; label: ReactNode; waiting?: boolean }> = [
+    reached
+      ? { state: "done", label: `Connected to ${gateway}` }
+      : { state: "current", label: `Connecting to ${gateway}` },
+    loadingBots || (connection.paired && !pairing)
+      ? { state: "done", label: "This device is paired" }
+      : pairing
+        ? { state: "current", label: pairingText ?? "Waiting for approval", waiting: true }
+        : { state: "pending", label: "Pair this device" },
+    loadingBots
+      ? { state: "current", label: "Loading bots" }
+      : { state: "pending", label: "Load bots" },
+  ];
   return (
-    <ol className="setup-steps" aria-label={W.setupLabel} data-testid="setup-steps">
+    <ol className="setup-steps" aria-label="Setting up" data-testid="setup-steps">
       {steps.map((step, index) => (
         <li
           key={index}
@@ -115,19 +122,33 @@ function SetupSteps({
               aria-hidden="true"
             />
           )}
-          <span role={step.state === "current" ? "status" : undefined}>
-            {step.label ?? pairingText ?? W.waitingStep}
-          </span>
+          <span role={step.state === "current" ? "status" : undefined}>{step.label}</span>
         </li>
       ))}
     </ol>
   );
 }
 
+/** A connection failure's title. */
+export function failureTitle(code: string | null | undefined): string {
+  switch (code) {
+    case "PAIRING_ENDED":
+      return "The pairing request is no longer pending";
+    default:
+      return "Could not connect";
+  }
+}
+
+/** What a requested scope lets this device do, in plain words. */
+const SCOPE_WORDS: Record<string, string> = {
+  "operator.read": "Read bots, tasks and conversations",
+};
+
 function PairingPanel({ connection }: { connection: ConnectionState }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const pairing = connection.pairing!;
-  const scopes = pairingScopes(connection);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
   // While it checks, the button stays focusable (aria-disabled, not disabled),
@@ -144,35 +165,31 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
   };
   return (
     <section className="panel" aria-labelledby="pair-title">
-      <h2 id="pair-title">{W.approveTitle}</h2>
-      <p className="panel-lede">{pairingLede(connection.gatewayUrl)}</p>
+      <h2 id="pair-title">Approve this device</h2>
+      <p className="panel-lede">
+        {gatewayLabel(connection.gatewayUrl)} has not seen this device before. Approve it once on
+        the gateway's machine and {PRODUCT_NAME} connects by itself.
+      </p>
       {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
-      {pairing.approveCommand && (
-        <CommandLine command={pairing.approveCommand} label={W.copyApprove} />
-      )}
+      <CommandLine command={pairing.approveCommand} label="Copy approve command" />
       <SetupSteps
         connection={connection}
         loadingBots={false}
         pairingText={
           <>
-            {checked ? W.notYet : W.waiting}
+            {checked ? "Not approved yet, checking again" : "Waiting for approval, checking again"}
             <Countdown until={connection.retryAt} />
           </>
         }
       />
-      <ul className="scopes" aria-label={W.scopesLabel}>
-        {scopes.asked.map((scope) => (
+      <ul className="scopes" aria-label="This device asks to">
+        {pairing.requestedScopes.map((scope) => (
           <li key={scope} data-scope={scope}>
             <EyeIcon />
-            {scopeWords(scope)}
+            {SCOPE_WORDS[scope] ?? scope}
           </li>
         ))}
       </ul>
-      {scopes.echoed && (
-        <p className="approve-note" data-testid="scopes-differ">
-          {scopesDifferWords(scopes.echoed)}
-        </p>
-      )}
       <div className="actions">
         <button
           type="button"
@@ -181,18 +198,25 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
           aria-disabled={checking || undefined}
           onClick={() => void check()}
         >
-          {checking ? W.checking : W.checkNow}
+          {checking ? "Checking…" : "Check now"}
         </button>
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          {W.useAnother}
-        </button>
+        {gatewayUrl && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Use another gateway
+          </button>
+        )}
       </div>
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }
@@ -208,13 +232,16 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!url.trim()) {
-      setSubmitError(W.missingAddress);
+      setSubmitError({
+        title: "Enter the gateway's address",
+        message: "It looks like ws://host:port or wss://host.",
+      });
       return;
     }
     setSubmitError(null);
     send({ type: "connect", url: url.trim(), token: token || null }).catch((error: unknown) =>
       setSubmitError({
-        title: failureTitle(null),
+        title: "Could not connect",
         message: error instanceof Error ? error.message : String(error),
       }),
     );
@@ -239,30 +266,30 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   return (
     <section className="panel" aria-labelledby="connect-title">
       <h2 id="connect-title" className="visually-hidden">
-        {W.connectTitle}
+        Connect to your gateway
       </h2>
       <form onSubmit={submit} noValidate ref={formRef}>
         <label className="field">
-          <span className="visually-hidden">{W.address}</span>
+          <span className="visually-hidden">Gateway address</span>
           <input
             className="input"
             name="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder={W.address}
+            placeholder="Gateway address"
             autoComplete="off"
             spellCheck={false}
           />
         </label>
         <label className="field">
-          <span className="visually-hidden">{W.tokenLabel}</span>
+          <span className="visually-hidden">Gateway token, for pairing</span>
           <input
             className="input"
             name="token"
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder={W.token}
+            placeholder="Gateway token, for pairing"
             autoComplete="off"
           />
         </label>
@@ -273,7 +300,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             {error.hint && ` ${error.hint}`}
             {error.code && <span className="form-error-code">{error.code}</span>}
             <button type="button" className="button" data-size="sm" onClick={tryAgain}>
-              {W.tryAgain}
+              Try again
             </button>
           </div>
         )}
@@ -285,7 +312,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             data-size="lg"
             disabled={busy}
           >
-            {busy ? W.connecting : W.connect}
+            {busy ? "Connecting…" : "Connect a gateway"}
           </button>
           {info.devGateway && (
             <button
@@ -297,11 +324,14 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
               title={`${gatewayLabel(info.devGateway.url)}, started with pnpm dev-gateway up`}
               onClick={() => void send({ type: "connectDevGateway" })}
             >
-              {W.devGateway}
+              Use the development gateway
             </button>
           )}
         </div>
-        <p className="field-hint">{W.hint}</p>
+        <p className="field-hint">
+          {PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access
+          only.
+        </p>
       </form>
     </section>
   );
@@ -316,6 +346,8 @@ function SetupPanel({
   loadingBots: boolean;
 }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const error = connection.error;
   return (
     <section className="panel" aria-labelledby="setup-title">
@@ -334,21 +366,28 @@ function SetupPanel({
             data-size="sm"
             onClick={() => void send({ type: "retry" })}
           >
-            {W.tryAgain}
+            Try again
           </button>
         </div>
       )}
-      <div className="actions">
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          {W.useAnother}
-        </button>
-      </div>
+      {gatewayUrl && (
+        <div className="actions">
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Use another gateway
+          </button>
+        </div>
+      )}
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }
@@ -362,11 +401,20 @@ function ProtocolNotice({
   error: ConnectionError;
 }) {
   const send = useCommand();
+  const { forget, failure } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
+  const protocol = error.protocol;
   const retrying = connection.status === "connecting" || connection.status === "reconnecting";
+  const gateway = gatewayLabel(connection.gatewayUrl);
   return (
     <section className="panel" aria-labelledby="protocol-title" data-testid="protocol-notice">
-      <h2 id="protocol-title">{W.protocolTitle}</h2>
-      <p className="panel-lede">{protocolLede(connection.gatewayUrl, error.protocol)}</p>
+      <h2 id="protocol-title">This gateway speaks another protocol</h2>
+      <p className="panel-lede">
+        {protocol?.gateway === null || protocol?.gateway === undefined
+          ? `${gateway} does not speak protocol ${protocol?.client ?? ""}, the one this version of ${PRODUCT_NAME} speaks.`
+          : `${gateway} speaks protocol ${protocol.gateway}. This version of ${PRODUCT_NAME} speaks protocol ${protocol.client}.`}{" "}
+        Update the one that is older, then retry.
+      </p>
       <div className="actions">
         <button
           type="button"
@@ -377,21 +425,66 @@ function ProtocolNotice({
             if (!retrying) void send({ type: "retry" });
           }}
         >
-          {retrying ? W.retrying : W.retry}
+          {retrying ? "Retrying…" : "Retry"}
         </button>
-        <button
-          type="button"
-          className="button"
-          data-variant="quiet"
-          data-size="lg"
-          onClick={() => void send({ type: "disconnect" })}
-        >
-          {W.chooseAnother}
-        </button>
+        {gatewayUrl && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            data-size="lg"
+            onClick={() => void forget(gatewayUrl)}
+          >
+            Choose another gateway
+          </button>
+        )}
       </div>
+      {failure && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {failure}
+        </div>
+      )}
     </section>
   );
 }
+
+/** The characters along the foot of the connection screens. Decoration only. */
+const ENSEMBLE: Array<CharacterSpec & { size: number; sink: number; lean: number }> = [
+  {
+    body: "drop",
+    color: "#45bdf5",
+    tilt: 3,
+    look: [0.3, 0.5],
+    lift: 1,
+    size: 132,
+    sink: -0.3,
+    lean: -8,
+  },
+  {
+    body: "arch",
+    color: "#ff8552",
+    tilt: 5,
+    look: [-0.7, 0.3],
+    lift: -1.5,
+    size: 176,
+    sink: -0.26,
+    lean: 5,
+  },
+  { body: "disc", color: "#f6bd3b", tilt: 6, look: [0.8, 0], size: 118, sink: -0.2, lean: -4 },
+  { body: "block", color: "#5b8dff", tilt: 0, look: [0.9, 0.2], size: 204, sink: -0.3, lean: 3 },
+  {
+    body: "pebble",
+    color: "#58c26f",
+    tilt: -7,
+    look: [0.6, -0.3],
+    size: 160,
+    sink: -0.24,
+    lean: -6,
+  },
+  { body: "hex", color: "#ff6f9c", tilt: -4, look: [-0.8, 0.2], size: 124, sink: -0.26, lean: 7 },
+  { body: "bloom", color: "#a98bff", tilt: -5, look: [0, -0.5], size: 186, sink: -0.28, lean: -3 },
+  { body: "gem", color: "#a5d955", tilt: 0, look: [-0.4, -0.4], size: 122, sink: -0.24, lean: 4 },
+];
 
 function Ensemble() {
   return (
@@ -444,7 +537,10 @@ export function ConnectScreen({
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
             <ProtocolNotice connection={connection} error={mismatch} />
-            <p className="connect-foot">{footWords("protocol", connection, host)}</p>
+            <p className="connect-foot">
+              {gatewayLabel(connection.gatewayUrl)}
+              {connection.serverVersion ? ` · OpenClaw ${connection.serverVersion}` : ""} · {host}
+            </p>
           </>
         ) : pairing ? (
           <>
@@ -452,7 +548,10 @@ export function ConnectScreen({
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
             <PairingPanel connection={connection} />
-            <p className="connect-foot">{footWords("pairing", connection, host)}</p>
+            <p className="connect-foot">
+              Request {pairing.requestId.slice(0, 8)} · this device{" "}
+              {(connection.deviceId ?? pairing.deviceId).slice(0, 8)} · {host}
+            </p>
           </>
         ) : (
           <>
@@ -466,7 +565,13 @@ export function ConnectScreen({
             ) : (
               <ConnectForm connection={connection} info={info} />
             )}
-            <p className="connect-foot">{footWords("connect", connection, host)}</p>
+            <p className="connect-foot">
+              {connection.deviceId
+                ? `This device ${connection.deviceId.slice(0, 8)}`
+                : "Preparing device identity…"}
+              {" · "}
+              {host}
+            </p>
           </>
         )}
       </div>

@@ -8,7 +8,7 @@
 // desktop, and nothing the gateway sent back shows a credential.
 
 import type { ConnectionError, ConnectionState, DiscoveryState } from "@clawtrate/core";
-import { ENSEMBLE, showEnsemble } from "@clawtrate/ui/character";
+import { ENSEMBLE, showEnsemble } from "../presentation/character.ts";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS as W,
@@ -24,9 +24,9 @@ import {
   scopeWords,
   setupSteps,
   SLOGAN,
-} from "@clawtrate/ui/connect-words";
-import { gatewayLabel } from "@clawtrate/ui/format";
-import { addressWords } from "@clawtrate/ui/gateway-state";
+} from "../presentation/connect-words.ts";
+import { gatewayLabel } from "../../../../packages/ui/src/format.ts";
+import { addressWords } from "../presentation/gateway-state.ts";
 import * as Clipboard from "expo-clipboard";
 import { useEffect, useState, type ReactNode } from "react";
 import {
