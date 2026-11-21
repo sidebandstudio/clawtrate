@@ -41,7 +41,9 @@ export function OutgoingBubble({
   let caption: ReactNode = null;
   switch (message.status) {
     case "sent":
-      if (message.mode === "steer") caption = <span>Steer requested</span>;
+      // "Steer" only once the gateway's record shows it joined the run (docs/research/steer-stop.md).
+      if (message.mode === "steer")
+        caption = <span>{message.steer === "joined" ? "Steer" : "Steer requested"}</span>;
       break;
     case "awaiting-access":
     case "sending":
@@ -279,7 +281,10 @@ export function RunEnding({
           {ending.timeouts === null &&
             transcript.outbox.some(
               (message) =>
-                message.runId === run.id && message.mode === "steer" && message.leftAt !== null,
+                message.runId === run.id &&
+                message.mode === "steer" &&
+                message.leftAt !== null &&
+                message.steer === undefined,
             ) && <p>The gateway may still run messages it already accepted.</p>}
           {(run.omittedTools ?? 0) > 0 && (
             <p>Some actions are no longer shown. Other bots' work may continue.</p>

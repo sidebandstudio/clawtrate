@@ -101,10 +101,16 @@ async function stopNewest(task: Task) {
   await task.client.stopRun(KEY, active.at(-1)!.id);
 }
 
-async function stoppedRightly(task: Task) {
+async function stoppedRightly(task: Task, withdrawn = 0) {
   await until(() => run(task)?.state === "stopped");
-  // The abort named the waiting run itself, and the gateway's end is that same run's.
-  expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: RUN }]);
+  // Each steer the gateway took is withdrawn first, by its own id (its idempotency key); then
+  // the abort names the waiting run itself, and the gateway's end is that same run's.
+  const steers = task.transcript().outbox.filter((message) => message.steer === "withdrawn");
+  expect(steers).toHaveLength(withdrawn);
+  expect(task.gateway.calls("chat.abort")).toEqual([
+    ...steers.map((message) => ({ sessionKey: KEY, runId: message.id })),
+    { sessionKey: KEY, runId: RUN },
+  ]);
   expect(run(task)).toMatchObject({ state: "stopped", outcomeKnown: true });
   // Its approval was settled by the gateway's own record, not only hidden here.
   await until(() => task.transcript().approvals[0]?.status !== "pending");
@@ -120,7 +126,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
     await until(() => task.gateway.calls("chat.history").length >= 2);
     await until(() => run(task, "steer-1") !== undefined);
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 1);
     task.client.stop();
   });
 
@@ -131,7 +137,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
     await until(() => task.gateway.calls("chat.send").length === 2);
     await sleep(100);
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 2);
     task.client.stop();
   });
 
@@ -151,7 +157,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
     answer.resolve(undefined);
     await until(() => task.transcript().outbox[0]?.status === "sent");
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 1);
     task.client.stop();
   });
 
