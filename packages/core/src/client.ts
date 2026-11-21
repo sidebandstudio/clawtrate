@@ -922,6 +922,17 @@ export class ClawtrateClient {
     bots: () =>
       this.state.bots.map((bot) => ({ id: bot.id, name: bot.name, isDefault: bot.isDefault })),
     connected: () => this.state.connection.status === "connected",
+    connection: () => ({
+      epoch: this.epoch,
+      generation: this.generation,
+      gateway: this.state.connection.gatewayUrl
+        ? { id: this.state.connection.gatewayId, url: this.state.connection.gatewayUrl }
+        : null,
+    }),
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+    },
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
     createMainTask: async (botId) => {
@@ -1033,6 +1044,8 @@ export class ClawtrateClient {
     const stops = this.stops;
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
+    // New bots whose command setting an earlier run couldn't confirm: still held.
+    await this.accounts.restore();
     // A turn limit the person chose earlier, unless the host was given one.
     if (this.options.turnLimitMs === undefined) {
       const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
@@ -4231,13 +4244,19 @@ export class ClawtrateClient {
     return this.accounts.createBot(input);
   }
 
+  /** Read the new bots' settings again, for the notes in their first tasks. */
+  refreshBotPolicies(): Promise<void> {
+    return this.accounts.refreshPolicies();
+  }
+
   /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
   finishBot(botId: string): Promise<CreatedBot> {
     return this.accounts.finishBot(botId);
   }
 
-  dismissBotCreation(): void {
-    this.accounts.dismissCreation();
+  /** Forget a creation that has settled; with `attempt`, only that attempt's. */
+  dismissBotCreation(attempt: string | null = null): void {
+    this.accounts.dismissCreation(attempt);
   }
 
   /** "Write it again": the new bot's command policy, for its id alone, never Create. */
@@ -4257,10 +4276,14 @@ export class ClawtrateClient {
 
   /** The first-bot prompt's check of the current gateway, again, before New bot opens. */
   async recheckFirstBot(): Promise<FirstBotState> {
-    if (this.state.connection.status !== "connected") return { status: "roster", mainPolicy: null };
+    if (this.state.connection.status !== "connected") {
+      this.accounts.firstBotFailed();
+      return { status: "roster", mainPolicy: null };
+    }
     try {
       await this.refreshBots();
     } catch {
+      // A failed read leaves no prompt from an earlier one (`refreshBots`).
       return { status: "roster", mainPolicy: null };
     }
     return this.state.accounts.firstBot;
@@ -4401,7 +4424,14 @@ export class ClawtrateClient {
   private async refreshBots(): Promise<unknown> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
-    const result = await this.request("agents.list", {});
+    let result: unknown;
+    try {
+      result = await this.request("agents.list", {});
+    } catch (error) {
+      // No first-bot prompt stands on a roster that can't be read now.
+      if (generation === this.generation) this.accounts.firstBotFailed();
+      throw error;
+    }
     if (generation !== this.generation || !this.newestBots(issued)) return result;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
     await this.accounts.checkFirstBot(result);
@@ -5493,6 +5523,7 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
+      this.accounts.firstBotFailed();
     }
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
@@ -6214,12 +6245,17 @@ export class ClawtrateClient {
     botId: string,
     options: { label?: string | null; owner?: object } = {},
   ): Promise<string> {
+    // A new bot's first task comes from Create, after step 2 reads back; none is made before.
+    const held = this.accounts.taskHeldBack(botId);
+    if (held) throw new Error(held);
     const ctx = this.actionContext(options.owner ?? null);
     return this.listCreated(await newTask(ctx, botId, options.label ?? null));
   }
 
   /** A bot's replacement first task, "Main", after its last unarchived task went (F-424). */
   async newMainTask(botId: string, options: { owner?: object } = {}): Promise<string> {
+    const held = this.accounts.taskHeldBack(botId);
+    if (held) throw new Error(held);
     return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
   }
 

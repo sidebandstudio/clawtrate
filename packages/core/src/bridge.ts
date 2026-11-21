@@ -220,8 +220,13 @@ export type BridgeCommand =
       model: string;
       effort: string | null;
       approvals: CommandChoice | null;
+      /** The New bot attempt this Create is. */
+      attempt: string | null;
     }
-  | { type: "dismissBotCreation" }
+  /** Forget a creation that has settled; with `attempt`, only that attempt's outcome. */
+  | { type: "dismissBotCreation"; attempt?: string | null }
+  /** Read the new bots' settings again, for the notes in their first tasks. */
+  | { type: "refreshBotPolicies" }
   /** Finish a bot whose creation is partial, by its id. */
   | { type: "finishBot"; botId: string }
   /** "Write it again": the new bot's command policy, for its id, never Create. */
@@ -767,9 +772,17 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "cancelSignIn":
     case "dismissSignIn":
     case "recheckSignIn":
-    case "dismissBotCreation":
     case "recheckFirstBot":
+    case "refreshBotPolicies":
       return { type: command.type };
+    case "dismissBotCreation":
+      return {
+        type: "dismissBotCreation",
+        attempt:
+          command.attempt === null || command.attempt === undefined
+            ? null
+            : shortText(command.attempt, 64, "attempt"),
+      };
     case "checkLock":
     case "finishBot":
     case "removeBotFallbacks":
@@ -823,6 +836,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             : id(command.effort, "effort"),
         approvals:
           command.approvals === "ask" || command.approvals === "full" ? command.approvals : null,
+        attempt:
+          command.attempt === null || command.attempt === undefined
+            ? null
+            : shortText(command.attempt, 64, "attempt"),
       };
     case "changeBotAccount":
       return {
@@ -1383,9 +1400,12 @@ class ViewerSession implements BridgeSession {
           model: command.model,
           effort: command.effort,
           approvals: command.approvals,
+          attempt: command.attempt,
         });
       case "dismissBotCreation":
-        return client.dismissBotCreation();
+        return client.dismissBotCreation(command.attempt ?? null);
+      case "refreshBotPolicies":
+        return client.refreshBotPolicies();
       case "finishBot":
         return client.finishBot(command.botId);
       case "retryBotPolicy":

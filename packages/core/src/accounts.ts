@@ -337,6 +337,8 @@ export type BotCreationState = {
   error: string | null;
   /** What a partial creation lacks, each finished by the bot's id. */
   missing: MissingStep[];
+  /** The New bot attempt it came from: its outcome is dismissed for that attempt alone. */
+  attempt: string | null;
 };
 
 /** The last write to a bot's settings or an account, for the line that says how it went. */
@@ -367,8 +369,12 @@ export type AccountsState = {
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
-  /** The command setting of the bot Create last made, as read (controls.md section 10). */
-  policy: NewBotPolicy | null;
+  /**
+   * The command settings of the new bots on this gateway, as read, for the
+   * notes in their first tasks (controls.md section 10), at most
+   * `MAX_POLICY_NOTES`.
+   */
+  policies: NewBotPolicy[];
   /** Whether the app opens on "Make your first bot" (bots.md section 3). */
   firstBot: FirstBotState;
 };
@@ -388,7 +394,7 @@ export const initialAccountsState: AccountsState = {
   signIn: null,
   creation: null,
   write: null,
-  policy: null,
+  policies: [],
   firstBot: initialFirstBot,
 };
 

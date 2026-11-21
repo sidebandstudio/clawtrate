@@ -189,6 +189,7 @@ export class AccountsGateway {
     g.handlers["config.get"] = () => ({
       config: JSON.parse(JSON.stringify(this.config)) as Json,
       hash: `h${this.revision}`,
+      valid: true,
       configRevisionHash: `r${this.revision}`,
       appliedConfigHash: `r${this.revision}`,
     });

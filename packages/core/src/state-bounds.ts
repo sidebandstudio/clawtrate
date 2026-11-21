@@ -30,7 +30,12 @@ import {
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
-import type { FirstBotState, NewBotPolicy } from "./new-bot.ts";
+import {
+  MAX_CREATED_WORKSPACE_CHARS,
+  MAX_POLICY_NOTES,
+  type FirstBotState,
+  type NewBotPolicy,
+} from "./new-bot.ts";
 import {
   MAX_ROUTINE_TEXT_CHARS,
   MAX_ROUTINES,
@@ -973,16 +978,17 @@ const botCreation = object<BotCreationState>()({
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
   missing: list(4, ENUM),
+  attempt: text(64),
 });
 const newBotPolicy = object<NewBotPolicy>()({
   botId: ID,
   name: NAME,
+  workspace: text(MAX_CREATED_WORKSPACE_CHARS),
   chosen: ENUM,
   status: ENUM,
   restrictive: FLAG,
   saved: ENUM,
   reported: ENUM,
-  reportedRead: FLAG,
   retryable: FLAG,
 });
 const firstBot = object<FirstBotState>()({ status: ENUM, mainPolicy: ENUM });
@@ -1008,7 +1014,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
-  policy: newBotPolicy,
+  policies: list(MAX_POLICY_NOTES, newBotPolicy),
   firstBot,
 });
 
