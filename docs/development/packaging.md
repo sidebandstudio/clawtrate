@@ -79,3 +79,5 @@ pnpm brand:icons
 ```
 
 To change the logo, replace that one file and run both commands. A unit test fails if the generated icons are older than the logo. The interface's accent color is taken from the mark and defined in `packages/ui/src/styles/tokens.css`.
+
+The installed updater trial must establish cache-only trust using the actual signing leaf. Signed Windows builds keep Restart unavailable pending the installed sharing and in-place upgrade trial.
