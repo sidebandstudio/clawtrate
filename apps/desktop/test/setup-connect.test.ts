@@ -619,7 +619,11 @@ describe("the programs setup starts", () => {
   });
 
   it("F-494: an account home with any name a file can have runs the look, and so does a program under it", () => {
-    for (const home of ["/Users/José", "/Users/O'Connor", "/Users/a&b (work)"]) {
+    for (const home of [
+      "/srv/accounts/José",
+      "/srv/accounts/O'Connor",
+      "/srv/accounts/a&b (work)",
+    ]) {
       expect(() =>
         checkRequest({
           ...base,
@@ -630,7 +634,11 @@ describe("the programs setup starts", () => {
       ).not.toThrow();
     }
     expect(() =>
-      checkRequest({ ...base, args: ["--version"], program: "/Users/a\nb/.local/bin/openclaw" }),
+      checkRequest({
+        ...base,
+        args: ["--version"],
+        program: "/srv/accounts/a\nb/.local/bin/openclaw",
+      }),
     ).toThrow();
   });
 

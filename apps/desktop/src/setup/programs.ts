@@ -57,7 +57,7 @@ const ENV_KEYS = new Set([
 /**
  * No shell reads a request (`shell: false`, the arguments as an array), so a value or a path is
  * refused only for what a process environment or a file name can't carry well: control
- * characters, NUL among them. A home such as `/Users/José` or `/Users/O'Connor` passes.
+ * characters, NUL among them. A home whose name has an accent or an apostrophe passes.
  */
 const hasControl = (text: string) =>
   [...text].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
