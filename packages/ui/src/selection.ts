@@ -1,4 +1,4 @@
-import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
+import { TASK_DELETED_ELSEWHERE, type Bot, type ClawtrateState, type Task } from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
 import { isUnread, markSeen, type SeenMap } from "./unread.ts";
@@ -128,6 +128,28 @@ export function visibleTasks<T extends { key: string }>(
   return top;
 }
 
+/**
+ * The task on screen, when the gateway deleted it while a message written in it was on its way,
+ * or refused the message for that reason: it stays on screen with the message and its words until
+ * the person leaves it or deletes the message (F-278). Null for a task still listed, or any other.
+ */
+export function keptOnScreen(
+  shown: Task | null,
+  botId: string | undefined,
+  tasks: Task[],
+  transcripts: ClawtrateState["transcripts"],
+): Task | null {
+  if (!shown || shown.botId !== botId || tasks.some((t) => t.key === shown.key)) return null;
+  const waits = transcripts[shown.key]?.outbox.some(
+    (message) =>
+      message.status === "sending" ||
+      message.status === "awaiting-access" ||
+      message.status === "checking" ||
+      (message.status === "failed" && message.error === TASK_DELETED_ELSEWHERE),
+  );
+  return waits ? shown : null;
+}
+
 /** Rows shown under an unfolded bot in one pane, so the rest of the list stays in view. */
 export const TASK_CAP_ONE_PANE = 3;
 
@@ -171,6 +193,8 @@ export function useSelection(
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
   /** Tasks marked unread while open: leaving them does not mark them read again. */
   const [keptUnread, setKeptUnread] = useState<Set<string>>(() => new Set());
+  /** The task on screen when last drawn. */
+  const [onScreen, setOnScreen] = useState<Task | null>(null);
 
   const bot = state.bots.find((b) => b.id === botId) ?? state.bots[0];
   const tasks = useMemo(
@@ -185,6 +209,7 @@ export function useSelection(
     state.tasksByBot[linked.task.botId]?.some((t) => t.key === linked.task.key)
   )
     setLinked(null);
+  const kept = keptOnScreen(onScreen, bot?.id, tasks, state.transcripts);
   const task =
     tasks.find((t) => t.key === remembered) ??
     (linked?.gatewayId === gatewayId &&
@@ -192,8 +217,10 @@ export function useSelection(
     linked.task.botId === bot?.id
       ? linked.task
       : null) ??
+    kept ??
     tasks[0] ??
     null;
+  if (task !== onScreen) setOnScreen(task);
 
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.

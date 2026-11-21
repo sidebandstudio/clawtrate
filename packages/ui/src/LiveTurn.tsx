@@ -6,6 +6,7 @@
 
 import {
   isTerminal,
+  TASK_DELETED_ELSEWHERE,
   type Bot,
   type OutgoingMessage,
   type Run,
@@ -80,17 +81,26 @@ export function OutgoingBubble({
       );
       break;
     case "failed":
-      caption = (
-        <>
-          <span title={message.error ?? undefined}>Failed to send</span>
-          <button type="button" className="link-button" onClick={retry}>
-            Resend
-          </button>
-          <button type="button" className="link-button" onClick={remove}>
-            Delete
-          </button>
-        </>
-      );
+      caption =
+        message.error === TASK_DELETED_ELSEWHERE ? (
+          // Sent again it would be refused the same way: the gateway no longer has this task.
+          <>
+            <span>Not sent. {TASK_DELETED_ELSEWHERE}</span>
+            <button type="button" className="link-button" onClick={remove}>
+              Delete
+            </button>
+          </>
+        ) : (
+          <>
+            <span title={message.error ?? undefined}>Failed to send</span>
+            <button type="button" className="link-button" onClick={retry}>
+              Resend
+            </button>
+            <button type="button" className="link-button" onClick={remove}>
+              Delete
+            </button>
+          </>
+        );
       break;
   }
   return (

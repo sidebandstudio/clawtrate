@@ -1,6 +1,12 @@
-import type { Bot, Task } from "@clawtrate/core";
+import {
+  TASK_DELETED_ELSEWHERE,
+  type Bot,
+  type ClawtrateState,
+  type OutgoingMessage,
+  type Task,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { botLabel, summarize, taskState, visibleTasks } from "../src/selection.ts";
+import { botLabel, keptOnScreen, summarize, taskState, visibleTasks } from "../src/selection.ts";
 
 const bot: Bot = {
   id: "otto",
@@ -136,5 +142,31 @@ describe("F-020 F-426: a bot row's state", () => {
     // New activity in that task after it was seen brings the marker back.
     const later = [{ ...tasks[0]!, updatedAt: 9 }, tasks[1]!];
     expect(summarize(later, { dwf: 5 }, null).state).toBe("done-with-failures");
+  });
+});
+
+describe("F-278: a task deleted elsewhere while a message written in it is out", () => {
+  const gone = task("gone", 100);
+  const other = task("other", 200);
+  const holding = (...messages: Array<Partial<OutgoingMessage>>) =>
+    ({ gone: { outbox: messages } }) as unknown as ClawtrateState["transcripts"];
+
+  it("stays on screen while the message is on its way, and once it was refused as deleted", () => {
+    for (const status of ["sending", "awaiting-access", "checking"] as const) {
+      expect(keptOnScreen(gone, "otto", [other], holding({ status }))).toBe(gone);
+    }
+    const refused = holding({ status: "failed", error: TASK_DELETED_ELSEWHERE });
+    expect(keptOnScreen(gone, "otto", [other], refused)).toBe(gone);
+  });
+
+  it("gives way otherwise: a task still listed, another bot's, one with nothing out, or one refused for another reason", () => {
+    const out = holding({ status: "sending" });
+    expect(keptOnScreen(gone, "otto", [gone, other], out)).toBeNull();
+    expect(keptOnScreen(gone, "pip", [other], out)).toBeNull();
+    expect(keptOnScreen(gone, "otto", [other], holding())).toBeNull();
+    expect(keptOnScreen(gone, "otto", [other], {})).toBeNull();
+    const failed = holding({ status: "failed", error: "budget exhausted" });
+    expect(keptOnScreen(gone, "otto", [other], failed)).toBeNull();
+    expect(keptOnScreen(null, "otto", [other], out)).toBeNull();
   });
 });

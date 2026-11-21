@@ -275,6 +275,7 @@ export function Composer({
       text: sentText(tokens, text),
       idempotencyKey: "x".repeat(36),
       queueMode: view.mode === "steer" ? "steer" : "followup",
+      sessionId: transcript?.sessionId ?? null,
       files: files.map((file) => ({
         fileName: file.name,
         mimeType: file.mimeType,
