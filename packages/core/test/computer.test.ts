@@ -1229,6 +1229,35 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(h.pane().stop).toBeNull();
   });
 
+  it("a Check started with the hand-back already out of sight is retired when the viewer leaves again", async () => {
+    vi.useFakeTimers();
+    let renewed!: (value: unknown) => void;
+    let held = false;
+    const h = harness({
+      "clawtrate-computer.control.release": () => {
+        throw refused("FORBIDDEN", "not_holder");
+      },
+      "clawtrate-computer.view.renew": () =>
+        held ? new Promise((resolve) => (renewed = resolve)) : { leaseRenewed: true },
+    });
+    await granted(h);
+    h.views.release(h.viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    h.views.leave(h.viewer);
+    // Back on Computer: the unconfirmed hand-back is still out of sight; Check, then leave.
+    h.views.show(h.viewer, KEY);
+    expect(h.pane().control).toMatchObject({ status: "unconfirmed", outOfSight: true });
+    held = true;
+    const checking = h.views.check(h.viewer);
+    h.views.leave(h.viewer);
+    renewed({ leaseRenewed: true, viewRenewed: true });
+    await checking;
+    expect(h.pane().control).toMatchObject({ status: "unconfirmed", outOfSight: true });
+    const renewals = h.calls("clawtrate-computer.view.renew").length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewals);
+  });
+
   it("a viewer that goes away gives control back and leaves no pane", async () => {
     const h = harness();
     await granted(h);

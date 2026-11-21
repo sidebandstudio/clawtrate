@@ -581,6 +581,8 @@ type Live = {
    * tab now. Earlier reads say nothing of it.
    */
   conflictAfter: number;
+  /** Counts each time this viewer was done with a tab (`closeTarget`): a Check sent before is retired. */
+  closed: number;
 };
 
 export type ComputerFrame = {
@@ -746,6 +748,7 @@ export class ComputerViews {
       shown: true,
       answering: null,
       conflictAfter: 0,
+      closed: 0,
     };
     live.shown = true;
     this.lives.set(viewer, live);
@@ -796,6 +799,7 @@ export class ComputerViews {
    */
   private closeTarget(live: Live): void {
     const viewer = live.viewer;
+    live.closed += 1;
     this.abandonTake(live);
     const pane = this.pane(viewer);
     if (live.lease && (pane?.control.status === "granted" || pane?.control.status === "unverified"))
@@ -1732,7 +1736,7 @@ export class ComputerViews {
     const checked = control?.status;
     if (!live || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
     // Leaving the tab since retires the Check: a tab out of sight is not renewed again.
-    const outOfSight = control!.outOfSight;
+    const closed = live.closed;
     const sentAt = this.ctx.now();
     try {
       const answer = asRecord(
@@ -1746,7 +1750,7 @@ export class ComputerViews {
         ),
       );
       const now = this.pane(viewer)?.control;
-      if (live.lease !== lease || now?.status !== checked || now.outOfSight !== outOfSight) return;
+      if (live.lease !== lease || now?.status !== checked || live.closed !== closed) return;
       if (answer?.leaseRenewed === true) {
         // Too late to count, or already confirmed by a later request: the line stays as it is.
         if (!this.confirm(live, lease, sentAt)) return;
