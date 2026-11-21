@@ -952,22 +952,27 @@ describe("a steer the gateway admits as a run of its own", () => {
 
   it("a steer admitted as a run of its own whose only frame here is its error is shown as that failed run", async () => {
     const gateway = grantingGateway();
-    gateway.handlers["chat.send"] = () => ({ runId: "steer-own", status: "started" });
+    // The gateway names a send's run by its idempotency key.
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: (params as { idempotencyKey: string }).idempotencyKey,
+      status: "started",
+    });
     const { client, transcript } = await openTask({ gateway });
     gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
-    client.sendMessage(KEY, "And the documents too.");
-    await until(() => transcript().steerAliases["steer-own"] === "base");
+    const own = client.sendMessage(KEY, "And the documents too.");
+    await until(() => transcript().outbox[0]?.status === "sent");
+    expect(transcript().steerAliases[own]).toBe("base");
     // Its start and text did not reach this client; its end did.
     gateway.emit("chat", {
-      runId: "steer-own",
+      runId: own,
       sessionKey: KEY,
       seq: 1,
       state: "error",
       errorMessage: "The model refused this run",
     });
-    await until(() => transcript().runs.some((run) => run.id === "steer-own"));
-    expect(transcript().runs.find((run) => run.id === "steer-own")).toMatchObject({
+    await until(() => transcript().runs.some((run) => run.id === own));
+    expect(transcript().runs.find((run) => run.id === own)).toMatchObject({
       state: "failed",
       error: { message: "The model refused this run" },
     });
