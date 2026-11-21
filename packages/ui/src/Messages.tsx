@@ -45,6 +45,8 @@ export const REACTIONS: Array<{ emoji: string; name: string }> = [
 
 /** How long a touch on a message is held before its actions show. */
 const LONG_PRESS_MS = 500;
+/** How far a held finger may drift and still be a touch and hold, about what iOS and Android allow. */
+const LONG_PRESS_SLOP = 10;
 
 type MessageEnv = {
   taskKey: string;
@@ -180,15 +182,22 @@ export function MessageActions({
     turn.addEventListener("pointerenter", onEnter);
     // Touch and hold on the message shows its actions; a tap elsewhere hides them.
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let start = { x: 0, y: 0 };
     const onDown = (event: PointerEvent) => {
       if (event.pointerType !== "touch") return;
       // A second finger makes it no touch and hold: the first one's wait ends too.
       if (timer) return cancel();
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
+      start = { x: event.clientX, y: event.clientY };
       timer = setTimeout(() => {
         measure();
         setHeld(true);
       }, LONG_PRESS_MS);
+    };
+    // A held finger always drifts a little; only a move past the slop ends the wait.
+    const onMove = (event: PointerEvent) => {
+      if (timer && Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_SLOP)
+        cancel();
     };
     const cancel = () => {
       if (timer) clearTimeout(timer);
@@ -197,14 +206,14 @@ export function MessageActions({
     turn.addEventListener("pointerdown", onDown);
     turn.addEventListener("pointerup", cancel);
     turn.addEventListener("pointercancel", cancel);
-    turn.addEventListener("pointermove", cancel);
+    turn.addEventListener("pointermove", onMove);
     return () => {
       cancel();
       turn.removeEventListener("pointerenter", onEnter);
       turn.removeEventListener("pointerdown", onDown);
       turn.removeEventListener("pointerup", cancel);
       turn.removeEventListener("pointercancel", cancel);
-      turn.removeEventListener("pointermove", cancel);
+      turn.removeEventListener("pointermove", onMove);
     };
   }, [turnRef, measure]);
 

@@ -3,7 +3,7 @@
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -51,6 +51,24 @@ const names = (locator: Locator) =>
 
 const shown = (locator: Locator) =>
   locator.evaluate((el) => Number(getComputedStyle(el).opacity) === 1);
+
+/**
+ * A finger down on a message's bubble, through the browser's own touch input, so that it drifts,
+ * scrolls and lifts the way a real one does. A pointer event made by hand does none of that.
+ */
+async function fingerOn(turn: Locator) {
+  const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+  const at = (dx: number, dy: number) => [
+    { x: box.x + 30 + dx, y: box.y + 20 + dy, id: 1, radiusX: 10, radiusY: 10, force: 1 },
+  ];
+  const cdp = await turn.page().context().newCDPSession(turn.page());
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(0, 0) });
+  return {
+    move: (dx: number, dy: number) =>
+      cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: at(dx, dy) }),
+    lift: () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }),
+  };
+}
 
 test.describe("message actions", () => {
   test.use(contextFor(WIDE, "light"));
@@ -628,6 +646,37 @@ test.describe("message actions on a phone", () => {
     const bar = (await actions.boundingBox())!;
     expect(bar.x).toBeGreaterThanOrEqual(0);
     expect(bar.x + bar.width).toBeLessThanOrEqual(PHONE.width);
+  });
+
+  test("F-066: touch and hold shows a message's actions though the finger drifts a few px", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    // Timers stop here, so the long press cannot end before the finger has drifted, however slow the page.
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const finger = await fingerOn(turn);
+    for (const dx of [3, 0, 3, 1]) await finger.move(dx, 2);
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: a finger that moves 30 px is a scroll, not a touch and hold: nothing opens", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: NOW });
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const finger = await fingerOn(turn);
+    for (const dy of [10, 20, 30]) await finger.move(0, -dy);
+    await page.clock.runFor(600);
+    await finger.lift();
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
   });
 });
 
