@@ -3208,15 +3208,22 @@ export function mergeHistoryRuns(
 }
 
 /**
- * History's copy of a run whose end it only infers, while the gateway still runs the task: a
- * call it closed only because of that inferred end is the live one, still open, so its own
- * result closes it when it arrives. A call history holds a result for is history's.
+ * History's copy of a run whose end it only infers, while the gateway still runs the task. It
+ * does not hold the finished run, so its steps merge into the live ones as a running run's do,
+ * and a live open reasoning step it lacks stays. A call it closed only because of that inferred
+ * end is open as the live one is, so the live step stays open, takes from history only what it
+ * lacks (the call, when the stream missed its start), and its own result closes it. A call
+ * history holds a result for is history's.
  */
 function keepOpenSteps(live: Run, history: Run): Run {
-  const open = new Map(live.steps.filter(isOpenStep).map((step) => [step.id, step]));
+  const open = new Map(live.steps.filter(isOpenStep).map((step) => [step.id, step.status]));
   return {
     ...history,
-    steps: history.steps.map((step) => (closedByRunEnd(step) ? (open.get(step.id) ?? step) : step)),
+    state: live.state,
+    steps: history.steps.map((step) => {
+      const status = closedByRunEnd(step) ? open.get(step.id) : undefined;
+      return status ? { ...step, status } : step;
+    }),
   };
 }
 
