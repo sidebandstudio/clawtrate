@@ -4,7 +4,7 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
-import { Settings } from "./Settings.tsx";
+import { Settings, type SettingsSection } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { showUpdateFooter } from "./Updates.tsx";
 import { Shell } from "./Shell.tsx";
@@ -49,7 +49,7 @@ export function App({
   const state = useClawtrateState();
   const { desktopUpdates } = useBridge();
   const updated = useDesktopUpdateSnapshot(desktopUpdates);
-  const [openUpdates, setOpenUpdates] = useState(false);
+  const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
@@ -57,8 +57,8 @@ export function App({
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpener = useRef<HTMLElement | null>(null);
-  const openSettings = useCallback((section?: "updates") => {
-    setOpenUpdates(section === "updates");
+  const openSettings = useCallback((section?: SettingsSection) => {
+    setOpenSection(section ?? null);
     const active = document.activeElement as HTMLElement | null;
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
@@ -124,7 +124,7 @@ export function App({
           checkIns={state.checkIns}
           bots={state.bots}
           updateReading={updated}
-          initialUpdates={openUpdates}
+          initialSection={openSection}
           onClose={closeSettings}
         />
       )}

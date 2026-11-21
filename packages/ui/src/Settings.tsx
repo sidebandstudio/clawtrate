@@ -73,16 +73,18 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section =
+export type SettingsSection =
   "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
-const SECTIONS: Array<[Section, string]> = [
-  ["gateway", "Gateway"],
-  ["accounts", "Accounts"],
-  ["conversation", "Conversation"],
-  ["usage", "Usage"],
-  ["machines", "Machines"],
-  ["checkins", "Check-ins"],
-  ["updates", "Updates"],
+type Section = SettingsSection;
+/** The sections Settings registers, in its order, each with the line search shows for it. */
+export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
+  ["gateway", "Gateway", "The gateway, its address and this device"],
+  ["accounts", "Accounts", "Provider accounts the bots run on"],
+  ["conversation", "Conversation", "How long a bot's turn may run"],
+  ["usage", "Usage", "Tokens, cost and warning budgets"],
+  ["machines", "Machines", "Where the bots run"],
+  ["checkins", "Check-ins", "When each bot checks in on its own"],
+  ["updates", "Updates", "Clawtrate's own updates"],
 ];
 
 /** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
@@ -186,7 +188,7 @@ export function Settings({
   accounts,
   checkIns,
   bots,
-  initialUpdates,
+  initialSection,
   updateReading,
   onClose,
 }: {
@@ -195,17 +197,19 @@ export function Settings({
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
-  initialUpdates: boolean;
+  /** The section to open on; otherwise the one shown last. */
+  initialSection: Section | null;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [section, setSectionState] = useState<Section>(() =>
-    initialUpdates ? "updates" : (recall<Section>(SHOWN_LAST) ?? "gateway"),
+  const initialUpdates = initialSection === "updates";
+  const [section, setSectionState] = useState<Section>(
+    () => initialSection ?? recall<Section>(SHOWN_LAST) ?? "gateway",
   );
   // On a phone the list comes first; a section replaces it.
-  const [pane, setPane] = useState<"nav" | "section">(initialUpdates ? "section" : "nav");
+  const [pane, setPane] = useState<"nav" | "section">(initialSection ? "section" : "nav");
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -502,7 +506,7 @@ export function Settings({
             <h2 id="settings-title">Settings</h2>
             {closeButton}
           </div>
-          {SECTIONS.map(([id, label]) => (
+          {SETTINGS_SECTIONS.map(([id, label]) => (
             <button
               key={id}
               type="button"

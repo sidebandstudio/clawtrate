@@ -63,6 +63,7 @@ import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
+import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -482,6 +483,7 @@ export function createFixtureBridge(
     usage?: UsageParams;
     machines?: MachineParams;
     checkIns?: CheckInParams;
+    search?: SearchParams;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -537,6 +539,9 @@ export function createFixtureBridge(
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
+  const search = options.search ?? NO_SEARCH_PARAMS;
+  if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
+  const searchCommand = searchCommands(search);
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -576,6 +581,11 @@ export function createFixtureBridge(
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const searched = searchCommand(command, () => state);
+    if (searched) {
+      sent.push(command);
+      return searched;
+    }
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
       sent.push(command);
