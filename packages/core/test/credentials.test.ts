@@ -63,7 +63,11 @@ describe("a credential never crosses gateways", () => {
     expect(JSON.parse(storage.data.get(tokenKey(URL_B))!).token).toBe("token-B");
     expect(storage.data.has(tokenKey(URL_A))).toBe(false);
     // B's settings keep B's URL; A's late hello did not touch them.
-    expect(JSON.parse(storage.data.get("connection")!)).toEqual({ url: URL_B, token: null });
+    expect(JSON.parse(storage.data.get("connection")!)).toEqual({
+      url: URL_B,
+      token: null,
+      address: true,
+    });
     gateway.dropAll();
     await until(() => gateway.connects.length >= 3);
     const auth = connectAuth(gateway, gateway.connects.length - 1);
@@ -98,7 +102,11 @@ describe("a credential never crosses gateways", () => {
     await until(() => client.state.connection.status === "pairing");
     storage.release(tokenKey(URL_A));
     await sleep(30);
-    expect(JSON.parse(storage.data.get("connection")!)).toEqual({ url: URL_B, token: "boot-B" });
+    expect(JSON.parse(storage.data.get("connection")!)).toEqual({
+      url: URL_B,
+      token: "boot-B",
+      address: true,
+    });
     client.stop();
   });
 

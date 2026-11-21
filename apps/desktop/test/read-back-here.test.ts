@@ -30,14 +30,19 @@ function runner(answers: Record<string, ProgramResult>) {
   };
 }
 
-const spec = (run: (request: ProgramRequest) => Promise<ProgramResult>) => ({
+const spec = (
+  run: (request: ProgramRequest) => Promise<ProgramResult>,
+  expected: string | null = GATEWAY,
+) => ({
   run,
   program: "/opt/homebrew/bin/openclaw",
   profileArgs: ["--profile", "clawtrate"],
   env: { HOME: "/var/empty/clawtrate", PATH: "/opt/homebrew/bin:/usr/bin:/bin" },
   cwd: "/var/empty/clawtrate",
   url: URL,
+  expected,
 });
+const IDENTITY_READ = { deviceId: GATEWAY, publicKey: "gateway-public-key-for-tests" };
 
 describe("F-500: the read-back on this computer", () => {
   it("reads the identity, then the list, for the profile at the verified address", async () => {
@@ -86,7 +91,7 @@ describe("F-500: the read-back on this computer", () => {
       await readBackHere(
         spec(runner({ "gateway.identity.get": ok(IDENTITY), "device.pair.list": failing(2) }).run),
       ),
-    ).toEqual({ ok: false, step: "list", exitCode: 2 });
+    ).toEqual({ ok: false, step: "list", exitCode: 2, identity: IDENTITY_READ });
     // Ended by the host, cut at its bound, or an answer of another shape: no exit code to name.
     for (const result of [
       failing(null, { timedOut: true }),
@@ -97,7 +102,19 @@ describe("F-500: the read-back on this computer", () => {
         await readBackHere(
           spec(runner({ "gateway.identity.get": ok(IDENTITY), "device.pair.list": result }).run),
         ),
-      ).toEqual({ ok: false, step: "list", exitCode: null });
+      ).toEqual({ ok: false, step: "list", exitCode: null, identity: IDENTITY_READ });
+  });
+
+  it("another gateway's identity at the endpoint is returned with no list asked for", async () => {
+    const r = runner({ "gateway.identity.get": ok(IDENTITY), "device.pair.list": ok(LIST) });
+    const other = "2".repeat(64);
+    expect(await readBackHere(spec(r.run, other))).toEqual({
+      ok: false,
+      step: "list",
+      exitCode: null,
+      identity: IDENTITY_READ,
+    });
+    expect(r.asked.map((request) => request.args[4])).toEqual(["gateway.identity.get"]);
   });
 
   it("the host's runner starts the two reads at a loopback address and refuses any other call", () => {

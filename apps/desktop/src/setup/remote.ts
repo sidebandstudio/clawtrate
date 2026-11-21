@@ -30,6 +30,7 @@ import {
   APPROVAL_IDENTITY_UNREAD,
   APPROVAL_UNCONFIRMED,
   initialSetupState,
+  PAIRING_STOPPED,
   MAX_SSH_CHANNELS,
   MAX_SSH_REMEMBERED_IDS,
   ROUTE_IDENTITY_CHANGED,
@@ -39,6 +40,7 @@ import {
   type ApprovalPlace,
   type ClawtrateClient,
   type ReadBack,
+  type ReadBackRequest,
   type ClawtrateState,
   type RouteStatus,
   type SetupFailure,
@@ -342,12 +344,16 @@ export class RemoteSetup {
 
   /**
    * The read-back after an approval (§9) for the gateway at `url`: through
-   * this route's own pinned SSH connection, a fresh LOOK for the program and
-   * its checksum, then IDENTITY and LIST, each a constant script for the
-   * route's profile and the gateway's port there. Null for an address that
-   * is no route's channel. Reads only.
+   * this route's own pinned SSH connection, a fresh LOOK that must find the
+   * route's profile running a supported version on exactly the route's
+   * gateway port there; then IDENTITY and, only when it returns `expected`,
+   * LIST, each a constant script for that profile and port, run with the
+   * program the LOOK found. The route must still hold the same channel after
+   * both reads, or nothing read counts. Null for an address that is no route's
+   * channel (the client takes a route's missing read as an identity it
+   * couldn't read). Reads only.
    */
-  async readBack(url: string): Promise<ReadBack | null> {
+  async readBack(url: string, request: ReadBackRequest): Promise<ReadBack | null> {
     const channel = this.channels.get(url);
     if (!channel) return null;
     const held =
@@ -361,13 +367,29 @@ export class RemoteSetup {
     const transport = this.transport();
     if (!held.route || "refused" in transport) return unread;
     const route = held.route;
+    const record = held.record;
+    const stillHeld = () =>
+      this.channels.get(url) === channel &&
+      (this.live?.channel === channel || this.pending?.channel === channel);
     const look = await transport.look(route);
-    if (!look.ok) return unread;
-    const facts = sshLook(look.facts);
-    if (!facts.program || !facts.programSum) return unread;
+    if (!look.ok || !stillHeld()) return unread;
+    // The endpoint and its version, established again for the route's own profile alone.
+    const facts = sshLook({
+      ...look.facts,
+      gateways: look.facts.gateways.filter((gateway) => gateway.profile === record.profile),
+    });
+    if (
+      facts.look.outcome !== "running" ||
+      !facts.found ||
+      facts.look.profile !== record.profile ||
+      facts.look.port !== record.gatewayPort ||
+      !facts.program ||
+      !facts.programSum
+    )
+      return unread;
     const values = {
-      profile: held.record.profile,
-      port: held.record.gatewayPort,
+      profile: record.profile,
+      port: record.gatewayPort,
       program: facts.program,
       programSum: facts.programSum,
     };
@@ -381,11 +403,16 @@ export class RemoteSetup {
         : { text: null, exitCode: ran.answer.exit };
     };
     const id = await read("identity");
+    if (!stillHeld()) return unread;
     const identity = id.text === null ? null : parseIdentity(id.text);
     if (!identity) return { ok: false, step: "identity", exitCode: id.exitCode || null };
+    // Another gateway at the route's endpoint: its device list is never asked for.
+    if (request.expected !== null && identity.deviceId !== request.expected)
+      return { ok: false, step: "list", exitCode: null, identity };
     const listed = await read("list");
+    if (!stillHeld()) return unread;
     const list = listed.text === null ? null : parseDeviceList(listed.text);
-    if (!list) return { ok: false, step: "list", exitCode: listed.exitCode || null };
+    if (!list) return { ok: false, step: "list", exitCode: listed.exitCode || null, identity };
     return { ok: true, identity, list };
   }
 
@@ -1076,7 +1103,11 @@ export class RemoteSetup {
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
-        const identity = code === ROUTE_IDENTITY_CHANGED || code === ROUTE_IDENTITY_UNREAD;
+        // A different gateway after the owner's approval (§9) gets the same cleanup as §8's.
+        const identity =
+          code === ROUTE_IDENTITY_CHANGED ||
+          code === ROUTE_IDENTITY_UNREAD ||
+          code === APPROVAL_IDENTITY_CHANGED;
         const pending = this.pending;
         // Not the route's gateway, or no saying: the same cleanup as on a restore (retireIdentity).
         if (identity && pending?.record)
@@ -1098,19 +1129,21 @@ export class RemoteSetup {
                   ? "approval-identity"
                   : code === APPROVAL_IDENTITY_UNREAD
                     ? "approval-identity-unread"
-                    : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
-                      ? "code-refused"
-                      : code === "UNREACHABLE"
-                        ? "unreachable"
-                        : code === ROUTE_IDENTITY_CHANGED
-                          ? "identity"
-                          : code === ROUTE_IDENTITY_UNREAD
-                            ? "identity-unread"
-                            : code === SETUP_PAIRING_GONE
-                              ? "pairing-gone"
-                              : code === SETUP_ENDPOINT_CHANGED || code === "GATEWAY_NOT_ALLOWED"
-                                ? "changed"
-                                : "other",
+                    : code === PAIRING_STOPPED
+                      ? "stopped"
+                      : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
+                        ? "code-refused"
+                        : code === "UNREACHABLE"
+                          ? "unreachable"
+                          : code === ROUTE_IDENTITY_CHANGED
+                            ? "identity"
+                            : code === ROUTE_IDENTITY_UNREAD
+                              ? "identity-unread"
+                              : code === SETUP_PAIRING_GONE
+                                ? "pairing-gone"
+                                : code === SETUP_ENDPOINT_CHANGED || code === "GATEWAY_NOT_ALLOWED"
+                                  ? "changed"
+                                  : "other",
           ),
         });
       }
@@ -1239,9 +1272,21 @@ export class RemoteSetup {
           status({ phase: "restoring", cause: null, retry: false });
       }),
     );
+    let retiredIdentity = false;
     live.stop.push(
       client.store.subscribe((state) => {
         if (this.live !== live) return;
+        // After the owner's approval, a different gateway answered this route (§9): §8's cleanup,
+        // the route's token dropped and its forward closed, its record kept for Review.
+        if (
+          client.route === key &&
+          state.connection.error?.code === APPROVAL_IDENTITY_CHANGED &&
+          !retiredIdentity
+        ) {
+          retiredIdentity = true;
+          void this.retireIdentity(live.record, live.forward);
+          status({ phase: "different-gateway", cause: null, retry: false });
+        }
         // Disconnect, another gateway, or Disconnect kept across a restart: the route is retired.
         if (client.route !== key || client.suspended) {
           void this.retire(live, client.suspended && client.route === key);

@@ -27,7 +27,11 @@ import { MAX_LOOK_NOISE } from "./look.ts";
 export type ScriptKind = "code" | "start" | "identity" | "list";
 export type ScriptProfile = "default" | "clawtrate";
 
-/** What each script keeps of OpenClaw's answer, in bytes, before base64. */
+/**
+ * The most of OpenClaw's answer each script accepts, in bytes, before base64.
+ * The script passes on one byte more, so an answer past its bound is seen to
+ * be, and refused whole: a cut answer is never parsed.
+ */
 export const SCRIPT_ANSWER_BYTES: Record<ScriptKind, number> = {
   // `qr --json`: a setup code, its URL and a few labels, well under 4 KiB.
   code: 16 * 1024,
@@ -88,14 +92,16 @@ exec 4>&1
 
 /** The script's body for `kind`: the prelude, the one command, the end line. */
 function body(kind: ScriptKind): string {
-  const bytes = SCRIPT_ANSWER_BYTES[kind];
+  // One byte past the bound: its presence is the refusal (parseScriptOutput).
+  const bytes = SCRIPT_ANSWER_BYTES[kind] + 1;
   const command = COMMANDS[kind];
   return (
     PRELUDE +
     String.raw`if [ -n "$prog" ]; then
   printf '{"k":"answer","v":"'
   code=$( { { if [ "$profile" = clawtrate ]; then "$prog" --profile clawtrate ${command} </dev/null 2>/dev/null && c=0 || c=$?; else "$prog" ${command} </dev/null 2>/dev/null && c=0 || c=$?; fi; printf '%s' "$c" >&3; } | b64 ${bytes} >&4; } 3>&1 )
-  case "$code" in ''|*[!0-9]*) code=255 ;; esac
+  # No status recorded (the watchdog ended it, say): absent, never a number of its own.
+  case "$code" in ''|*[!0-9]*) code=null ;; esac
   printf '","exit":%s}\n' "$code"
 fi
 kill -TERM "$watchdog" 2>/dev/null || true
@@ -155,14 +161,19 @@ export function maxScriptOutput(kind: ScriptKind): number {
   return (
     lineChars('{"k":"begin","id":""}', 36) +
     lineChars('{"k":"program","i":4}', 0) +
-    lineChars('{"k":"answer","v":"","exit":255}', base64Chars(SCRIPT_ANSWER_BYTES[kind])) +
+    lineChars('{"k":"answer","v":"","exit":255}', base64Chars(SCRIPT_ANSWER_BYTES[kind] + 1)) +
     lineChars('{"k":"end","id":""}', 36) +
     MAX_LOOK_NOISE
   );
 }
 
 export type ScriptParse =
-  | { ok: true; program: ProgramPlace | null; answer: { text: string; exit: number } | null }
+  | {
+      ok: true;
+      program: ProgramPlace | null;
+      /** OpenClaw's answer, whole, and its exit status apart from it: null when none was recorded. */
+      answer: { text: string; exit: number | null } | null;
+    }
   | { ok: false; reason: "no-begin" | "no-end" | "malformed" | "too-large" | "incomplete" };
 
 const record = (value: unknown): Record<string, unknown> | null =>
@@ -185,7 +196,7 @@ export function parseScriptOutput(
   const after = lines.slice(begin + 1);
   after.pop();
   let program: ProgramPlace | null = null;
-  let answer: { text: string; exit: number } | null = null;
+  let answer: { text: string; exit: number | null } | null = null;
   const seen = new Set<string>();
   for (const line of after) {
     let json: unknown;
@@ -218,12 +229,12 @@ export function parseScriptOutput(
         program === null ||
         typeof value !== "string" ||
         !/^[A-Za-z0-9+/]*={0,2}$/.test(value) ||
-        typeof exit !== "number" ||
-        !Number.isInteger(exit)
+        (exit !== null && (typeof exit !== "number" || !Number.isInteger(exit)))
       )
         return { ok: false, reason: "malformed" };
       const bytes = Buffer.from(value, "base64");
-      if (bytes.length > SCRIPT_ANSWER_BYTES[kind]) return { ok: false, reason: "malformed" };
+      // Past the bound by even a byte: the whole answer is refused, never a prefix of it.
+      if (bytes.length > SCRIPT_ANSWER_BYTES[kind]) return { ok: false, reason: "too-large" };
       answer = { text: bytes.toString("utf8"), exit };
       continue;
     }

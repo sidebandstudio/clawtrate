@@ -93,6 +93,14 @@ export type ScopeUpgradeState = {
    * confirmed exactly the asked access.
    */
   nowShown?: boolean;
+  /**
+   * When the waiting request is checked next, where the host can look at the
+   * gateway's computer (this computer, SSH); null or absent where it can't
+   * (an address route), whose wait is continuous and has no Check now.
+   */
+  checkAt?: number | null;
+  /** Where the request waits, for the actions the bar offers: an SSH route, this computer, an address. */
+  place?: "ssh" | "here" | "address" | null;
   error: string | null;
 };
 

@@ -24,7 +24,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { until } from "../../../../packages/core/test/fake-gateway.ts";
 import { FORBIDDEN_PORTS } from "../../../../e2e/ports.ts";
-import { cleanUp, saveRecord, type RunRecord } from "../../../../e2e/run-record.ts";
+import {
+  cleanUp,
+  isRunTempDir,
+  saveRecord,
+  TEMP_PREFIX,
+  type RunRecord,
+} from "../../../../e2e/run-record.ts";
 import { openInstance } from "../../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../../tools/dev-gateway/src/env.ts";
 import { newRunId, processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
@@ -51,13 +57,15 @@ const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 const RUN = randomBytes(4).toString("hex");
 const INSTANCE = `e2e-${RUN}-approve-ssh`;
+/** The development tool's profile for this run's instance: the only one any `openclaw` here names. */
+const PROFILE = `clawtrate-dev-${INSTANCE}`;
 const INTERACTIVE = ["operator.approvals", "operator.questions", "operator.read", "operator.write"];
 
 function openclawHere(): string | null {
   const found = spawnSync("/bin/sh", ["-c", "command -v openclaw"], { encoding: "utf8" });
   const path = found.stdout.trim();
   if (found.status !== 0 || !path) return null;
-  const version = spawnSync(path, ["--version"], { encoding: "utf8" });
+  const version = spawnSync(path, ["--profile", PROFILE, "--version"], { encoding: "utf8" });
   return version.status === 0 && /^OpenClaw 2026\.10\.6\b/.test(version.stdout.trim())
     ? path
     : null;
@@ -96,6 +104,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
   let t: TestWorld;
   let server: TestSshd;
   let gatewayPort: number;
+  let gatewayPid: number;
   let routes: RouteStore;
   let transport: SshTransport;
   let client: ClawtrateClient;
@@ -119,7 +128,9 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     const self = processIdentity(process.pid);
     if (self.state !== "alive") throw new Error("could not determine this process's start time");
     record.runner.identity = self.identity;
-    root = tempDir("clawtrate-ssh-approve-");
+    // In the short temporary folder, named so a later run recovers it if this one is killed.
+    root = tempDir(`${TEMP_PREFIX}ssh-approve-`);
+    if (!isRunTempDir(root)) throw new Error("the test's folder is not one a later run recovers");
     record.dirs.push(root);
     const runId = newRunId();
     record.instances.push({ name: INSTANCE, runId });
@@ -134,6 +145,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     if (FORBIDDEN_PORTS.includes(mine.gatewayPort))
       throw new Error(`instance ${INSTANCE} is on port ${mine.gatewayPort}, which this never uses`);
     gatewayPort = mine.gatewayPort;
+    gatewayPid = mine.gatewayPid;
 
     t = makeWorld(root);
     server = await startSshd(root, t.home, t.userKey);
@@ -198,7 +210,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
           null,
           (url) => setupHost?.placeFor(url) ?? null,
         ),
-        readBack: async (url) => (setupHost ? setupHost.readBack(url) : null),
+        readBack: async (url, request) => (setupHost ? setupHost.readBack(url, request) : null),
       }),
       {
         allowGatewayUrl: (url) => setupHost?.allows(url) ?? false,
@@ -235,6 +247,8 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     const problems = cleanUp(RECORDS, record, (name, runId) =>
       cli("reset", "--run-id", runId, "--instance", name),
     );
+    // The folder this test made, by its exact name, once its own sshd has stopped.
+    if (root) rmSync(root, { recursive: true, force: true });
     expect(problems).toEqual([]);
   }, 120_000);
 
@@ -271,6 +285,41 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     );
     expect(mine).toHaveLength(1);
     expect([...mine[0]!.scopes!].sort()).toEqual(INTERACTIVE);
+  });
+
+  it("F-500: the read-back establishes the route's endpoint and version first, and reads no list for another gateway", async () => {
+    const url = client.state.connection.gatewayUrl!;
+    const expected = client.state.connection.gatewayId!;
+    const status = (port: number, running = true) =>
+      stub.setStatus("default", statusJson({ port, home: t.home, pid: gatewayPid, running }));
+    try {
+      // The route's profile now answers on another port there: nothing is read at all.
+      status(gatewayPort + 1);
+      let ran = reads().length;
+      expect(await remote.readBack(url, { expected, here: null })).toEqual({
+        ok: false,
+        step: "identity",
+        exitCode: null,
+      });
+      expect(reads().length).toBe(ran);
+      // The route's service reports itself stopped: the same.
+      status(gatewayPort, false);
+      expect(await remote.readBack(url, { expected, here: null })).toMatchObject({
+        ok: false,
+        step: "identity",
+      });
+      expect(reads().length).toBe(ran);
+      // The endpoint is the route's, but another identity is expected: IDENTITY, and no LIST.
+      status(gatewayPort);
+      ran = reads().length;
+      const other = await remote.readBack(url, { expected: "0".repeat(64), here: null });
+      expect(other).toMatchObject({ ok: false, step: "list", identity: { deviceId: expected } });
+      expect(reads().slice(ran)).toEqual([
+        `gateway call gateway.identity.get --expect-url ws://127.0.0.1:${gatewayPort} --json`,
+      ]);
+    } finally {
+      status(gatewayPort);
+    }
   });
 
   it("F-500: an SSH drop after the person ran the command, while Clawtrate reads back, disconnects and saves no new token", async () => {

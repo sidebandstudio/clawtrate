@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   parseScriptOutput,
   remoteScript,
+  SCRIPT_ANSWER_BYTES,
   SCRIPT_BODIES,
   type ScriptValues,
 } from "../../src/main/ssh/scripts.ts";
@@ -44,7 +45,7 @@ describe.skipIf(process.platform === "win32")("the IDENTITY and LIST scripts", (
         'printf \'%s\\n\' "$*" >> "$HOME/calls"',
         'env | grep "^OPENCLAW_" >> "$HOME/env" || true',
         'case "$*" in',
-        `  *"gateway call gateway.identity.get --expect-url ws://127.0.0.1:"*" --json") printf '{\\n  "deviceId": "${GATEWAY}",\\n  "publicKey": "gateway-public-key-for-tests"\\n}\\n' ;;`,
+        `  *"gateway call gateway.identity.get --expect-url ws://127.0.0.1:"*" --json") if [ -f "$HOME/identity.json" ]; then cat "$HOME/identity.json"; else printf '{\\n  "deviceId": "${GATEWAY}",\\n  "publicKey": "gateway-public-key-for-tests"\\n}\\n'; fi ;;`,
         '  *"gateway call device.pair.list --expect-url ws://127.0.0.1:"*" --json") cat "$HOME/list.json" ;;',
         "  *) exit 9 ;;",
         "esac",
@@ -179,6 +180,50 @@ describe.skipIf(process.platform === "win32")("the IDENTITY and LIST scripts", (
       expect(SCRIPT_BODIES[kind]).toContain(" gateway call ");
       expect(SCRIPT_BODIES[kind]).not.toMatch(/approve|remove|reject|revoke|rotate/);
     }
+  });
+
+  it("F-500: an answer past its bound is refused whole, even when its first part is a whole document", () => {
+    // A complete identity document filling the 4 KiB bound exactly, then more after it.
+    const doc = `{"deviceId": "${GATEWAY}", "publicKey": "gateway-public-key-for-tests"}`;
+    const filled = doc.slice(0, -1) + " ".repeat(SCRIPT_ANSWER_BYTES.identity - doc.length) + "}";
+    expect(Buffer.byteLength(filled)).toBe(SCRIPT_ANSWER_BYTES.identity);
+    expect(parseIdentity(filled)).not.toBeNull();
+    writeFileSync(join(home, "identity.json"), `${filled}\n{"more": "after the bound"}\n`);
+    try {
+      const script = remoteScript("identity", values());
+      const out = run(script.text);
+      expect(out.status).toBe(0);
+      expect(parseScriptOutput("identity", out.stdout, script.requestId)).toEqual({
+        ok: false,
+        reason: "too-large",
+      });
+      // Exactly at the bound, it is whole and read.
+      writeFileSync(join(home, "identity.json"), filled);
+      const exact = remoteScript("identity", values());
+      const parsed = parseScriptOutput("identity", run(exact.text).stdout, exact.requestId);
+      if (!parsed.ok || !parsed.answer) throw new Error("no answer");
+      expect(parseIdentity(parsed.answer.text)?.deviceId).toBe(GATEWAY);
+    } finally {
+      rmSync(join(home, "identity.json"), { force: true });
+    }
+  });
+
+  it("F-500: a status the script couldn't record is absent, never a number of its own", () => {
+    const id = "00000000-0000-4000-8000-000000000000";
+    const out = [
+      `{"k":"begin","id":"${id}"}`,
+      `{"k":"program","i":0}`,
+      `{"k":"answer","v":"","exit":null}`,
+      `{"k":"end","id":"${id}"}`,
+      "",
+    ].join("\n");
+    expect(parseScriptOutput("list", out, id)).toMatchObject({
+      ok: true,
+      answer: { text: "", exit: null },
+    });
+    // The script itself prints null where it has no status.
+    expect(SCRIPT_BODIES.list).toContain("code=null");
+    expect(SCRIPT_BODIES.list).not.toContain("code=255");
   });
 
   it("F-500: an answer that isn't one whole document of the expected shape reads as nothing", () => {

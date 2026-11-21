@@ -2,7 +2,7 @@
 // results, the waiting line, commands and codes with their copy buttons, the
 // model and effort selects, the access bar for admin, and the announcer.
 
-import type { ConnectionState, HostInfo } from "@clawtrate/core";
+import { APPROVAL_WORDS, type ConnectionState, type HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "../bridge.tsx";
 import { copyText } from "../clipboard.ts";
@@ -288,7 +288,10 @@ export function AdminBar({
   let body: ReactNode;
   let action: ReactNode = null;
   let tone: "danger" | undefined;
-  const shelf = info.readOnly || !mine ? null : approvalShelf(connection, send, ask, "sm");
+  const shelf =
+    info.readOnly || !mine
+      ? null
+      : approvalShelf(connection, send, ask, "sm", info.setup !== undefined);
   if (info.readOnly) {
     body = (
       <>
@@ -404,7 +407,21 @@ export function useGranted(connection: ConnectionState): boolean {
   return granted;
 }
 
-export function GrantedBar() {
+/** How long the bar says the gateway now shows the access, after a wait it lost, before Granted. */
+export const RECOVERED_FOR_MS = 2000;
+
+/**
+ * Granted. After a wait this device lost (`nowShown`, setup §9), it first
+ * says, once, in its live region, that the gateway now shows the requested
+ * access.
+ */
+export function GrantedBar({ nowShown = false }: { nowShown?: boolean }) {
+  const [recovered, setRecovered] = useState(nowShown);
+  useEffect(() => {
+    if (!recovered) return;
+    const timer = setTimeout(() => setRecovered(false), RECOVERED_FOR_MS);
+    return () => clearTimeout(timer);
+  }, [recovered]);
   return (
     <section
       className="access-bar"
@@ -416,7 +433,13 @@ export function GrantedBar() {
       <div className="access-row">
         <CheckIcon />
         <span className="shelf-text" role="status">
-          <b>Admin access granted.</b> You can change this now.
+          {recovered ? (
+            APPROVAL_WORDS.nowShown
+          ) : (
+            <>
+              <b>Admin access granted.</b> You can change this now.
+            </>
+          )}
         </span>
       </div>
     </section>

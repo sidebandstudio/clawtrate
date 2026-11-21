@@ -1,4 +1,4 @@
-import type { ConnectionError, HostInfo } from "@clawtrate/core";
+import { isApprovalDisconnect, type ConnectionError, type HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
@@ -100,9 +100,18 @@ export function App({
     setMismatch(null);
   }
   // Connected through setup opens the app only once the bots were read (docs/design/setup.md §7).
+  // After an approval Clawtrate couldn't confirm, "Look again" and "Review" open the route's own
+  // look (§9, §6): its screens show while that look is under way or shown.
+  const approvalLook =
+    info.setup !== undefined &&
+    isApprovalDisconnect(state.connection.error?.code) &&
+    state.setup !== undefined &&
+    state.setup.phase !== "idle" &&
+    state.setup.phase !== "done";
   const setupHolds =
     info.setup !== undefined &&
-    (state.setup?.phase === "connecting" ||
+    (approvalLook ||
+      state.setup?.phase === "connecting" ||
       (state.setup?.phase === "failed" && state.setup.failure?.kind === "bots"));
   const screen = mismatch || setupHolds ? "connect" : screenFor(state);
   // When one screen replaces another and takes focus with it, focus the first

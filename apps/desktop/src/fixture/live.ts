@@ -35,6 +35,9 @@ export const LIVE_SCENES = [
   "access-granted",
   "access-waiting-ssh",
   "access-waiting-here",
+  "access-waiting-address",
+  "access-recovered",
+  "access-identity-unread",
   "access-confirming",
   "access-unconfirmed",
   "access-stale",
@@ -387,16 +390,60 @@ export function liveScene(
           approveCommand: words.command,
           approveNote: words.note,
           approveTitle: words.title,
+          // Where the host can look, the request is also checked on a schedule (§9).
+          place: name === "access-waiting-ssh" ? "ssh" : "here",
+          checkAt: now + 4 * SECOND,
         }),
         steps: [],
       };
     }
+    // An address route: no shell there, so the wait is the gateway's own, with no Check now.
+    case "access-waiting-address":
+      return {
+        initial: upgrade(base, {
+          status: "pending",
+          requestId: REQUEST_ID,
+          approveCommand: `openclaw devices approve ${REQUEST_ID}`,
+          approveNote:
+            "Run this on the gateway's computer, with `--profile <name>` if the gateway doesn't use the default profile:",
+          approveTitle: "Waiting for approval.",
+          place: "address",
+          checkAt: null,
+        }),
+        steps: [],
+      };
+    // A wait this device lost, then confirmed: the strip says so once, then Granted.
+    case "access-recovered":
+      return {
+        initial: upgrade(base, {
+          status: "confirming",
+          requestId: REQUEST_ID,
+          place: "ssh",
+        }),
+        steps: [
+          {
+            after: 300,
+            change: (state) => upgrade(interactive(state), { status: "approved", nowShown: true }),
+          },
+        ],
+      };
     case "access-confirming":
       return { initial: upgrade(base, { status: "confirming", requestId: REQUEST_ID }), steps: [] };
     case "access-unconfirmed":
-    case "access-identity-changed": {
-      const outcome = name === "access-unconfirmed" ? "unconfirmed" : "identity-changed";
-      const state = upgrade(base, { status: outcome, requestId: REQUEST_ID, approveCommand: null });
+    case "access-identity-changed":
+    case "access-identity-unread": {
+      const outcome =
+        name === "access-unconfirmed"
+          ? "unconfirmed"
+          : name === "access-identity-changed"
+            ? "identity-changed"
+            : "identity-unread";
+      const state = upgrade(base, {
+        status: outcome,
+        requestId: REQUEST_ID,
+        approveCommand: null,
+        place: "ssh",
+      });
       return {
         initial: {
           ...state,
@@ -404,11 +451,18 @@ export function liveScene(
             ...state.connection,
             status: "error",
             error: {
-              code: "APPROVAL_UNCONFIRMED",
+              code:
+                outcome === "unconfirmed"
+                  ? "APPROVAL_UNCONFIRMED"
+                  : outcome === "identity-changed"
+                    ? "APPROVAL_IDENTITY_CHANGED"
+                    : "APPROVAL_IDENTITY_UNREAD",
               message:
                 outcome === "unconfirmed"
                   ? `${APPROVAL_WORDS.unconfirmed.title} ${APPROVAL_WORDS.unconfirmed.detail}`
-                  : APPROVAL_WORDS.identityChanged,
+                  : outcome === "identity-changed"
+                    ? APPROVAL_WORDS.identityChanged
+                    : APPROVAL_WORDS.identityUnread,
               hint: null,
             },
           },

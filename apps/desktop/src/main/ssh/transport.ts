@@ -220,7 +220,7 @@ export type LookResult =
 
 /** What a CODE, START or STOP script found: the program's place and OpenClaw's answer, in memory. */
 export type ScriptResult =
-  | { ok: true; program: ProgramPlace | null; answer: { text: string; exit: number } | null }
+  | { ok: true; program: ProgramPlace | null; answer: { text: string; exit: number | null } | null }
   | Failed
   | NotSupportedHere
   | { ok: false; kind: "not-pinned" }

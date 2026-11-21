@@ -16,7 +16,11 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkPairedRecord, type ReadBack } from "../packages/core/src/approval.ts";
+import {
+  checkPairedRecord,
+  type ReadBack,
+  type ReadBackRequest,
+} from "../packages/core/src/approval.ts";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../packages/core/src/scopes.ts";
@@ -71,9 +75,10 @@ const devices = () =>
  * profile and the verified address, each command passed through the host
  * runner's own check, then run by the tool's guarded runner for this instance.
  */
-function hostReadBack(reads: ReadBack[]) {
-  return async (url: string): Promise<ReadBack | null> => {
+function hostReadBack(reads: ReadBack[], asked: ReadBackRequest[] = []) {
+  return async (url: string, request: ReadBackRequest): Promise<ReadBack | null> => {
     if (url !== URL) return null;
+    asked.push(request);
     const read = await readBackHere({
       run: async (request: ProgramRequest) => {
         checkRequest(request);
@@ -92,6 +97,7 @@ function hostReadBack(reads: ReadBack[]) {
       env: {},
       cwd: DIR,
       url,
+      expected: request.expected,
     });
     reads.push(read);
     return read;
@@ -99,7 +105,7 @@ function hostReadBack(reads: ReadBack[]) {
 }
 
 /** A client of its own, in a data folder of its own, with the host's read-back. */
-async function engine(dataDir: string, reads: ReadBack[]) {
+async function engine(dataDir: string, reads: ReadBack[], asked: ReadBackRequest[] = []) {
   const client = new ClawtrateClient(
     createNodeHost({
       dataDir,
@@ -108,7 +114,7 @@ async function engine(dataDir: string, reads: ReadBack[]) {
         version: "0.0.0",
         platform: process.platform,
       },
-      readBack: hostReadBack(reads),
+      readBack: hostReadBack(reads, asked),
     }),
     { reconnect: { initialMs: 200, maxMs: 1000 } },
   );
@@ -128,17 +134,33 @@ function saved(dataDir: string): { key: string; token: string; heldScopes: strin
   return { key, token: parsed.token, heldScopes: parsed.heldScopes };
 }
 
-/** Paired read-only, the first pairing approved with the development tool's approve command. */
-async function pairedReadOnly(client: ClawtrateClient) {
-  await client.connect({ url: URL, token: TOKEN });
+/**
+ * Paired read-only, the first pairing approved with the development tool's
+ * approve command; then the app relaunched with the connection saved as the
+ * host's setup keeps one found on this computer, for its profile (§9): the
+ * read-back after an approval comes from that, not from anything this run
+ * still holds in memory.
+ */
+async function pairedHere(dataDir: string, reads: ReadBack[], asked: ReadBackRequest[] = []) {
+  const first = await engine(dataDir, reads, asked);
+  await first.connect({ url: URL, token: TOKEN });
   await expect
-    .poll(() => client.state.connection.status, { timeout: 60_000 })
+    .poll(() => first.state.connection.status, { timeout: 60_000 })
     .toMatch(/pairing|connected/);
-  if (client.state.connection.status === "pairing")
-    cli("approve", client.state.connection.pairing!.requestId, "--instance", INSTANCE);
+  if (first.state.connection.status === "pairing")
+    cli("approve", first.state.connection.pairing!.requestId, "--instance", INSTANCE);
+  await expect.poll(() => first.state.connection.status, { timeout: 60_000 }).toBe("connected");
+  await expect.poll(() => saved(dataDir)?.token ?? null, { timeout: 30_000 }).toBeTruthy();
+  first.stop();
+  const file = join(dataDir, "state.json");
+  const state = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+  state.connection = JSON.stringify({ url: URL, token: null, here: { profile: "clawtrate" } });
+  writeFileSync(file, JSON.stringify(state));
+  const client = await engine(dataDir, reads, asked);
   await expect.poll(() => client.state.connection.status, { timeout: 60_000 }).toBe("connected");
   expect(client.state.connection.scopes).toEqual([...READ_SCOPES]);
   await expect.poll(() => client.state.connection.gatewayId, { timeout: 30_000 }).toBeTruthy();
+  return client;
 }
 
 const asSet = (scopes: readonly string[]) => [...scopes].sort();
@@ -177,8 +199,8 @@ test("F-500: write access the development tool approves is kept only after the r
   test.setTimeout(180_000);
   const dataDir = mkdtempSync(join(DIR, "write-"));
   const reads: ReadBack[] = [];
-  const client = await engine(dataDir, reads);
-  await pairedReadOnly(client);
+  const asked: ReadBackRequest[] = [];
+  const client = await pairedHere(dataDir, reads, asked);
   const before = saved(dataDir)!;
   expect(before.heldScopes).toEqual([...READ_SCOPES]);
 
@@ -202,6 +224,11 @@ test("F-500: write access the development tool approves is kept only after the r
   // The read-back ran once: the identity at the verified address is the connection's gateway,
   // and this device's record holds the operator role alone and exactly the interactive scopes.
   expect(reads).toHaveLength(1);
+  // Asked after a relaunch, from the profile kept with the connection, for the gateway
+  // identity established before the approval.
+  expect(asked).toEqual([
+    { expected: client.state.connection.gatewayId, here: { profile: "clawtrate" } },
+  ]);
   const read = reads[0]!;
   if (!read.ok) throw new Error(`the read-back failed at ${read.step}`);
   expect(read.identity.deviceId).toBe(client.state.connection.gatewayId);
@@ -230,8 +257,7 @@ test("F-500: a grant broader than asked disconnects and saves no token", async (
   test.setTimeout(180_000);
   const dataDir = mkdtempSync(join(DIR, "broader-"));
   const reads: ReadBack[] = [];
-  let client = await engine(dataDir, reads);
-  await pairedReadOnly(client);
+  let client = await pairedHere(dataDir, reads);
   // Earlier, this device was granted admin on this gateway.
   await client.requestAccess("admin");
   await expect

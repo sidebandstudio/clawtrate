@@ -1,4 +1,4 @@
-import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
+import { APPROVAL_WORDS, mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +19,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { RECOVERED_FOR_MS } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -71,10 +72,21 @@ export function Shell({
   const connectedNow = state.connection.status === "connected";
   const [tier, setTier] = useState(interactive);
   const [granted, setGranted] = useState(false);
+  // After a wait this device lost, the strip first says once that the gateway now shows the
+  // requested access (setup §9), then Granted.
+  const [recovered, setRecovered] = useState(false);
   if (connectedNow && interactive !== tier) {
     setTier(interactive);
-    if (interactive && state.connection.upgrade.status === "approved") setGranted(true);
+    if (interactive && state.connection.upgrade.status === "approved") {
+      setGranted(true);
+      setRecovered(state.connection.upgrade.nowShown === true);
+    }
   }
+  useEffect(() => {
+    if (!recovered) return;
+    const timer = setTimeout(() => setRecovered(false), RECOVERED_FOR_MS);
+    return () => clearTimeout(timer);
+  }, [recovered]);
   useEffect(() => {
     if (!granted) return;
     // Focus that was in the access bar moves to the composer's field.
@@ -458,8 +470,8 @@ export function Shell({
     granted && connectionStrip?.tone !== "danger"
       ? {
           tone: "ok" as const,
-          text: "Access granted",
-          more: "you can send, stop and answer",
+          text: recovered ? APPROVAL_WORDS.nowShown : "Access granted",
+          more: recovered ? null : "you can send, stop and answer",
           action: null,
           countdown: false,
         }

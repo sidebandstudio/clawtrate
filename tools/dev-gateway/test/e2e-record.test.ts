@@ -2,7 +2,7 @@
 // Runners and preview hosts are `sleep` stand-ins; instance resets are recorded,
 // never run. Every folder is created here and removed here.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -150,6 +150,36 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
       expect.objectContaining({ name: `e2e-${run.record.run}-setup` }),
     );
   });
+
+  it("recovers the approval checks' own instances, named for their run", () => {
+    const run = aRun(deadProcess());
+    for (const suffix of ["approve", "approve-ssh"])
+      run.record.instances.push({ name: `e2e-${run.record.run}-${suffix}`, runId: newRunId() });
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))).not.toBeNull();
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(run.resets.map((line) => line.split(" ")[0])).toEqual(
+      expect.arrayContaining([
+        `e2e-${run.record.run}-approve`,
+        `e2e-${run.record.run}-approve-ssh`,
+      ]),
+    );
+    expect(run.gone()).toBe(true);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "recovers a folder of the run's in macOS's short temporary folder, and no other there",
+    () => {
+      const run = aRun(deadProcess());
+      const short = own(realpathSync(mkdtempSync(join("/tmp", TEMP_PREFIX))));
+      const other = own(realpathSync(mkdtempSync(join("/tmp", "clawtrate-not-e2e-"))));
+      run.record.dirs.push(short, other);
+      saveRecord(run.records, run.record);
+      recoverDeadRuns(run.records, run.reset, run.log);
+      expect(existsSync(short)).toBe(false);
+      expect(existsSync(other)).toBe(true);
+    },
+  );
 
   it("leaves alone a record that names instances other than its run's own", () => {
     const run = aRun(deadProcess());

@@ -102,6 +102,8 @@ export type BridgeCommand =
   | { type: "stopWaiting" }
   /** "Check now" (setup §9): the host reads the gateway's pending list for this request, where it can. */
   | { type: "checkAccess" }
+  /** "Stop waiting" on the pairing screen (setup §9): no more retries; the request stays on the gateway. */
+  | { type: "stopPairing" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -1066,6 +1068,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "retry":
     case "stopWaiting":
     case "checkAccess":
+    case "stopPairing":
     case "setupLook":
     case "setupCancel":
     case "setupConnect":
@@ -1601,6 +1604,8 @@ class ViewerSession implements BridgeSession {
         return client.stopWaiting();
       case "checkAccess":
         return client.checkAccess();
+      case "stopPairing":
+        return client.stopPairing();
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":

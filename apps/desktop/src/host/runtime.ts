@@ -10,6 +10,7 @@ import {
   type ApprovalPlace,
   type KeyValueStore,
   type ReadBack,
+  type ReadBackRequest,
   type BridgePolicy,
   type HostInfo,
   type WebSocketLike,
@@ -79,13 +80,18 @@ export function readDevConnection(
  * The approve command to show. Only the development gateway gets the dev
  * tooling's command. A gateway setup reached on this computer or over SSH gets
  * the command for its profile and the computer to run it on
- * (docs/design/setup.md §9); an address route keeps the general one.
+ * (docs/design/setup.md §9), after a relaunch too, from the profile kept with
+ * the connection; an address route keeps the general one.
  */
 export function approvalInstructionsFor(
   devGateway: DevGatewayConnection | null,
   placeFor: (gatewayUrl: string) => ApprovalPlace | null = () => null,
-): (gatewayUrl: string, requestId: string) => ApprovalInstructions {
-  return (gatewayUrl, requestId) => {
+): (
+  gatewayUrl: string,
+  requestId: string,
+  here?: { profile: "default" | "clawtrate" } | null,
+) => ApprovalInstructions {
+  return (gatewayUrl, requestId, here) => {
     if (devGateway && gatewayUrl === devGateway.url)
       return {
         command:
@@ -94,7 +100,9 @@ export function approvalInstructionsFor(
             : `pnpm dev-gateway approve --instance ${devGateway.instance}`,
         note: null,
       };
-    const place = placeFor(gatewayUrl);
+    const place =
+      placeFor(gatewayUrl) ??
+      (here ? ({ route: "this-computer", profile: here.profile } as const) : null);
     return place
       ? approvalForPlace(place, requestId)
       : defaultApprovalInstructions(gatewayUrl, requestId);
@@ -152,7 +160,7 @@ export async function startHostRuntime(options: {
   /** Where a gateway's owner approves a request, for setup's routes (`approvalInstructionsFor`). */
   approvalPlace?: (gatewayUrl: string) => ApprovalPlace | null;
   /** The read-back after an approval (setup §9), for setup's routes; null for any other address. */
-  readBack?: (gatewayUrl: string) => Promise<ReadBack | null>;
+  readBack?: (gatewayUrl: string, request: ReadBackRequest) => Promise<ReadBack | null>;
   /**
    * A route's word on an address before every socket: true or false for an
    * SSH forward's local address (only the current one, while it is up), null

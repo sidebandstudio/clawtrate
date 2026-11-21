@@ -1440,13 +1440,15 @@ test.describe("access", () => {
       "openclaw devices approve 7c41d09e-52b3-4e8a-9f10-3d6b2a7e9c41",
     );
     await expect(bar).toContainText("Request 7c41d09e");
-    // The gateway's answer is waited for continuously: no countdown. Check now asks the host to
-    // look, and Stop waiting stops this device's wait; nothing offers to cancel the request (§9).
+    // An address route: the gateway's answer is waited for continuously, with no countdown and
+    // no Check now, since the host has nothing to look at there; Stop waiting stops this
+    // device's wait, and nothing offers to cancel the request (§9).
     await expect(bar.getByTestId("access-wait")).toHaveText(
       "This changes by itself as soon as the owner approves or denies the request, or it expires.",
     );
     await expect(bar.getByRole("button", { name: /Cancel request/ })).toHaveCount(0);
-    await expect(bar.getByRole("button", { name: "Check now" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Check now" })).toHaveCount(0);
+    await expect(bar.getByTestId("access-next")).toHaveCount(0);
     await expect(bar.getByRole("button", { name: "Stop waiting" })).toBeVisible();
     await expect(bar.getByRole("button", { name: "Copy approve command" })).toBeVisible();
     await expect(bar.getByRole("button", { name: "Copy request id" })).toBeVisible();

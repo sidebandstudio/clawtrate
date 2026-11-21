@@ -355,3 +355,137 @@ describe("F-500: a route Clawtrate disconnected after an approval it couldn't co
     client.stop();
   });
 });
+
+describe("F-500: a route's approval, confirmed through the route", () => {
+  const REQ = "0d0d0d0d-0000-4000-8000-0000000000aa";
+  const INTERACTIVE = [
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.questions",
+  ];
+
+  /** A route waiting on an upgrade; `readBack` answers the host's read there. */
+  async function routed(readBack: () => Promise<unknown> | unknown) {
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "token-1") };
+    };
+    let identity = "gateway-1";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity, publicKey: "key" });
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: REQ });
+    let approve: (value: unknown) => void = () => {};
+    gateway.handlers["device.scopes.waitUpgrade"] = () =>
+      new Promise((resolve) => {
+        approve = resolve;
+      });
+    const storage = memoryStorage({ [ROUTE_TOKEN]: SAVED_TOKEN });
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), readBack: async () => readBack() as never },
+      { reconnect: { initialMs: 20, maxMs: 40 } },
+    );
+    await client.start();
+    await client.connectRoute({ url: "ws://127.0.0.1:50001", route: ROUTE, identity: "gateway-1" });
+    await until(() => client.state.connection.status === "connected");
+    await client.requestAccess();
+    await until(() => client.state.connection.upgrade.status === "pending");
+    return {
+      gateway,
+      storage,
+      client,
+      setIdentity: (next: string) => (identity = next),
+      approve: () =>
+        approve({
+          status: "approved",
+          requestId: REQ,
+          deviceToken: "rotated",
+          scopes: INTERACTIVE,
+        }),
+    };
+  }
+
+  const exactRead = () => ({
+    ok: true,
+    identity: { deviceId: "gateway-1", publicKey: "key" },
+    list: {
+      pending: [],
+      paired: [
+        {
+          deviceId: "device-1",
+          publicKey: "public-key",
+          clientId: "gateway-client",
+          clientMode: "ui",
+          role: "operator",
+          scopes: INTERACTIVE,
+          tokens: [{ role: "operator", scopes: INTERACTIVE }],
+        },
+      ],
+    },
+  });
+
+  it("the forward dropping while the approval is confirmed ends it: unconfirmed, nothing kept", async () => {
+    let release: (value: unknown) => void = () => {};
+    const t = await routed(() => new Promise((resolve) => (release = resolve)));
+    t.approve();
+    await until(() => t.client.state.connection.upgrade.status === "confirming");
+    t.client.holdRoute(ROUTE);
+    expect(t.client.state.connection.upgrade.status).toBe("unconfirmed");
+    expect(t.client.suspended).toBe(true);
+    release(exactRead());
+    // The forward comes back on a new channel: the route stays as it was left.
+    await t.client.connectRoute({
+      url: "ws://127.0.0.1:50002",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await sleep(80);
+    expect(t.client.state.connection.status).toBe("error");
+    expect(t.storage.data.get(ROUTE_TOKEN)).toBe(SAVED_TOKEN);
+    t.client.stop();
+  });
+
+  it("a forward that comes back before the kept disconnect is saved opens nothing", async () => {
+    const t = await routed(() => ({ ok: false, step: "identity", exitCode: null }));
+    const sockets = () => t.gateway.sockets.length;
+    t.approve();
+    await until(() => t.client.state.connection.upgrade.status === "identity-unread");
+    const before = sockets();
+    // Queued at once, before the suspension's own write has run.
+    void t.client.connectRoute({
+      url: "ws://127.0.0.1:50002",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => JSON.parse(t.storage.data.get("connection")!).suspended === true);
+    await sleep(80);
+    expect(sockets()).toBe(before);
+    t.client.stop();
+  });
+
+  it("a confirming reconnect through the route that reaches another gateway has §9's words", async () => {
+    const t = await routed(exactRead);
+    t.gateway.connectReply = (params) => {
+      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+      if (auth?.deviceToken === "rotated") t.setIdentity("gateway-2");
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "token-1") };
+    };
+    t.approve();
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.state.connection.error).toMatchObject({
+      code: "APPROVAL_IDENTITY_CHANGED",
+      message: "This route now leads to a different gateway.",
+    });
+    expect(t.storage.data.get(ROUTE_TOKEN)).toBe(SAVED_TOKEN);
+    t.client.stop();
+  });
+
+  it("confirmed through the route, the token is kept for the route and the route stays verified", async () => {
+    const t = await routed(exactRead);
+    t.approve();
+    await until(() => t.client.state.connection.canWrite);
+    expect(JSON.parse(t.storage.data.get(ROUTE_TOKEN)!).token).toBe("rotated");
+    expect(t.client.state.connection.gatewayId).toBe("gateway-1");
+    t.client.stop();
+  });
+});

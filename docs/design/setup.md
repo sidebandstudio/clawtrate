@@ -346,6 +346,8 @@ So on 2026.10.6 the app shows the waiting state and the profile-qualified comman
 
 Under it: "Request e5eb4aa8", "checking again in 4s", "Check now" and "Stop waiting". "Stop waiting" stops this device's retries; the gateway's request is not cancelled, and nothing says it was. The waiting line and the retry follow the pairing screen, as built. The words name a computer only where the route establishes it: "on devbox" over SSH, "on this computer" here.
 
+On a scope upgrade the client's wait for the gateway's answer is continuous (`device.scopes.waitUpgrade`), so the bar also says "This changes by itself as soon as the owner approves or denies the request, or it expires." Where the host has a shell on the gateway's computer (this computer, SSH), it also reads the pending list on a schedule, read-only, and the countdown names that next read; "Check now" runs it at once. On an address route there is nothing on 2026.10.6 that gives a fresh check of the same request beside the continuous wait, so that bar has no countdown and no "Check now", only "Stop waiting".
+
 ### After the person approves: what Clawtrate keeps
 
 Clawtrate keeps a new token only when it can confirm exactly what was approved. It never removes anything from the gateway on its own: `devices remove` deletes the device's whole pairing, including access it had before and its other pending requests, so it could not undo just one grant.

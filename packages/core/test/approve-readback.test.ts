@@ -87,6 +87,9 @@ async function setUp(
     readBack?: (() => ReadBack | null | Promise<ReadBack | null>) | null;
     identity?: () => string;
     instructions?: ApprovalInstructions;
+    /** The saved connection: by default one saved before its place was kept (a loopback address). */
+    connection?: Record<string, unknown>;
+    checkMs?: number;
   } = {},
 ) {
   const gateway = new FakeGateway();
@@ -107,10 +110,10 @@ async function setUp(
     heldScopes: READ_SCOPES,
   });
   const storage = memoryStorage({
-    connection: JSON.stringify({ url: URL_A, token: null }),
+    connection: JSON.stringify(options.connection ?? { url: URL_A, token: null }),
     [tokenKey(URL_A)]: saved,
   });
-  const reads: Array<{ url: string; stored: string | undefined }> = [];
+  const reads: Array<{ url: string; stored: string | undefined; asked?: unknown }> = [];
   const host = {
     ...testHost(gateway, storage),
     approvalInstructions: () =>
@@ -123,13 +126,16 @@ async function setUp(
     ...(options.readBack === null
       ? {}
       : {
-          readBack: async (url: string) => {
-            reads.push({ url, stored: storage.data.get(tokenKey(URL_A)) });
+          readBack: async (url: string, asked: unknown) => {
+            reads.push({ url, stored: storage.data.get(tokenKey(URL_A)), asked });
             return (options.readBack ?? (() => exact()))();
           },
         }),
   };
-  const client = new ClawtrateClient(host, FAST);
+  const client = new ClawtrateClient(host, {
+    ...FAST,
+    ...(options.checkMs ? { approvalCheckMs: options.checkMs } : {}),
+  });
   await client.start();
   await until(() => client.state.connection.status === "connected");
   await until(() => client.state.connection.gatewayId === GATEWAY);
@@ -162,8 +168,11 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
     });
     t.approve();
     await until(() => t.client.state.connection.canWrite);
-    // The read-back ran before anything was saved, against this gateway's address.
-    expect(t.reads).toEqual([{ url: URL_A, stored: t.saved }]);
+    // The read-back ran before anything was saved, against this gateway's address and the
+    // identity established before the approval.
+    expect(t.reads).toEqual([
+      { url: URL_A, stored: t.saved, asked: { expected: GATEWAY, here: null } },
+    ]);
     // The reconnect used the staged token and asked for exactly the interactive set.
     const reconnect = t.connectsWith("rotated-token");
     expect(reconnect).toHaveLength(1);
@@ -279,13 +288,15 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
   });
 
   it("a failed read-back of the list disconnects and saves no token", async () => {
-    const t = await setUp({ readBack: () => ({ ok: false, step: "list", exitCode: 2 }) });
+    const t = await setUp({
+      readBack: () => ({ ok: false, step: "list", exitCode: 2, identity: identity() }),
+    });
     await waiting(t.client);
     t.approve();
     await refused(t, "unconfirmed", unconfirmedText);
   });
 
-  it("a read-back that throws is a failed read-back", async () => {
+  it("a read-back that throws is an identity that couldn't be read", async () => {
     const t = await setUp({
       readBack: () => {
         throw new Error("ssh: connection closed");
@@ -293,7 +304,16 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
     });
     await waiting(t.client);
     t.approve();
-    await refused(t, "unconfirmed", unconfirmedText);
+    await refused(t, "identity-unread", APPROVAL_WORDS.identityUnread);
+  });
+
+  it("a list that couldn't be read beside another gateway's identity says it is another gateway", async () => {
+    const t = await setUp({
+      readBack: () => ({ ok: false, step: "list", exitCode: null, identity: identity("gw-x") }),
+    });
+    await waiting(t.client);
+    t.approve();
+    await refused(t, "identity-changed", APPROVAL_WORDS.identityChanged);
   });
 
   it("a reconnect granted other scopes than asked disconnects and saves no token", async () => {
@@ -338,7 +358,7 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
     await refused(t, "identity-changed", APPROVAL_WORDS.identityChanged);
   });
 
-  it("without a shell there (an address route) the reconnect's hello alone decides", async () => {
+  it("without a shell anywhere (a host with no read-back) the reconnect's hello alone decides", async () => {
     const t = await setUp({ readBack: null });
     await waiting(t.client);
     t.approve();
@@ -347,12 +367,66 @@ describe("F-500: a scope upgrade is kept only once its read-back and reconnect c
     t.client.stop();
   });
 
-  it("a read-back the host answers with null (no shell for this address) leaves the hello to decide", async () => {
+  it("an explicit address route is never read back: the hello decides, against the same gateway", async () => {
+    const t = await setUp({
+      readBack: () => null,
+      connection: { url: URL_A, token: null, address: true },
+    });
+    await waiting(t.client);
+    expect(t.client.state.connection.upgrade.place).toBe("address");
+    t.approve();
+    await until(() => t.client.state.connection.canWrite);
+    expect(t.reads).toEqual([]);
+    t.client.stop();
+  });
+
+  it("an explicit address route that reaches another gateway on reconnect saves no token", async () => {
+    let id = GATEWAY;
+    const t = await setUp({
+      identity: () => id,
+      connection: { url: URL_A, token: null, address: true },
+    });
+    await waiting(t.client);
+    t.gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (auth?.deviceToken === "rotated-token") id = "gw-other";
+      return { ok: true, payload: helloOk(scopes) };
+    };
+    t.approve();
+    await refused(t, "identity-changed", APPROVAL_WORDS.identityChanged);
+  });
+
+  it("a connection found on this computer whose host can't read back there keeps nothing", async () => {
+    const t = await setUp({
+      readBack: () => null,
+      connection: { url: URL_A, token: null, here: { profile: "clawtrate" } },
+    });
+    await waiting(t.client);
+    t.approve();
+    await refused(t, "identity-unread", APPROVAL_WORDS.identityUnread);
+    // The kept profile was handed to the host, which had no proof to read with.
+    expect(t.reads[0]?.asked).toEqual({ expected: GATEWAY, here: { profile: "clawtrate" } });
+  });
+
+  it("a loopback connection saved before its place was kept is read back, and keeps nothing without it", async () => {
     const t = await setUp({ readBack: () => null });
     await waiting(t.client);
     t.approve();
-    await until(() => t.client.state.connection.canWrite);
-    t.client.stop();
+    await refused(t, "identity-unread", APPROVAL_WORDS.identityUnread);
+  });
+
+  it("an upgrade with no gateway identity established before it keeps nothing", async () => {
+    const t = await setUp();
+    await waiting(t.client);
+    // As if the identity read on this connection had given nothing.
+    t.client.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: null },
+    }));
+    (t.client as unknown as { gatewayIdentity: unknown }).gatewayIdentity = null;
+    t.approve();
+    await refused(t, "identity-unread", APPROVAL_WORDS.identityUnread);
+    expect(t.reads).toEqual([]);
   });
 });
 
@@ -377,6 +451,9 @@ describe("F-500: an SSH drop while waiting, or after the person ran the command"
       `${APPROVAL_WORDS.unconfirmed.title} ${APPROVAL_WORDS.unconfirmed.detail}`,
     );
     expect(t.changedGateway()).toEqual([]);
+    // Kept disconnected as any unconfirmed approval: at once, and across a restart.
+    expect(t.client.suspended).toBe(true);
+    await until(() => JSON.parse(t.storage.data.get("connection")!).suspended === true);
     t.client.stop();
   });
 
@@ -498,7 +575,9 @@ describe("F-500: Check now and Stop waiting", () => {
 
   it("a list that couldn't be read names the computer, and the exit code only when recorded", async () => {
     let exitCode: number | null = 2;
-    const t = await setUp({ readBack: () => ({ ok: false, step: "list", exitCode }) });
+    const t = await setUp({
+      readBack: () => ({ ok: false, step: "list", exitCode, identity: identity() }),
+    });
     await waiting(t.client);
     await t.client.checkAccess();
     expect(t.client.state.connection.upgrade).toMatchObject({
@@ -515,13 +594,100 @@ describe("F-500: Check now and Stop waiting", () => {
     t.client.stop();
   });
 
-  it("a different gateway at the endpoint, while waiting, says so", async () => {
+  it("a different gateway at the endpoint, while waiting, ends the wait and the connection", async () => {
     const t = await setUp({
       readBack: () => ({ ok: true, identity: identity("gw-other"), list: listed([], []) }),
     });
     await waiting(t.client);
     await t.client.checkAccess();
     expect(t.client.state.connection.upgrade.status).toBe("identity-changed");
+    expect(t.client.state.connection.status).toBe("error");
+    expect(t.client.state.connection.error?.code).toBe("APPROVAL_IDENTITY_CHANGED");
+    // The wait is over: an approval that arrives now keeps nothing and reconnects nothing.
+    t.approve();
+    await sleep(50);
+    expect(t.connectsWith("rotated-token")).toEqual([]);
+    expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
+    expect(t.client.suspended).toBe(true);
+    t.client.stop();
+  });
+
+  it("an identity that couldn't be read while waiting can be looked at again, and the wait goes on", async () => {
+    let read: ReadBack = { ok: false, step: "identity", exitCode: null };
+    const t = await setUp({ readBack: () => read });
+    await waiting(t.client);
+    await t.client.checkAccess();
+    expect(t.client.state.connection.upgrade.status).toBe("identity-unread");
+    expect(t.client.state.connection.status).toBe("connected");
+    read = {
+      ok: true,
+      identity: identity(),
+      list: listed([pendingEntry(REQUEST, INTERACTIVE_SCOPES)], [paired(READ_SCOPES)]),
+    };
+    await t.client.checkAccess();
+    expect(t.client.state.connection.upgrade.status).toBe("pending");
+    t.client.stop();
+  });
+
+  it("where the host can look, the waiting request is checked on a schedule, and says when", async () => {
+    const t = await setUp({ checkMs: 60 });
+    await waiting(t.client);
+    const first = t.client.state.connection.upgrade.checkAt;
+    expect(typeof first).toBe("number");
+    expect(t.client.state.connection.upgrade.place).toBe("here");
+    await until(() => t.reads.length >= 2);
+    // Read-only, and nothing but reads: the wait itself goes on.
+    expect(t.changedGateway()).toEqual([]);
+    expect(t.gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    t.client.stopWaiting();
+    const reads = t.reads.length;
+    await sleep(150);
+    expect(t.reads.length).toBe(reads);
+    t.client.stop();
+  });
+
+  it("an address route has no scheduled check and no Check now: its wait is continuous", async () => {
+    const t = await setUp({ checkMs: 30, connection: { url: URL_A, token: null, address: true } });
+    await waiting(t.client);
+    expect(t.client.state.connection.upgrade.checkAt ?? null).toBeNull();
+    await t.client.checkAccess();
+    await sleep(100);
+    expect(t.reads).toEqual([]);
+    t.client.stop();
+  });
+
+  it("a Check now answer that arrives while the approval is confirmed is dropped", async () => {
+    const check = deferred<ReadBack>();
+    const confirm = deferred<ReadBack>();
+    let calls = 0;
+    const t = await setUp({
+      readBack: () => (calls++ === 0 ? check.promise : confirm.promise),
+    });
+    await waiting(t.client);
+    const checking = t.client.checkAccess();
+    t.approve();
+    await until(() => t.reads.length === 2);
+    expect(t.client.state.connection.upgrade.status).toBe("confirming");
+    // The late answer says the request isn't listed: it would have said stale.
+    check.resolve({ ok: true, identity: identity(), list: listed([], []) });
+    await checking;
+    await sleep(30);
+    expect(t.client.state.connection.upgrade.status).toBe("confirming");
+    confirm.resolve(exact());
+    await until(() => t.client.state.connection.canWrite);
+    expect(t.client.state.connection.upgrade.status).toBe("approved");
+    t.client.stop();
+  });
+
+  it("a Check now answer that arrives after Stop waiting is dropped", async () => {
+    const hold = deferred<ReadBack>();
+    const t = await setUp({ readBack: () => hold.promise });
+    await waiting(t.client);
+    const checking = t.client.checkAccess();
+    t.client.stopWaiting();
+    hold.resolve({ ok: true, identity: identity(), list: listed([], []) });
+    await checking;
+    expect(t.client.state.connection.upgrade.status).toBe("idle");
     t.client.stop();
   });
 
@@ -548,6 +714,7 @@ describe("F-500: a first pairing its owner approved is confirmed before it is ke
   async function firstPairing(
     readBack: () => ReadBack | null,
     hello?: (token: string) => string[],
+    options: { failSettings?: boolean; firstGrant?: string[] } = {},
   ) {
     const gateway = new FakeGateway();
     let approved = false;
@@ -566,13 +733,20 @@ describe("F-500: a first pairing its owner approved is confirmed before it is ke
       return {
         ok: true,
         payload: helloOk(
-          token ? (hello?.(token) ?? ["operator.read"]) : ["operator.read"],
+          token ? (hello?.(token) ?? ["operator.read"]) : (options.firstGrant ?? ["operator.read"]),
           "first-token",
         ),
       };
     };
     gateway.handlers["gateway.identity.get"] = () => identity();
     const storage = memoryStorage();
+    if (options.failSettings) {
+      const set = storage.set;
+      storage.set = async (key, value) => {
+        if (key === "connection") throw new Error("disk full");
+        await set(key, value);
+      };
+    }
     const reads: Array<string | undefined> = [];
     const client = new ClawtrateClient(
       {
@@ -643,10 +817,166 @@ describe("F-500: a first pairing its owner approved is confirmed before it is ke
   });
 
   it("a failed read-back disconnects and saves nothing", async () => {
-    const t = await firstPairing(() => ({ ok: false, step: "list", exitCode: 1 }));
+    const t = await firstPairing(() => ({
+      ok: false,
+      step: "list",
+      exitCode: 1,
+      identity: identity(),
+    }));
     await until(() => t.client.state.connection.status === "error");
     expect(t.client.state.connection.error?.code).toBe("APPROVAL_UNCONFIRMED");
     expect(t.storage.data.has(tokenKey(URL_A))).toBe(false);
+    t.client.stop();
+  });
+
+  it("a gateway that can't be saved leaves no token behind either", async () => {
+    const t = await firstPairing(
+      () => ({ ok: true, identity: identity(), list: listed([], [paired(READ_SCOPES)]) }),
+      undefined,
+      { failSettings: true },
+    );
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.state.connection.error?.code).toBe("APPROVAL_UNCONFIRMED");
+    expect(t.storage.data.has(tokenKey(URL_A))).toBe(false);
+    expect(t.storage.data.has("connection")).toBe(false);
+    t.client.stop();
+  });
+
+  it("a first hello after the owner's approval granting more than read has §9's words", async () => {
+    const t = await firstPairing(
+      () => ({ ok: true, identity: identity(), list: listed([], [paired(READ_SCOPES)]) }),
+      undefined,
+      { firstGrant: ["operator.read", "operator.write"] },
+    );
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.state.connection.error).toMatchObject({
+      code: "APPROVAL_UNCONFIRMED",
+      message: `${APPROVAL_WORDS.unconfirmed.title} ${APPROVAL_WORDS.unconfirmed.detail}`,
+    });
+    expect(t.storage.data.has(tokenKey(URL_A))).toBe(false);
+    expect(t.reads).toEqual([]);
+    t.client.stop();
+  });
+
+  it("Stop waiting on the pairing screen stops retrying, drops the code, and asks nothing of the gateway", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: FIRST, deviceId: "device-1" },
+      },
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), readBack: async () => exact(READ_SCOPES) },
+      FAST,
+    );
+    await client.start();
+    await client.connectWithSetupCode({
+      url: URL_A,
+      bootstrapToken: CODE,
+      expiresAtMs: Date.now() + 60_000,
+    });
+    await until(() => client.state.connection.status === "pairing");
+    client.stopPairing();
+    expect(client.state.connection).toMatchObject({
+      status: "error",
+      retryAt: null,
+      pairing: null,
+      error: { code: "PAIRING_STOPPED" },
+    });
+    const connects = gateway.connects.length;
+    await sleep(150);
+    expect(gateway.connects.length).toBe(connects);
+    expect(JSON.stringify(client.state)).not.toContain(CODE);
+    expect(gateway.requests.filter((r) => NEVER_SENT.includes(r.method))).toEqual([]);
+    // The gateway stays selected, for another explicit attempt.
+    expect(client.state.connection.gatewayUrl).toBe(URL_A);
+    client.stop();
+  });
+});
+
+describe("F-500: an approval is bound to one request and one connection", () => {
+  it("Disconnect while the read-back runs: the late answer reopens nothing and saves nothing", async () => {
+    const hold = deferred<ReadBack>();
+    const t = await setUp({ readBack: () => hold.promise });
+    await waiting(t.client);
+    t.approve();
+    await until(() => t.client.state.connection.upgrade.status === "confirming");
+    await t.client.suspend();
+    hold.resolve(exact());
+    await sleep(80);
+    expect(t.connectsWith("rotated-token")).toEqual([]);
+    expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
+    expect(t.client.state.connection.status).toBe("disconnected");
+    t.client.stop();
+  });
+
+  it("another gateway chosen while the read-back runs: nothing of the approval is kept", async () => {
+    const hold = deferred<ReadBack>();
+    const t = await setUp({ readBack: () => hold.promise });
+    await waiting(t.client);
+    t.approve();
+    await until(() => t.client.state.connection.upgrade.status === "confirming");
+    await t.client.connect({ url: "ws://127.0.0.1:19002" });
+    hold.resolve(exact());
+    await sleep(80);
+    expect(t.connectsWith("rotated-token")).toEqual([]);
+    expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
+    t.client.stop();
+  });
+
+  it("a confirming socket that drops before its hello is terminal: no retry with the staged token", async () => {
+    const t = await setUp();
+    await waiting(t.client);
+    t.gateway.refuseConnections = true;
+    t.approve();
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.state.connection.upgrade.status).toBe("unconfirmed");
+    t.gateway.refuseConnections = false;
+    await sleep(150);
+    expect(t.client.state.connection.status).toBe("error");
+    expect(t.connectsWith("rotated-token")).toEqual([]);
+    expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
+    expect(JSON.stringify(t.client.state)).not.toContain("rotated-token");
+    await until(() => JSON.parse(t.storage.data.get("connection")!).suspended === true);
+    t.client.stop();
+  });
+
+  it("a confirming hello in another protocol says identity or version, and keeps nothing", async () => {
+    const t = await setUp();
+    await waiting(t.client);
+    t.gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      const hello = helloOk(scopes) as Record<string, unknown>;
+      return {
+        ok: true,
+        payload: auth?.deviceToken === "rotated-token" ? { ...hello, protocol: 99 } : hello,
+      };
+    };
+    t.approve();
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.state.connection.upgrade.status).toBe("identity-unread");
+    expect(t.client.state.connection.error).toMatchObject({
+      code: "APPROVAL_IDENTITY_UNREAD",
+      message: APPROVAL_WORDS.identityUnread,
+    });
+    expect(t.storage.data.get(tokenKey(URL_A))).toBe(t.saved);
+    t.client.stop();
+  });
+
+  it("refused, it is kept disconnected at once, before its suspension is saved", async () => {
+    const t = await setUp({ readBack: () => ({ ok: false, step: "identity", exitCode: null }) });
+    await waiting(t.client);
+    t.approve();
+    await until(() => t.client.state.connection.status === "error");
+    expect(t.client.suspended).toBe(true);
+    // Reconnect is the person's: it opens again, with the saved token.
+    await t.client.retryNow();
+    await until(() => t.client.state.connection.status === "connected");
+    expect(t.client.suspended).toBe(false);
     t.client.stop();
   });
 });

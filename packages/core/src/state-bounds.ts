@@ -650,6 +650,8 @@ const upgrade = object<ScopeUpgradeState>()({
   approveNote: text(MAX_MESSAGE_LINE_CHARS),
   approveTitle: text(MAX_MESSAGE_LINE_CHARS),
   nowShown: FLAG,
+  checkAt: NUMBER,
+  place: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const connection = object<ConnectionState>()({

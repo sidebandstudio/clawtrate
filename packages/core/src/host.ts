@@ -1,7 +1,7 @@
 // What a host process provides to the core. Core itself uses no DOM and no
 // Node APIs, so the same code runs in Electron's main process, plain Node and Expo.
 
-import type { ReadBack } from "./approval.ts";
+import type { ReadBack, ReadBackRequest } from "./approval.ts";
 
 /**
  * Async key/value persistence. Values are strings; core stores JSON. `set` and
@@ -67,13 +67,21 @@ export type ClawtrateHost = {
    * How to approve a pairing request on this gateway. The host knows whether the
    * gateway is the local development one; core falls back to the generic command.
    */
-  approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
+  approvalInstructions?: (
+    gatewayUrl: string,
+    requestId: string,
+    /** The profile the host's look found this connection's gateway for on this computer, as kept with it. */
+    here?: { profile: "default" | "clawtrate" } | null,
+  ) => ApprovalInstructions;
   /**
    * Where the host has a shell on the gateway's computer (this computer, an
-   * SSH route): read the gateway's identity and its device list there, at the
-   * verified loopback endpoint, through the gateway (setup §9). Undefined, or
-   * a null answer, where it has none (an address route): the reconnect's hello
-   * alone decides then. Reads only: it never changes the gateway.
+   * SSH route): establish the endpoint and its version for the route's
+   * profile again, read the gateway's identity there and, only when it is
+   * `expected`, its device list, at the verified loopback endpoint, through
+   * the gateway (setup §9). A null answer: the host has no shell for this
+   * address. Only an explicit address route may have none; for any other,
+   * the client takes it as an identity it couldn't read. Reads only: it never
+   * changes the gateway.
    */
-  readBack?: (gatewayUrl: string) => Promise<ReadBack | null>;
+  readBack?: (gatewayUrl: string, request: ReadBackRequest) => Promise<ReadBack | null>;
 };

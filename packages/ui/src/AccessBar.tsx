@@ -13,10 +13,10 @@ import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
  * for admin. The words for where the request waits, the command and the
  * request id are the host's (setup.md §9). The engine waits on the gateway's
  * answer continuously (`device.scopes.waitUpgrade`), so the bar says it
- * updates by itself and shows no countdown. "Check now" asks the host to read
- * the gateway's pending list where it can; "Stop waiting" stops this device's
- * wait, never "Cancel request", since the gateway has no way to withdraw a
- * request it holds.
+ * updates by itself; where the host can look at the gateway's computer it
+ * also checks the pending list on a schedule, and the bar says when next,
+ * with "Check now". "Stop waiting" stops this device's wait, never "Cancel
+ * request", since the gateway has no way to withdraw a request it holds.
  */
 export function AccessBar({
   bot,
@@ -34,7 +34,9 @@ export function AccessBar({
   let tone: "danger" | undefined;
   let body: ReactNode;
   let action: ReactNode = null;
-  const shelf = info.readOnly ? null : approvalShelf(connection, send, ask);
+  const shelf = info.readOnly
+    ? null
+    : approvalShelf(connection, send, ask, undefined, info.setup !== undefined);
   if (shelf) {
     body = shelf.body;
     action = shelf.action;

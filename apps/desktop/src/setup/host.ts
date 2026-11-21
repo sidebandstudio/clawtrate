@@ -9,6 +9,7 @@ import {
   type ApprovalPlace,
   type ClawtrateClient,
   type ReadBack,
+  type ReadBackRequest,
   type RouteStatus,
   type SetupHost,
   type SetupState,
@@ -57,8 +58,8 @@ export class SetupRouter implements SetupHost {
   }
 
   /** The read-back after an approval (§9), where the gateway at `url` is a route's or found here. */
-  async readBack(url: string): Promise<ReadBack | null> {
-    return (await this.remote?.readBack(url)) ?? (await this.here.readBack(url));
+  async readBack(url: string, request: ReadBackRequest): Promise<ReadBack | null> {
+    return (await this.remote?.readBack(url, request)) ?? (await this.here.readBack(url, request));
   }
 
   async look(): Promise<void> {

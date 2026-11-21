@@ -76,6 +76,8 @@ export type ReadBackHere = {
   env: Readonly<Record<string, string>>;
   cwd: string;
   url: string;
+  /** The identity the connection established; the list is read only when the endpoint returns it. */
+  expected: string | null;
 };
 
 /**
@@ -83,7 +85,8 @@ export type ReadBackHere = {
  * program the look found, for its profile, at the address it verified. A read
  * that didn't end in time, within its bound, with exit 0 and one whole JSON
  * document of the expected shape names its step, and its exit code when
- * OpenClaw recorded one.
+ * OpenClaw recorded one. An identity other than `expected` is returned with
+ * no list read.
  */
 export async function readBackHere(spec: ReadBackHere): Promise<ReadBack> {
   const call = (method: ReadBackMethod) =>
@@ -104,12 +107,15 @@ export async function readBackHere(spec: ReadBackHere): Promise<ReadBack> {
     const exit = exitOf(identityRun);
     return { ok: false, step: "identity", exitCode: exit === 0 ? null : exit };
   }
+  // Another gateway at the endpoint: its device list is never asked for.
+  if (spec.expected !== null && identity.deviceId !== spec.expected)
+    return { ok: false, step: "list", exitCode: null, identity };
   const listRun = await call("device.pair.list");
   const list =
     listRun.exitCode === 0 && exitOf(listRun) === 0 ? parseDeviceList(listRun.stdout) : null;
   if (!list) {
     const exit = exitOf(listRun);
-    return { ok: false, step: "list", exitCode: exit === 0 ? null : exit };
+    return { ok: false, step: "list", exitCode: exit === 0 ? null : exit, identity };
   }
   return { ok: true, identity, list };
 }

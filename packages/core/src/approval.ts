@@ -14,11 +14,27 @@ export type GatewayIdentityRead = { deviceId: string; publicKey: string };
  * What the host read on the gateway's computer, at the verified loopback
  * endpoint, through the gateway (`gateway call … --expect-url`): its identity,
  * then its device list. A read that failed names its step, and OpenClaw's exit
- * code only when the host recorded one.
+ * code only when the host recorded one. `identity` fails when the endpoint,
+ * its version or the identity itself couldn't be established; `list` carries
+ * the identity that was read, so a different gateway is told apart from a
+ * list that couldn't be read. The host issues the list only once the identity
+ * is the expected one.
  */
 export type ReadBack =
   | { ok: true; identity: GatewayIdentityRead; list: unknown }
-  | { ok: false; step: "identity" | "list"; exitCode: number | null };
+  | { ok: false; step: "identity"; exitCode: number | null }
+  | { ok: false; step: "list"; exitCode: number | null; identity: GatewayIdentityRead };
+
+/**
+ * Where the host is asked to read back (setup §9): the gateway identity this
+ * connection established before the approval, which the endpoint must still
+ * return before the list is read, and, for a connection the host's look found
+ * on this computer, the profile it found it for, kept with the connection.
+ */
+export type ReadBackRequest = {
+  expected: string | null;
+  here: { profile: "default" | "clawtrate" } | null;
+};
 
 /** The device this client is, and what it means to hold after the approval. */
 export type ReadBackDevice = { deviceId: string; publicKey: string; scopes: readonly string[] };

@@ -10,12 +10,14 @@ import {
   APPROVAL_IDENTITY_UNREAD,
   APPROVAL_UNCONFIRMED,
   initialSetupState,
+  PAIRING_STOPPED,
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_GONE,
   type ClawtrateClient,
   type ApprovalPlace,
   type ClawtrateState,
   type ReadBack,
+  type ReadBackRequest,
   type SetupFailure,
   type SetupHost,
   type SetupState,
@@ -83,6 +85,15 @@ export function pairConfirmation(
   };
 }
 
+/**
+ * Where the look found the gateway, kept with the connection once it is saved
+ * (§9): its profile, when it is one of the two Clawtrate names in commands.
+ */
+function hereOf(found: FoundGateway): { here?: { profile: "default" | "clawtrate" } } {
+  const name = found.profile.name;
+  return name === "default" || name === "clawtrate" ? { here: { profile: name } } : {};
+}
+
 export class SetupController implements SetupHost {
   private readonly options: SetupControllerOptions;
   private state: SetupState = initialSetupState;
@@ -127,14 +138,19 @@ export class SetupController implements SetupHost {
   }
 
   /**
-   * The read-back after an approval (§9) for the gateway this setup found at
-   * `url`: the identity, then the device list, with the program the look
-   * found, for its profile, at the address it verified. Null for any other
-   * address. Reads only.
+   * The read-back after an approval (§9) for a gateway found on this
+   * computer at `url`: for the profile kept with the connection (after a
+   * relaunch too), or the one this setup found. A fresh look for exactly that
+   * profile must find it running a supported version at exactly that address,
+   * with one listener; then the identity is read there and, only when it is
+   * `expected`, the device list; and the same listener and program must still
+   * be there after both reads, or nothing read counts. Null for an address
+   * this computer's look has no profile for. Reads only.
    */
-  async readBack(url: string): Promise<ReadBack | null> {
-    const found = this.found;
-    if (!found || found.url !== url) return null;
+  async readBack(url: string, request: ReadBackRequest): Promise<ReadBack | null> {
+    const name =
+      request.here?.profile ?? (this.found?.url === url ? this.found.profile.name : null);
+    if (!name) return null;
     const unread = { ok: false, step: "identity", exitCode: null } as const;
     let opened: Opened | SetupRefusedError;
     try {
@@ -144,14 +160,28 @@ export class SetupController implements SetupHost {
     }
     if (opened instanceof SetupRefusedError) return unread;
     try {
-      return await readBackHere({
+      const profiles = opened.world.profiles.filter((profile) => profile.name === name);
+      if (profiles.length !== 1) return unread;
+      // The endpoint and its version, established again for that profile alone.
+      const report = await lookHere({ ...opened.world, profiles, deep: false }, opened.run, {
+        identify: opened.identify,
+        ...(opened.assertActive ? { checkActive: opened.assertActive } : {}),
+      });
+      const found = report?.found;
+      if (!found || report.look.outcome !== "running" || found.url !== url) return unread;
+      const read = await readBackHere({
         run: opened.run,
         program: found.program,
         profileArgs: found.profile.args,
         env: { ...opened.world.env, PATH: programPath(found.program), ...found.profile.env },
         cwd: opened.world.cwd,
         url: found.url,
+        expected: request.expected,
       });
+      // The proof held through both reads: the same listener, and the same program file.
+      const program = opened.world.installed ? "stand-in" : await fileIdentity(found.program);
+      if (!this.sameListener(opened, found) || program !== found.programIdentity) return unread;
+      return read;
     } catch {
       return unread;
     }
@@ -436,7 +466,7 @@ export class SetupController implements SetupHost {
       this.publish({ ...this.state, step: 1 });
       this.owned = { attempt, url: found.url };
       this.watch(attempt, found.url, found.port);
-      await client.connectForSetup(found.url, { check: listening });
+      await client.connectForSetup(found.url, { check: listening, ...hereOf(found) });
       return;
     }
     const made = await opened.run({
@@ -462,7 +492,7 @@ export class SetupController implements SetupHost {
     this.owned = { attempt, url: found.url };
     this.watch(attempt, found.url, found.port);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
-    await client.connectWithSetupCode(code, { check: listening });
+    await client.connectWithSetupCode(code, { check: listening, ...hereOf(found) });
   }
 
   /**
@@ -571,13 +601,15 @@ export class SetupController implements SetupHost {
                   ? "approval-identity"
                   : code === APPROVAL_IDENTITY_UNREAD
                     ? "approval-identity-unread"
-                    : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
-                      ? "code-refused"
-                      : code === "UNREACHABLE"
-                        ? "unreachable"
-                        : code === SETUP_ENDPOINT_CHANGED
-                          ? "changed"
-                          : "other",
+                    : code === PAIRING_STOPPED
+                      ? "stopped"
+                      : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
+                        ? "code-refused"
+                        : code === "UNREACHABLE"
+                          ? "unreachable"
+                          : code === SETUP_ENDPOINT_CHANGED
+                            ? "changed"
+                            : "other",
           port,
         });
       }

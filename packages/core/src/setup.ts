@@ -103,6 +103,8 @@ export type SetupFailureKind =
   | "approval-identity"
   /** After an approval, the gateway's identity couldn't be read (§9). */
   | "approval-identity-unread"
+  /** The person chose Stop waiting on the pairing screen (§9): the request stays on the gateway. */
+  | "stopped"
   /** Connected, but the bots couldn't be read. */
   | "bots"
   /** The connection failed in another way; the connection state says how. */

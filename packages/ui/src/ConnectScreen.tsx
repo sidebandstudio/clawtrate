@@ -1,9 +1,10 @@
-import type {
-  ConnectionError,
-  ConnectionState,
-  DiscoveryState,
-  HostInfo,
-  SetupState,
+import {
+  isApprovalDisconnect,
+  type ConnectionError,
+  type ConnectionState,
+  type DiscoveryState,
+  type HostInfo,
+  type SetupState,
 } from "@clawtrate/core";
 import {
   useEffect,
@@ -219,6 +220,15 @@ function PairingPanel({
           onClick={() => void check()}
         >
           {checking ? "Checking…" : "Check now"}
+        </button>
+        <button
+          type="button"
+          className="button"
+          data-variant="quiet"
+          data-size="lg"
+          onClick={() => void send({ type: "stopPairing" }).catch(() => {})}
+        >
+          Stop waiting
         </button>
         {gatewayUrl && (
           <button
@@ -557,7 +567,11 @@ export function ConnectScreen({
   );
   const setupOwns =
     setup !== undefined &&
-    (setup.phase === "confirming" ||
+    // The route's look after an approval Clawtrate couldn't confirm (§9 "Look again", "Review").
+    ((isApprovalDisconnect(connection.error?.code) &&
+      setup.phase !== "idle" &&
+      setup.phase !== "done") ||
+      setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
       (setup.phase === "done" && connection.status !== "connected"));

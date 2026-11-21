@@ -560,7 +560,8 @@ const FAILURES: Record<
   {
     lead: string;
     text?: (port: number | null, exit: number | null) => string;
-    next: "retry" | "look" | "back" | "advanced" | "bots";
+    /** "review" is "look" in §8's word: that computer's screens again, after a different gateway. */
+    next: "retry" | "look" | "review" | "back" | "advanced" | "bots";
     step: number;
   }
 > = {
@@ -631,13 +632,19 @@ const FAILURES: Record<
   },
   "approval-identity": {
     lead: APPROVAL_WORDS.identityChanged,
-    next: "look",
+    next: "review",
     step: 2,
   },
   "approval-identity-unread": {
     lead: APPROVAL_WORDS.identityUnread,
     next: "look",
     step: 2,
+  },
+  stopped: {
+    lead: "Stopped waiting for approval.",
+    text: () => "The request stays on the gateway. Try again once it's approved.",
+    next: "retry",
+    step: 1,
   },
   bots: {
     lead: "Connected, but Clawtrate couldn't read your bots.",
@@ -832,8 +839,10 @@ export function SetupFlow({
               {copy.next === "retry" && (
                 <Primary onClick={() => void send({ type: "setupConnect" })}>Try again</Primary>
               )}
-              {copy.next === "look" && (
-                <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+              {(copy.next === "look" || copy.next === "review") && (
+                <Primary onClick={() => void send({ type: "setupLook" })}>
+                  {copy.next === "review" ? "Review" : "Look again"}
+                </Primary>
               )}
               {copy.next === "advanced" && <Primary onClick={advanced}>Use Advanced</Primary>}
               {copy.next === "back" && <Primary onClick={backFromConnect}>Back</Primary>}
@@ -1371,11 +1380,15 @@ function AnotherComputer({
                 : copy.text?.(failure.port, failure.exitCode)}
             </Note>
             <Actions>
-              {(copy.next === "retry" || copy.next === "look") && (
+              {(copy.next === "retry" || copy.next === "look" || copy.next === "review") && (
                 <Primary
                   onClick={() => void send({ type: "setupThere", destination: there.destination })}
                 >
-                  {copy.next === "retry" ? "Try again" : "Look again"}
+                  {copy.next === "retry"
+                    ? "Try again"
+                    : copy.next === "review"
+                      ? "Review"
+                      : "Look again"}
                 </Primary>
               )}
               {copy.next === "back" && <Primary onClick={cancel}>Back</Primary>}
