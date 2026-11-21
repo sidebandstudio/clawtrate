@@ -266,4 +266,33 @@ describe("Stop with no one current run (F-097)", () => {
       task.client.stop();
     },
   );
+  it("F-097: a turn the gateway withdrew, still listed as cancelled, does not keep an inferred end from settling", async () => {
+    const gateway = grantingGateway();
+    const task = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, "original")?.state === "running");
+    // Its end was missed: its rows stop at a call, which only infers an end, nothing is in
+    // flight, and the only input listed is one the gateway withdrew.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        {
+          role: "user",
+          content: "First",
+          __openclaw: { id: "u1", idempotencyKey: "original:user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: { command: "ls" } }],
+          stopReason: "toolUse",
+          __openclaw: { id: "a1", runId: "original" },
+        },
+      ],
+      hasMore: false,
+      pendingInputs: { items: [{ id: "p-1", state: "cancelled", runId: "withdrawn" }], total: 1 },
+    });
+    gateway.dropAll();
+    await until(() => run(task, "original")?.state !== "running");
+    expect(run(task, "original")).toMatchObject({ state: "completed", outcomeKnown: false });
+    task.client.stop();
+  });
 });

@@ -404,6 +404,12 @@ const SESSION_LIST_PARAMS = {
 };
 const HISTORY_LIMIT = 200;
 
+/** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
+function holdsInput(history: RawRecord | null): boolean {
+  const items = asRecord(history?.pendingInputs)?.items;
+  return Array.isArray(items) && items.some((item) => asRecord(item)?.state !== "cancelled");
+}
+
 /** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
 function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
   const kept = new Map<string, RawRecord>();
@@ -3716,8 +3722,7 @@ export class ClawtrateClient {
         aliases,
       );
       const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlight !== null || holdsInput(history);
       const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
         ids.has(run.id),
       );
@@ -5797,9 +5802,7 @@ export class ClawtrateClient {
       const scratch = new RawTable();
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy =
-        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlightId !== null || holdsInput(history);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
