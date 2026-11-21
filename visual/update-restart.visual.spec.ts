@@ -80,6 +80,21 @@ for (const [scene, warning] of [
   });
 }
 
+test("F-231: downloading an offered update enables restart for that version", async ({ page }) => {
+  await openFixture(page, "scene=main&updates=offered", "light");
+  await page.getByRole("button", { name: "Open Updates" }).click();
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+  const restart = page.getByRole("button", { name: "Restart to Update" });
+  await expect(restart).toBeVisible();
+  await restart.click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("install version 0.2.0 and reopen");
+  await confirmation.getByRole("button", { name: "Restart", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Update status" })).toContainText(
+    "Preparing Clawtrate 0.2.0 for restart",
+  );
+});
+
 test("F-231: a retired offer closes its confirmation without restarting", async ({ page }) => {
   await openFixture(page, "scene=main&updates=ready", "light");
   await page.getByRole("button", { name: "Open Updates" }).click();
