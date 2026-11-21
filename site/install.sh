@@ -1,15 +1,17 @@
 #!/bin/sh
-# Installs the latest Clawtrate beta for macOS. Download it whole, then run it:
+# Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet.
+# Download it whole, then run it:
 #
 #   sh -c 'f=$(mktemp) && trap "rm -f \"$f\"" EXIT && c=$(curl -q -sS --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
 #
 # It reads the Beta feed, takes the build for this Mac's processor, and checks
 # the download's SHA-256, the archive's layout, the app's bundle id, version and
 # processor, its Developer ID signature and team, and Apple's notarization.
-# Only then does it copy Clawtrate.app into /Applications, asking before it
-# replaces a copy that is there. It never uses sudo and changes no system
-# setting. Nothing runs until the whole file has arrived: the last line calls
-# main.
+# Only then does it move Clawtrate.app into /Applications, and it checks the
+# copy it placed again before saying so. Where Clawtrate is already installed
+# it changes nothing: updates come from Settings in the app. It never uses sudo
+# and changes no system setting. Nothing runs until the whole file has arrived:
+# the last line calls main with the one argument main requires.
 #
 # For tests only, these point it at stand-ins on this Mac's loopback address:
 # CLAWTRATE_FEED (the feed), CLAWTRATE_RELEASES (the release download prefix)
@@ -33,55 +35,51 @@ RELEASES_PAGE="https://github.com/sidebandstudio/clawtrate/releases"
 
 say() { printf '%s\n' "$*"; }
 
-# A refusal. What it means for an existing copy is said on the way out.
+# A refusal. What it leaves behind is said on the way out.
 stop() {
   printf 'Stopped: %s\n' "$*" >&2
   exit 1
 }
 
-# The exit path for every outcome, also after INT, TERM or HUP: put a previous
-# copy back when the replacement did not finish, and say where things are.
+# The way out for every outcome, also after INT, TERM or HUP. It removes this
+# run's own private files and nothing else.
 # shellcheck disable=SC2329 # called by the EXIT trap
 finish() {
   status=$?
   trap '' INT TERM HUP
-  case "$PHASE" in
-    installed) ;;
-    placed | aside)
-      if [ -n "$MOVED" ]; then
-        # The new copy was put in place but not confirmed: take it out again.
-        mv "$TARGET" "$STAGE/rejected.app" 2>/dev/null || :
-      fi
-      if [ -n "$OLD" ] && [ -d "$OLD" ]; then
-        if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && mv "$OLD" "$TARGET" 2>/dev/null; then
-          say "Your previous copy of Clawtrate was put back." >&2
-        else
-          KEEP_STAGE=1
-          say "Clawtrate could not be restored. Your previous copy is at $OLD." >&2
-        fi
-      else
-        say "Nothing was installed." >&2
-      fi
-      ;;
-    *) [ "$status" -eq 0 ] || say "Nothing was installed." >&2 ;;
-  esac
+  if [ "$PHASE" != installed ]; then
+    if [ -n "$STAGED_ID" ] && [ -d "$TARGET" ] && [ ! -L "$TARGET" ] &&
+      [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
+      say "Clawtrate is at $TARGET, but its last check did not finish." >&2
+    elif [ -n "$KEEP_STAGE" ]; then
+      say "Nothing was installed. The checked copy is at $STAGE/$APP." >&2
+    elif [ "$status" -ne 0 ]; then
+      say "Nothing was installed." >&2
+    fi
+  fi
   if [ -n "$STAGE" ] && [ -z "$KEEP_STAGE" ]; then rm -rf "$STAGE"; fi
   if [ -n "$LOCKED" ]; then rmdir "$LOCK" 2>/dev/null || :; fi
   if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
   exit "$status"
 }
 
-# Only loopback http for the test variables; the default addresses are fixed.
+# Only loopback http for the test variables, with a decimal port; the default
+# addresses are fixed.
 loopback() {
-  case "$1" in
-    http://127.0.0.1:[0-9]*/*) ;;
-    *) stop "$2 must be an http://127.0.0.1:<port>/ address." ;;
+  rest="${1#http://127.0.0.1:}"
+  port="${rest%%/*}"
+  if [ "$rest" = "$1" ] || [ "$port" = "$rest" ]; then
+    stop "$2 must be an http://127.0.0.1:<port>/ address."
+  fi
+  case "$port" in
+    '' | 0* | *[!0-9]*) stop "$2 must name a port from 1 to 65535." ;;
   esac
+  [ "${#port}" -le 5 ] && [ "$port" -le 65535 ] || stop "$2 must name a port from 1 to 65535."
 }
 
 # Reads latest-mac.json strictly: JSON with no repeated key and exactly this
-# shape, both builds of one beta version, each at its release's own address.
-# Prints the version, the address and the SHA-256 of the build for $1.
+# shape, both builds of one real beta version, each at its release's own
+# address. Prints the version, the address and the SHA-256 of the build for $1.
 read_feed() {
   cat >"$WORK/feed.js" <<'JS'
 ObjC.import("Foundation");
@@ -106,7 +104,7 @@ function run(argv) {
   }
   function object() {
     i++; ws();
-    const out = {}; const seen = new Set();
+    const out = Object.create(null); const seen = new Set();
     if (s[i] === "}") { i++; return out; }
     for (;;) {
       ws(); if (s[i] !== '"') fail("expected a key");
@@ -146,20 +144,32 @@ function run(argv) {
   const feed = value(); ws();
   if (i !== s.length) fail("content after the document");
   const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-  const keys = (v) => Object.keys(v).sort().join(",");
-  if (!isObject(feed) || keys(feed) !== "arm64,teamIdentifier,x86_64") throw new Error("wrong fields");
+  const exactKeys = (v, want) => {
+    const have = Object.keys(v).sort();
+    return have.length === want.length && have.every((key, n) => key === want[n]);
+  };
+  if (!isObject(feed) || !exactKeys(feed, ["arm64", "teamIdentifier", "x86_64"])) throw new Error("wrong fields");
   if (feed.teamIdentifier !== team) throw new Error("the feed names another signing team");
-  const VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})-beta\.[1-9]\d{7}\.(0|[1-9]\d{0,11})$/;
+  // The release's own beta version: a real calendar date and a run number.
+  const VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})-beta\.([1-9]\d{7})\.(0|[1-9]\d{0,11})$/;
+  const isBeta = (v) => {
+    if (typeof v !== "string" || v.length > 50) return false;
+    const m = VERSION.exec(v);
+    if (!m || m[0] !== v) return false;
+    const iso = m[4].slice(0, 4) + "-" + m[4].slice(4, 6) + "-" + m[4].slice(6);
+    const time = Date.parse(iso);
+    return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === iso;
+  };
   const files = { arm64: "mac-arm64", x86_64: "mac-x64" };
   let version = null;
   for (const key of ["arm64", "x86_64"]) {
     const e = feed[key];
-    if (!isObject(e) || keys(e) !== "sha256,url,version") throw new Error(key + ": wrong fields");
-    if (typeof e.version !== "string" || e.version.length > 50 || !VERSION.test(e.version))
-      throw new Error(key + ": not a beta version");
+    if (!isObject(e) || !exactKeys(e, ["sha256", "url", "version"])) throw new Error(key + ": wrong fields");
+    if (!isBeta(e.version)) throw new Error(key + ": not a beta version");
     if (version !== null && e.version !== version) throw new Error("the two builds name different versions");
     version = e.version;
-    if (typeof e.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.sha256)) throw new Error(key + ": bad SHA-256");
+    const digest = typeof e.sha256 === "string" ? /^[0-9a-f]{64}$/.exec(e.sha256) : null;
+    if (!digest || digest[0] !== e.sha256) throw new Error(key + ": bad SHA-256");
     const expected = prefix + "v" + e.version + "/Clawtrate-" + e.version + "-" + files[key] + ".zip";
     if (e.url !== expected) throw new Error(key + ": not this release's download address");
   }
@@ -173,7 +183,7 @@ JS
 # Fetches the build: the release download address, and at most one redirect
 # to the release-asset origin, checked before it is followed.
 fetch_zip() {
-  first="$(curl -q -sS --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+  first="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code} %{redirect_url}' --url "$1")" ||
     stop "the download did not finish."
   code="${first%% *}"
@@ -190,15 +200,16 @@ fetch_zip() {
   case "$next" in
     *'#'* | *' '*) stop "the download's redirect is not a plain address." ;;
   esac
-  code="$(curl -q -sS --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+  code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code}' --url "$next")" ||
     stop "the download did not finish."
   [ "$code" = 200 ] || stop "the download answered HTTP $code."
 }
 
 # The archive holds Clawtrate.app and nothing else: no other root, no path
-# that climbs out, no repeated entry, links only where an Electron framework
-# has them, and optionally the AppleDouble metadata ditto writes.
+# that climbs out, no repeated entry, optionally the AppleDouble metadata
+# ditto writes, and links only where an Electron framework has them, each read
+# from the archive and compared with its one allowed target before unpacking.
 check_zip() {
   zip="$WORK/Clawtrate.zip"
   zipinfo -1 "$zip" >"$WORK/names.txt" 2>/dev/null || stop "the download is not a readable zip."
@@ -226,14 +237,33 @@ check_zip() {
   [ -z "$(sed 's#/$##' "$WORK/names.txt" | sort | uniq -d)" ] || stop "the archive repeats an entry."
   awk -v p="$APP/Contents/" 'index($0, p) == 1 { found = 1 } END { exit !found }' "$WORK/names.txt" ||
     stop "the archive does not contain $APP."
-  zipinfo "$zip" 2>/dev/null | awk '$1 ~ /^l/ { sub(/^([^ ]+ +){8}/, ""); print }' >"$WORK/links.txt"
+  zipinfo "$zip" >"$WORK/listing.txt" 2>/dev/null || stop "the archive cannot be listed."
+  awk '$1 ~ /^l/ { sub(/^([^ ]+ +){8}/, ""); print }' "$WORK/listing.txt" >"$WORK/links.txt"
   while IFS= read -r link; do
     case "$link" in
-      "$APP"/Contents/Frameworks/*.framework/Versions/Current) ;;
-      "$APP"/Contents/Frameworks/*.framework/*/*) stop "the archive has a link where none belongs: $link" ;;
-      "$APP"/Contents/Frameworks/*.framework/*) ;;
+      *'*'* | *'?'* | *'['* | *']'*) stop "the archive has a link with an unusual name: $link" ;;
+    esac
+    rest="${link#"$APP"/Contents/Frameworks/}"
+    framework="${rest%%/*}"
+    child="${rest#*/}"
+    if [ "$rest" = "$link" ] || [ "$framework" = "$rest" ] || [ -z "$child" ]; then
+      stop "the archive has a link where none belongs: $link"
+    fi
+    case "$framework" in
+      ?*.framework) ;;
       *) stop "the archive has a link where none belongs: $link" ;;
     esac
+    if [ "$child" = Versions/Current ]; then
+      want=A
+    else
+      case "$child" in
+        */*) stop "the archive has a link where none belongs: $link" ;;
+      esac
+      want="Versions/Current/$child"
+    fi
+    unzip -qq -p "$zip" "$link" >"$WORK/link-target" 2>/dev/null || stop "the archive's link $link cannot be read."
+    printf '%s' "$want" >"$WORK/link-wanted"
+    cmp -s "$WORK/link-target" "$WORK/link-wanted" || stop "the archive's link $link points somewhere it should not."
   done <"$WORK/links.txt"
 }
 
@@ -270,15 +300,17 @@ check_bundle() {
   [ "$kind" = "Mach-O 64-bit executable $ARCH" ] || stop "the app is built for another processor ($kind), not $ARCH."
 }
 
-# Signature and notarization, as the release script checks them.
+# Signature and notarization, as the release script checks them. Sets CDHASH,
+# the signature's code directory hash, so later copies can be matched to it.
 check_signature() {
   codesign --verify --deep --strict "$1" 2>"$WORK/codesign.txt" ||
     stop "the app's signature is not valid: $(cat "$WORK/codesign.txt")"
-  codesign --display --verbose=2 "$1" >"$WORK/display.txt" 2>&1 ||
+  codesign --display --verbose=4 "$1" >"$WORK/display.txt" 2>&1 ||
     stop "the app's signature cannot be read: $(cat "$WORK/display.txt")"
   signed_id="$(sed -n 's/^Identifier=//p' "$WORK/display.txt" | head -n 1)"
   authority="$(sed -n 's/^Authority=//p' "$WORK/display.txt" | head -n 1)"
   signer="$(sed -n 's/^TeamIdentifier=//p' "$WORK/display.txt" | head -n 1)"
+  CDHASH="$(sed -n 's/^CDHash=//p' "$WORK/display.txt" | head -n 1)"
   [ "$signed_id" = "$BUNDLE_ID" ] || stop "the app is signed as ${signed_id:-unknown}, not $BUNDLE_ID."
   case "$authority" in
     "Developer ID Application: "*) ;;
@@ -286,23 +318,42 @@ check_signature() {
   esac
   [ "$signer" = "$CLAWTRATE_TEAM_ID" ] ||
     stop "the app is signed by team ${signer:-unknown}, not by Clawtrate's team $CLAWTRATE_TEAM_ID."
+  printf '%s' "$CDHASH" | grep -Eqx '[0-9a-f]{40}' || stop "the app's signature has no code directory hash."
   spctl --assess --type execute --verbose=2 "$1" >"$WORK/spctl.txt" 2>&1 ||
     stop "macOS does not accept the app: $(cat "$WORK/spctl.txt")"
   grep -qx 'source=Notarized Developer ID' "$WORK/spctl.txt" ||
     stop "macOS does not report the app as a notarized Developer ID app."
 }
 
+# What is at a path, in a few words, without following a link.
+describe() {
+  if [ -L "$1" ]; then
+    say "a link"
+  elif [ -d "$1" ]; then
+    say "a folder"
+  elif [ -e "$1" ]; then
+    say "a file"
+  else
+    say "nothing"
+  fi
+}
+
+already_installed() {
+  stop "Clawtrate is already installed at $TARGET. Update it from Settings, or move it to the Trash and run this again."
+}
+
 main() {
+  [ "$#" -eq 1 ] && [ "$1" = 'clawtrate-installer-complete' ] || exit 1
   trap - EXIT
   set -eu
-  PHASE="" WORK="" STAGE="" OLD="" LOCKED="" KEEP_STAGE="" TARGET="" LOCK="" MOVED=""
+  PHASE="" WORK="" STAGE="" LOCKED="" KEEP_STAGE="" TARGET="" LOCK="" STAGED_ID="" VERSION=""
   trap finish EXIT
   trap 'exit 1' INT TERM HUP
 
   [ "$(uname -s)" = "Darwin" ] || stop "this installer is for macOS."
   [ "$(id -u)" != "0" ] || stop "run this as yourself, not with sudo or as root."
-  for tool in uname id sysctl curl shasum osascript zipinfo ditto find readlink file plutil \
-    codesign spctl mktemp mkdir rmdir rm mv ls sed awk grep sort uniq wc cat tr head; do
+  for tool in uname id sysctl curl shasum osascript zipinfo unzip cmp ditto find readlink file \
+    plutil codesign spctl stat mktemp mkdir rmdir rm mv ls sed awk grep sort uniq wc cat tr head; do
     command -v "$tool" >/dev/null 2>&1 || stop "$tool is missing from this Mac."
   done
   printf '%s' "$CLAWTRATE_TEAM_ID" | grep -Eqx '[A-Z0-9]{10}' ||
@@ -327,6 +378,9 @@ main() {
   TARGET="$DEST/$APP"
   LOCK="$DEST/.clawtrate-install.lock"
 
+  # A first install only: an existing copy updates itself from Settings.
+  if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then already_installed; fi
+
   # An Apple silicon Mac takes its native build, also from a shell under Rosetta.
   ARCH="$(uname -m)"
   if [ "$(sysctl -in hw.optional.arm64 2>/dev/null)" = 1 ] ||
@@ -342,7 +396,7 @@ main() {
 
   # 1. The feed: a direct HTTP 200, read strictly.
   say "Reading the Beta feed: $FEED"
-  code="$(curl -q -sS --proto "$PROTO" --max-redirs 0 --max-filesize 65536 \
+  code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 65536 \
     -o "$WORK/latest-mac.json" -w '%{http_code}' --url "$FEED" 2>/dev/null)" ||
     stop "could not read the Beta feed. Check your connection and try again."
   case "$code" in
@@ -372,57 +426,58 @@ main() {
   check_bundle "$NEW"
   say "It is Clawtrate $APP_VERSION ($BUNDLE_ID) for $ARCH."
   check_signature "$NEW"
+  CHECKED_CDHASH="$CDHASH"
   say "Signed with Clawtrate's Developer ID ($CLAWTRATE_TEAM_ID) and notarized by Apple."
 
-  # 4. The destination: a real folder, locked for this install.
+  # 4. The destination: a real folder, locked for this install, with no Clawtrate.
   [ -d "$DEST" ] && [ ! -L "$DEST" ] || stop "$DEST is not a folder."
   [ -w "$DEST" ] || stop "you cannot write to $DEST without an administrator. Use the download on https://clawtrate.dev instead."
   mkdir "$LOCK" 2>/dev/null ||
     stop "another Clawtrate install is using $DEST. If none is running, remove $LOCK and try again."
   LOCKED=1
-  if [ -L "$TARGET" ] || { [ -e "$TARGET" ] && [ ! -d "$TARGET" ]; }; then
-    stop "$TARGET is not an app folder; it was left as it was."
-  fi
-  if [ -e "$TARGET" ]; then
-    found="$(plutil -extract CFBundleIdentifier raw -expect string -o - "$TARGET/Contents/Info.plist" 2>/dev/null)" || found=""
-    [ "$found" = "$BUNDLE_ID" ] || stop "$TARGET is not Clawtrate; it was left as it was."
-    say "Clawtrate is already in $DEST."
-    answer=""
-    if (exec </dev/tty) 2>/dev/null; then
-      printf 'Replace it with Clawtrate %s? Quit Clawtrate first. [y/N] ' "$APP_VERSION"
-      read -r answer </dev/tty || answer=""
-    fi
-    case "$answer" in
-      y | Y | yes | YES) ;;
-      *) stop "the copy in $DEST was left as it was." ;;
-    esac
-  fi
+  if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then already_installed; fi
 
-  # 5. Stage on the same volume, swap, and confirm before saying so.
+  # 5. Stage beside the target, check the staged copy as the same build, and
+  # move it in with a move that never overwrites or nests.
   STAGE="$(mktemp -d "$DEST/.clawtrate-install.XXXXXX")"
   ditto "$NEW" "$STAGE/$APP" || stop "could not copy the app into $DEST."
-  if [ -e "$TARGET" ]; then
-    OLD="$STAGE/previous.app"
-    PHASE=aside
-    mv "$TARGET" "$OLD" || stop "could not move the existing copy aside. Is Clawtrate still open?"
+  [ -d "$STAGE/$APP" ] && [ ! -L "$STAGE/$APP" ] || stop "the staged copy is not a folder."
+  check_bundle "$STAGE/$APP"
+  check_signature "$STAGE/$APP"
+  [ "$CDHASH" = "$CHECKED_CDHASH" ] || stop "the staged copy is not the build that was checked."
+  STAGED_ID="$(stat -f '%d:%i' "$STAGE/$APP")"
+  if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then already_installed; fi
+  PHASE=placing
+  mv -n "$STAGE/$APP" "$DEST/" || :
+  if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+    STAGED_ID="" KEEP_STAGE=1
+    stop "could not move the app to $TARGET."
   fi
-  [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] || stop "something appeared at $TARGET during the install."
-  PHASE=placed
-  mv "$STAGE/$APP" "$TARGET" || stop "could not put the new copy in place."
-  if [ -e "$TARGET/$APP" ] || [ -e "$STAGE/$APP" ]; then
-    # $TARGET was created by something else after the check: take ours back out.
-    mv "$TARGET/$APP" "$STAGE/rejected.app" 2>/dev/null || :
-    stop "a folder appeared at $TARGET during the install; it was left as it was."
+  if [ -L "$TARGET" ] || [ ! -d "$TARGET" ] || [ "$(stat -f '%d:%i' "$TARGET")" != "$STAGED_ID" ]; then
+    found="$(describe "$TARGET")"
+    STAGED_ID=""
+    [ ! -e "$STAGE/$APP" ] || KEEP_STAGE=1
+    stop "$TARGET is $found that this installer did not put there; it was left as it was."
   fi
-  MOVED=1
-  check_bundle "$TARGET"
-  codesign --verify --deep --strict "$TARGET" 2>"$WORK/codesign.txt" ||
-    stop "the installed copy's signature is not valid: $(cat "$WORK/codesign.txt")"
+
+  # 6. The copy in place is the checked build, or this run takes it out again.
+  if ! (
+    check_bundle "$TARGET"
+    check_signature "$TARGET"
+    [ "$CDHASH" = "$CHECKED_CDHASH" ] || stop "the copy at $TARGET is not the build that was checked."
+  ); then
+    if [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ] && mv -n "$TARGET" "$STAGE/" &&
+      [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+      STAGED_ID=""
+      stop "the copy at $TARGET did not pass its final check, so it was taken out again."
+    fi
+    STAGED_ID=""
+    stop "the copy at $TARGET did not pass its final check. Move it to the Trash."
+  fi
   PHASE=installed
-  [ -z "$OLD" ] || say "Replaced the previous copy of Clawtrate."
   say "Installed Clawtrate $APP_VERSION in $TARGET."
-  say "Clawtrate checks for Beta updates in Settings."
+  say "Later updates come from Settings in Clawtrate."
   exit 0
 }
 
-main "$@"
+main 'clawtrate-installer-complete'
