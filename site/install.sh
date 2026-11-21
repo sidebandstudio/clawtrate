@@ -342,6 +342,18 @@ describe() {
   fi
 }
 
+# The kernel checks the destination and moves the staged directory in one operation.
+place_app() {
+  osascript -l JavaScript - "$1" "$2" 2>/dev/null <<'JS'
+ObjC.bindFunction("renamex_np", ["int", ["string", "string", "unsigned int"]]);
+function run([source, target]) {
+  const RENAME_EXCL = 4;
+  if ($.renamex_np(source, target, RENAME_EXCL) !== 0)
+    throw new Error("Could not place the staged app.");
+}
+JS
+}
+
 already_installed() {
   stop "Clawtrate is already installed at $TARGET. Update it from Settings, or move it to the Trash and run this again."
 }
@@ -452,7 +464,7 @@ main() {
   STAGED_ID="$(stat -f '%d:%i' "$STAGE/$APP")"
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then already_installed; fi
   PHASE=placing
-  mv -n "$STAGE/$APP" "$DEST/" || :
+  place_app "$STAGE/$APP" "$TARGET" || :
   if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
     STAGED_ID="" KEEP_STAGE=1
     stop "could not move the app to $TARGET."
