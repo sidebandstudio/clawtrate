@@ -445,9 +445,9 @@ function copySnapshot(snapshot: RegistrationSnapshot): RegistrationSnapshot {
 export class MemoryRegistrationStore implements RegistrationStore {
   #latest: RegistrationSnapshot | null = null;
 
-  /** The snapshot to restore from; null before the first write. */
+  /** A copy of the snapshot to restore from; null before the first write. */
   get latest(): RegistrationSnapshot | null {
-    return this.#latest;
+    return this.#latest === null ? null : { ...this.#latest };
   }
 
   persist(snapshot: RegistrationSnapshot): void {
@@ -703,10 +703,12 @@ export class ControlRegistration {
       replay: options.replay,
       allowLoopbackWs: this.#allowLoopbackWs,
     });
-    if (!result.ok) return result;
-    // A store that took its time may have outlasted the challenge or the socket.
+    // A store that took its time may have outlasted the challenge or the socket, whatever it
+    // answered. A storage fault stays a storage fault.
+    if (!result.ok && result.code === "store_failed") return result;
     lost = this.#check(token);
     if (lost !== null) return { ok: false, code: lost };
+    if (!result.ok) return result;
     let claimed: boolean;
     try {
       claimed = await options.claims.claim(

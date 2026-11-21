@@ -672,6 +672,39 @@ describe("one control socket's registration", () => {
     }
   });
 
+  it("a replay denial that arrives past the deadline reports the expiry, with no timer", async () => {
+    let now = 5_000;
+    const late = socket({
+      clock: () => now,
+      replay: { consume: () => ((now = 5_000 + 60_001), false) },
+    });
+    expect(await late.register(proofFor(late))).toEqual({ ok: false, code: "challenge_expired" });
+    // In time, the denial stands.
+    const inTime = socket({ replay: { consume: () => false } });
+    expect(await inTime.register(proofFor(inTime))).toEqual({ ok: false, code: "replayed" });
+  });
+
+  it("stores failed in the same turn as a commit that wrote and then threw", async () => {
+    const memory = new MemoryRegistrationStore();
+    let afterThrow: string | undefined;
+    const registration = socket({
+      store: {
+        persist: (snapshot) => memory.persist(snapshot),
+        commitRegistered: (snapshot, attempt) => {
+          memory.commitRegistered(snapshot, attempt);
+          queueMicrotask(() => (afterThrow = memory.latest?.state));
+          throw new Error("write not confirmed");
+        },
+      },
+    });
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "store_failed",
+    });
+    // With a synchronous persist, nothing ran between the commit and the failed write.
+    expect(afterThrow).toBe("failed");
+  });
+
   it("a denial that arrives after the attempt ended reports why it ended", async () => {
     // The replay check waits; meanwhile the timer sees a clock rollback, an expired deadline,
     // or the socket closes. The clock then recovers and the replay check answers "seen".
@@ -925,6 +958,15 @@ describe("one control socket's registration", () => {
     expect(memory.latest).toBeNull();
     expect(memory.commitRegistered(registered, { live: true })).toBe("committed");
     expect(memory.latest).toEqual(registered);
+  });
+
+  it("the reference store hands out copies of what it stored", () => {
+    const memory = new MemoryRegistrationStore();
+    const registration = socket();
+    memory.persist(registration.snapshot());
+    const seen = memory.latest as { state: string };
+    seen.state = "registered";
+    expect(memory.latest?.state).toBe("challenged");
   });
 
   it("the reference store copies the snapshot before its liveness reading", () => {

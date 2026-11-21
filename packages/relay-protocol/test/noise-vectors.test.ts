@@ -62,6 +62,21 @@ describe("Noise IK against the Cacophony test vectors", () => {
     });
   }
 
+  it("derives a key pair's public half from the same bytes it keeps as the secret", () => {
+    const secret = new Uint8Array(32).fill(9);
+    // An array whose iterator lies about its bytes must not split the pair.
+    Object.defineProperty(secret, Symbol.iterator, {
+      value: function* () {
+        for (let i = 0; i < 32; i++) yield 7;
+      },
+    });
+    const pair = keyPairFromSecret(secret);
+    expect(toHex(pair.secretKey)).toBe("09".repeat(32));
+    expect(toHex(pair.publicKey)).toBe(
+      toHex(keyPairFromSecret(new Uint8Array(32).fill(9)).publicKey),
+    );
+  });
+
   it("hands out copies of the peer's static key, so a caller cannot change the handshake", () => {
     const vector = cacophony.vectors[0]!;
     const responder = new IKHandshake({
