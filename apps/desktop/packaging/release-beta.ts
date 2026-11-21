@@ -1011,10 +1011,22 @@ export async function publish(
   const dir = join(staging, version);
   if (runner("gh", ["auth", "status"]).status !== 0)
     stop("Sign in to GitHub with `gh auth login`.");
-  if (runner("git", ["fetch", "--quiet", "origin", "main"]).status !== 0)
-    stop("Could not refresh origin/main from GitHub. Nothing was published.");
-  if (runner("git", ["merge-base", "--is-ancestor", plan.commit, "origin/main"]).status !== 0)
-    stop(`${plan.commit} is not on main. Publish only a commit that has merged.`);
+  // Asked of the repository the release goes to, not of this checkout's
+  // `origin`, which can be a fork or a stale copy. A commit GitHub does not
+  // know there answers 404 and is refused.
+  const compared = runner("gh", [
+    "api",
+    `repos/${REPOSITORY}/compare/${plan.commit}...main`,
+    "--jq",
+    ".status",
+  ]);
+  const status = compared.stdout.trim();
+  if (compared.status !== 0 || !["ahead", "identical"].includes(status))
+    stop(
+      compared.status === 0
+        ? `${plan.commit} is not on ${REPOSITORY}'s main (${status}). Publish only a commit that has merged.`
+        : `Could not compare ${plan.commit} with ${REPOSITORY}'s main on GitHub. Nothing was published.`,
+    );
   const releases = githubReleases(runner);
   const tags = githubTags(runner, releases);
   if (tags.includes(plan.tag)) stop(`${plan.tag} already exists on GitHub.`);

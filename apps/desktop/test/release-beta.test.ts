@@ -955,7 +955,8 @@ function github(
     for (const [start, answer] of Object.entries(answers))
       if (line.startsWith(start)) return answer;
     if (line === "gh auth status") return ok();
-    if (line.startsWith("git fetch") || line.startsWith("git merge-base")) return ok();
+    if (line.startsWith(`gh api repos/sidebandstudio/clawtrate/compare/${COMMIT}...main`))
+      return ok("ahead\n");
     if (line.startsWith("git ls-remote")) return ok("");
     if (line.startsWith("gh api -H Accept: application/octet-stream")) {
       const id = Number(args.at(-1)!.split("/").at(-1));
@@ -1104,13 +1105,37 @@ describe("publishing", () => {
     );
   });
 
-  it("refuses when origin/main cannot be refreshed, before creating anything", async () => {
+  it("refuses when GitHub cannot compare the commit with main, before creating anything", async () => {
     const hub = github(dir);
-    hub.answers["git fetch"] = fail("could not resolve host");
+    hub.answers["gh api repos/sidebandstudio/clawtrate/compare/"] = fail("Not Found");
     expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
-      "Could not refresh origin/main from GitHub. Nothing was published.",
+      `Could not compare ${COMMIT} with sidebandstudio/clawtrate's main on GitHub. Nothing was published.`,
     );
     expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
+  });
+
+  it.each(["diverged", "behind"])(
+    "refuses a commit that is %s from the repository's main, whatever this checkout's origin says",
+    async (status) => {
+      const hub = github(dir);
+      // A fork or a stale origin/main would call it merged.
+      hub.answers["git"] = ok();
+      hub.answers["gh api repos/sidebandstudio/clawtrate/compare/"] = ok(`${status}\n`);
+      expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
+        `${COMMIT} is not on sidebandstudio/clawtrate's main (${status}). Publish only a commit that has merged.`,
+      );
+      expect(hub.calls.some((call) => call[0] === "git")).toBe(false);
+      expect(hub.calls.some((call) => call[1] === "release")).toBe(false);
+    },
+  );
+
+  it("accepts the commit main points at", async () => {
+    const hub = github(dir);
+    hub.answers["gh api repos/sidebandstudio/clawtrate/compare/"] = ok("identical\n");
+    hub.answers["gh release create"] = fail("stop here");
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toContain(
+      "Creating the draft release failed.",
+    );
   });
 
   it("leaves the draft unpublished when GitHub's digest of a file is not the prepared one", async () => {
