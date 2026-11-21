@@ -667,6 +667,13 @@ function ScreenSection(props: ScreenProps) {
         </button>
       </p>
     );
+  // Offline before any pane: nothing is being read, so nothing says it is.
+  if (!pane && !props.online)
+    return (
+      <p className="files-alert" data-tone="quiet" role="status" data-testid="computer-offline">
+        Not connected to the gateway.
+      </p>
+    );
   if (!pane || pane.availability === "unknown" || pane.availability === "checking")
     return (
       <div className="screen computer-dark" data-state="checking" aria-busy="true">
