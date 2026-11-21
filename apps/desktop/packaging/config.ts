@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
+import { CHAT_LINK_SCHEME } from "../../../packages/core/src/chat-link.ts";
 import { APP_ID, PRODUCT_NAME } from "../src/main/identity.ts";
 import { packageOutput } from "./output.ts";
 import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
@@ -104,6 +105,9 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     publish: null,
     afterPack: afterPack(env),
     artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+    // Clawtrate links: declared in the macOS app's Info.plist. The Windows installer
+    // declares nothing, so the app registers itself at startup (src/main/index.ts).
+    protocols: [{ name: PRODUCT_NAME, schemes: [CHAT_LINK_SCHEME] }],
     mac: {
       category: "public.app-category.productivity",
       icon: "resources/icon.icns",

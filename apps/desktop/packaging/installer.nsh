@@ -5,7 +5,9 @@
 ; after the package with "-updater". electron-builder's uninstaller removes the
 ; app, its shortcuts and its registry keys but not that copy. The app has no
 ; updater, so an uninstall that is not part of an update removes the copy and
-; then its folder, if nothing else is in it.
+; then its folder, if nothing else is in it. It also removes the app's own
+; registration for Clawtrate links, which the app writes for this user when it
+; starts, so no link is handed to a program that is gone.
 
 ; The folder, from the file's path; the build fails if electron-builder ever names the file otherwise.
 !searchparse "${APP_INSTALLER_STORE_FILE}" "" CLAWTRATE_UPDATER_DIR "\installer.exe"
@@ -21,6 +23,7 @@
     ${if} $installMode == "all"
       SetShellVarContext all
     ${endif}
+    DeleteRegKey HKCU "Software\Classes\clawtrate"
   ${endif}
 !macroend
 

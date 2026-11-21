@@ -46,6 +46,17 @@ describe("packaging configuration", () => {
     expect(() => output("custom-dist")).toThrow("must be an absolute path");
   });
 
+  it("F-248: declares the link scheme for macOS; the Windows uninstaller removes the app's own registration", () => {
+    const config = builderConfig({}, "45.3.2");
+    expect(config.protocols).toEqual([{ name: "Clawtrate", schemes: ["clawtrate"] }]);
+    const script = readFileSync(join(APP, config.nsis!.include!), "utf8");
+    const uninstall = script.slice(
+      script.indexOf("!macro customUnInstall"),
+      script.indexOf("!macroend"),
+    );
+    expect(uninstall).toContain('DeleteRegKey HKCU "Software\\Classes\\clawtrate"');
+  });
+
   it.each(["1.2.0", "1.2.0-beta.20261104.10"])(
     "emits the full signed setup version and setup-only marker for %s",
     (version) => {
