@@ -220,12 +220,21 @@ check(
 
 // 3. What was installed.
 const unpacked = mkdtempSync(join(temp, "tarball-"));
-execFileSync("/usr/bin/tar", ["-xzf", at.tarball, "-C", unpacked, "package/dist/entry.js"]);
+execFileSync("/usr/bin/tar", [
+  "-xzf",
+  at.tarball,
+  "-C",
+  unpacked,
+  "package/dist/entry.js",
+  "package/dist/index.js",
+]);
 const sha = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 check(
   existsSync(at.installedEntry) &&
-    sha(at.installedEntry) === sha(join(unpacked, "package/dist/entry.js")),
-  "the installed dist/entry.js has the checked tarball's SHA-256",
+    sha(at.installedEntry) === sha(join(unpacked, "package/dist/entry.js")) &&
+    existsSync(at.installedIndex) &&
+    sha(at.installedIndex) === sha(join(unpacked, "package/dist/index.js")),
+  "the installed dist/entry.js and dist/index.js have the checked tarball's SHA-256",
 );
 check(
   existsSync(join(place.programDir, "tools/node")) &&
@@ -259,7 +268,7 @@ const argv = serviceArgv(platform, serviceText);
 say(`service command: ${JSON.stringify(argv)}`);
 check(
   argv !== null && runsCheckedInstall(argv, place, PINS, port),
-  "the service runs the checked Node.js with the installed entry.js and gateway --port <the install's port>",
+  "the service runs the checked Node.js with the installed, checked entrypoint and gateway --port <the install's port>",
 );
 check(
   argv !== null &&

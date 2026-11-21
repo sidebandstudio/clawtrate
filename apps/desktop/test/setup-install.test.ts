@@ -638,7 +638,7 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
     const service = readFileSync(stand.place.serviceFile, "utf8");
     writeFileSync(
       stand.place.serviceFile,
-      service.replace(at.installedEntry, "/elsewhere/entry.js"),
+      service.replace(at.installedIndex, "/elsewhere/index.js"),
     );
     expect(await installer(stand).owned(port)).toBe(false);
   });

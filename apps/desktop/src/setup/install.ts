@@ -291,9 +291,12 @@ export function layout(place: InstallPlace, pins: InstallPins) {
     nodeBin: join(nodeDir, "bin", "node"),
     scripts: join(dir, "install"),
     installer: join(dir, "install", "install-cli.sh"),
-    /** The checked tarball's `dist/entry.js`, to compare the installed one with. */
+    /** The checked tarball's `dist/entry.js` and `dist/index.js`, to compare the installed ones with. */
     checkedEntry: join(dir, "install", "entry.js"),
+    checkedIndex: join(dir, "install", "index.js"),
     installedEntry: join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js"),
+    /** What OpenClaw's service starts: the installed package's gateway entrypoint. */
+    installedIndex: join(nodeDir, "lib", "node_modules", "openclaw", "dist", "index.js"),
     npmUser: join(dir, "npm", "user.npmrc"),
     npmGlobal: join(dir, "npm", "global.npmrc"),
     npmCache: join(dir, "npm", "cache"),
@@ -383,6 +386,7 @@ export function commands(
         "package/scripts/install-cli.sh",
         "package/scripts/install-policy.sh",
         "package/dist/entry.js",
+        "package/dist/index.js",
       ],
     },
     {
@@ -639,7 +643,8 @@ const real = (path: string) => {
 
 /**
  * Whether a service command runs this install: the checked Node.js, the
- * installed `entry.js` of the checked tarball, then `gateway --port <port>`.
+ * installed package's `dist/index.js` (OpenClaw's gateway entrypoint) or
+ * `dist/entry.js`, both proven the checked tarball's, then `gateway --port <port>`.
  */
 export function runsCheckedInstall(
   argv: string[],
@@ -648,9 +653,14 @@ export function runsCheckedInstall(
   port: number,
 ): boolean {
   const at = layout(place, pins);
-  // Both compared through links: OpenClaw may write either path resolved.
-  const checkedEntry = real(at.installedEntry);
-  const entry = checkedEntry === null ? -1 : argv.findIndex((arg) => real(arg) === checkedEntry);
+  // Compared through links: OpenClaw may write either path resolved.
+  const entries = [at.installedIndex, at.installedEntry]
+    .map(real)
+    .filter((path): path is string => path !== null);
+  const entry = argv.findIndex((arg) => {
+    const path = real(arg);
+    return path !== null && entries.includes(path);
+  });
   if (entry < 1) return false;
   const rest = argv.slice(entry + 1);
   if (
@@ -1433,7 +1443,7 @@ export class Installer {
   /**
    * The installed program is the checked one: the installer's reported
    * version is the pinned one, its wrapper is exactly the one it writes for
-   * this prefix, and the installed `entry.js` is the checked tarball's.
+   * this prefix, and the installed `entry.js` and `index.js` are the checked tarball's.
    */
   private async checkedProgram(version: string | null): Promise<boolean> {
     const { place, pins } = this.options;
@@ -1447,7 +1457,10 @@ export class Installer {
         .update(await readFile(file))
         .digest("hex");
     try {
-      return (await sha(this.at.installedEntry)) === (await sha(this.at.checkedEntry));
+      return (
+        (await sha(this.at.installedEntry)) === (await sha(this.at.checkedEntry)) &&
+        (await sha(this.at.installedIndex)) === (await sha(this.at.checkedIndex))
+      );
     } catch {
       return false;
     }

@@ -107,9 +107,9 @@ main() {
   local package="$PREFIX/tools/node-v$NODE_VERSION/lib/node_modules/openclaw"
   local unpacked
   unpacked="$(mktemp -d)"
-  tar -xzf "$tgz" -C "$unpacked" package/dist/entry.js
+  tar -xzf "$tgz" -C "$unpacked" package/dist/entry.js package/dist/index.js
   mkdir -p "$package/dist"
-  cp "$unpacked/package/dist/entry.js" "$package/dist/entry.js"
+  cp "$unpacked/package/dist/entry.js" "$unpacked/package/dist/index.js" "$package/dist/"
   rm -rf "$unpacked"
   [[ "$SCENARIO" != "wrong-program" ]] || printf '# changed\\n' >> "$package/dist/entry.js"
   mkdir -p "$PREFIX/bin"
@@ -146,6 +146,8 @@ PLATFORM="@PLATFORM@"
 SERVICE_FILE="@SERVICE_FILE@"
 ENTRY="$0"
 NODE="\${ENTRY%/lib/node_modules/openclaw/dist/entry.js}/bin/node"
+# OpenClaw's service starts the package's gateway entrypoint, beside entry.js.
+INDEX="\${ENTRY%entry.js}index.js"
 printf 'openclaw %s\\n' "$*" >> "$HOME/stand-in-calls.log"
 [[ "$1" == "--profile" && "$2" == "clawtrate" ]] || exit 64
 shift 2
@@ -182,9 +184,9 @@ case "$1" in
       fi
       mkdir -p "\${SERVICE_FILE%/*}"
       if [[ "$PLATFORM" == "darwin" ]]; then
-        printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0">\\n  <dict>\\n    <key>Label</key>\\n    <string>ai.openclaw.clawtrate</string>\\n    <key>RunAtLoad</key>\\n    <true/>\\n    <key>ProgramArguments</key>\\n    <array>\\n      <string>/bin/sh</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>--max-old-space-size=4096</string>\\n      <string>%s</string>\\n      <string>gateway</string>\\n      <string>--port</string>\\n      <string>%s</string>\\n    </array>\\n  </dict>\\n</plist>\\n' "$HOME/.openclaw-clawtrate/service-env/wrapper.sh" "$HOME/.openclaw-clawtrate/service-env/env" "$NODE" "$ENTRY" "$port" > "$SERVICE_FILE"
+        printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0">\\n  <dict>\\n    <key>Label</key>\\n    <string>ai.openclaw.clawtrate</string>\\n    <key>RunAtLoad</key>\\n    <true/>\\n    <key>ProgramArguments</key>\\n    <array>\\n      <string>/bin/sh</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>--max-old-space-size=4096</string>\\n      <string>%s</string>\\n      <string>gateway</string>\\n      <string>--port</string>\\n      <string>%s</string>\\n    </array>\\n  </dict>\\n</plist>\\n' "$HOME/.openclaw-clawtrate/service-env/wrapper.sh" "$HOME/.openclaw-clawtrate/service-env/env" "$NODE" "$INDEX" "$port" > "$SERVICE_FILE"
       else
-        printf '[Unit]\\nDescription=OpenClaw Gateway\\n\\n[Service]\\nExecStart="%s" --max-old-space-size=4096 "%s" gateway --port %s\\nRestart=always\\n\\n[Install]\\nWantedBy=default.target\\n' "$NODE" "$ENTRY" "$port" > "$SERVICE_FILE"
+        printf '[Unit]\\nDescription=OpenClaw Gateway\\n\\n[Service]\\nExecStart="%s" --max-old-space-size=4096 "%s" gateway --port %s\\nRestart=always\\n\\n[Install]\\nWantedBy=default.target\\n' "$NODE" "$INDEX" "$port" > "$SERVICE_FILE"
       fi
       : > "$HOME/stand-in-loaded"
       printf 'register clawtrate %s\\n' "$port" >> "$HOME/stand-in-service-manager.log"
@@ -313,6 +315,7 @@ export async function standIn(
       .replace("@PLATFORM@", platform)
       .replace("@SERVICE_FILE@", place.serviceFile),
   );
+  writeFileSync(join(pkg, "dist", "index.js"), "// the stand-in's gateway entrypoint\n");
   writeFileSync(join(pkg, "package.json"), '{"name":"openclaw","version":"2026.10.6"}\n');
   execFileSync("/usr/bin/tar", [
     "-czf",
