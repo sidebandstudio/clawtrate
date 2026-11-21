@@ -10,17 +10,23 @@
 //    the user manager runs without lingering, and lingering is the same
 //    after as before.
 // 3. What was installed: the checked tarball's `entry.js`, the checked
-//    Node.js, one id in the three records, and the service's own command,
-//    start policy and runtime; token sign-in; the listener belongs to the
-//    service; the look that follows runs no command of the default
-//    profile's, finds the gateway running on the install's port, and says
-//    Clawtrate installed it. Connect pairs read-only through the setup
-//    controller and the gateway grants exactly `operator.read`.
+//    Node.js, one id in the three records, the service file's command, and
+//    the service manager's own effective command and main process for the
+//    job it loaded; start policy and runtime; token sign-in; the listener
+//    belongs to the service; the look that follows and Connect run no command
+//    of the default profile's, and the look finds the gateway running on the
+//    install's port. Connect pairs read-only through the setup controller,
+//    the host's dialog answered yes by this script, and the gateway grants
+//    exactly `operator.read`. No restart or later login is exercised.
 // 4. A decoy default home and a sentinel default service definition are put
 //    in place; OpenClaw's own uninstall for the profile and the program
-//    folder's removal; then nothing of the install is left, OpenClaw's own
-//    known leftovers are asserted and removed, and the decoy and the sentinel
-//    are unchanged.
+//    folder's removal; then nothing of the install is left: no definition,
+//    job or listener; OpenClaw's own known leftovers are asserted and
+//    removed; every shared log and cache path is as it was before the
+//    install, the new entries this check's install made removed by name;
+//    and the decoy and the sentinel are unchanged.
+//
+// Everything of its own is under one scratch folder, removed at the end.
 //
 // Run: node apps/desktop/test/hosted/real-install.ts
 
@@ -33,13 +39,14 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { rm } from "node:fs/promises";
 import { connect } from "node:net";
-import { userInfo } from "node:os";
-import { join } from "node:path";
+import { tmpdir, userInfo } from "node:os";
+import { dirname, join } from "node:path";
 import { startHostRuntime } from "../../src/host/runtime.ts";
 import { SetupController } from "../../src/setup/controller.ts";
 import {
@@ -53,7 +60,12 @@ import {
 import { installTarget, PINS, runsOnGlibc } from "../../src/setup/install-pins.ts";
 import { InstallRunner } from "../../src/setup/install-runner.ts";
 import { parseAuthMode, parseStatus } from "../../src/setup/parse.ts";
-import { ProgramRunner, type ProgramRequest } from "../../src/setup/programs.ts";
+import {
+  checkRequest,
+  ProgramRunner,
+  sessionEnv,
+  type ProgramRequest,
+} from "../../src/setup/programs.ts";
 import { productionWorld } from "../../src/setup/world.ts";
 import { processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
 
@@ -78,11 +90,16 @@ if (!target) throw new Error("this runner's system isn't one the install support
 const account = userInfo();
 const home = account.homedir;
 const uid = String(process.getuid?.() ?? "");
-const temp = process.env.RUNNER_TEMP ?? mkdtempSync("/tmp/clawtrate-hosted-");
+/** This check's own folder: everything it makes of its own is in it, and it is removed at the end. */
+const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "clawtrate-hosted-"));
+// Removed however the check ends, a failure or a throw included.
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 // A Mac's app data is "~/Library/Application Support/Clawtrate": a space in every path.
-const appData = join(temp, "Clawtrate App Data");
-const deviceDir = join(temp, "clawtrate-device");
+const appData = join(scratch, "Clawtrate App Data");
+const deviceDir = join(scratch, "clawtrate-device");
 mkdirSync(appData, { recursive: true });
+/** The session's bus, as a person's app reads it once in its main process. */
+const session = sessionEnv(platform, process.env);
 
 /** Every file under a folder with its SHA-256: what must come through unchanged. */
 function tree(dir: string): string {
@@ -116,10 +133,36 @@ const lingerFile = `/var/lib/systemd/linger/${account.username}`;
 const lingerBefore = platform === "linux" ? existsSync(lingerFile) : false;
 if (platform === "linux")
   check(!lingerBefore, "lingering is off for the runner's account before the install");
-const npmHome = join(home, ".npm");
-const npmHomeBefore = existsSync(npmHome);
+/**
+ * The runner's shared log and cache places OpenClaw or npm could write to:
+ * each listed before the install, so that afterwards only what this check's
+ * install added is removed, by name, and the rest is as it was.
+ */
+const shared = [
+  ...new Set([
+    "/tmp/openclaw",
+    join(tmpdir(), "openclaw"),
+    join(home, ".npm"),
+    ...(platform === "darwin" ? [join(home, "Library/Logs/openclaw")] : []),
+  ]),
+];
+/** Every entry under a place, by its path: `(absent)` for a place that isn't there. */
+function listing(root: string): Set<string> {
+  const out = new Set<string>();
+  if (!existsSync(root)) return new Set(["(absent)"]);
+  const walk = (at: string) => {
+    for (const name of readdirSync(at)) {
+      const path = join(at, name);
+      out.add(path);
+      if (statSync(path, { throwIfNoEntry: false })?.isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return out;
+}
+const sharedBefore = new Map(shared.map((root) => [root, listing(root)]));
 
-const place = computerPlace({ home, appData, platform, target, env: process.env });
+const place = computerPlace({ home, appData, platform, target, env: process.env, session });
 const at = layout(place, PINS);
 const runner = new InstallRunner();
 const makeInstaller = () =>
@@ -132,8 +175,8 @@ const makeInstaller = () =>
     log: say,
   });
 
-// The host's own controller, its look's runner recorded.
-const programs = new ProgramRunner();
+// The host's own controller, its look's runner recorded and checked as a person's app checks it.
+const programs = new ProgramRunner({ check: (request) => checkRequest(request, session) });
 const asked: ProgramRequest[] = [];
 /** What each look command was asked and gave, for the log when the look after the install can't tell. */
 type Seen = { args: string; env: string; exit?: number | null; stdout?: string; refused?: string };
@@ -229,21 +272,25 @@ check(
   steps.some((line) => line.includes("node checked")),
   "the installer reported it used the checked Node.js (skip)",
 );
+/** Every command of a slice: the installed program, the clawtrate profile, no deep status, the session's bus. */
+const installedOnly = (slice: ProgramRequest[]) =>
+  slice.length > 0 &&
+  slice.every(
+    (request) =>
+      request.program === at.openclaw &&
+      request.args[0] === "--profile" &&
+      request.args[1] === "clawtrate" &&
+      !request.args.includes("--deep") &&
+      Object.entries(session).every(([key, value]) => request.env[key] === value),
+  );
 const lookAsked = asked.slice(fromInstall);
 check(
-  lookAsked.length > 0 &&
-    lookAsked.every(
-      (request) =>
-        request.program === at.openclaw &&
-        request.args[0] === "--profile" &&
-        request.args[1] === "clawtrate" &&
-        !request.args.includes("--deep"),
-    ),
+  installedOnly(lookAsked),
   `the look after the install ran the installed program for the clawtrate profile only (${lookAsked.length} commands)`,
 );
 
 // 3. What was installed.
-const unpacked = mkdtempSync(join(temp, "tarball-"));
+const unpacked = mkdtempSync(join(scratch, "tarball-"));
 execFileSync("/usr/bin/tar", [
   "-xzf",
   at.tarball,
@@ -278,12 +325,8 @@ const own = record(place.recordFile);
 const there = record(at.record);
 const owner = record(at.owner);
 check(
-  own.id !== undefined &&
-    own.id === there.id &&
-    own.id === owner.id &&
-    own.stage === "installed" &&
-    there.stage === "installed",
-  "one id and the stage installed in Clawtrate's record, the program folder's and the profile's owner file",
+  own.id !== undefined && own.id === there.id && own.id === owner.id && own.stage === "installed",
+  "one id in Clawtrate's record, the program folder's and the profile's owner file, and the stage installed in Clawtrate's",
 );
 const port = own.port ?? 0;
 const serviceText = existsSync(place.serviceFile) ? readFileSync(place.serviceFile, "utf8") : "";
@@ -292,7 +335,7 @@ const argv = serviceArgv(platform, serviceText);
 say(`service command: ${JSON.stringify(argv)}`);
 check(
   argv !== null && runsCheckedInstall(argv, place, PINS, port),
-  "the service runs the checked Node.js with the installed, checked entrypoint and gateway --port <the install's port>",
+  "the service file's command is exactly the checked Node.js, the installed, checked entrypoint and gateway --port <the install's port>",
 );
 check(
   argv !== null &&
@@ -308,6 +351,8 @@ const openclaw = (...args: string[]) =>
     timeout: 60_000,
   });
 let mainPid: number | null;
+/** The running process's own executable, as the system reports it. */
+let mainExecutable: string | null = null;
 if (platform === "darwin") {
   check(
     /<key>RunAtLoad<\/key>\s*<true\/>/.test(serviceText) &&
@@ -318,6 +363,24 @@ if (platform === "darwin") {
     encoding: "utf8",
   });
   mainPid = Number(/^\s*pid = (\d+)/m.exec(job.stdout)?.[1] ?? NaN) || null;
+  // The job launchd loaded, not the file: its program and its arguments, one per line.
+  const block = /^\targuments = \{\n([\s\S]*?)\n\t\}/m.exec(job.stdout)?.[1] ?? null;
+  const effective =
+    block === null ? null : block.split("\n").map((line) => line.replace(/^\t\t/, ""));
+  say(
+    `launchd's job: program ${/^\tprogram = (.*)$/m.exec(job.stdout)?.[1]}, ${effective?.length ?? 0} arguments`,
+  );
+  check(
+    effective !== null &&
+      runsCheckedInstall(effective, place, PINS, port) &&
+      JSON.stringify(effective) === JSON.stringify(argv) &&
+      /^\tprogram = \/bin\/sh$/m.test(job.stdout),
+    "launchd's loaded job runs exactly that command",
+  );
+  if (mainPid !== null) {
+    const comm = spawnSync("/bin/ps", ["-o", "comm=", "-p", String(mainPid)], { encoding: "utf8" });
+    mainExecutable = comm.stdout.trim() || null;
+  }
 } else {
   const enabled = spawnSync("systemctl", ["--user", "is-enabled", place.service], {
     encoding: "utf8",
@@ -335,7 +398,36 @@ if (platform === "darwin") {
     { encoding: "utf8", env: { ...process.env } },
   );
   mainPid = Number(shown.stdout.trim()) || null;
+  // The unit systemd loaded, not the file: its effective ExecStart (drop-ins included).
+  const exec = spawnSync(
+    "systemctl",
+    ["--user", "show", place.service, "--property=ExecStart", "--value"],
+    { encoding: "utf8", env: { ...process.env } },
+  );
+  const effective = exec.stdout.trim();
+  say(`systemd's ExecStart: ${effective.length} characters`);
+  // Read as systemd prints it, with any quoting of a spaced argument taken away.
+  const plain = effective.replace(/"/g, "");
+  check(
+    argv !== null &&
+      plain.startsWith(`{ path=${argv[0]} ; argv[]=${argv.join(" ")} ; `) &&
+      plain.split("path=").length === 2,
+    "systemd's loaded unit has exactly one ExecStart, that command",
+  );
+  if (mainPid !== null) {
+    try {
+      mainExecutable = realpathSync(`/proc/${mainPid}/exe`);
+    } catch {
+      mainExecutable = null;
+    }
+  }
 }
+check(
+  mainExecutable !== null &&
+    existsSync(mainExecutable) &&
+    realpathSync(mainExecutable) === realpathSync(at.nodeBin),
+  `the service's main process runs the checked Node.js (${mainExecutable})`,
+);
 const auth = openclaw("config", "get", "gateway.auth.mode", "--json");
 check(
   auth.status === 0 && parseAuthMode(auth.stdout) === "token",
@@ -363,7 +455,7 @@ check(
   `the listener on the install's port belongs to the service (listener ${listener}, service ${mainPid})`,
 );
 
-// The look that followed finds it running, says Clawtrate installed it; Connect pairs read-only.
+// The look that followed finds it running; Connect pairs read-only.
 const look = setup.current.look;
 check(
   setup.current.phase === "found" &&
@@ -374,7 +466,10 @@ check(
     look.port === own.port,
   `the look shows the clawtrate gateway running on its port (${JSON.stringify(look)})`,
 );
-check(look?.managed === true, "the running card says Clawtrate installed it");
+check(
+  look !== undefined && look !== null && !Object.hasOwn(look, "managed"),
+  "the running card says nothing of who installed it",
+);
 if (look?.outcome !== "running") {
   // Exactly what the look after the install ran and what each command gave.
   for (const seen of ran.slice(ranFromInstall))
@@ -383,6 +478,7 @@ if (look?.outcome !== "running") {
     );
 }
 if (look?.outcome === "running") {
+  const fromConnect = asked.length;
   await setup.connect();
   const deadline = Date.now() + 60_000;
   while (
@@ -400,6 +496,11 @@ if (look?.outcome === "running") {
     connection.status === "connected" &&
       JSON.stringify([...connection.scopes].sort()) === JSON.stringify(["operator.read"]),
     `the gateway granted exactly operator.read (${JSON.stringify(connection.scopes)})`,
+  );
+  const connectAsked = asked.slice(fromConnect);
+  check(
+    installedOnly(connectAsked),
+    `Connect's rechecks and code ran the installed program for the clawtrate profile only, with the session's bus (${connectAsked.length} commands)`,
   );
   await runtime.client.disconnect();
 }
@@ -440,11 +541,13 @@ await rm(deviceDir, { recursive: true, force: true });
 check(!existsSync(place.programDir), "the program folder, with npm's cache, is gone");
 check(!existsSync(place.recordFile), "Clawtrate's record is gone");
 check(!existsSync(place.stateDir), "~/.openclaw-clawtrate is gone");
-check(!existsSync(place.serviceFile), "the profile's service file is gone");
+check(!existsSync(place.serviceFile), "the profile's service definition is absent");
 check(!existsSync(unpacked), "the check's unpacked tarball is gone");
 check(!existsSync(deviceDir), "the check's device store is gone");
-check(existsSync(npmHome) === npmHomeBefore, "npm wrote nothing to ~/.npm");
-say(`OpenClaw's own log folder in /tmp: ${existsSync("/tmp/openclaw") ? "present" : "absent"}`);
+check(
+  readdirSync(dirname(place.programDir)).length === 0,
+  "nothing else of the install is in the app-data folder (no staging or removal folder)",
+);
 if (platform === "darwin") {
   /** `launchctl print` of a label: only exit 113 with launchd's own words is "no such job". */
   const noJob = (label: string) => {
@@ -454,7 +557,10 @@ if (platform === "darwin") {
     return job.status === 113 && /Could not find service/i.test(text);
   };
   check(noJob(place.service), "launchd has no ai.openclaw.clawtrate job");
-  check(noJob("ai.openclaw.gateway"), "the default profile's ai.openclaw.gateway was never loaded");
+  check(
+    noJob("ai.openclaw.gateway"),
+    "the default profile's ai.openclaw.gateway is absent after uninstall",
+  );
   // OpenClaw's own uninstall leaves these (research §6.8): asserted, then removed.
   const trash = join(home, ".Trash/ai.openclaw.clawtrate.plist");
   const log = join(home, "Library/Logs/openclaw/gateway-clawtrate.log");
@@ -464,11 +570,20 @@ if (platform === "darwin") {
   await rm(log, { force: true });
   check(!existsSync(trash) && !existsSync(log), "those known leftovers are removed");
 } else {
+  const loadState = spawnSync(
+    "systemctl",
+    ["--user", "show", place.service, "--property=LoadState", "--value"],
+    { encoding: "utf8", env: { ...process.env } },
+  );
+  check(
+    loadState.stdout.trim() === "not-found",
+    `systemd has no ${place.service} unit (LoadState ${loadState.stdout.trim()})`,
+  );
   const unit = spawnSync("systemctl", ["--user", "status", place.service], {
     stdio: "ignore",
     env: { ...process.env },
   });
-  check(unit.status === 4, `systemd has no ${place.service} unit (status exit ${unit.status})`);
+  check(unit.status === 4, `systemctl status says no such unit (exit ${unit.status})`);
   const gateway = spawnSync("systemctl", ["--user", "is-active", "openclaw-gateway.service"], {
     stdio: "ignore",
     env: { ...process.env },
@@ -486,12 +601,38 @@ const listening = await new Promise<boolean>((done) => {
   socket.once("error", () => done(false));
 });
 check(!listening, `nothing listens on the install's port ${own.port}`);
+// The shared log and cache places: what this check's install added, removed by name, deepest
+// first; everything there before is kept, and each place is then exactly as it was.
+for (const root of shared) {
+  const before = sharedBefore.get(root)!;
+  const added = [...listing(root)].filter((path) => !before.has(path));
+  say(
+    `${root}: ${added.length} new entries${
+      added.length
+        ? `: ${added
+            .slice(0, 12)
+            .map((path) => path.slice(root.length + 1) || "(the folder)")
+            .join(", ")}`
+        : ""
+    }`,
+  );
+  for (const path of added.sort((a, b) => b.length - a.length))
+    await rm(path, { recursive: true, force: true });
+  if (before.has("(absent)")) await rm(root, { recursive: true, force: true });
+  const after = listing(root);
+  check(
+    after.size === before.size && [...after].every((path) => before.has(path)),
+    `${root} is as it was before the install`,
+  );
+}
 check(
   `${tree(decoy)}\n${existsSync(sentinel) ? sha(sentinel) : "(absent)"}` === keptBefore,
   "the default OpenClaw home and the default service definition are unchanged",
 );
 await rm(decoy, { recursive: true, force: true });
 await rm(sentinel, { force: true });
+await rm(scratch, { recursive: true, force: true });
+check(!existsSync(scratch), "the check's scratch folder is gone");
 
 if (failures.length) {
   console.error(`[hosted-install] ${failures.length} check(s) failed:\n- ${failures.join("\n- ")}`);

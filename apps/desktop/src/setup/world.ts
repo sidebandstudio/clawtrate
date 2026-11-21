@@ -195,9 +195,10 @@ export function programPath(program: string): string {
 
 /**
  * The look that follows setting OpenClaw up (§10): the installed program
- * alone, the `clawtrate` profile alone, no deep status, and the session's
- * bus on Linux as the install had it. It runs no command of the default
- * profile's.
+ * alone, the `clawtrate` profile alone, no deep status, and on Linux the
+ * session's bus as the install had it, in that profile's own environment,
+ * so that the gateway found carries it to Connect's rechecks and its code.
+ * It runs no command of the default profile's.
  */
 export function installedWorld(
   world: LookWorld,
@@ -213,10 +214,9 @@ export function installedWorld(
         args: ["--profile", "clawtrate"],
         stateDir: join(world.home, ".openclaw-clawtrate"),
         required: true,
-        env: {},
+        env: { ...env },
       },
     ],
-    env: { ...world.env, ...env },
     deep: false,
   };
 }

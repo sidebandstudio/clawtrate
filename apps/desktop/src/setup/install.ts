@@ -8,28 +8,30 @@
 //   profile's state folder, its service file and the service manager's own
 //   job or unit, with only "no such file" taken as absence;
 // - the attempt is reserved by creating its program folder exclusively, and
-//   its two records, which name one id, version, profile and stage, are
-//   written before anything is downloaded;
-// - both downloads go to a private staging folder, from the pinned URLs with
-//   no redirect, and are moved into the program folder only once both
-//   hashes match;
-// - the installer is taken from the checked tarball, changed in one place so
-//   that it can never fetch a Node.js of its own, and checked against the
-//   checked Node.js before it runs; an installer whose Node.js step doesn't
-//   report `skip` is a failure, and the installed program must be the
-//   checked one;
-// - just before onboarding the profile and its service are checked again and
-//   the profile's state folder is reserved; onboarding writes the profile's
-//   config only, and the profile's service is installed by a separate
-//   command that never replaces one (OpenClaw's onboarding would also try to
-//   change the account's systemd lingering through sudo, which this never
-//   reaches);
+//   its two records, which name one id, version and profile, are made before
+//   anything is downloaded; only Clawtrate's records the stage;
+// - both downloads go to the attempt's own staging folder beside the program
+//   folder, from the pinned URLs with no redirect, and are moved into the
+//   program folder only once both hashes match;
+// - the installer is taken from the checked tarball, its Node.js step and
+//   temporary folder replaced whole, so that it can never fetch a Node.js of
+//   its own, reach a package manager or use the shared `/tmp`, and checked
+//   against the checked Node.js before it runs; an installer whose Node.js
+//   step doesn't report `skip` is a failure, and the installed program must
+//   be the checked one;
+// - just before onboarding the profile and its service are checked again,
+//   the profile's state folder is reserved, and only then is the stage
+//   `onboarding` written; onboarding writes the profile's config only, and
+//   the profile's service is installed by a separate command (OpenClaw's
+//   onboarding would also try to change the account's systemd lingering
+//   through sudo, which this never reaches), checked again just before it
+//   and read back after it;
 // - then the gateway's status until it answers.
 //
 // Every program is one of the exact commands `commands` builds for this
 // place, started without a shell for any value. The one thing it removes is
 // an attempt of its own that never reached onboarding, after proving that
-// again.
+// again, by the identities of what it made.
 
 import type {
   InstallCleanup,
@@ -39,11 +41,12 @@ import type {
   SetupInstall,
 } from "@clawtrate/core";
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, realpathSync } from "node:fs";
+import { constants, createWriteStream, realpathSync, type Stats } from "node:fs";
 import {
   link,
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -60,6 +63,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import type { InstallPins, InstallTarget } from "./install-pins.ts";
 import type { InstallRequest, InstallResult } from "./install-runner.ts";
+import { sessionEnv } from "./programs.ts";
 
 export const INSTALL_PROFILE = "clawtrate";
 /** OpenClaw's default port and the development gateway's: never chosen for an install. */
@@ -84,32 +88,83 @@ export const NODE_CHECK =
   'OPENCLAW_INSTALL_CLI_SH_NO_RUN=1; . "$1"; PREFIX="$2"; NODE_VERSION="$3"; linked_node_is_usable';
 
 /**
- * The checked installer's Node.js step (OpenClaw 2026.10.6, `install-cli.sh`
- * lines 909 to 913): with a usable runtime it links it and reports `skip`;
- * otherwise it goes on to download one. The install's copy ends there
- * instead (§10): the checked Node.js is the only runtime it may use.
+ * The checked installer's functions the install's copy replaces whole
+ * (OpenClaw 2026.10.6, `install-cli.sh`), each from its `name() {` line to
+ * its closing `}` line, by the SHA-256 of that text: a function of another
+ * text is never changed, and the installer doesn't run.
  */
-export const NODE_STEP = [
+export const REPLACED_FUNCTIONS = {
+  /**
+   * Its Node.js step: FreeBSD's system runtime, Alpine's `apk` (through
+   * `sudo`), the runtime already in the prefix, or a download of its own.
+   */
+  install_node: "3e390d5685e8275b3dabdc2f87459c7cefad25f620e1895b194a2bcb73383581",
+  /** Its temporary folder: under `TMPDIR`, or else under the shared `/tmp`. */
+  prepare_tmpdir: "11bbc7287cf1a0847fcca678944f118f96f66e985c5cfd1efab5c4db554cabae",
+} as const;
+
+/**
+ * What the install's copy runs instead (§10): the checked Node.js in the
+ * prefix, linked and reported as `skip`, or a failure. No package manager,
+ * system runtime or download of its own is reachable.
+ */
+export const CHECKED_INSTALL_NODE = [
+  "install_node() {",
+  "  # Clawtrate: the checked Node.js is the only runtime this install uses.",
+  "  local dir",
+  '  dir="$(node_dir)"',
   "  if linked_node_is_usable; then",
   '    ln -sfn "$dir" "${PREFIX}/tools/node"',
   '    emit_json step name node status skip path "$dir"',
   "    return",
   "  fi",
-  "",
-].join("\n");
-const NODE_STEP_END = [
-  "  # Clawtrate: the checked Node.js is the only runtime this install uses; it never fetches one.",
   '  emit_json error message "the checked Node.js is not usable"',
   "  exit 70",
+  "}",
   "",
 ].join("\n");
 
-/** The installer's text with its Node.js download unreachable, or null unless its Node.js step appears exactly once. */
+/** Its temporary folder only under the `TMPDIR` the install gives it, inside the program folder; never the shared one. */
+export const PRIVATE_TMPDIR = [
+  "prepare_tmpdir() {",
+  "  # Clawtrate: the install's own temporary folder, or a failure.",
+  "  local base tmp",
+  '  [[ -n "${TMPDIR:-}" ]] || fail "Cannot create a temporary directory."',
+  '  base="$(resolve_installer_path "$TMPDIR")"',
+  '  if ! tmp="$(mktemp -d "${base%/}/openclaw-install.XXXXXX" 2>/dev/null)"; then',
+  '    fail "Cannot create a temporary directory."',
+  "  fi",
+  '  TMPFILES+=("$tmp")',
+  '  export TMPDIR="$tmp"',
+  "}",
+  "",
+].join("\n");
+
+const REPLACEMENTS: Record<keyof typeof REPLACED_FUNCTIONS, string> = {
+  install_node: CHECKED_INSTALL_NODE,
+  prepare_tmpdir: PRIVATE_TMPDIR,
+};
+
+/**
+ * The installer's text with `install_node` and `prepare_tmpdir` replaced
+ * whole, or null unless each is defined exactly once and its text is the
+ * checked one.
+ */
 export function patchInstaller(text: string): string | null {
-  const at = text.indexOf(NODE_STEP);
-  if (at === -1 || text.indexOf(NODE_STEP, at + 1) !== -1) return null;
-  const end = at + NODE_STEP.length;
-  return text.slice(0, end) + NODE_STEP_END + text.slice(end);
+  let out = text;
+  for (const name of Object.keys(REPLACED_FUNCTIONS) as Array<keyof typeof REPLACED_FUNCTIONS>) {
+    const head = `\n${name}() {\n`;
+    const at = out.indexOf(head);
+    if (at === -1 || out.indexOf(head, at + 1) !== -1) return null;
+    const start = at + 1;
+    const close = out.indexOf("\n}\n", start);
+    if (close === -1) return null;
+    const end = close + 3;
+    const body = out.slice(start, end);
+    if (createHash("sha256").update(body).digest("hex") !== REPLACED_FUNCTIONS[name]) return null;
+    out = out.slice(0, start) + REPLACEMENTS[name] + out.slice(end);
+  }
+  return out;
 }
 
 /** Where an install goes on one computer, and with what it runs. */
@@ -150,23 +205,6 @@ function serviceOf(platform: "darwin" | "linux", home: string) {
       };
 }
 
-/** A user service on Linux is reached through the session's bus; nothing else of the session is passed. */
-export const SESSION_KEYS = ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] as const;
-
-/** The session's bus, on Linux, from an environment: the only variables of the session any setup program gets. */
-export function sessionEnv(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): Record<string, string> {
-  const kept: Record<string, string> = {};
-  if (platform !== "linux") return kept;
-  for (const key of SESSION_KEYS) {
-    const value = env[key];
-    if (value && /^[A-Za-z0-9._:/=,-]+$/.test(value)) kept[key] = value;
-  }
-  return kept;
-}
-
 /** The real computer's place, for a person's app or a hosted runner. */
 export function computerPlace(options: {
   home: string;
@@ -174,6 +212,8 @@ export function computerPlace(options: {
   platform: "darwin" | "linux";
   target: InstallTarget;
   env: NodeJS.ProcessEnv;
+  /** The session's bus as the main process read it (`sessionEnv`); read from `env` when not given. */
+  session?: Record<string, string>;
   uid?: number;
   tar?: string;
   serviceManager?: string;
@@ -183,7 +223,7 @@ export function computerPlace(options: {
     HOME: home,
     LANG: options.env.LANG && /^[A-Za-z0-9._@-]+$/.test(options.env.LANG) ? options.env.LANG : "C",
     NO_COLOR: "1",
-    ...sessionEnv(platform, options.env),
+    ...(platform === "linux" ? (options.session ?? sessionEnv(platform, options.env)) : {}),
   };
   return {
     kind: "computer",
@@ -271,6 +311,18 @@ async function assertMayInstall(
     throw new InstallRefusedError("a stand-in downloads from this computer's loopback only");
 }
 
+/**
+ * Where one attempt's downloads arrive, unchecked: a private folder beside
+ * the program folder, named by the attempt's id and made exclusively by it.
+ * Nothing in it is ever extracted or run.
+ */
+export function stagingDir(place: InstallPlace, id: string): string {
+  return join(dirname(place.programDir), `.openclaw-staging-${id}`);
+}
+
+/** An attempt's id, as its records name it and its staging folder's name carries it. */
+const ATTEMPT_ID = /^[A-Za-z0-9-]{1,64}$/;
+
 /** The paths of one install, all inside its program folder but the owner file. */
 export function layout(place: InstallPlace, pins: InstallPins) {
   const dir = place.programDir;
@@ -278,12 +330,10 @@ export function layout(place: InstallPlace, pins: InstallPins) {
   const tarballName = `openclaw-${pins.version}.tgz`;
   const nodeName = `node-v${pins.nodeVersion}-${place.target}.tar.gz`;
   return {
-    /** The program folder's own record of the attempt. */
+    tarballName,
+    nodeName,
+    /** The program folder's own record of the attempt: written once, never changed. */
     record: join(dir, ".clawtrate-install.json"),
-    /** Where the downloads arrive, unchecked; nothing in it is ever extracted or run. */
-    staging: join(dir, ".staging"),
-    stagedTarball: join(dir, ".staging", tarballName),
-    stagedNode: join(dir, ".staging", nodeName),
     downloads: join(dir, "downloads"),
     tarball: join(dir, "downloads", tarballName),
     nodeTarball: join(dir, "downloads", nodeName),
@@ -300,6 +350,8 @@ export function layout(place: InstallPlace, pins: InstallPins) {
     npmUser: join(dir, "npm", "user.npmrc"),
     npmGlobal: join(dir, "npm", "global.npmrc"),
     npmCache: join(dir, "npm", "cache"),
+    /** The installer's temporary files: inside the program folder, never a shared one. */
+    tmp: join(dir, "tmp"),
     openclaw: join(dir, "bin", "openclaw"),
     owner: join(place.stateDir, ".clawtrate-owner.json"),
   };
@@ -641,10 +693,17 @@ const real = (path: string) => {
   }
 };
 
+/** OpenClaw's heap limit for its gateway's Node.js (`daemon/node-args.ts`): the one option it adds. */
+const HEAP_OPTION = /^--max-old-space-size=[1-9][0-9]{0,6}$/;
+
 /**
- * Whether a service command runs this install: the checked Node.js, the
- * installed package's `dist/index.js` (OpenClaw's gateway entrypoint) or
- * `dist/entry.js`, both proven the checked tarball's, then `gateway --port <port>`.
+ * Whether a service command runs exactly this install, in the shape the
+ * pinned service writer gives it: on Linux the checked Node.js, OpenClaw's
+ * heap option at most, the installed package's `dist/index.js` (or
+ * `dist/entry.js`), both proven the checked tarball's, and `gateway --port
+ * <port>`; on macOS that command after `/bin/sh` and the profile's own
+ * environment wrapper and file in its state folder. Nothing else may come
+ * before, between or after.
  */
 export function runsCheckedInstall(
   argv: string[],
@@ -653,25 +712,34 @@ export function runsCheckedInstall(
   port: number,
 ): boolean {
   const at = layout(place, pins);
+  let rest = argv;
+  if (place.platform === "darwin") {
+    const envDir = join(place.stateDir, "service-env");
+    if (
+      rest[0] !== "/bin/sh" ||
+      rest[1] !== join(envDir, `${place.service}-env-wrapper.sh`) ||
+      rest[2] !== join(envDir, `${place.service}.env`)
+    )
+      return false;
+    rest = rest.slice(3);
+  }
+  const node = real(at.nodeBin);
+  if (node === null || rest[0] === undefined || real(rest[0]) !== node) return false;
+  rest = rest.slice(1);
+  if (rest[0] !== undefined && HEAP_OPTION.test(rest[0])) rest = rest.slice(1);
   // Compared through links: OpenClaw may write either path resolved.
   const entries = [at.installedIndex, at.installedEntry]
     .map(real)
     .filter((path): path is string => path !== null);
-  const entry = argv.findIndex((arg) => {
-    const path = real(arg);
-    return path !== null && entries.includes(path);
-  });
-  if (entry < 1) return false;
-  const rest = argv.slice(entry + 1);
-  if (
-    rest.length !== 3 ||
-    rest[0] !== "gateway" ||
-    rest[1] !== "--port" ||
-    rest[2] !== String(port)
-  )
-    return false;
-  const node = real(at.nodeBin);
-  return node !== null && argv.slice(0, entry).some((arg) => real(arg) === node);
+  const entry = rest[0] === undefined ? null : real(rest[0]);
+  return (
+    entry !== null &&
+    entries.includes(entry) &&
+    rest.length === 4 &&
+    rest[1] === "gateway" &&
+    rest[2] === "--port" &&
+    rest[3] === String(port)
+  );
 }
 
 /** A port this computer's loopback has free now, never OpenClaw's default. */
@@ -709,6 +777,8 @@ export async function download(
   encoding: "base64" | "hex",
   signal?: AbortSignal,
 ): Promise<Downloaded> {
+  // A quit that came first: nothing is asked or written.
+  if (signal?.aborted) return { ok: false, why: "network" };
   const abort = new AbortController();
   const stop = () => abort.abort();
   signal?.addEventListener("abort", stop);
@@ -776,20 +846,70 @@ const presence = (path: string): Promise<Presence> =>
     (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? "absent" : "unreadable"),
   );
 
-async function readJson(path: string): Promise<Record<string, unknown> | null> {
+/** A file read without following a link, with its identity: what the install proves and removes by. */
+type Owned = { text: string; stat: Stats };
+
+async function readOwn(path: string): Promise<Owned | null> {
+  let handle;
   try {
-    const info = await lstat(path);
-    if (!info.isFile() || info.size > 64 * 1024) return null;
-    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
     return null;
   }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 64 * 1024) return null;
+    return { text: await handle.readFile("utf8"), stat };
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+const parsed = (text: string): Record<string, unknown> | null => {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The same file or folder: one device and inode. */
+const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+
+/** Removes the file at `path` only when it still is `made`. Resolves whether it is gone. */
+async function unlinkIfSame(path: string, made: Stats): Promise<boolean> {
+  const now = await lstat(path).catch(() => null);
+  if (!now) return true;
+  if (!same(now, made)) return false;
+  return unlink(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** Removes the folder at `path` only when it still is `made` and is empty. Resolves whether it is gone. */
+async function rmdirIfSame(path: string, made: Stats): Promise<boolean> {
+  const now = await lstat(path).catch(() => null);
+  if (!now) return true;
+  if (!now.isDirectory() || !same(now, made)) return false;
+  return rmdir(path).then(
+    () => true,
+    () => false,
+  );
 }
 
 type Stage = "installing" | "onboarding" | "installed";
 
-/** Clawtrate's own record of an install (§10): one id, its folders, its service and port, and how far it got. */
+/**
+ * Clawtrate's own record of an install (§10): one id, its folders, its
+ * service and port, and how far it got. The only record of the stage, and
+ * replaced whole at each.
+ */
 export type InstallRecord = {
   id: string;
   version: string;
@@ -802,8 +922,17 @@ export type InstallRecord = {
   stage: Stage;
 };
 
-/** The program folder's record: the same id, version, profile and stage as Clawtrate's. */
-type FolderRecord = { id: string; version: string; profile: string; stage: Stage };
+/** The program folder's record: the same id, version and profile as Clawtrate's, written once. */
+type FolderRecord = { id: string; version: string; profile: string };
+
+/** What an earlier attempt was proven to be, by identity, before any of it is removed. */
+type Proof = {
+  id: string;
+  dir: Stats;
+  marker: Owned;
+  record: Owned;
+  staging: Stats | null;
+};
 
 /**
  * What is there before an install: nothing; an attempt of Clawtrate's that
@@ -829,10 +958,10 @@ export type InstallOptions = {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   statusWaitMs?: number;
-  /** Aborted when the app quits: no download goes on. */
+  /** Aborted when the app quits: no download goes on, and no step after it starts. */
   signal?: AbortSignal;
-  /** The install's own writes of its records and configuration; the file system's by default. */
-  writeFile?: typeof writeFile;
+  /** For the host's tests: asked before each file the install makes is opened, then before it is written; may throw. */
+  beforeWrite?: (path: string, at: "open" | "write") => void | Promise<void>;
   log?: (line: string) => void;
 };
 
@@ -842,7 +971,7 @@ export type InstallOutcome =
       port: number;
       /** The installed program, for the look that follows, which runs it for this profile only. */
       program: string;
-      /** The session's bus on Linux, for that look's programs. */
+      /** The session's bus on Linux, for that look's programs and Connect's. */
       env: Record<string, string>;
     }
   | { ok: false; failure: InstallFailure };
@@ -864,6 +993,8 @@ const failure = (
 const ok = (result: InstallResult) =>
   result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
 
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
+
 export class Installer {
   private readonly options: InstallOptions;
   private readonly at: ReturnType<typeof layout>;
@@ -877,8 +1008,31 @@ export class Installer {
     this.options.log?.(`[install] ${line}`);
   }
 
-  private get write(): typeof writeFile {
-    return this.options.writeFile ?? writeFile;
+  /** Whether the app is quitting: nothing more starts. */
+  private get closing(): boolean {
+    return this.options.signal?.aborted === true;
+  }
+
+  /**
+   * Makes a new file of the install's own (never one that is there) and
+   * writes it whole. On a failed write it removes only the file it made, by
+   * the identity its exclusive open gave it. Resolves that identity.
+   */
+  private async writeNew(path: string, data: string, mode = 0o600): Promise<Stats> {
+    await this.options.beforeWrite?.(path, "open");
+    const handle = await open(path, "wx", mode);
+    let made: Stats | null = null;
+    try {
+      made = await handle.stat();
+      await this.options.beforeWrite?.(path, "write");
+      await handle.writeFile(data);
+      await handle.close();
+      return made;
+    } catch (error) {
+      await handle.close().catch(() => {});
+      if (made) await unlinkIfSame(path, made);
+      throw error;
+    }
   }
 
   /** Runs one of this install's own commands; anything else is refused before it starts. */
@@ -941,6 +1095,12 @@ export class Installer {
     return result.stdout.trim() === "not-found" ? "absent" : "there";
   }
 
+  /** The profile's service: its file and the service manager's job or unit, the one predicate of every check. */
+  private async serviceAbsent(): Promise<boolean> {
+    if ((await presence(this.options.place.serviceFile)) !== "absent") return false;
+    return (await this.supervisor()) === "absent";
+  }
+
   /**
    * What is there now (§10, "Nothing there before"): the program folder,
    * Clawtrate's record, the profile's state folder and service file, and the
@@ -957,27 +1117,34 @@ export class Installer {
     if (loaded === "unreadable") return "unreadable";
     if (state === "there" || service === "there" || loaded === "there") return "exists";
     if (program === "absent" && record === "absent") return "clear";
-    return (await this.leftover()) !== null ? "leftover" : "exists";
+    return (await this.prove()) !== null ? "leftover" : "exists";
   }
 
   /**
-   * The id of an attempt of Clawtrate's that never reached onboarding,
-   * proven from both records and the folder itself, or null: the same id,
-   * version, profile and stage `installing` in both, for this folder.
+   * An attempt of Clawtrate's that never reached onboarding, proven from both
+   * records and the folder itself, each opened without following a link, or
+   * null: the same id, version and profile in both, Clawtrate's at stage
+   * `installing`, for this folder.
    */
-  private async leftover(): Promise<string | null> {
+  private async prove(): Promise<Proof | null> {
     const { place, pins } = this.options;
-    const info = await lstat(place.programDir).catch(() => null);
-    if (!info?.isDirectory() || info.isSymbolicLink()) return null;
-    const own = await readJson(place.recordFile);
-    const there = await readJson(this.at.record);
+    const dir = await lstat(place.programDir).catch(() => null);
+    if (!dir?.isDirectory()) return null;
+    const [marker, record] = await Promise.all([
+      readOwn(this.at.record),
+      readOwn(place.recordFile),
+    ]);
+    if (!marker || !record) return null;
+    const own = parsed(record.text);
+    const there = parsed(marker.text);
     if (
       !own ||
       !there ||
       typeof own.id !== "string" ||
+      !ATTEMPT_ID.test(own.id) ||
       own.id !== there.id ||
+      Object.keys(there).sort().join(",") !== "id,profile,version" ||
       own.stage !== "installing" ||
-      there.stage !== "installing" ||
       own.version !== pins.version ||
       there.version !== pins.version ||
       own.profile !== INSTALL_PROFILE ||
@@ -986,7 +1153,12 @@ export class Installer {
       own.stateDir !== place.stateDir
     )
       return null;
-    return own.id;
+    const staging = await lstat(stagingDir(place, own.id)).catch((error: unknown) =>
+      errorCode(error) === "ENOENT" ? null : false,
+    );
+    // A staging place of that name that isn't a folder, or can't be read, isn't the attempt's.
+    if (staging === false || (staging !== null && !staging.isDirectory())) return null;
+    return { id: own.id, dir, marker, record, staging };
   }
 
   /**
@@ -1000,65 +1172,94 @@ export class Installer {
       presence(place.serviceFile),
     ]);
     if (state !== "absent" || service !== "absent") return null;
-    return (await this.leftover()) !== null ? this.at.openclaw : null;
+    return (await this.prove()) !== null ? this.at.openclaw : null;
   }
 
   /**
-   * Removes an attempt that never reached onboarding, after proving again
-   * that it is that attempt (`id`, or any proven one): its program folder and
-   * Clawtrate's record. Resolves whether nothing of it is left.
+   * Removes an attempt that never reached onboarding (`id`, or an earlier
+   * run's): its program folder, its staging folder and Clawtrate's record.
+   * Every question to the service manager comes first; then the attempt is
+   * proven, moved into a new private folder beside it, proven again there by
+   * the same identities, and only then removed. Anything that changed is put
+   * back as it was. Resolves whether nothing of it is left.
    */
   async discard(id: string | null = null): Promise<boolean> {
     const { place } = this.options;
-    const found = await this.leftover();
-    if (found === null || (id !== null && found !== id)) return false;
     // An earlier run's attempt is removed only where nothing of the profile is: a profile or
     // service there may be what it began. This run's own attempt, before onboarding, never
     // reached them, and is removed whoever else has made them since.
     if (id === null) {
-      const [state, service] = await Promise.all([
-        presence(place.stateDir),
-        presence(place.serviceFile),
-      ]);
-      if (state !== "absent" || service !== "absent") return false;
-      if ((await this.supervisor()) !== "absent") return false;
+      if ((await presence(place.stateDir)) !== "absent") return false;
+      if (!(await this.serviceAbsent())) return false;
     }
-    await rm(place.programDir, { recursive: true, force: true }).catch(() => {});
-    if ((await presence(place.programDir)) !== "absent") return false;
-    await rm(place.recordFile, { force: true }).catch(() => {});
+    const proof = await this.prove();
+    if (!proof || (id !== null && proof.id !== id)) return false;
+    const quarantine = join(dirname(place.programDir), `.openclaw-removing-${randomUUID()}`);
+    try {
+      await mkdir(quarantine, { mode: 0o700 });
+    } catch {
+      return false;
+    }
+    const staging = stagingDir(place, proof.id);
+    const moves: Array<{ from: string; to: string }> = [
+      { from: place.programDir, to: join(quarantine, "program") },
+      { from: place.recordFile, to: join(quarantine, "record") },
+      ...(proof.staging ? [{ from: staging, to: join(quarantine, "staging") }] : []),
+    ];
+    const moved: typeof moves = [];
+    let intact = true;
+    for (const move of moves) {
+      try {
+        await rename(move.from, move.to);
+        moved.push(move);
+      } catch {
+        intact = false;
+        break;
+      }
+    }
+    if (intact) intact = await this.stillProven(quarantine, proof);
+    if (!intact) {
+      // Put back, each only where nothing has taken its place.
+      for (const move of moved.reverse())
+        if ((await presence(move.from)) === "absent")
+          await rename(move.to, move.from).catch(() => {});
+      await rmdir(quarantine).catch(() => {});
+      this.log("an attempt changed while it was being removed; it was left as it was");
+      return false;
+    }
+    await rm(quarantine, { recursive: true, force: true }).catch(() => {});
+    // The record's scratch link, if its own removal failed: the same file as the record.
+    await unlinkIfSame(this.scratch(proof.id), proof.record.stat);
+    const left = await Promise.all(
+      [place.programDir, place.recordFile, staging, quarantine, this.scratch(proof.id)].map(
+        presence,
+      ),
+    );
+    if (left.some((state) => state !== "absent")) return false;
     this.log("removed an attempt that never reached onboarding");
-    return (await presence(place.recordFile)) === "absent";
+    return true;
   }
 
-  /**
-   * Whether the gateway on `port` is the one Clawtrate set up (§10): the
-   * three records name one id, the install is complete on that port, and its
-   * service runs the checked install.
-   */
-  async owned(port: number): Promise<boolean> {
-    const { place, pins } = this.options;
-    const [own, there, owner] = await Promise.all([
-      readJson(place.recordFile),
-      readJson(this.at.record),
-      readJson(this.at.owner),
-    ]);
-    if (
-      !own ||
-      !there ||
-      !owner ||
-      typeof own.id !== "string" ||
-      own.id !== there.id ||
-      own.id !== owner.id ||
-      own.stage !== "installed" ||
-      there.stage !== "installed" ||
-      own.port !== port ||
-      own.profile !== INSTALL_PROFILE ||
-      own.programDir !== place.programDir
-    )
+  /** In quarantine: the same folder, staging folder, marker and record, by identity and text. */
+  private async stillProven(quarantine: string, proof: Proof): Promise<boolean> {
+    const dir = await lstat(join(quarantine, "program")).catch(() => null);
+    if (!dir?.isDirectory() || !same(dir, proof.dir)) return false;
+    const marker = await readOwn(join(quarantine, "program", ".clawtrate-install.json"));
+    if (!marker || !same(marker.stat, proof.marker.stat) || marker.text !== proof.marker.text)
       return false;
-    const text = await readFile(place.serviceFile, "utf8").catch(() => null);
-    const argv = text === null ? null : serviceArgv(place.platform, text);
-    return argv !== null && runsCheckedInstall(argv, place, pins, port);
+    const record = await readOwn(join(quarantine, "record"));
+    if (!record || !same(record.stat, proof.record.stat) || record.text !== proof.record.text)
+      return false;
+    if (proof.staging) {
+      const staging = await lstat(join(quarantine, "staging")).catch(() => null);
+      if (!staging?.isDirectory() || !same(staging, proof.staging)) return false;
+    }
+    return true;
+  }
+
+  /** Where Clawtrate's record is made whole before it is put in place. */
+  private scratch(id: string): string {
+    return `${this.options.place.recordFile}.${id}.next`;
   }
 
   private record(id: string, stage: Stage, port: number | null): InstallRecord {
@@ -1075,23 +1276,23 @@ export class Installer {
     };
   }
 
-  /** Both records, at one stage: each written whole to a new file, then moved over the last. */
+  /** Clawtrate's record at a new stage: written whole to a new file, then moved over the last in one step. */
   private async writeStage(id: string, stage: Stage, port: number | null): Promise<void> {
-    const { place, pins } = this.options;
-    const folder: FolderRecord = { id, version: pins.version, profile: INSTALL_PROFILE, stage };
-    const write = async (file: string, value: object) => {
-      const next = `${file}.${id}.next`;
-      await this.write(next, JSON.stringify(value), { mode: 0o600, flag: "wx" });
-      await rename(next, file);
-    };
-    await write(this.at.record, folder);
-    await write(place.recordFile, this.record(id, stage, port));
+    const next = this.scratch(id);
+    const made = await this.writeNew(next, JSON.stringify(this.record(id, stage, port)));
+    try {
+      await rename(next, this.options.place.recordFile);
+    } catch (error) {
+      await unlinkIfSame(next, made);
+      throw error;
+    }
   }
 
   /**
-   * Reserves the attempt: its program folder created exclusively, its
-   * folder record, then Clawtrate's record, made exclusively too. Resolves
-   * null once reserved, or why it couldn't be, having removed what it made.
+   * Reserves the attempt: its program folder created exclusively, the
+   * folder's record made in it, then Clawtrate's record, made beside it and
+   * linked into place, which never replaces one. Resolves null once reserved,
+   * or why it couldn't be, having removed only what it made, by identity.
    */
   private async reserve(id: string): Promise<InstallFailure | null> {
     const { place, pins } = this.options;
@@ -1099,53 +1300,51 @@ export class Installer {
       await mkdir(dirname(place.programDir), { recursive: true, mode: 0o700 });
       await mkdir(place.programDir, { mode: 0o700 });
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      return failure(code === "EEXIST" ? "exists" : "write", -1);
+      return failure(errorCode(error) === "EEXIST" ? "exists" : "write", -1);
     }
-    const folder: FolderRecord = {
-      id,
-      version: pins.version,
-      profile: INSTALL_PROFILE,
-      stage: "installing",
-    };
-    try {
-      await this.write(this.at.record, JSON.stringify(folder), { mode: 0o600, flag: "wx" });
-    } catch {
-      // Only the folder this attempt created, and its own record if it began one.
-      await unlink(this.at.record).catch(() => {});
-      const removed = await rmdir(place.programDir).then(
-        () => true,
-        () => false,
-      );
+    const folder = await lstat(place.programDir).catch(() => null);
+    /** Undoes the reservation: the files it made and its empty folder, each only if it still is what was made. */
+    const undo = async (kind: InstallFailureKind, made: Array<[string, Stats]>) => {
+      let removed = folder !== null;
+      for (const [path, stat] of made) removed = (await unlinkIfSame(path, stat)) && removed;
+      removed = removed && folder !== null && (await rmdirIfSame(place.programDir, folder));
       return failure(
-        "write",
+        kind,
         -1,
-        removed ? { cleanup: "removed", retry: true } : { cleanup: "unproven" },
+        removed ? { cleanup: "removed", retry: kind !== "exists" } : { cleanup: "unproven" },
       );
-    }
-    const next = `${place.recordFile}.${id}.next`;
+    };
+    const record: FolderRecord = { id, version: pins.version, profile: INSTALL_PROFILE };
+    let marker: Stats;
     try {
-      await this.write(next, JSON.stringify(this.record(id, "installing", null)), {
-        mode: 0o600,
-        flag: "wx",
-      });
+      marker = await this.writeNew(this.at.record, JSON.stringify(record));
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") {
+        // Something else put a file into the folder this attempt made: neither is touched.
+        this.log("a file appeared in the program folder as it was made");
+        return failure("changed", -1, { cleanup: "unproven" });
+      }
+      return undo("write", []);
+    }
+    const next = this.scratch(id);
+    let scratch: Stats;
+    try {
+      scratch = await this.writeNew(next, JSON.stringify(this.record(id, "installing", null)));
+    } catch (error) {
+      return undo(errorCode(error) === "EEXIST" ? "exists" : "write", [[this.at.record, marker]]);
+    }
+    try {
       // A record that appeared since the check is never replaced.
       await link(next, place.recordFile);
-      await unlink(next);
-      return null;
     } catch (error) {
-      await unlink(next).catch(() => {});
-      const there = (error as NodeJS.ErrnoException).code === "EEXIST";
-      // The program folder is this attempt's: it made it, and its record names this id.
-      const mine = (await readJson(this.at.record))?.id === id;
-      if (mine) await rm(place.programDir, { recursive: true, force: true }).catch(() => {});
-      const gone = mine && (await presence(place.programDir)) === "absent";
-      return failure(
-        there ? "exists" : "write",
-        -1,
-        gone ? { cleanup: "removed", retry: !there } : { cleanup: "unproven" },
-      );
+      return undo(errorCode(error) === "EEXIST" ? "exists" : "write", [
+        [next, scratch],
+        [this.at.record, marker],
+      ]);
     }
+    // Reserved. A scratch link that stays is the same file as the record, removed with the attempt.
+    if (!(await unlinkIfSame(next, scratch))) this.log("the record's scratch link stayed");
+    return null;
   }
 
   /**
@@ -1181,12 +1380,13 @@ export class Installer {
     if (site === "unreadable") return stopped("write", -1);
     if (site === "exists") return stopped("exists", -1);
     if (site === "leftover" && !(await this.discard())) return stopped("exists", -1);
+    if (this.closing) return stopped("download", -1);
 
     const id = (this.options.newId ?? randomUUID)();
     const refused = await this.reserve(id);
     if (refused) return { ok: false, failure: refused };
 
-    /** Before onboarding the attempt is the program folder and Clawtrate's record alone, removed on failure. */
+    /** Before onboarding the attempt is the program folder, its staging folder and Clawtrate's record alone, removed on failure. */
     const early = async (
       kind: InstallFailureKind,
       step: number,
@@ -1201,7 +1401,7 @@ export class Installer {
       });
     };
     try {
-      const before = await this.beforeOnboarding(publish);
+      const before = await this.beforeOnboarding(publish, id);
       if (before.ok === false) return early(before.kind, before.step, before.extra);
     } catch {
       return early("write", install.step);
@@ -1211,38 +1411,33 @@ export class Installer {
     let port: number;
     try {
       port = await (this.options.freePort ?? freeLoopbackPort)();
-      await this.writeStage(id, "onboarding", port);
     } catch {
       return early("write", 2);
     }
-    const kept = (kind: InstallFailureKind, extra: Partial<InstallFailure> = {}, step = 2) =>
-      stopped(kind, step, { cleanup: "kept", ...extra });
-    // The profile and its service once more, then the state folder reserved.
-    const [state, service] = await Promise.all([
-      presence(place.stateDir),
-      presence(place.serviceFile),
-    ]);
-    const loaded = await this.supervisor();
-    if (state !== "absent" || service !== "absent" || loaded !== "absent") {
+    if (this.closing) return early("installer", 2);
+    // The profile and its service once more, then the state folder reserved, and only then the
+    // stage that says onboarding began.
+    if ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent())) {
       this.log("the profile or its service appeared before onboarding");
-      try {
-        await this.writeStage(id, "installing", null);
-      } catch {
-        return kept("changed");
-      }
       return early("changed", 2);
     }
+    let state: Stats;
     try {
       await mkdir(place.stateDir, { mode: 0o700 });
+      state = await lstat(place.stateDir);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return kept("write");
-      try {
-        await this.writeStage(id, "installing", null);
-      } catch {
-        return kept("changed");
-      }
-      return early("changed", 2);
+      return early(errorCode(error) === "EEXIST" ? "changed" : "write", 2);
     }
+    try {
+      await this.writeStage(id, "onboarding", port);
+    } catch {
+      // Still before onboarding: the empty state folder this attempt made, then the attempt.
+      const empty = await rmdirIfSame(place.stateDir, state);
+      const result = await early("write", 2);
+      return empty ? result : stopped("write", 2, { cleanup: "unproven", retry: false });
+    }
+    const kept = (kind: InstallFailureKind, extra: Partial<InstallFailure> = {}, step = 2) =>
+      stopped(kind, step, { cleanup: "kept", ...extra });
     this.log("onboarding");
     const onboard = await this.exec(
       {
@@ -1266,13 +1461,14 @@ export class Installer {
       });
     }
     try {
-      await this.write(this.at.owner, JSON.stringify({ id }), { mode: 0o600, flag: "wx" });
+      await this.writeNew(this.at.owner, JSON.stringify({ id }));
     } catch {
       return kept("write");
     }
-    // The service is installed only where none is, by a command that never replaces one.
-    const [serviceNow, loadedNow] = [await presence(place.serviceFile), await this.supervisor()];
-    if (serviceNow !== "absent" || loadedNow !== "absent") {
+    if (this.closing) return kept("service");
+    // The service is installed only where none is: the same predicate as every check before,
+    // immediately before the call (docs/decisions.md, "The profile's service").
+    if (!(await this.serviceAbsent())) {
       this.log("a service of the profile appeared before it was installed");
       return kept("changed");
     }
@@ -1287,9 +1483,18 @@ export class Installer {
       },
       port,
     );
-    if (!ok(installed) || !readServiceInstall(installed.stdout)) {
+    // What is defined now, read back: a definition that doesn't run this install on its port is
+    // someone else's, which appeared after the check above. It is left as it is.
+    const written = await this.writtenService(port);
+    if (written === "other") {
       this.log(
-        `the service wasn't installed: exit=${installed.exitCode} timedOut=${installed.timedOut}`,
+        "a service of the profile appeared while it was being installed; it was left as it is",
+      );
+      return kept("service-appeared", { exitCode: installed.exitCode });
+    }
+    if (written !== "ours" || !ok(installed) || !readServiceInstall(installed.stdout)) {
+      this.log(
+        `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
       );
       return kept("service", { exitCode: installed.exitCode });
     }
@@ -1318,7 +1523,7 @@ export class Installer {
         port,
       );
       if (ok(status) && readAnswering(status.stdout, port, pins.version)) break;
-      if (now() >= until) return kept("not-answering", {}, 3);
+      if (now() >= until || this.closing) return kept("not-answering", {}, 3);
       await sleep(Math.min(STATUS_EVERY_MS, Math.max(0, until - now())));
     }
     publish({ step: 4 });
@@ -1327,17 +1532,33 @@ export class Installer {
       ok: true,
       port,
       program: this.at.openclaw,
-      env: sessionEnv(place.platform, place.env),
+      env: place.platform === "linux" ? sessionEnv("linux", place.env) : {},
     };
   }
 
   /**
-   * Steps 1 and 2, inside the program folder: the downloads, checked, then
-   * the installer, with the checked Node.js only, and the installed program
-   * checked. Throws for a write of its own that failed.
+   * The profile's service definition after `gateway install`: absent, the
+   * one that runs this install on `port`, another, or one that can't be read.
+   */
+  private async writtenService(port: number): Promise<"absent" | "ours" | "other" | "unreadable"> {
+    const { place, pins } = this.options;
+    const there = await presence(place.serviceFile);
+    if (there !== "there") return there;
+    const file = await readOwn(place.serviceFile);
+    if (!file) return "other";
+    const argv = serviceArgv(place.platform, file.text);
+    return argv !== null && runsCheckedInstall(argv, place, pins, port) ? "ours" : "other";
+  }
+
+  /**
+   * Steps 1 and 2: the downloads, into the attempt's staging folder beside
+   * the program folder and checked there, then the installer, with the
+   * checked Node.js only, and the installed program checked. Throws for a
+   * write of its own that failed.
    */
   private async beforeOnboarding(
     publish: (next: Partial<SetupInstall>) => void,
+    id: string,
   ): Promise<
     | { ok: true }
     | { ok: false; kind: InstallFailureKind; step: number; extra?: Partial<InstallFailure> }
@@ -1350,14 +1571,17 @@ export class Installer {
       extra,
     });
 
-    // 1. Download into staging, and check both before anything leaves it.
+    // 1. Download into staging, and check both before either is extracted or run.
     this.log("downloading");
-    await mkdir(this.at.staging, { mode: 0o700 });
+    const staging = stagingDir(place, id);
+    await mkdir(staging, { mode: 0o700 });
+    const stagedTarball = join(staging, this.at.tarballName);
+    const stagedNode = join(staging, this.at.nodeName);
     const get = this.options.download ?? download;
     const node = pins.node[place.target];
     const [tarball, runtime] = await Promise.all([
-      get(pins.openclaw.url, this.at.stagedTarball, "sha512", "base64", this.options.signal),
-      get(node.url, this.at.stagedNode, "sha256", "hex", this.options.signal),
+      get(pins.openclaw.url, stagedTarball, "sha512", "base64", this.options.signal),
+      get(node.url, stagedNode, "sha256", "hex", this.options.signal),
     ]);
     for (const result of [tarball, runtime]) {
       if (result.ok) continue;
@@ -1370,11 +1594,12 @@ export class Installer {
       this.log("a download didn't match its fingerprint");
       return no("fingerprint", 0);
     }
+    if (this.closing) return no("download", 0);
     // Checked: only now in the program folder.
     await mkdir(this.at.downloads, { mode: 0o700 });
-    await rename(this.at.stagedTarball, this.at.tarball);
-    await rename(this.at.stagedNode, this.at.nodeTarball);
-    await rmdir(this.at.staging);
+    await rename(stagedTarball, this.at.tarball);
+    await rename(stagedNode, this.at.nodeTarball);
+    await rmdir(staging);
     publish({ step: 1 });
 
     // 2. Install Node.js and OpenClaw.
@@ -1385,14 +1610,17 @@ export class Installer {
     const tar = list.filter((command) => command.program === place.tar);
     const [check, installer] = list.filter((command) => command.program === place.bash);
     for (const command of tar) {
+      if (this.closing) return no("unpack", 1);
       const unpacked = await this.exec({ ...command, env: this.env(), ...unpack }, null);
       if (!ok(unpacked)) return no("unpack", 1, { exitCode: unpacked.exitCode });
     }
-    // The checked installer, changed so that it can't fetch a Node.js of its own.
+    // The checked installer, its Node.js step and temporary folder replaced whole.
     const original = await readFile(this.at.installer, "utf8").catch(() => null);
     const patched = original === null ? null : patchInstaller(original);
     if (patched === null) {
-      this.log("the checked installer's Node.js step isn't the one this build changes");
+      this.log(
+        "the checked installer's Node.js step or temporary folder isn't the one this build replaces",
+      );
       return no("installer-changed", 1);
     }
     await writeFile(this.at.installer, patched, { mode: 0o700 });
@@ -1402,8 +1630,10 @@ export class Installer {
       return no("node-not-checked", 1);
     }
     await mkdir(dirname(this.at.npmUser), { mode: 0o700 });
-    await this.write(this.at.npmUser, "", { mode: 0o600, flag: "wx" });
-    await this.write(this.at.npmGlobal, "", { mode: 0o600, flag: "wx" });
+    await this.writeNew(this.at.npmUser, "");
+    await this.writeNew(this.at.npmGlobal, "");
+    await mkdir(this.at.tmp, { mode: 0o700 });
+    if (this.closing) return no("installer", 1);
     let seen: InstallerEvents = { node: null, done: false, version: null };
     const ran = await this.exec(
       {
@@ -1413,6 +1643,7 @@ export class Installer {
           NPM_CONFIG_GLOBALCONFIG: this.at.npmGlobal,
           NPM_CONFIG_CACHE: this.at.npmCache,
           npm_config_registry: "https://registry.npmjs.org/",
+          TMPDIR: this.at.tmp,
         }),
         cwd: place.programDir,
         timeoutMs: 15 * 60_000,
@@ -1427,6 +1658,10 @@ export class Installer {
       },
       null,
     );
+    // Stopped before its Node.js step (its temporary folder, say): the installer's failure. Exit 70
+    // is the replaced step's own: the checked Node.js wasn't usable.
+    if (seen.node === null && !ok(ran) && ran.exitCode !== 70)
+      return no("installer", 1, { exitCode: ran.exitCode });
     if (seen.node !== "skip") {
       this.log("the installer didn't use the checked Node.js");
       return no("node-not-checked", 1);

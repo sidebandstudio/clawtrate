@@ -95,6 +95,8 @@ async function endGroup(pgid: number): Promise<void> {
 export class InstallRunner {
   /** The process groups of programs still running or still draining, by group id. */
   private readonly groups = new Map<number, Promise<void>>();
+  /** Each group's one end: asked once, by its step or by the quit, and waited for by both. */
+  private readonly ends = new Map<number, () => Promise<void>>();
   private readonly spawnImpl: typeof nodeSpawn;
   private closed = false;
 
@@ -139,6 +141,7 @@ export class InstallRunner {
       let ended: Promise<void> | null = null;
       /** Ends the whole group once, and remembers the wait. */
       const end = () => (ended ??= endGroup(pgid));
+      this.ends.set(pgid, end);
       let exited = false;
       let markExited: () => void = () => {};
       const exitedOnce = new Promise<void>((done) => (markExited = done));
@@ -150,7 +153,10 @@ export class InstallRunner {
         await end();
       })();
       this.groups.set(pgid, drained);
-      void drained.then(() => this.groups.delete(pgid));
+      void drained.then(() => {
+        this.groups.delete(pgid);
+        this.ends.delete(pgid);
+      });
       const kept: string[] = [];
       let size = 0;
       let partial = "";
@@ -233,7 +239,7 @@ export class InstallRunner {
 
   /** Ends every group this runner started that still runs. */
   stopAll(): void {
-    for (const pgid of this.groups.keys()) void endGroup(pgid);
+    for (const end of this.ends.values()) void end();
   }
 
   /**

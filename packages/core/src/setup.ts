@@ -60,11 +60,6 @@ export type SetupLook = {
   access: "new" | "paired" | null;
   /** Other OpenClaw services and profiles the look saw, named and never used. */
   others: string[];
-  /**
-   * The host proved this gateway is the one Clawtrate set up (§10): its three
-   * ownership records name one id and its service runs the checked install.
-   */
-  managed?: boolean;
   /** An earlier setup attempt of Clawtrate's that never reached onboarding is there, and setting up removes it first. */
   leftover?: boolean;
 };
@@ -153,11 +148,18 @@ export type InstallFailureKind =
   | "no-program"
   | "node-not-checked"
   | "onboard"
-  /** OpenClaw couldn't install the profile's user service. */
+  /** Clawtrate couldn't confirm OpenClaw installed the profile's user service. */
   | "service"
+  /**
+   * A `clawtrate` service definition that doesn't run this install appeared
+   * between the last check and OpenClaw's service install; it is left as it is.
+   */
+  | "service-appeared"
   | "not-answering"
   /** The facts changed between the look and the host's dialog, or before onboarding. */
   | "changed"
+  /** After the host's dialog, the look's file checks couldn't be made or didn't finish in time. */
+  | "unchecked"
   /** The host's dialog was answered after the prepared operation's two minutes. */
   | "expired";
 

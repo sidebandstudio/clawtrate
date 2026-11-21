@@ -10,20 +10,27 @@
 
 import type { SetupInstall } from "@clawtrate/core";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CHECKED_INSTALL_NODE,
   commands,
   computerPlace,
   download,
   InstallRefusedError,
   Installer,
   layout,
-  NODE_STEP,
   onboardingFacts,
   onHostedRunner,
   patchInstaller,
@@ -31,8 +38,10 @@ import {
   readInstallerLine,
   readOnboarding,
   readServiceInstall,
+  REPLACED_FUNCTIONS,
   runsCheckedInstall,
   serviceArgv,
+  stagingDir,
   type InstallOptions,
 } from "../src/setup/install.ts";
 import { installTarget, PINS } from "../src/setup/install-pins.ts";
@@ -133,7 +142,7 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
     // F-504: no provider flag and no model key, in the arguments or the environment.
     expect(stand.calls().join(" ")).not.toMatch(/api-key|--token|anthropic|openai/i);
     // The downloads left staging only once checked; the checked Node.js is where the installer looks.
-    expect(existsSync(at.staging)).toBe(false);
+    expect(readdirSync(stand.appData).sort()).toEqual(["openclaw", "openclaw-install.json"]);
     expect(existsSync(at.tarball) && existsSync(at.nodeTarball)).toBe(true);
     expect(existsSync(join(at.nodeDir, "bin", "node"))).toBe(true);
 
@@ -142,7 +151,6 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
     expect(stand.place.serviceFile).toMatch(/ai\.openclaw\.clawtrate\.plist$/);
     const argv = serviceArgv("darwin", readFileSync(stand.place.serviceFile, "utf8"));
     expect(argv && runsCheckedInstall(argv, stand.place, stand.pins, port)).toBe(true);
-    expect(await installer(stand).owned(port)).toBe(true);
 
     // One id, version, profile and stage in all three records (§10).
     const own = json(stand.place.recordFile);
@@ -155,12 +163,8 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
       port,
       stage: "installed",
     });
-    expect(json(at.record)).toEqual({
-      id: own.id,
-      version: "2026.10.6",
-      profile: "clawtrate",
-      stage: "installed",
-    });
+    // The program folder's record is written once: no stage.
+    expect(json(at.record)).toEqual({ id: own.id, version: "2026.10.6", profile: "clawtrate" });
     expect(json(at.owner)).toEqual({ id: own.id });
   });
 
@@ -188,6 +192,10 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
     expect(readFileSync(at.npmUser, "utf8")).toBe("");
     expect(readFileSync(at.npmGlobal, "utf8")).toBe("");
     expect(env.npm_config_registry).toBe("https://registry.npmjs.org/");
+    // Its temporary files inside the program folder, never a shared one.
+    expect(env.TMPDIR).toBe(at.tmp);
+    expect(at.tmp.startsWith(`${stand.place.programDir}/`)).toBe(true);
+    expect(stand.marked("tmp-elsewhere")).toBe(false);
     expect(env.HOME).toBe(stand.home);
     expect(env.PATH).toBe(`${stand.place.programDir}/bin:/usr/bin:/bin:/usr/sbin:/sbin`);
     expect(env.CLAWTRATE_TEST_SECRET).toBeUndefined();
@@ -201,6 +209,7 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
       "NPM_CONFIG_GLOBALCONFIG",
       "NPM_CONFIG_CACHE",
       "npm_config_registry",
+      "TMPDIR",
     ]);
     const bash = new Set(["PWD", "SHLVL", "_", "OLDPWD"]);
     expect(Object.keys(env).filter((key) => !named.has(key) && !bash.has(key))).toEqual([]);
@@ -531,11 +540,11 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
   it("F-502: a write of the program folder's record that fails removes only the empty folder this attempt made, and offers Try again", async () => {
     const stand = await make();
     const at = layout(stand.place, stand.pins);
-    const full: typeof writeFile = async (file, ...rest) => {
-      if (file === at.record) throw Object.assign(new Error("full"), { code: "ENOSPC" });
-      return writeFile(file, ...rest);
+    const full = (file: string, when: "open" | "write") => {
+      if (file === at.record && when === "write")
+        throw Object.assign(new Error("full"), { code: "ENOSPC" });
     };
-    const { outcome } = await runAll(installer(stand, { writeFile: full }));
+    const { outcome } = await runAll(installer(stand, { beforeWrite: full }));
     expect(outcome).toMatchObject({
       ok: false,
       failure: { kind: "write", step: -1, retry: true, cleanup: "removed" },
@@ -547,11 +556,11 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
   it("F-502: a write that fails later, before onboarding, is the same early failure, with the attempt removed", async () => {
     const stand = await make();
     const at = layout(stand.place, stand.pins);
-    const full: typeof writeFile = async (file, ...rest) => {
-      if (file === at.npmUser) throw Object.assign(new Error("full"), { code: "ENOSPC" });
-      return writeFile(file, ...rest);
+    const full = (file: string, when: "open" | "write") => {
+      if (file === at.npmUser && when === "write")
+        throw Object.assign(new Error("full"), { code: "ENOSPC" });
     };
-    const { outcome } = await runAll(installer(stand, { writeFile: full }));
+    const { outcome } = await runAll(installer(stand, { beforeWrite: full }));
     expect(outcome).toMatchObject({
       ok: false,
       failure: { kind: "write", step: 1, retry: true, cleanup: "removed" },
@@ -578,19 +587,19 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
     writeFileSync(stand.place.recordFile, JSON.stringify(record));
     writeFileSync(
       at.record,
-      JSON.stringify({
-        id: record.id,
-        version: "2026.10.6",
-        profile: "clawtrate",
-        stage: "installing",
-      }),
+      JSON.stringify({ id: record.id, version: "2026.10.6", profile: "clawtrate" }),
     );
+    // Its staging folder, beside the program folder, named by its id.
+    mkdirSync(stagingDir(stand.place, record.id));
+    writeFileSync(join(stagingDir(stand.place, record.id), "part"), "x");
     const install = installer(stand);
     expect(await install.site()).toBe("leftover");
     expect(await install.leftoverProgram()).toBe(at.openclaw);
     const { outcome } = await runAll(install);
     expect(outcome.ok).toBe(true);
     expect(json(stand.place.recordFile).id).not.toBe(record.id);
+    expect(existsSync(stagingDir(stand.place, record.id))).toBe(false);
+    expect(readdirSync(stand.appData).sort()).toEqual(["openclaw", "openclaw-install.json"]);
   });
 
   it("F-502: an attempt whose records disagree on id, version or stage, or that reached onboarding, is never removed", async () => {
@@ -605,13 +614,13 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
       stateDir: stand.place.stateDir,
       stage: "installing",
     };
-    const folder = { id: "a", version: "2026.10.6", profile: "clawtrate", stage: "installing" };
+    const folder = { id: "a", version: "2026.10.6", profile: "clawtrate" };
     const cases: Array<[object, object]> = [
       [{ ...base, stage: "onboarding" }, folder],
       [{ ...base, id: "b" }, folder],
       [base, { ...folder, version: "2026.9.37" }],
-      // A folder record without a stage, as an earlier build wrote it.
-      [base, { id: "a", version: "2026.10.6", profile: "clawtrate" }],
+      // A folder record with a stage, as an earlier build wrote it.
+      [base, { ...folder, stage: "installing" }],
     ];
     for (const [own, there] of cases) {
       writeFileSync(stand.place.recordFile, JSON.stringify(own));
@@ -624,23 +633,32 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
 
-  it("F-505: a profile named clawtrate whose records or service don't prove Clawtrate set it up isn't said to be Clawtrate's", async () => {
+  it("F-505: a service command counts as this install's only in the exact shape the pinned writer gives it", async () => {
     const stand = await make();
     const { outcome } = await runAll(installer(stand));
     const port = (outcome as { port: number }).port;
-    expect(await installer(stand).owned(port)).toBe(true);
-    expect(await installer(stand).owned(port + 1)).toBe(false);
     const at = layout(stand.place, stand.pins);
-    const owner = readFileSync(at.owner, "utf8");
-    writeFileSync(at.owner, JSON.stringify({ id: "someone-else" }));
-    expect(await installer(stand).owned(port)).toBe(false);
-    writeFileSync(at.owner, owner);
-    const service = readFileSync(stand.place.serviceFile, "utf8");
-    writeFileSync(
-      stand.place.serviceFile,
-      service.replace(at.installedIndex, "/elsewhere/index.js"),
+    const argv = serviceArgv("darwin", readFileSync(stand.place.serviceFile, "utf8"))!;
+    const runs = (command: string[], place = stand.place) =>
+      runsCheckedInstall(command, place, stand.pins, port);
+    expect(runs(argv)).toBe(true);
+    expect(runs(argv.filter((arg) => !arg.startsWith("--max-old-space-size")))).toBe(true);
+    expect(runs(argv.map((arg) => (arg === String(port) ? String(port + 1) : arg)))).toBe(false);
+    expect(runs(argv.map((arg) => (arg === at.installedIndex ? "/elsewhere/index.js" : arg)))).toBe(
+      false,
     );
-    expect(await installer(stand).owned(port)).toBe(false);
+    // Another program first, the old arguments after it: never this install (the review's probe).
+    expect(runs(["/usr/bin/true", ...argv])).toBe(false);
+    expect(runs([...argv.slice(0, 3), "/usr/bin/true", ...argv.slice(3)])).toBe(false);
+    expect(runs([...argv, "--verbose"])).toBe(false);
+    // Another wrapper than the profile's own.
+    expect(runs(["/bin/sh", "/tmp/wrapper.sh", ...argv.slice(2)])).toBe(false);
+    // On Linux: the checked Node.js first, with nothing before it.
+    const linux = { ...stand.place, platform: "linux" as const };
+    const bare = argv.slice(3);
+    expect(runs(bare, linux)).toBe(true);
+    expect(runs(["/usr/bin/true", ...bare], linux)).toBe(false);
+    expect(runs([bare[0]!, "--inspect", ...bare.slice(1)], linux)).toBe(false);
   });
 });
 
@@ -765,13 +783,38 @@ describe("F-501 F-503: what may run, and where", () => {
     }
   });
 
-  it("F-503: the installer's copy ends where its Node.js download would start, only when its Node.js step appears exactly once", () => {
-    const script = `install_node() {\n${NODE_STEP}\n  emit_json step name node status start version "$NODE_VERSION"\n}\n`;
+  it("F-503: the installer's copy replaces its whole Node.js step and temporary folder, only when each is defined once with the checked text", () => {
+    const fixture = (name: string) =>
+      readFileSync(new URL(`./fixtures/install-cli-fe06181/${name}.sh`, import.meta.url), "utf8");
+    const installNode = fixture("install_node");
+    const tmp = fixture("prepare_tmpdir");
+    // The fixtures are the pinned text, by the hashes the build checks.
+    expect(createHash("sha256").update(installNode).digest("hex")).toBe(
+      REPLACED_FUNCTIONS.install_node,
+    );
+    expect(createHash("sha256").update(tmp).digest("hex")).toBe(REPLACED_FUNCTIONS.prepare_tmpdir);
+    const script = `#!/usr/bin/env bash\nbefore() {\n  :\n}\n${installNode}${tmp}after() {\n  :\n}\n`;
     const patched = patchInstaller(script)!;
-    expect(patched.indexOf("exit 70")).toBeGreaterThan(patched.indexOf("status skip"));
-    expect(patched.indexOf("exit 70")).toBeLessThan(patched.indexOf("status start"));
-    expect(patchInstaller(script + script)).toBeNull();
+    expect(patched).toContain(CHECKED_INSTALL_NODE);
+    // Nothing of the pinned step's other branches is left: no package manager, system runtime or download.
+    for (const word of [
+      "install_alpine_node",
+      "apk",
+      "freebsd",
+      "download_file",
+      "SHASUMS256",
+      "/tmp",
+    ])
+      expect(patched, word).not.toContain(word);
+    expect(patched).toContain("before() {\n  :\n}\n");
+    expect(patched).toContain("after() {\n  :\n}\n");
+    // Defined twice, changed by a character, or without its end: nothing runs.
+    expect(patchInstaller(script + installNode)).toBeNull();
     expect(patchInstaller(script.replace("    return\n", "    return 0\n"))).toBeNull();
+    expect(patchInstaller(script.replace("is_musl_linux", "is_musl"))).toBeNull();
+    expect(patchInstaller(script.replace("TMPFILES+=", "TMPFILE+="))).toBeNull();
+    expect(patchInstaller(`#!/usr/bin/env bash\n${installNode.slice(0, -2)}`)).toBeNull();
+    expect(patchInstaller(`#!/usr/bin/env bash\n${installNode}`)).toBeNull();
   });
 });
 
@@ -950,5 +993,201 @@ describe("F-502 F-503 F-505: reading what the programs print", () => {
     expect(readAnswering(status(false, "2026.10.6", 40001), 40001, "2026.10.6")).toBe(false);
     expect(readAnswering(status(true, "2026.9.37", 40001), 40001, "2026.10.6")).toBe(false);
     expect(readAnswering(status(true, "2026.10.6", 18789), 40001, "2026.10.6")).toBe(false);
+  });
+});
+
+describe("F-501 F-502 F-503: the review's closing cases", () => {
+  it("F-503: on a musl-classified Linux with apk on the path, the installer's package-manager branch is never reached: the checked Node.js is used", async () => {
+    const stand = await make({ scenario: "alpine", platform: "linux" });
+    const { outcome, seen } = await runAll(installer(stand));
+    expect(outcome.ok).toBe(true);
+    expect(seen.some((step) => step.nodeChecked)).toBe(true);
+    // Without the whole-function replacement the pinned step's Alpine branch runs here.
+    expect(stand.marked("package-manager-reached")).toBe(false);
+  });
+
+  it("F-503: an installer that can't make its temporary folder in the program folder fails, and never falls back to the shared /tmp", async () => {
+    const stand = await make({ scenario: "tmp-unusable" });
+    const { outcome } = await runAll(installer(stand));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", step: 1, retry: true, cleanup: "removed" },
+    });
+    // Without the replaced prepare_tmpdir the pinned one makes a folder under /tmp (here, a marker).
+    expect(stand.marked("tmp-fallback")).toBe(false);
+    expect(existsSync(join(stand.home, "stand-in-shared-tmp"))).toBe(false);
+  });
+
+  it("F-503: the raw downloads arrive in the attempt's own staging folder beside the program folder, and reach it only once both are checked", async () => {
+    const stand = await make();
+    const id = "7d1f2c3b-0000-4000-8000-000000000001";
+    const staged: string[] = [];
+    const during: string[][] = [];
+    const get: typeof download = async (url, file, ...rest) => {
+      staged.push(file);
+      const result = await download(url, file, ...rest);
+      during.push(readdirSync(stand.place.programDir).sort());
+      return result;
+    };
+    const { outcome } = await runAll(installer(stand, { download: get, newId: () => id }));
+    expect(outcome.ok).toBe(true);
+    const staging = stagingDir(stand.place, id);
+    expect(join(staging, "..")).toBe(stand.appData);
+    expect(staged.map((file) => join(file, ".."))).toEqual([staging, staging]);
+    // While they were unchecked, the program folder held only its record: no downloads, no staging.
+    expect(during).toEqual([[".clawtrate-install.json"], [".clawtrate-install.json"]]);
+    expect(existsSync(staging)).toBe(false);
+  });
+
+  it("F-501: a clawtrate service present at the check just before its install stops it there: the install is never called, and the service is left as it came", async () => {
+    const stand = await make({ scenario: "service-after-onboard" });
+    const { outcome } = await runAll(installer(stand));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "changed", step: 2, retry: false, cleanup: "kept" },
+    });
+    expect(stand.calls().some((line) => line.includes("gateway install"))).toBe(false);
+    expect(readFileSync(stand.place.serviceFile, "utf8")).toBe("someone's\n");
+    expect(stand.registered()).toEqual([]);
+  });
+
+  it.each(["darwin", "linux"] as const)(
+    "F-501: on %s a clawtrate service that appears during the service install is detected by reading the definition back, left in place, and said so",
+    async (platform) => {
+      const stand = await make({ scenario: "service-during-install", platform });
+      const lines: string[] = [];
+      const { outcome } = await runAll(installer(stand, { log: (line) => lines.push(line) }));
+      expect(outcome).toMatchObject({
+        ok: false,
+        failure: { kind: "service-appeared", step: 2, retry: false, cleanup: "kept" },
+      });
+      // Left as it is: the other program's definition, and no status asked of it.
+      expect(readFileSync(stand.place.serviceFile, "utf8")).toContain("/usr/bin/true");
+      expect(stand.calls().some((line) => line.endsWith("gateway status --json"))).toBe(false);
+      expect(json(stand.place.recordFile)).toMatchObject({ stage: "onboarding" });
+      expect(lines.join("\n")).toMatch(/appeared while it was being installed/);
+    },
+  );
+
+  it("F-502: a file that appears in the program folder as the attempt makes its record is never touched, nor is the folder", async () => {
+    const stand = await make();
+    const at = layout(stand.place, stand.pins);
+    const plant = (file: string, when: "open" | "write") => {
+      if (file === at.record && when === "open") writeFileSync(at.record, "someone's\n");
+    };
+    const { outcome } = await runAll(installer(stand, { beforeWrite: plant }));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "changed", step: -1, retry: false, cleanup: "unproven" },
+    });
+    expect(readFileSync(at.record, "utf8")).toBe("someone's\n");
+    expect(stand.requests).toEqual([]);
+  });
+
+  it("F-502: a write that fails removes only the file it made, by its identity: one put in its place is left", async () => {
+    const stand = await make();
+    const at = layout(stand.place, stand.pins);
+    const swap = (file: string, when: "open" | "write") => {
+      if (file !== at.record || when !== "write") return;
+      // Another file takes the path, then the write fails.
+      unlinkSync(at.record);
+      writeFileSync(at.record, "someone's\n");
+      throw Object.assign(new Error("full"), { code: "ENOSPC" });
+    };
+    const { outcome } = await runAll(installer(stand, { beforeWrite: swap }));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "write", step: -1, retry: false, cleanup: "unproven" },
+    });
+    expect(readFileSync(at.record, "utf8")).toBe("someone's\n");
+  });
+
+  it("F-502: a disk that fills as the onboarding stage is written leaves one record at `installing`, and the attempt and its empty state folder are removed", async () => {
+    const stand = await make();
+    let opened = 0;
+    const full = (file: string, when: "open" | "write") => {
+      if (!file.startsWith(`${stand.place.recordFile}.`) || when !== "write") return;
+      // The first is the reservation; the second the stage `onboarding`.
+      opened += 1;
+      if (opened === 2) throw Object.assign(new Error("full"), { code: "ENOSPC" });
+    };
+    const { outcome } = await runAll(installer(stand, { beforeWrite: full }));
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "write", step: 2, retry: true, cleanup: "removed" },
+    });
+    expect(stand.calls().filter((line) => line.startsWith("openclaw"))).toEqual([]);
+    expect(existsSync(stand.place.programDir)).toBe(false);
+    expect(existsSync(stand.place.recordFile)).toBe(false);
+    expect(existsSync(stand.place.stateDir)).toBe(false);
+    expect(readdirSync(stand.appData)).toEqual([]);
+  });
+
+  it("F-502: an earlier attempt moved aside while the service manager is asked is never removed in its replacement's place", async () => {
+    const stand = await make();
+    const at = layout(stand.place, stand.pins);
+    const id = "0c6b1a52-1111-4222-8333-944455556666";
+    mkdirSync(stand.place.programDir);
+    writeFileSync(
+      stand.place.recordFile,
+      JSON.stringify({
+        id,
+        version: "2026.10.6",
+        profile: "clawtrate",
+        programDir: stand.place.programDir,
+        stateDir: stand.place.stateDir,
+        service: stand.place.service,
+        port: null,
+        stage: "installing",
+      }),
+    );
+    writeFileSync(at.record, JSON.stringify({ id, version: "2026.10.6", profile: "clawtrate" }));
+    const aside = join(stand.root, "moved-aside");
+    let asked = 0;
+    const install = installer(stand, {
+      run: async (request, check) => {
+        check(request);
+        // During the second question to the service manager (the earlier attempt's removal):
+        // the attempt is moved aside and someone else's folder and record take its place.
+        if (request.program === stand.place.serviceManager && (asked += 1) === 2) {
+          renameSync(stand.place.programDir, aside);
+          mkdirSync(stand.place.programDir);
+          writeFileSync(join(stand.place.programDir, "keep-me"), "someone's\n");
+          writeFileSync(stand.place.recordFile, '{"someone":"else"}');
+        }
+        return runner.run(request, check);
+      },
+    });
+    const { outcome } = await runAll(install);
+    expect(outcome).toMatchObject({ ok: false, failure: { kind: "exists", step: -1 } });
+    expect(readFileSync(join(stand.place.programDir, "keep-me"), "utf8")).toBe("someone's\n");
+    expect(readFileSync(stand.place.recordFile, "utf8")).toBe('{"someone":"else"}');
+    expect(existsSync(join(aside, ".clawtrate-install.json"))).toBe(true);
+    expect(stand.requests).toEqual([]);
+  });
+
+  it("F-502: a quit that came first downloads nothing and makes nothing", async () => {
+    const stand = await make();
+    const quit = new AbortController();
+    quit.abort();
+    const writes: string[] = [];
+    const { outcome } = await runAll(
+      installer(stand, { signal: quit.signal, beforeWrite: (file) => void writes.push(file) }),
+    );
+    expect(outcome).toMatchObject({ ok: false, failure: { cleanup: "none" } });
+    expect(writes).toEqual([]);
+    expect(stand.requests).toEqual([]);
+    expect(existsSync(stand.place.programDir)).toBe(false);
+  });
+
+  it("F-502: a download whose signal was aborted before it started asks nothing and writes nothing", async () => {
+    const stand = await make();
+    const quit = new AbortController();
+    quit.abort();
+    const file = join(stand.root, "never");
+    const result = await download(stand.pins.openclaw.url, file, "sha512", "base64", quit.signal);
+    expect(result).toEqual({ ok: false, why: "network" });
+    expect(stand.requests).toEqual([]);
+    expect(existsSync(file)).toBe(false);
   });
 });

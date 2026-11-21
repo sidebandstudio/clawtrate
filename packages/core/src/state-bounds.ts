@@ -1019,7 +1019,6 @@ const setupLook = object<SetupLook>()({
   authMode: ENUM,
   access: ENUM,
   others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
-  managed: FLAG,
   leftover: FLAG,
 });
 const setup = object<SetupState>()({

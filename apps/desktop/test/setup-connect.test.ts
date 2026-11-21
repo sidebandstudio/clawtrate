@@ -606,8 +606,9 @@ describe("the programs setup starts", () => {
   });
 
   it("F-505: on Linux the session's bus passes, each in the one shape a session gives it, and nothing else of the session", () => {
+    // The host's snapshot holds whatever the request names: the shapes alone are checked here.
     const at = (env: Record<string, string>) => () =>
-      checkRequest({ ...base, args: ["--profile", "clawtrate", "--version"], env });
+      checkRequest({ ...base, args: ["--profile", "clawtrate", "--version"], env }, env);
     expect(
       at({
         XDG_RUNTIME_DIR: "/run/user/1001",
@@ -704,6 +705,26 @@ describe("the programs setup starts", () => {
     expect(stubborn.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
     expect(runner.running()).toEqual([]);
+  }, 20_000);
+
+  it("F-502: closed for the app's quit, the runner ends what runs, waits for it, and starts nothing more", async () => {
+    const runner = loose();
+    const running = runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["30"],
+      timeoutMs: 60_000,
+      maxBytes: 4096,
+    });
+    await new Promise((done) => setTimeout(done, 100));
+    expect(runner.running()).toHaveLength(1);
+    const started = Date.now();
+    await runner.close(5_000);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(runner.running()).toEqual([]);
+    expect((await running).exitCode).not.toBe(0);
+    const after = await runner.run({ ...base, program: "/usr/bin/true", args: [] });
+    expect(after).toMatchObject({ failed: true });
   }, 20_000);
 
   it("the host's runner refuses anything but the look's commands before it starts", async () => {

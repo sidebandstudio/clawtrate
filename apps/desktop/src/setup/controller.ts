@@ -115,6 +115,10 @@ export class SetupController implements SetupHost {
   private busy = false;
   private watching: (() => void) | null = null;
   private readonly now: () => number;
+  /** Set when the app quits: nothing new starts, a dialog's answer included. */
+  private closed = false;
+  /** Setting OpenClaw up from its dialog to the look that follows, while it runs. */
+  private operation: Promise<void> | null = null;
 
   constructor(options: SetupControllerOptions) {
     this.options = options;
@@ -173,8 +177,23 @@ export class SetupController implements SetupHost {
   }
 
   async look(): Promise<void> {
+    if (this.closed) return;
     if (this.busy) throw new Error(BUSY);
     await this.runLook(null);
+  }
+
+  /**
+   * For the app's quit: nothing more starts, whatever answer or step comes
+   * next, and this resolves once setting OpenClaw up and the look that
+   * follows it have ended. The caller aborts the install's downloads and
+   * ends its programs.
+   */
+  close(): Promise<void> {
+    this.closed = true;
+    this.attempt += 1;
+    this.clearSlow();
+    this.stopWatching();
+    return this.operation ?? Promise.resolve();
   }
 
   /** The program of a proven early leftover of Clawtrate's own, which the look passes over. */
@@ -193,6 +212,7 @@ export class SetupController implements SetupHost {
   private async runLook(
     installed: { port: number; program: string; env: Record<string, string> } | null,
   ): Promise<void> {
+    if (this.closed) return;
     this.stopWatching();
     // Another look: the earlier one's programs end before this one asks anything.
     this.options.stopPrograms();
@@ -265,16 +285,6 @@ export class SetupController implements SetupHost {
         look: { ...report.look, outcome: "cant-tell", reason: "endpoint", access: null },
         found: null,
       };
-    // Said to be Clawtrate's only once its records and its service prove it.
-    const make = this.options.installer;
-    const managed =
-      make && report.found?.profile.name === "clawtrate"
-        ? await make()
-            .owned(report.found.port)
-            .catch(() => false)
-        : false;
-    if (attempt !== this.attempt) return;
-    if (managed) report = { ...report, look: { ...report.look, managed: true } };
     if (skip !== null && report.look.outcome === "not-found")
       report = { ...report, look: { ...report.look, leftover: true } };
     this.found = report.found;
@@ -358,11 +368,15 @@ export class SetupController implements SetupHost {
     const make = this.options.installer;
     const confirm = this.options.confirm;
     if (!make || !confirm) throw new Error("This host doesn't set OpenClaw up.");
+    if (this.closed) return;
     this.busy = true;
+    const operation = this.installHeld(make, confirm, retry);
+    this.operation = operation.catch(() => {});
     try {
-      await this.installHeld(make, confirm, retry);
+      await operation;
     } finally {
       this.busy = false;
+      this.operation = null;
     }
   }
 
@@ -389,7 +403,7 @@ export class SetupController implements SetupHost {
       return;
     }
     const start = { step: 0, nodeChecked: false, failure: null };
-    const stoppedBefore = (kind: "expired" | "changed") =>
+    const stoppedBefore = (kind: "expired" | "changed" | "unchecked") =>
       this.publish({
         ...initialSetupState,
         look,
@@ -411,14 +425,20 @@ export class SetupController implements SetupHost {
       return;
     }
     // The look's file checks again, after the dialog: anything that appeared since ends it here.
-    let here: Awaited<ReturnType<typeof anythingHere>>;
+    let here: Awaited<ReturnType<typeof anythingHere>> | "unreadable";
     try {
       const opened = await this.open();
       here = await anythingHere(opened.world, await this.leftoverProgram());
     } catch {
-      here = "timeout";
+      here = "unreadable";
     }
     if (attempt !== this.attempt) return;
+    if (here === "timeout" || here === "unreadable") {
+      // Nothing was seen to arrive: what can't be told isn't called a change.
+      this.log("the look's file checks couldn't be made after the dialog");
+      stoppedBefore("unchecked");
+      return;
+    }
     if (here !== "nothing") {
       this.log("something of OpenClaw's appeared after the look");
       stoppedBefore("changed");
@@ -481,6 +501,7 @@ export class SetupController implements SetupHost {
   }
 
   async connect(): Promise<void> {
+    if (this.closed) return;
     if (this.busy) throw new Error(BUSY);
     const found = this.found;
     const phase = this.state.phase;

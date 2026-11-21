@@ -121,7 +121,8 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible();
     await expect(page.getByTestId("setup-found")).toContainText("clawtrate");
-    await expect(page.getByTestId("setup-found")).toContainText("Installed byClawtrate");
+    // Nothing says who installed it until the service manager's effective command proves it.
+    await expect(page.getByTestId("setup-found")).not.toContainText("Installed by");
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
@@ -142,7 +143,7 @@ test.describe("behaviour", () => {
     await expect(steps.nth(1)).toHaveAttribute("data-state", "failed");
     await expect(steps.nth(2)).toHaveAttribute("data-state", "waiting");
     await expect(page.getByRole("alert")).toHaveText(
-      "Install Node.js and OpenClaw failed. The installer stopped before reporting completion. Clawtrate removed this attempt's program files and install record.",
+      "Install Node.js and OpenClaw failed. The installer didn't finish successfully. Clawtrate removed this attempt's program files and install record.",
     );
     await page.getByText("Show details").click();
     const details = page.getByTestId("setup-install-details").locator("dd");
@@ -190,7 +191,7 @@ test.describe("behaviour", () => {
     await openFixture(page, "setup=not-found-leftover", "dark");
     await expect(
       page.getByText(
-        "An earlier setup attempt of Clawtrate's didn't finish. Setting up removes its files first.",
+        "An earlier setup attempt of Clawtrate's didn't finish. Setting up checks whether those files can be removed first.",
       ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toBeVisible();
@@ -202,6 +203,24 @@ test.describe("behaviour", () => {
     await openFixture(page, "setup=install-exists", "dark");
     await expect(page.getByRole("alert")).toHaveText(
       "A clawtrate folder, service or install record already exists. Clawtrate won't replace it.",
+    );
+    await expect(page.locator(".s-steps [data-state='failed']")).toHaveCount(0);
+  });
+
+  test("F-501 F-505: a service that appeared during its install, the service install's own result, and a check that couldn't be made each say only what was seen", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-service-appeared", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "Set up the gateway failed. A Clawtrate service appeared on this computer while setting up; Clawtrate left it as it is. Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered.",
+    );
+    await openFixture(page, "setup=install-service", "dark");
+    await expect(page.getByRole("alert")).toContainText(
+      "Clawtrate couldn't confirm the gateway's user service was installed.",
+    );
+    await openFixture(page, "setup=install-unchecked", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "Clawtrate couldn't check whether OpenClaw was already set up. Look again.",
     );
     await expect(page.locator(".s-steps [data-state='failed']")).toHaveCount(0);
   });

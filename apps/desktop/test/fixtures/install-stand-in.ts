@@ -1,7 +1,9 @@
 // Stand-ins for setting OpenClaw up (docs/design/setup.md §19): the two
 // downloads served from this computer's loopback out of a temporary folder;
 // an npm tarball whose `install-cli.sh` is a script of ours with the checked
-// installer's Node.js step word for word, and whose `dist/entry.js` is a
+// installer's `install_node` and `prepare_tmpdir` word for word (from
+// OpenClaw 2026.10.6's `scripts/install-cli.sh`, MIT licensed, in
+// `install-cli-fe06181/`), and whose `dist/entry.js` is a
 // stand-in `openclaw`; a Node.js tarball whose `node` runs that stand-in and
 // whose `npm` only prints a version; and a stand-in service manager that
 // answers `launchctl print` or `systemctl --user show` from what was
@@ -12,11 +14,16 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InstallPins, InstallTarget } from "../../src/setup/install-pins.ts";
-import { NODE_STEP, standInPlace, type InstallPlace } from "../../src/setup/install.ts";
+import { standInPlace, type InstallPlace } from "../../src/setup/install.ts";
+
+/** One of the pinned installer's functions, word for word. */
+const pinned = (name: "install_node" | "prepare_tmpdir") =>
+  readFileSync(fileURLToPath(new URL(`./install-cli-fe06181/${name}.sh`, import.meta.url)), "utf8");
 
 /** How the stand-ins behave: each a failure the install must name, or the whole way through. */
 export type StandInScenario =
@@ -27,8 +34,12 @@ export type StandInScenario =
   | "node-second-check-fails"
   /** The installer reports starting Node.js itself before its Node.js step. */
   | "node-start"
-  /** The tarball's installer has another Node.js step than the one this build changes. */
+  /** The tarball's installer has another Node.js step than the one this build replaces. */
   | "installer-unpatchable"
+  /** A musl-classified Linux with `apk` on the path: the pinned Node.js step's package-manager branch. */
+  | "alpine"
+  /** The installer's temporary folder can't be made: the pinned step's fallback is the shared `/tmp`. */
+  | "tmp-unusable"
   | "installer-fails"
   /** The installer leaves a program running that writes into the program folder later. */
   | "descendant"
@@ -39,6 +50,10 @@ export type StandInScenario =
   /** Someone else's `clawtrate` service file appears while the installer runs. */
   | "service-before-onboard"
   | "onboard-fails"
+  /** Someone else's `clawtrate` service file appears after onboarding, before the service install. */
+  | "service-after-onboard"
+  /** Someone else's `clawtrate` service definition appears during the service install, which says it installed. */
+  | "service-during-install"
   | "service-fails"
   /** Linux: the session has no systemd user manager. */
   | "no-user-manager"
@@ -52,15 +67,57 @@ const NODE_VERSION = "24.22.1";
 const INSTALLER = `#!/usr/bin/env bash
 set -euo pipefail
 SCENARIO="@SCENARIO@"
+PLATFORM="@PLATFORM@"
 here="\${BASH_SOURCE[0]%/*}"
 source "$here/install-policy.sh"
 PREFIX="\${HOME}/.openclaw"
 NODE_VERSION="${NODE_VERSION}"
+NODE_ONLY=0
+SUPPORTED_NODE_VERSION_LABEL="Node 24"
+TMPFILES=()
 emit_json() {
   local out="{\\"event\\":\\"$1\\""
   shift
   while [[ $# -ge 2 ]]; do out+=",\\"$1\\":\\"$2\\""; shift 2; done
   printf '%s}\\n' "$out"
+}
+fail() { emit_json error message "$1"; exit 1; }
+log() { :; }
+resolve_installer_path() { printf '%s' "$1"; }
+os_detect() { [[ "$SCENARIO" == "alpine" ]] && echo linux || echo "$PLATFORM"; }
+arch_detect() { echo arm64; }
+is_musl_linux() { [[ "$SCENARIO" == "alpine" ]]; }
+select_node_version_for_platform() { :; }
+node_version_is_supported() { :; }
+node_dir() { echo "\${PREFIX}/tools/node-v\${NODE_VERSION}"; }
+node_bin() { echo "$(node_dir)/bin/node"; }
+command_path_without_node_prefix() { return 1; }
+link_node_runtime_paths() { :; }
+detect_downloader() { :; }
+require_bin() { :; }
+sha256_file() { echo 0; }
+required_node_version() { echo 24; }
+node_binary_sqlite_version() { echo unknown; }
+# The pinned step's own downloads and package manager: markers, never the network or a package.
+download_file() {
+  : > "$HOME/stand-in-fallback-fetched"
+  sleep 20
+  return 1
+}
+install_alpine_node() {
+  : > "$HOME/stand-in-package-manager-reached"
+  emit_json step name node status ok method apk
+}
+# The shared /tmp: a marker, and a folder in the stand-in's own home instead.
+mktemp() {
+  local last="\${!#}"
+  if [[ "$last" == /tmp/openclaw-* ]]; then
+    : > "$HOME/stand-in-tmp-fallback"
+    mkdir -p "$HOME/stand-in-shared-tmp"
+    command mktemp -d "$HOME/stand-in-shared-tmp/openclaw-install.XXXXXX"
+    return
+  fi
+  command mktemp "$@"
 }
 linked_node_is_usable() {
   [[ "$SCENARIO" != "node-unusable" ]] || return 1
@@ -69,15 +126,8 @@ linked_node_is_usable() {
   fi
   [[ -x "$PREFIX/tools/node-v$NODE_VERSION/bin/node" ]]
 }
-install_node() {
-  local dir
-  dir="$PREFIX/tools/node-v$NODE_VERSION"
-@NODE_STEP@
-  emit_json step name node status start version "$NODE_VERSION"
-  # The checked installer would download a Node.js of its own here.
-  : > "$HOME/stand-in-fallback-fetched"
-  sleep 20
-}
+@INSTALL_NODE@
+@PREPARE_TMPDIR@
 main() {
   local tgz=""
   printf 'install-cli %s\\n' "$*" >> "$HOME/stand-in-calls.log"
@@ -94,7 +144,15 @@ main() {
     sleep 20
     exit 0
   fi
-  install_node
+  [[ "$SCENARIO" != "tmp-unusable" ]] || TMPDIR="$TMPDIR/not-there"
+  prepare_tmpdir
+  [[ "$TMPDIR" == "$PREFIX"/tmp/openclaw-install.* ]] || : > "$HOME/stand-in-tmp-elsewhere"
+  if [[ "$SCENARIO" == "alpine" ]]; then
+    mkdir -p "$PREFIX/bin"
+    printf '#!/bin/sh\\nexit 0\\n' > "$PREFIX/bin/apk"
+    chmod 755 "$PREFIX/bin/apk"
+  fi
+  install_node "$(os_detect)" "$(arch_detect)"
   emit_json step name openclaw status start version "$tgz"
   printf 'added 345 packages\\n'
   if [[ "$SCENARIO" == "descendant" ]]; then
@@ -169,6 +227,10 @@ case "$1" in
     fi
     mkdir -p "$HOME/.openclaw-clawtrate"
     printf '{"gateway":{"port":%s}}\\n' "$port" > "$HOME/.openclaw-clawtrate/openclaw.json"
+    if [[ "$SCENARIO" == "service-after-onboard" ]]; then
+      mkdir -p "\${SERVICE_FILE%/*}"
+      printf "someone's\\n" > "$SERVICE_FILE"
+    fi
     printf '{"ok":true,"mode":"local","authChoice":"skip","gateway":{"port":%s,"bind":"loopback","authMode":"token","tailscaleMode":"off"},"installDaemon":false,"skipHealth":true}\\n' "$port"
     ;;
   gateway)
@@ -183,8 +245,19 @@ case "$1" in
         exit 1
       fi
       mkdir -p "\${SERVICE_FILE%/*}"
+      if [[ "$SCENARIO" == "service-during-install" ]]; then
+        # Another program's definition, written in the moment between the host's check and this call.
+        if [[ "$PLATFORM" == "darwin" ]]; then
+          printf '<plist version="1.0"><dict><key>Label</key><string>ai.openclaw.clawtrate</string><key>ProgramArguments</key><array><string>/usr/bin/true</string></array></dict></plist>\\n' > "$SERVICE_FILE"
+        else
+          printf '[Service]\\nExecStart=/usr/bin/true\\n' > "$SERVICE_FILE"
+        fi
+        : > "$HOME/stand-in-loaded"
+        printf '%s\\n' '{"ok":true,"action":"install","result":"installed","service":{"label":"stand-in","loaded":true}}'
+        exit 0
+      fi
       if [[ "$PLATFORM" == "darwin" ]]; then
-        printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0">\\n  <dict>\\n    <key>Label</key>\\n    <string>ai.openclaw.clawtrate</string>\\n    <key>RunAtLoad</key>\\n    <true/>\\n    <key>ProgramArguments</key>\\n    <array>\\n      <string>/bin/sh</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>--max-old-space-size=4096</string>\\n      <string>%s</string>\\n      <string>gateway</string>\\n      <string>--port</string>\\n      <string>%s</string>\\n    </array>\\n  </dict>\\n</plist>\\n' "$HOME/.openclaw-clawtrate/service-env/wrapper.sh" "$HOME/.openclaw-clawtrate/service-env/env" "$NODE" "$INDEX" "$port" > "$SERVICE_FILE"
+        printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0">\\n  <dict>\\n    <key>Label</key>\\n    <string>ai.openclaw.clawtrate</string>\\n    <key>RunAtLoad</key>\\n    <true/>\\n    <key>ProgramArguments</key>\\n    <array>\\n      <string>/bin/sh</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>%s</string>\\n      <string>--max-old-space-size=4096</string>\\n      <string>%s</string>\\n      <string>gateway</string>\\n      <string>--port</string>\\n      <string>%s</string>\\n    </array>\\n  </dict>\\n</plist>\\n' "$HOME/.openclaw-clawtrate/service-env/ai.openclaw.clawtrate-env-wrapper.sh" "$HOME/.openclaw-clawtrate/service-env/ai.openclaw.clawtrate.env" "$NODE" "$INDEX" "$port" > "$SERVICE_FILE"
       else
         printf '[Unit]\\nDescription=OpenClaw Gateway\\n\\n[Service]\\nExecStart="%s" --max-old-space-size=4096 "%s" gateway --port %s\\nRestart=always\\n\\n[Install]\\nWantedBy=default.target\\n' "$NODE" "$INDEX" "$port" > "$SERVICE_FILE"
       fi
@@ -298,15 +371,17 @@ export async function standIn(
   const pkg = join(root, "pkg", "package");
   mkdirSync(join(pkg, "scripts"), { recursive: true });
   mkdirSync(join(pkg, "dist"), { recursive: true });
-  const step =
+  const installNode =
     scenario === "installer-unpatchable"
-      ? NODE_STEP.replace("    return\n", "    return 0\n")
-      : NODE_STEP;
+      ? pinned("install_node").replace("    return\n", "    return 0\n")
+      : pinned("install_node");
   sh(
     join(pkg, "scripts", "install-cli.sh"),
     INSTALLER.replace("@SCENARIO@", scenario)
+      .replace("@PLATFORM@", platform)
       .replace("@SERVICE_FILE@", place.serviceFile)
-      .replace("@NODE_STEP@\n", step),
+      .replace("@INSTALL_NODE@\n", installNode)
+      .replace("@PREPARE_TMPDIR@\n", pinned("prepare_tmpdir")),
   );
   sh(join(pkg, "scripts", "install-policy.sh"), "# stand-in policy\n");
   sh(

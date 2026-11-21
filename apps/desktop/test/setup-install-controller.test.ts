@@ -19,9 +19,10 @@ import {
   type Confirmation,
 } from "../src/setup/controller.ts";
 import type { InstallOutcome, Installer } from "../src/setup/install.ts";
-import { checkRequest, type ProgramRequest } from "../src/setup/programs.ts";
+import { checkRequest, sessionEnv, type ProgramRequest } from "../src/setup/programs.ts";
+import type { Opened } from "../src/setup/sandbox.ts";
 import { productionWorld } from "../src/setup/world.ts";
-import { authJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
+import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -45,6 +46,7 @@ type Fake = {
 
 const PORT = 40123;
 const LISTENER = 4242;
+const CODE = "Xq3v8Lw0eXk2Rj9TaNf5Hc1UbYm7Pd4GsZi6Ko2EaVr";
 
 /**
  * A controller whose look finds nothing (no program in a temporary home)
@@ -62,11 +64,15 @@ function harness(
     hold?: boolean;
     /** The port the installed gateway's status reports. */
     answersOn?: number;
-    owned?: boolean;
     /** A proven early leftover's program, which the look is also given as its first place. */
     leftover?: string | null;
-    /** The host's own check of every program the look starts, as the real runner makes it. */
+    /** The host's own check of every program the look starts, as the real runner makes it, with this session snapshot. */
     checked?: boolean;
+    session?: Record<string, string>;
+    /** The installed gateway answers only programs given exactly this bus. */
+    needsBus?: string;
+    /** The look's file checks after the dialog can't be made. */
+    unreadable?: boolean;
     platform?: "darwin" | "linux";
   } = {},
 ): Fake {
@@ -95,29 +101,35 @@ function harness(
     ],
     deep: true,
   };
+  const opened = (): Opened => ({
+    world,
+    run: async (request: ProgramRequest) => {
+      asked.push(request);
+      if (options.checked) checkRequest(request, options.session ?? {});
+      const args = request.args.join(" ");
+      if (options.needsBus && request.env.DBUS_SESSION_BUS_ADDRESS !== options.needsBus)
+        return { exitCode: 1, stdout: "", timedOut: false, tooLarge: false, failed: false };
+      const port = options.answersOn ?? PORT;
+      const stdout = args.endsWith("--version")
+        ? VERSION_LINE
+        : args.includes("gateway status")
+          ? statusJson({ port, rpcUrl: `ws://127.0.0.1:${port}` })
+          : args.includes(" qr ")
+            ? qrJson(`ws://127.0.0.1:${port}`, CODE, Date.now() + 600_000)
+            : authJson();
+      return { exitCode: 0, stdout, timedOut: false, tooLarge: false, failed: false };
+    },
+    identify: (pid) =>
+      pid === LISTENER
+        ? { state: "alive", identity: "started" }
+        : { state: "exited", how: "absent" },
+  });
   fake.setup = new SetupController({
     client,
-    open: async () => ({
-      world,
-      run: async (request) => {
-        asked.push(request);
-        if (options.checked) checkRequest(request);
-        const args = request.args.join(" ");
-        const stdout = args.endsWith("--version")
-          ? VERSION_LINE
-          : args.includes("gateway status")
-            ? statusJson({
-                port: options.answersOn ?? PORT,
-                rpcUrl: `ws://127.0.0.1:${options.answersOn ?? PORT}`,
-              })
-            : authJson();
-        return { exitCode: 0, stdout, timedOut: false, tooLarge: false, failed: false };
-      },
-      identify: (pid) =>
-        pid === LISTENER
-          ? { state: "alive", identity: "started" }
-          : { state: "exited", how: "absent" },
-    }),
+    open: async () => {
+      if (options.unreadable && fake.dialogs.length > 0) throw new Error("EACCES");
+      return opened();
+    },
     stopPrograms: () => {},
     confirm: async (confirmation) => {
       dialogs.push(confirmation);
@@ -149,7 +161,6 @@ function harness(
                 return outcome;
               },
               leftoverProgram: async () => options.leftover ?? null,
-              owned: async (port: number) => (options.owned ?? true) && port === PORT,
             }) as unknown as Installer,
   });
   client.store.subscribe((state) => {
@@ -240,7 +251,7 @@ describe("F-501: nothing is downloaded or run before the host's own dialog", () 
 });
 
 describe("F-502 F-505: the steps, then the look of the gateway just set up", () => {
-  it("F-502 F-505: after yes the steps are published in order, then the look of the clawtrate profile alone, with its installed program, finds it running on its port and says Clawtrate set it up", async () => {
+  it("F-502 F-505: after yes the steps are published in order, then the look of the clawtrate profile alone, with its installed program, finds it running on its port, and says nothing of who installed it", async () => {
     const fake = harness();
     await notFound(fake);
     const steps: number[] = [];
@@ -264,8 +275,9 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
       outcome: "running",
       profile: "clawtrate",
       port: PORT,
-      managed: true,
     });
+    // No ownership label until the service manager's effective command and main process prove it.
+    expect(fake.setup.current.look).not.toHaveProperty("managed");
     // No command of the default profile's, and no deep status.
     expect(fake.asked.length).toBeGreaterThan(0);
     for (const request of fake.asked) {
@@ -282,6 +294,7 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     };
     const fake = harness({
       checked: true,
+      session,
       platform: "linux",
       outcome: {
         ok: true,
@@ -296,13 +309,75 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
       outcome: "running",
       profile: "clawtrate",
       port: PORT,
-      managed: true,
     });
     // The session's bus reached every command of that look.
     for (const request of fake.asked) expect(request.env).toMatchObject(session);
   });
 
-  it("F-505: a gateway that answers on another port than the install's is not offered, and a clawtrate profile the records don't prove isn't said to be Clawtrate's", async () => {
+  it("F-505: on Linux a gateway whose status needs a non-default session bus is found, rechecked and given a code with that same bus, for exactly the install's address", async () => {
+    const session = {
+      XDG_RUNTIME_DIR: "/run/user/1002",
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/1002/other-bus,guid=${"5c".repeat(16)}`,
+    };
+    const fake = harness({
+      checked: true,
+      session,
+      needsBus: session.DBUS_SESSION_BUS_ADDRESS,
+      platform: "linux",
+      outcome: {
+        ok: true,
+        port: PORT,
+        program: join(dir, "openclaw", "bin", "openclaw"),
+        env: session,
+      },
+    });
+    const codes: string[] = [];
+    fake.client.connectWithSetupCode = async (code) => {
+      codes.push(code.url);
+    };
+    await notFound(fake);
+    await fake.setup.install();
+    expect(fake.setup.current.look).toMatchObject({ outcome: "running", port: PORT });
+    const fromConnect = fake.asked.length;
+    await fake.setup.connect();
+    const connect = fake.asked.slice(fromConnect);
+    // The rechecks (status and sign-in) and the code, each with the same bus.
+    expect(connect.map((request) => request.args.slice(2, 4).join(" "))).toEqual(
+      expect.arrayContaining(["gateway status", "config get", "qr --json"]),
+    );
+    for (const request of connect) expect(request.env).toMatchObject(session);
+    expect(fake.setup.current.failure).toBeNull();
+    expect(codes).toEqual([`ws://127.0.0.1:${PORT}`]);
+  });
+
+  it("F-505: the host's program check passes the bus only with exactly its own snapshot's values, and none without one", () => {
+    const session = {
+      XDG_RUNTIME_DIR: "/run/user/1001",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus",
+    };
+    const request: ProgramRequest = {
+      program: "/usr/bin/true",
+      args: ["--profile", "clawtrate", "--version"],
+      env: session,
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      maxBytes: 1024,
+    };
+    expect(() => checkRequest(request, session)).not.toThrow();
+    // A sandbox, another system or a development build: an empty snapshot.
+    expect(() => checkRequest(request)).toThrow(/environment variable/);
+    expect(() =>
+      checkRequest(
+        { ...request, env: { ...session, DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/x" } },
+        session,
+      ),
+    ).toThrow(/environment variable/);
+    expect(sessionEnv("linux", { ...session, DISPLAY: ":0" })).toEqual(session);
+    expect(sessionEnv("darwin", session)).toEqual({});
+    expect(sessionEnv("linux", { XDG_RUNTIME_DIR: "/run/user/1001;x" })).toEqual({});
+  });
+
+  it("F-505: a gateway that answers on another port than the install's is not offered", async () => {
     const elsewhere = harness({ answersOn: PORT + 1 });
     await notFound(elsewhere);
     await elsewhere.setup.install();
@@ -311,12 +386,52 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
       reason: "endpoint",
     });
     await expect(elsewhere.setup.connect()).rejects.toThrow(/nothing to connect/);
+  });
 
-    const unproven = harness({ owned: false });
-    await notFound(unproven);
-    await unproven.setup.install();
-    expect(unproven.setup.current.look).toMatchObject({ outcome: "running" });
-    expect(unproven.setup.current.look?.managed).toBeUndefined();
+  it("F-501: after the dialog, look's file checks that can't be made stop it before anything is run, and aren't called a change", async () => {
+    const fake = harness({ unreadable: true });
+    await notFound(fake);
+    await fake.setup.install();
+    expect(fake.runs).toBe(0);
+    expect(fake.setup.current).toMatchObject({
+      phase: "install-failed",
+      install: { failure: { kind: "unchecked", step: -1, retry: false, cleanup: "none" } },
+    });
+  });
+
+  it("F-502: closed for the app's quit, the controller starts nothing more: a dialog answered after it runs nothing", async () => {
+    let answer: (yes: boolean) => void = () => {};
+    const fake = harness({ answer: () => new Promise<boolean>((done) => (answer = done)) });
+    await notFound(fake);
+    const installing = fake.setup.install();
+    await new Promise((done) => setTimeout(done, 10));
+    const closing = fake.setup.close();
+    answer(true);
+    await installing;
+    await closing;
+    expect(fake.runs).toBe(0);
+    const asked = fake.asked.length;
+    await fake.setup.look();
+    expect(fake.asked.length).toBe(asked);
+  });
+
+  it("F-502: closed while an install runs, the quit waits for it, and no look follows it", async () => {
+    const fake = harness({ hold: true });
+    await notFound(fake);
+    const asked = fake.asked.length;
+    const installing = fake.setup.install();
+    await new Promise((done) => setTimeout(done, 20));
+    expect(fake.setup.current.phase).toBe("installing");
+    let closed = false;
+    const closing = fake.setup.close().then(() => (closed = true));
+    await new Promise((done) => setTimeout(done, 20));
+    // The operation is still under way: the quit waits for it.
+    expect(closed).toBe(false);
+    fake.release();
+    await installing;
+    await closing;
+    expect(closed).toBe(true);
+    expect(fake.asked.length).toBe(asked);
   });
 
   it("F-502: while an install runs, a look, Connect, a second install, Back and the first screen are refused or do nothing, and the install's own look still follows", async () => {

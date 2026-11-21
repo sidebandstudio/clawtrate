@@ -283,7 +283,6 @@ function runningFacts(look: SetupLook): Array<[string, string]> {
     ],
     ["Service", serviceWords(look.service)],
     // Only where the host proved it: the install's records and its service's command.
-    ...(look.managed ? ([["Installed by", "Clawtrate"]] as Array<[string, string]>) : []),
   ];
 }
 
@@ -480,8 +479,8 @@ function LookResult({
           <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
             {look.leftover && (
               <Lede>
-                An earlier setup attempt of Clawtrate's didn't finish. Setting up removes its files
-                first.
+                An earlier setup attempt of Clawtrate's didn't finish. Setting up checks whether
+                those files can be removed first.
               </Lede>
             )}
             <Actions>
@@ -649,7 +648,7 @@ function installCause(failure: InstallFailure): string {
     case "installer-changed":
       return "The checked installer isn't the one this version of Clawtrate expects.";
     case "installer":
-      return "The installer stopped before reporting completion.";
+      return "The installer didn't finish successfully.";
     case "no-program":
       return "Clawtrate couldn't find the installed OpenClaw program, or it isn't the checked one.";
     case "node-not-checked":
@@ -661,11 +660,14 @@ function installCause(failure: InstallFailure): string {
           ? "OpenClaw's setup didn't report a gateway Clawtrate can use."
           : `OpenClaw's setup stopped (exit ${failure.exitCode}).`;
     case "service":
-      return "OpenClaw couldn't install the gateway's user service.";
+      return "Clawtrate couldn't confirm the gateway's user service was installed.";
+    case "service-appeared":
+      return "A Clawtrate service appeared on this computer while setting up; Clawtrate left it as it is.";
     case "not-answering":
       return "Clawtrate couldn't confirm the new gateway was running on its chosen port.";
     case "changed":
     case "expired":
+    case "unchecked":
       return "Look again.";
   }
 }
@@ -684,6 +686,7 @@ const BEFORE: Partial<Record<InstallFailure["kind"], string>> = {
   write: "Clawtrate couldn't prepare the install.",
   "user-service": "This session can't run a systemd user service.",
   changed: "This changed since you looked.",
+  unchecked: "Clawtrate couldn't check whether OpenClaw was already set up.",
   expired: "This setup confirmation expired.",
 };
 
@@ -703,8 +706,10 @@ const CATEGORY: Record<InstallFailure["kind"], string> = {
   "node-not-checked": "Node.js not checked",
   onboard: "Gateway setup",
   service: "User service",
+  "service-appeared": "Service appeared",
   "not-answering": "No answer",
   changed: "Changed",
+  unchecked: "Not checked",
   expired: "Expired",
 };
 
@@ -755,8 +760,9 @@ function InstallReview({
       <Hint>Setup asks for no provider account or model key.</Hint>
       {platform === "linux" && (
         <Hint>
-          A systemd user service stops when you log out unless lingering is on for your account
-          (loginctl enable-linger). Clawtrate doesn't change that setting.
+          With lingering off for your account (loginctl enable-linger), systemd can stop the service
+          when your last session closes; another active session or a stop delay can keep it running.
+          Clawtrate doesn't change that setting.
         </Hint>
       )}
       <Hint>

@@ -154,15 +154,20 @@ export const SETUP_STATES: Record<string, SetupState> = {
     cleanup: "kept",
   }),
   "install-service": installFailed("service", 2, { exitCode: 1, cleanup: "kept" }),
+  "install-service-appeared": installFailed("service-appeared", 2, {
+    exitCode: 0,
+    cleanup: "kept",
+  }),
   "install-not-answering": installFailed("not-answering", 3, { cleanup: "kept" }),
   "install-exists": installFailed("exists", -1),
   "install-user-service": installFailed("user-service", -1),
   "install-changed": installFailed("changed", -1),
+  "install-unchecked": installFailed("unchecked", -1),
   "install-expired": installFailed("expired", -1),
   /** An earlier attempt of Clawtrate's that never reached onboarding: setting up removes it first. */
   "not-found-leftover": looked({ ...notFound, leftover: true }),
-  /** The gateway Clawtrate set up, found by the look that follows the install, and proven Clawtrate's. */
-  "found-installed": looked({ profile: "clawtrate", port: 52114, managed: true }),
+  /** The gateway Clawtrate set up, found by the look that follows the install. */
+  "found-installed": looked({ profile: "clawtrate", port: 52114 }),
 };
 
 export function isSetupState(name: string | null): name is string {

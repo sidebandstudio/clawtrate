@@ -56,14 +56,32 @@ const ENV_KEYS = new Set([
 ]);
 const SAFE_ENV_VALUE = /^[A-Za-z0-9._:/@+=, -]*$/;
 /**
- * On Linux, a user service is reached through the session's bus, and the look
- * that follows an install asks the profile's systemd unit through it: only
- * these two, each of the one shape a session gives it.
+ * On Linux, a user service is reached through the session's bus, and the
+ * install and the look and Connect that follow it ask the profile's systemd
+ * unit through it: only these two, each of the one shape a session gives it.
  */
 const SESSION_ENV: Record<string, RegExp> = {
   XDG_RUNTIME_DIR: /^\/[A-Za-z0-9._/-]+$/,
   DBUS_SESSION_BUS_ADDRESS: /^unix:path=\/[A-Za-z0-9._/-]+(,guid=[0-9a-f]{32})?$/,
 };
+
+/**
+ * The session's bus, on Linux, from the main process's own environment: the
+ * only variables of the session any setup program gets, each in its one
+ * shape, and nothing on any other system. Read once, at the trusted source.
+ */
+export function sessionEnv(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): Record<string, string> {
+  const kept: Record<string, string> = {};
+  if (platform !== "linux") return kept;
+  for (const [key, shape] of Object.entries(SESSION_ENV)) {
+    const value = env[key];
+    if (typeof value === "string" && value.length <= 4096 && shape.test(value)) kept[key] = value;
+  }
+  return kept;
+}
 
 const profileName = (name: string | undefined) =>
   name === "clawtrate" ||
@@ -84,15 +102,23 @@ export function isLookCommand(args: readonly string[]): boolean {
   return match !== null && Number(match[1]) <= 65535;
 }
 
-/** Throws before anything starts when the program, command, variables or folder are not ones the host may use. */
-export function checkRequest(request: ProgramRequest): void {
+/**
+ * Throws before anything starts when the program, command, variables or
+ * folder are not ones the host may use. A variable of the session's bus
+ * passes only with exactly the value of `session`, the host's own snapshot
+ * (`sessionEnv`), which is empty but on Linux in a person's app.
+ */
+export function checkRequest(
+  request: ProgramRequest,
+  session: Readonly<Record<string, string>> = {},
+): void {
   // A fixed path from the look's list, which may hold a space ("Application Support").
   if (!isAbsolute(request.program) || /[\t\n\r'"`$;&|<>\\*?(){}[\]!#~]/.test(request.program))
     throw new Error("refusing a program that is not a fixed absolute path");
   if (!isLookCommand(request.args)) throw new Error("refusing a command the look doesn't run");
   for (const [key, value] of Object.entries(request.env)) {
     const allowed = Object.hasOwn(SESSION_ENV, key)
-      ? SESSION_ENV[key]!.test(value)
+      ? SESSION_ENV[key]!.test(value) && Object.hasOwn(session, key) && session[key] === value
       : ENV_KEYS.has(key) && SAFE_ENV_VALUE.test(value);
     if (!allowed || value.length > 4096)
       throw new Error("refusing an environment variable the look doesn't pass");
@@ -107,10 +133,12 @@ export function checkRequest(request: ProgramRequest): void {
  * may start; the setup host uses `checkRequest`.
  */
 export class ProgramRunner {
-  private readonly children = new Set<ChildProcess>();
+  /** Each program still running, and when it has exited. */
+  private readonly children = new Map<ChildProcess, Promise<void>>();
   private readonly spawnImpl: typeof nodeSpawn;
   private readonly check: (request: ProgramRequest) => void;
   private readonly graceMs: number;
+  private closed = false;
 
   constructor(
     options: {
@@ -148,6 +176,15 @@ export class ProgramRunner {
 
   readonly run: RunProgram = (request) => {
     this.check(request);
+    const notStarted = {
+      exitCode: null,
+      stdout: "",
+      timedOut: false,
+      tooLarge: false,
+      failed: true,
+    };
+    // Once the app quits, nothing more starts.
+    if (this.closed) return Promise.resolve(notStarted);
     return new Promise((resolve) => {
       let child: ChildProcess;
       try {
@@ -159,10 +196,15 @@ export class ProgramRunner {
           windowsHide: true,
         });
       } catch {
-        resolve({ exitCode: null, stdout: "", timedOut: false, tooLarge: false, failed: true });
+        resolve(notStarted);
         return;
       }
-      this.children.add(child);
+      const gone = new Promise<void>((done) => {
+        child.once("exit", () => done());
+        child.once("error", () => done());
+      });
+      this.children.set(child, gone);
+      void gone.then(() => this.children.delete(child));
       const chunks: Buffer[] = [];
       let size = 0;
       let timedOut = false;
@@ -172,7 +214,6 @@ export class ProgramRunner {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        this.children.delete(child);
         // A descendant that kept the pipes open must not keep the look waiting.
         child.stdout?.destroy();
         child.stderr?.destroy();
@@ -215,11 +256,31 @@ export class ProgramRunner {
 
   /** The PIDs of the programs running now. */
   running(): number[] {
-    return [...this.children].flatMap((child) => (child.pid === undefined ? [] : [child.pid]));
+    return [...this.children.keys()].flatMap((child) =>
+      child.pid === undefined ? [] : [child.pid],
+    );
   }
 
   /** Ends every program this runner started that still runs, by its PID, killing it after the grace. */
   stopAll(): void {
-    for (const child of this.children) this.end(child);
+    for (const child of this.children.keys()) this.end(child);
+  }
+
+  /**
+   * For the app's quit: nothing more starts, every program is ended, and this
+   * resolves once none is left or `withinMs` has passed.
+   */
+  async close(withinMs: number): Promise<void> {
+    this.closed = true;
+    this.stopAll();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all(this.children.values()),
+      new Promise<void>((done) => {
+        timer = setTimeout(done, withinMs);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
   }
 }

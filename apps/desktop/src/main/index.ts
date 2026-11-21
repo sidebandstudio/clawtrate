@@ -40,7 +40,7 @@ import { SetupController } from "../setup/controller.ts";
 import { computerPlace, Installer } from "../setup/install.ts";
 import { installTarget, PINS, runsOnGlibc } from "../setup/install-pins.ts";
 import { InstallRunner } from "../setup/install-runner.ts";
-import { ProgramRunner } from "../setup/programs.ts";
+import { checkRequest, ProgramRunner, sessionEnv } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
 import { desktopStartup } from "../setup/startup.ts";
@@ -89,16 +89,16 @@ function openExternally(raw: string): void {
 
 let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
-/** The programs setup started, ended by PID when the app quits. */
-const programs = new ProgramRunner();
 /** The programs an install started, each in its own process group, ended and waited for when the app quits. */
 const installPrograms = new InstallRunner();
-/** Aborted when the app quits: an install downloads nothing more. */
+/** Aborted when the app quits: an install downloads nothing more and starts no further step. */
 const installStop = new AbortController();
-/** How long the quit waits for an install's programs to end. */
+/** How long the quit waits for setting OpenClaw up, its downloads and its programs to end. */
 const INSTALL_QUIT_WAIT_MS = 5_000;
-let installDrained = false;
+let setupDrained = false;
 let closeSetup: () => Promise<void> = async () => {};
+/** The setup controller's own close, once it exists: nothing new starts and its operation is waited for. */
+let closeController: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
 function hasSwitch(name: string): boolean {
@@ -143,6 +143,15 @@ const STARTUP = desktopStartup(SETUP, {
   privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
 });
 if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
+
+/**
+ * The session's bus, read once from this process's own environment: on Linux
+ * in a person's app only. Every setup program that passes either variable
+ * must pass exactly these values; a sandbox or another system passes none.
+ */
+const SESSION = SETUP.kind === "production" ? sessionEnv(process.platform, process.env) : {};
+/** The programs setup started, ended by PID when the app quits. */
+const programs = new ProgramRunner({ check: (request) => checkRequest(request, SESSION) });
 
 /**
  * The checkout whose run records prove a sandbox's run: this development
@@ -217,6 +226,7 @@ function setupInstaller(): (() => Installer) | null {
         platform,
         target,
         env: process.env,
+        session: SESSION,
       }),
       pins: PINS,
       run: (request, check) => installPrograms.run(request, check),
@@ -443,6 +453,7 @@ async function main(): Promise<void> {
     installer,
   });
   policy.setup = setup;
+  closeController = () => setup.close();
   info.setup = { look: true, pair: true, platform: process.platform, install: installer !== null };
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
@@ -529,20 +540,25 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  programs.stopAll();
-  // An install's programs, descendants too, are ended and waited for, within a bound, before the
-  // app goes: nothing of an attempt runs on after it.
-  if (!installDrained && installPrograms.running().length > 0) {
+  // Setting up is closed first, so that no dialog's answer or queued step starts anything; then
+  // its downloads are aborted and every program it started, descendants too, is ended. The quit
+  // waits, within one bound, for the operation, the install's groups and the look's programs.
+  if (!setupDrained) {
     event.preventDefault();
+    setupDrained = true;
+    const operation = closeController();
     installStop.abort();
-    void installPrograms.close(INSTALL_QUIT_WAIT_MS).then(() => {
-      installDrained = true;
-      app.quit();
-    });
+    const deadline = new Promise<void>((done) => setTimeout(done, INSTALL_QUIT_WAIT_MS));
+    void Promise.race([
+      Promise.all([
+        operation,
+        installPrograms.close(INSTALL_QUIT_WAIT_MS),
+        programs.close(INSTALL_QUIT_WAIT_MS),
+      ]),
+      deadline,
+    ]).then(() => app.quit());
     return;
   }
-  installStop.abort();
-  void installPrograms.close(0);
   void closeSetup();
   runtime?.client.stop();
 });
