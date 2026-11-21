@@ -1126,11 +1126,15 @@ export async function publish(
       );
     console.log(`  ${file.name}: the public file matches.`);
   }
-  const feed = readFileSync(join(dir, FEED_NAME));
+  // The feed as recorded and published, not the staging file read again.
+  const feed = plan.files.find((file) => file.name === FEED_NAME)!;
   console.log(`Waiting for ${BETA_FEED_URL} to offer ${version}…`);
   const seen = await watchSite(
     net,
-    (reading) => reading.kind === "feed" && reading.body.equals(feed),
+    (reading) =>
+      reading.kind === "feed" &&
+      reading.body.length === feed.size &&
+      sha("sha512", reading.body, "base64") === feed.sha512,
   );
   if (!seen.done)
     stop(
@@ -1174,10 +1178,18 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
   console.log(
     `Waiting for ${BETA_FEED_URL} to ${next ? `offer ${next.tag_name.slice(1)}` : "serve no feed"}…`,
   );
-  // The remaining beta's own feed, or, with none, a 404 at the feed's own address.
+  // The remaining beta's own feed.json, by GitHub's digest of it, or, with
+  // none, a 404 at the feed's own address.
   const expected = next ? next.tag_name.slice(1) : null;
+  const digest = next?.assets.find((asset) => asset.name === FEED_NAME)?.digest;
+  if (next && !digest)
+    stop(
+      `GitHub reports no digest for ${next.tag_name}'s ${FEED_NAME}, so the site's feed cannot be checked against it. Check ${BETA_FEED_URL} yourself.`,
+    );
+  const isNextFeed = (reading: SiteReading) =>
+    reading.kind === "feed" && `sha256:${sha("sha256", reading.body, "hex")}` === digest;
   const seen = await watchSite(net, (reading) =>
-    expected ? reading.kind === "feed" && reading.version === expected : reading.kind === "absent",
+    expected ? isNextFeed(reading) : reading.kind === "absent",
   );
   const { reading } = seen;
   if (seen.done) {
@@ -1188,11 +1200,18 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
     );
     return;
   }
+  if (reading.kind === "feed" && !expected)
+    // With no published beta the Site workflow deploys nothing: running it again changes nothing.
+    stop(
+      `The site still offers ${reading.version}, and GitHub lists no published beta, so the Site workflow deploys nothing and the site keeps that feed. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one (docs/development/releases.md, "Withdraw a beta").`,
+    );
   if (reading.kind === "feed")
     stop(
       reading.version === version
         ? `The site still offers ${version}. Run the Site workflow and run this again.`
-        : `The site offers ${reading.version}, ${expected ? `not ${expected}` : "though GitHub lists no published beta"}. Run the Site workflow and run this again.`,
+        : reading.version === expected
+          ? `The site offers ${expected}, but not the ${FEED_NAME} of its release. Run the Site workflow and run this again.`
+          : `The site offers ${reading.version}, not ${expected}. Run the Site workflow and run this again.`,
     );
   if (reading.kind === "absent")
     stop(

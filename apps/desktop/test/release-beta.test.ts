@@ -1057,6 +1057,22 @@ describe("publishing", () => {
     expect(create[create.indexOf("--notes") + 1]).toBe(readFileSync(join(dir, "notes.md"), "utf8"));
   });
 
+  it("checks the site against the feed it published, not the staging file read again", async () => {
+    const hub = github(dir);
+    const published = readFileSync(join(dir, "feed.json"));
+    // The site serves the published feed, while someone edits the staging copy.
+    const editing: Net = {
+      ...net,
+      get: async (url, signal, follow) => {
+        if (url !== BETA_FEED_URL) return net.get(url, signal, follow);
+        writeFileSync(join(dir, "feed.json"), "edited afterwards");
+        return new Response(published);
+      },
+    };
+    await publish(hub.runner, VERSION, record, editing, place.staging);
+    expect(output).toContain(`The Beta feed offers ${VERSION}.`);
+  });
+
   it("leaves the draft unpublished when its notes are not the checked notes", async () => {
     const hub = github(dir);
     const changing: Run = (command, args, options) => {
@@ -1238,6 +1254,24 @@ describe("publishing", () => {
 
 describe("withdrawing", () => {
   const older = "0.1.1-beta.20261119.1";
+  /** A release's feed, naming both Macs' zips, or only `keys`. */
+  const feed = (version: string, keys = ["mac-arm64", "mac-x64"]) =>
+    JSON.stringify({
+      format: 1,
+      track: "nightly",
+      version,
+      releaseDate: "2026-11-20T18:00:00.000Z",
+      files: Object.fromEntries(
+        keys.map((key) => [
+          key,
+          {
+            url: `${releaseFolder(`v${version}`)}Clawtrate-${version}-${key}.zip`,
+            size: 10,
+            sha512: Buffer.alloc(64, 1).toString("base64"),
+          },
+        ]),
+      ),
+    });
   const row = (version: string, draft: boolean): ReleaseRow => ({
     tag_name: `v${version}`,
     draft,
@@ -1247,22 +1281,12 @@ describe("withdrawing", () => {
       "latest-mac.json",
       `Clawtrate-${version}-mac-arm64.zip`,
       `Clawtrate-${version}-mac-x64.zip`,
-    ].map((name) => ({ name, browser_download_url: `${releaseFolder(`v${version}`)}${name}` })),
+    ].map((name) => ({
+      name,
+      browser_download_url: `${releaseFolder(`v${version}`)}${name}`,
+      ...(name === "feed.json" ? { digest: `sha256:${sha256(feed(version))}` } : {}),
+    })),
   });
-  const feed = (version: string) =>
-    JSON.stringify({
-      format: 1,
-      track: "nightly",
-      version,
-      releaseDate: "2026-11-20T18:00:00.000Z",
-      files: {
-        "mac-arm64": {
-          url: `${releaseFolder(`v${version}`)}Clawtrate-${version}-mac-arm64.zip`,
-          size: 10,
-          sha512: Buffer.alloc(64, 1).toString("base64"),
-        },
-      },
-    });
   const hub = (withOlder: boolean) => {
     const made = github("/nowhere", {
       earlier: [...(withOlder ? [row(older, false)] : []), row(VERSION, false)],
@@ -1362,7 +1386,52 @@ describe("withdrawing", () => {
         ),
       ),
     ).toBe(
-      `The site offers ${older}, though GitHub lists no published beta. Run the Site workflow and run this again.`,
+      `The site still offers ${older}, and GitHub lists no published beta, so the Site workflow deploys nothing and the site keeps that feed. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one (docs/development/releases.md, "Withdraw a beta").`,
+    );
+  });
+
+  it("refuses a feed with the remaining beta's version that is not its release's feed.json", async () => {
+    // Intel Macs could not update from it.
+    expect(
+      await stopped(() =>
+        withdraw(
+          hub(true).runner,
+          VERSION,
+          serving(() => new Response(feed(older, ["mac-arm64"]))),
+        ),
+      ),
+    ).toBe(
+      `The site offers ${older}, but not the feed.json of its release. Run the Site workflow and run this again.`,
+    );
+  });
+
+  it("refuses to judge the site when GitHub reports no digest of the remaining beta's feed", async () => {
+    const made = github("/nowhere", { earlier: [row(older, false), row(VERSION, false)] });
+    delete made.releases[0]!.assets.find((asset) => asset.name === "feed.json")!.digest;
+    expect(
+      await stopped(() =>
+        withdraw(
+          made.runner,
+          VERSION,
+          serving(() => new Response(feed(older))),
+        ),
+      ),
+    ).toBe(
+      `GitHub reports no digest for v${older}'s feed.json, so the site's feed cannot be checked against it. Check ${BETA_FEED_URL} yourself.`,
+    );
+  });
+
+  it("gives the way out when the only beta is withdrawn and the site still offers it", async () => {
+    expect(
+      await stopped(() =>
+        withdraw(
+          hub(false).runner,
+          VERSION,
+          serving(() => new Response(feed(VERSION))),
+        ),
+      ),
+    ).toBe(
+      `The site still offers ${VERSION}, and GitHub lists no published beta, so the Site workflow deploys nothing and the site keeps that feed. Cut a fixed beta, or unpublish the Pages site in the repository's settings until there is one (docs/development/releases.md, "Withdraw a beta").`,
     );
   });
 
