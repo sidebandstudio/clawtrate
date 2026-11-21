@@ -221,10 +221,7 @@ interface Call {
  * A stand-in for the user's keychain search list, never this machine's own: a
  * path with spaces shows that nothing splits it.
  */
-const SEARCH_LIST = [
-  "/Volumes/Keys/login.keychain-db",
-  "/Volumes/Keys/Work Keys.keychain-db",
-];
+const SEARCH_LIST = ["/Volumes/Keys/login.keychain-db", "/Volumes/Keys/Work Keys.keychain-db"];
 
 /** `security list-keychains -d user` against `list`, which `-s` replaces. */
 function listKeychains(list: string[], args: string[]): RunResult | null {
