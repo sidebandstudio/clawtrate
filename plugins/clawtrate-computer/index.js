@@ -94,6 +94,8 @@ const WATCH_WAIT_MS = 2000;
 const CALL_CONFIRM_MS = 120_000;
 /** Calls whose end arrived, remembered so a late pre-call check records nothing. */
 const MAX_ENDED_CALLS = 256;
+/** Bot runs whose end arrived, remembered so a late pre-call check of theirs records nothing. */
+const MAX_ENDED_RUNS = 64;
 
 /**
  * What a granted take guarantees, exactly, in the answer and on the plugin's
@@ -143,6 +145,8 @@ export function newState() {
     inflight: new Map(),
     /** runId + toolCallId of calls whose end arrived, at most MAX_ENDED_CALLS, oldest first */
     endedCalls: new Set(),
+    /** agentId + runId of bot runs whose end arrived, at most MAX_ENDED_RUNS, oldest first */
+    endedRuns: new Set(),
     /** profile + targetId -> lease */
     leases: new Map(),
     /** streamId -> stream */
@@ -1352,7 +1356,7 @@ export function createComputer(api, options = {}) {
    */
   function trackCall(bot, runId, toolCallId, ctx) {
     const key = callKey(runId, toolCallId);
-    if (state.endedCalls.has(key)) return null;
+    if (state.endedCalls.has(key) || state.endedRuns.has(callKey(bot.agentId, runId))) return null;
     const record = {
       agentId: bot.agentId,
       profile: bot.profile,
@@ -1391,10 +1395,17 @@ export function createComputer(api, options = {}) {
     }
   }
 
-  // A run's end ends its calls, also one whose own end never arrived.
+  // A run's end ends its calls, also one whose own end never arrived, and one whose pre-call
+  // check comes after it.
   api.on("agent_end", (event, ctx) => {
     const runId = toolString(ctx?.runId) ?? toolString(event?.runId);
     if (!runId || !bots.has(ctx?.agentId)) return;
+    const run = callKey(ctx.agentId, runId);
+    state.endedRuns.delete(run);
+    state.endedRuns.add(run);
+    while (state.endedRuns.size > MAX_ENDED_RUNS) {
+      state.endedRuns.delete(state.endedRuns.values().next().value);
+    }
     for (const [key, record] of [...state.inflight]) {
       if (record.runId !== runId || record.agentId !== ctx.agentId) continue;
       callEnded(key);

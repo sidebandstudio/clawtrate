@@ -109,6 +109,16 @@ describe("a bot call's record ends with the call, whatever the order of the gate
     expect([...h.state.inflight.keys()]).toEqual(["run-2\nc2"]);
   });
 
+  it("a run's end that arrives before a call's pre-call check leaves that call unrecorded, and other runs' calls tracked", async () => {
+    const h = load();
+    await h.hook("agent_end", {}, { agentId: "atlas", runId: "run-1" });
+    await h.before("atlas", "run-1", "c1", { action: "act" });
+    expect(h.state.inflight.size).toBe(0);
+    await h.before("atlas", "run-2", "c2", { action: "act" });
+    expect([...h.state.inflight.keys()]).toEqual(["run-2\nc2"]);
+    expect((await h.call("control.take", tab)).payload?.state).not.toBe("granted");
+  });
+
   it("a call that has reported no end for the stated time makes a take say it cannot confirm, never that the bot is acting", async () => {
     // The drain waits 1 s here; a call is confirmed as running for 1.5 s.
     const h = load({ callConfirmMs: 1500 });
