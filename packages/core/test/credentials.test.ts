@@ -2,6 +2,7 @@
 // recoverable: every stored token, handshake and persistence step belongs to
 // the gateway it came from, and anything finishing after a switch is dropped.
 
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -243,6 +244,148 @@ describe("losing access is represented and recoverable (B1)", () => {
     ]);
     // Read access is kept throughout.
     expect(client.state.connection.scopes).toContain("operator.read");
+    client.stop();
+  });
+});
+
+const tokenMismatch = {
+  code: "UNAUTHORIZED",
+  message: "device token mismatch",
+  details: { code: "AUTH_DEVICE_TOKEN_MISMATCH", recommendedNextStep: "re_pair" },
+};
+
+const savedToken = (token: string) =>
+  JSON.stringify({ token, grantedScopes: [...READ_SCOPES], heldScopes: [...READ_SCOPES] });
+
+/** A client connected to A with `token-A` saved, on a gateway that accepts the token it is sent. */
+async function pairedOnA(storage = memoryStorage()) {
+  storage.data.set("connection", JSON.stringify({ url: URL_A, token: null }));
+  storage.data.set(tokenKey(URL_A), savedToken("token-A"));
+  const gateway = new FakeGateway();
+  gateway.connectReply = (params) => {
+    const { scopes, auth } = params as ConnectParams;
+    return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+  };
+  const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+  await client.start();
+  await until(() => client.state.connection.status === "connected");
+  return { client, gateway, storage };
+}
+
+/** The connection's token store, and its refusal of a connect that offered `offered`. */
+function tokenChanges(client: ClawtrateClient) {
+  const inner = client as unknown as {
+    auth: {
+      tokenStore: {
+        store(params: {
+          clientId: string;
+          deviceId: string;
+          role: string;
+          token: string;
+          scopes: string[];
+        }): Promise<void>;
+      };
+    };
+    handleConnectFailure(
+      error: GatewayProtocolRequestError,
+      deviceId: string,
+      url: string,
+      tokenStore: unknown,
+      plan: unknown,
+    ): unknown;
+  };
+  const tokenStore = inner.auth.tokenStore;
+  return {
+    save: (token: string) =>
+      tokenStore.store({
+        clientId: "gateway-client",
+        deviceId: "device-1",
+        role: "operator",
+        token,
+        scopes: [...READ_SCOPES],
+      }),
+    refuse: (offered: string) =>
+      inner.handleConnectFailure(
+        new GatewayProtocolRequestError(tokenMismatch),
+        "device-1",
+        URL_A,
+        tokenStore,
+        { selectedAuth: { usingStoredDeviceToken: true, storedToken: offered } },
+      ),
+  };
+}
+
+describe("a refused device token never removes a newer one", () => {
+  it("keeps token B when the refusal of token A arrives after B was saved, and connects with B", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const accept = gateway.connectReply;
+    // The attempt offers A; before the gateway's refusal of A arrives, B is saved.
+    gateway.connectReply = (params, url) => {
+      if ((params as ConnectParams).auth?.deviceToken !== "token-A") return accept(params, url);
+      storage.data.set(tokenKey(URL_A), savedToken("token-B"));
+      return { ok: false, error: tokenMismatch };
+    };
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+    await sleep(30);
+    expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).token).toBe("token-B");
+    await client.retryNow();
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAuth(gateway, gateway.connects.length - 1)?.deviceToken).toBe("token-B");
+    client.stop();
+  });
+
+  it("removes the saved token when the gateway refuses it", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    gateway.connectReply = () => ({ ok: false, error: tokenMismatch });
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+    await until(() => !storage.data.has(tokenKey(URL_A)));
+    expect(client.state.connection.paired).toBe(false);
+    client.stop();
+  });
+
+  it("removes a refused token whose save was still in progress, once the save lands", async () => {
+    const storage = gatedStorage();
+    const { client } = await pairedOnA(storage);
+    const { save, refuse } = tokenChanges(client);
+    storage.hold(tokenKey(URL_A));
+    const saved = save("token-B");
+    refuse("token-B");
+    storage.release(tokenKey(URL_A));
+    await saved;
+    await sleep(30);
+    expect(storage.data.has(tokenKey(URL_A))).toBe(false);
+    client.stop();
+  });
+
+  it("applies saves and refusals for one gateway in the order they were made", async () => {
+    const storage = gatedStorage();
+    const { client } = await pairedOnA(storage);
+    const { save, refuse } = tokenChanges(client);
+    const applied: string[] = [];
+    const set = storage.set;
+    const remove = storage.delete;
+    storage.set = async (key, value) => {
+      if (key === tokenKey(URL_A)) applied.push(`save ${JSON.parse(value).token}`);
+      await set(key, value);
+    };
+    storage.delete = async (key) => {
+      if (key === tokenKey(URL_A)) applied.push("remove");
+      await remove(key);
+    };
+    // Each save waits on a read, as a slow disk would make it.
+    storage.hold(tokenKey(URL_A));
+    const saves = [save("token-B")];
+    refuse("token-A");
+    saves.push(save("token-C"));
+    refuse("token-C");
+    saves.push(save("token-D"));
+    storage.release(tokenKey(URL_A));
+    await Promise.all(saves);
+    await sleep(30);
+    expect(applied).toEqual(["save token-B", "save token-C", "remove", "save token-D"]);
+    expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).token).toBe("token-D");
     client.stop();
   });
 });

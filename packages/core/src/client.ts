@@ -556,6 +556,14 @@ type StoredDeviceToken = {
   pairingHeld?: boolean;
 };
 
+/**
+ * A connection's token store. A rejection removes a token only through
+ * `forget`, which names the token the gateway rejected.
+ */
+type ConnectionTokenStore = GatewayBrowserDeviceTokenStore & {
+  forget(params: { deviceId: string; role: string }, rejected: string): Promise<void>;
+};
+
 type Waiter = {
   scope: string;
   resolve: () => void;
@@ -743,7 +751,7 @@ export class ClawtrateClient {
   private auth: {
     url: string;
     generation: number;
-    tokenStore: GatewayBrowserDeviceTokenStore;
+    tokenStore: ConnectionTokenStore;
     lifecycle: GatewayBrowserDeviceAuthLifecycle;
   } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
@@ -1028,8 +1036,9 @@ export class ClawtrateClient {
   }
 
   /**
-   * Run one change to the selected gateway and its saved settings after the
-   * previous one has settled, so each reads and writes what the last one left.
+   * Run one change to the selected gateway, its saved settings or its device
+   * token after the previous one has settled, so each reads and writes what the
+   * last one left.
    */
   private changeConnection<T>(change: () => Promise<T>): Promise<T> {
     const run = this.connectionChanges.then(change);
@@ -1359,28 +1368,30 @@ export class ClawtrateClient {
         clear: auth.tokenStore.clear,
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only.
-        store: async ({ deviceId, role, token, scopes }) => {
-          if (
-            generation !== this.generation ||
-            this.settings?.url !== url ||
-            this.scopeUpgrade !== upgrade
-          ) {
-            throw new Error("The gateway changed while access was being approved.");
-          }
-          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
-          const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
-          await this.writeToken(url, deviceId, role, {
-            token,
-            grantedScopes: scopes,
-            heldScopes: [
-              ...heldFromGrant(scopes),
-              ...(admin ? [ADMIN_SCOPE] : []),
-              ...(pairing ? [PAIRING_SCOPE] : []),
-            ],
-            ...(admin ? { adminHeld: true } : {}),
-            ...(pairing ? { pairingHeld: true } : {}),
-          });
-        },
+        // Queued with every other token change, so a late rejection cannot remove it.
+        store: ({ deviceId, role, token, scopes }) =>
+          this.changeConnection(async () => {
+            if (
+              generation !== this.generation ||
+              this.settings?.url !== url ||
+              this.scopeUpgrade !== upgrade
+            ) {
+              throw new Error("The gateway changed while access was being approved.");
+            }
+            const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
+            const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
+            await this.writeToken(url, deviceId, role, {
+              token,
+              grantedScopes: scopes,
+              heldScopes: [
+                ...heldFromGrant(scopes),
+                ...(admin ? [ADMIN_SCOPE] : []),
+                ...(pairing ? [PAIRING_SCOPE] : []),
+              ],
+              ...(admin ? { adminHeld: true } : {}),
+              ...(pairing ? { pairingHeld: true } : {}),
+            });
+          }),
       },
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
@@ -5173,8 +5184,8 @@ export class ClawtrateClient {
         }
         this.handleHello(hello, generation);
       },
-      onConnectFailure: async (error) =>
-        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore),
+      onConnectFailure: async (error, context) =>
+        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore, context.plan),
       resolveClose: (context) => ({
         retry: true,
         notify: true,
@@ -5314,7 +5325,8 @@ export class ClawtrateClient {
     error: GatewayProtocolRequestError,
     deviceId: string,
     url: string,
-    tokenStore: GatewayBrowserDeviceTokenStore,
+    tokenStore: ConnectionTokenStore,
+    plan: Plan | undefined,
   ) {
     const details = asRecord(error.details) ?? {};
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
@@ -5385,11 +5397,19 @@ export class ClawtrateClient {
     const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
     if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
-      // next attempt can pair again with a bootstrap token. The gateway's refusal
-      // stays on screen whether or not the host could remove it.
-      void (async () => tokenStore.clear(this.tokenParams(deviceId)))().catch(() =>
-        this.log("warn", "Could not remove the rejected device token from this device."),
-      );
+      // next attempt can pair again with a bootstrap token, but only that token:
+      // one saved since this attempt was sent is newer, and stays. The gateway's
+      // refusal stays on screen whether or not the host could remove it.
+      const rejected = plan?.selectedAuth.usingStoredDeviceToken
+        ? plan.selectedAuth.storedToken
+        : undefined;
+      if (rejected) {
+        tokenStore
+          .forget(this.tokenParams(deviceId), rejected)
+          .catch(() =>
+            this.log("warn", "Could not remove the rejected device token from this device."),
+          );
+      }
     }
 
     const pause = shouldPauseGatewayReconnect({ details: error.details });
@@ -6538,9 +6558,10 @@ export class ClawtrateClient {
   /**
    * A token store for one connection. Every operation names its gateway URL,
    * and a write is dropped once that connection is no longer current, checked
-   * after every wait, so a late write can never land after a switch.
+   * after every wait, so a late write can never land after a switch. Writes and
+   * removals run in the queue with the gateway's settings, one after another.
    */
-  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
+  private connectionTokenStore(url: string, generation: number): ConnectionTokenStore {
     const current = () => generation === this.generation && this.settings?.url === url;
     return {
       // The lifecycle uses the record's scopes for reconnects. Report the
@@ -6553,22 +6574,32 @@ export class ClawtrateClient {
           scopes: this.options.readOnly ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
-      store: async ({ deviceId, role, token, scopes }) => {
-        if (!current()) return;
-        const existing = await this.loadToken(url, deviceId, role);
-        if (!current()) return;
-        await this.writeToken(url, deviceId, role, {
-          token,
-          grantedScopes: scopes,
-          heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
-          ...(existing?.adminHeld ? { adminHeld: true } : {}),
-          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-        });
-      },
-      clear: async ({ deviceId, role }) => {
-        if (!current()) return;
-        await this.host.storage.delete(this.tokenKey(url, deviceId, role));
-      },
+      store: ({ deviceId, role, token, scopes }) =>
+        this.changeConnection(async () => {
+          if (!current()) return;
+          const existing = await this.loadToken(url, deviceId, role);
+          if (!current()) return;
+          await this.writeToken(url, deviceId, role, {
+            token,
+            grantedScopes: scopes,
+            heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
+            ...(existing?.adminHeld ? { adminHeld: true } : {}),
+            ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          });
+        }),
+      // A removal that names no token could take one saved after the rejection.
+      // This client removes a token only through `forget`.
+      clear: async () => {},
+      // Compare-and-delete, queued after every earlier token change: the token
+      // goes only while it is still the one the gateway rejected. A connect
+      // sends the saved token trimmed, so the comparison trims it too.
+      forget: ({ deviceId, role }, rejected) =>
+        this.changeConnection(async () => {
+          if (!current()) return;
+          const existing = await this.loadToken(url, deviceId, role);
+          if (!current() || existing?.token.trim() !== rejected) return;
+          await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+        }),
     };
   }
 
