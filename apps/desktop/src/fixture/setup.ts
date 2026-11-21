@@ -203,8 +203,64 @@ export const SETUP_STATES: Record<string, SetupState> = {
     ...thereFailed({ kind: "unreachable", cause: "timed out", exit: 255 }),
     route: route("unreachable"),
   },
+  // At launch, the saved route's settings refused by name, or its name leading elsewhere: Remove stays.
+  "there-resume-refused": {
+    ...there(
+      {},
+      {
+        refusal: {
+          category: "jump-host",
+          setting: "ProxyJump",
+          title: "The SSH settings for devbox include ProxyJump.",
+          sentence:
+            "Clawtrate doesn't connect through another computer. Use a plain SSH alias or Advanced.",
+        },
+      },
+    ),
+    route: route("failed"),
+  },
+  "there-endpoint-changed": {
+    ...there({}, { notice: "endpoint-changed" }),
+    route: route("failed"),
+  },
+  // Replace pressed with its box unticked: nothing replaced, said beside the two keys.
+  "there-replace-unticked": there(
+    { phase: "key" },
+    {
+      key: { state: "changed", presented: PRESENTED, trusted: TRUSTED },
+      notice: "replace-unticked",
+    },
+  ),
+  // A first forward's own LOOK found the service stopped, or another service at the port.
+  "there-gateway-stopped": thereFailed(
+    { kind: "gateway-stopped", cause: null, exit: null },
+    running,
+  ),
+  "there-service-changed": thereFailed(
+    { kind: "service-changed", cause: null, exit: null },
+    running,
+  ),
+  // Start: refused before its command ran, or ran and not confirmed.
+  "there-start-not-run": thereFailed(
+    { kind: "start-not-run", cause: null, exit: null },
+    { ...running, outcome: "stopped", service: "launchagent-stopped" },
+  ),
+  "there-start-unconfirmed": thereFailed(
+    { kind: "start-unconfirmed", cause: null, exit: null },
+    { ...running, outcome: "stopped", service: "launchagent-stopped" },
+  ),
+  // Remove couldn't delete the saved key: the route stays, and Remove is offered again.
+  "there-remove-failed": {
+    ...thereFailed({ kind: "remove-failed", cause: null, exit: null }),
+    route: route("failed"),
+  },
   // The SSH route in the app: the status strip's words, and Settings' Remove (§8).
   "route-restoring": { ...initialSetupState, route: route("restoring") },
+  /** Restoring, the forward up and the gateway not yet said who it is: no Retry. */
+  "route-restoring-identity": {
+    ...initialSetupState,
+    route: route("restoring", { retry: false }),
+  },
   "route-restored": { ...initialSetupState, route: route("restored") },
   "route-unreachable": {
     ...initialSetupState,

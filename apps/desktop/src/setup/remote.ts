@@ -486,7 +486,7 @@ export class RemoteSetup {
       slow: false,
       look: null,
       failure: null,
-      there: this.withThere({ key: null, failure: null }),
+      there: this.withThere({ key: null, failure: null, notice: null }),
     });
     const check = await transport.checkHostKey(route);
     if (attempt !== this.attempt) return;
@@ -660,6 +660,8 @@ export class RemoteSetup {
     )
       throw new Error("There is no changed key to replace. Look again.");
     const attempt = (this.attempt += 1);
+    if (this.state.there?.notice)
+      this.publish({ ...this.state, there: this.withThere({ notice: null }) });
     const detail = `Saved: ${key.trusted.label} ${key.trusted.fingerprint}\nPresented now: ${key.presented.label} ${key.presented.fingerprint}`;
     let answer: HostAnswer = { confirmed: false, checked: false };
     for (let i = 0; i < REPLACE_ASKS; i += 1) {
@@ -672,7 +674,12 @@ export class RemoteSetup {
       if (attempt !== this.attempt || !answer.confirmed || answer.checked) break;
     }
     if (attempt !== this.attempt) return;
-    if (!answer.confirmed || !answer.checked) return;
+    if (!answer.confirmed) return;
+    if (!answer.checked) {
+      // Replace pressed and the box left unticked: nothing replaced, and the screen says so.
+      this.publish({ ...this.state, there: this.withThere({ notice: "replace-unticked" }) });
+      return;
+    }
     const replaced = transport.replaceTrustedKey(route, capture.captureId);
     this.capture = null;
     if (!replaced.ok) {
@@ -1282,18 +1289,20 @@ export class RemoteSetup {
       programSum: fresh.programSum,
     });
     if (attempt !== this.attempt) return;
-    if (ran.ok && ran.program !== fresh.program) {
-      this.failSetup("changed");
+    // The script refused before START: its program wasn't the one the look named. Nothing ran.
+    if (ran.ok && (ran.program !== fresh.program || !ran.answer)) {
+      this.failThere({ kind: "start-not-run", cause: null, exit: null });
       return;
     }
-    if (!ran.ok || !ran.answer || ran.answer.exit !== 0) {
-      if (!ran.ok && ran.kind === "failed") this.failFromTransport(ran);
-      else
-        this.failThere({
-          kind: "start-failed",
-          cause: null,
-          exit: ran.ok ? (ran.answer?.exit ?? null) : null,
-        });
+    if (!ran.ok) {
+      // ssh couldn't sign in or reach it: START didn't run. Anything else: it may have.
+      if (ran.kind === "failed" || ran.kind === "not-supported-here" || ran.kind === "not-pinned")
+        this.failFromTransport(ran);
+      else this.failThere({ kind: "start-unconfirmed", cause: null, exit: null });
+      return;
+    }
+    if (ran.answer!.exit !== 0) {
+      this.failThere({ kind: "start-failed", cause: null, exit: ran.answer!.exit });
       return;
     }
     this.publish({ ...this.state, step: 1 });
@@ -1312,7 +1321,8 @@ export class RemoteSetup {
       await new Promise((resolve) => setTimeout(resolve, START_LOOK_GAP_MS));
       if (attempt !== this.attempt) return;
     }
-    this.failThere({ kind: "start-failed", cause: null, exit: null });
+    // START ran and exited 0; what followed never showed the gateway running.
+    this.failThere({ kind: "start-unconfirmed", cause: null, exit: null });
   }
 
   // Remove ----------------------------------------------------------------------
@@ -1469,7 +1479,27 @@ export class RemoteSetup {
     const route = transport.prepareRoute(record.id, record.destination);
     if (!route.ok || route.endpoint !== record.endpoint) {
       failRoute();
-      this.publish({ ...initialSetupState, there: emptyThere(record.destination) });
+      // The field says why: the setting refused by name, a name that isn't usable, or the name
+      // now resolving to another account, host or port; the saved route's Remove stays offered.
+      const there = emptyThere(record.destination);
+      this.publish({
+        ...initialSetupState,
+        there: !route.ok
+          ? route.kind === "refused"
+            ? {
+                ...there,
+                refusal: {
+                  category: route.category,
+                  setting: route.setting,
+                  title: route.title,
+                  sentence: route.sentence,
+                },
+              }
+            : route.kind === "invalid-destination"
+              ? { ...there, invalid: true }
+              : { ...there, failure: { kind: "app-files-unsafe", cause: null, exit: null } }
+          : { ...there, notice: "endpoint-changed" },
+      });
       return;
     }
     this.route = route;

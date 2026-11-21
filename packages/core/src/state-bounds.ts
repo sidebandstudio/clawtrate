@@ -1049,6 +1049,7 @@ const there = object<SshSetup>()({
   }),
   failure: object<NonNullable<SshSetup["failure"]>>()({ kind: ENUM, cause: ENUM, exit: NUMBER }),
   resume: FLAG,
+  notice: ENUM,
 });
 const route = object<RouteStatus>()({
   name: text(MAX_DESTINATION_CHARS),

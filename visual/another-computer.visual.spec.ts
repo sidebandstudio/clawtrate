@@ -24,6 +24,14 @@ const SCREENS = [
   "there-contradictory",
   "there-resume",
   "there-resume-failed",
+  "there-resume-refused",
+  "there-endpoint-changed",
+  "there-replace-unticked",
+  "there-gateway-stopped",
+  "there-service-changed",
+  "there-start-not-run",
+  "there-start-unconfirmed",
+  "there-remove-failed",
 ];
 const STRIPS = [
   "route-restoring",
@@ -32,6 +40,7 @@ const STRIPS = [
   "route-key-changed",
   "route-failed",
   "route-different",
+  "route-restoring-identity",
 ];
 
 const sent = (page: Page) =>
@@ -200,5 +209,21 @@ test.describe("behaviour", () => {
     expect(await sent(page)).toContain(JSON.stringify({ type: "setupRetryRoute" }));
     await openFixture(page, "setup=route-different", "light");
     await expect(strip).toContainText("A different OpenClaw gateway answered");
+  });
+  test("F-495 F-499: a saved route that couldn't be opened keeps Remove on the field and the key screens, and Replace unticked says nothing was replaced", async ({
+    page,
+  }) => {
+    for (const state of ["there-resume-refused", "there-endpoint-changed"]) {
+      await openFixture(page, `setup=${state}`, "light");
+      await page.getByRole("button", { name: /^Remove you@devbox\.example/ }).click();
+      expect(await sent(page)).toContain(JSON.stringify({ type: "setupRemoveRoute" }));
+    }
+    await expect(page.getByText(/no longer lead to you@devbox\.example/)).toBeVisible();
+    await openFixture(page, "setup=there-replace-unticked", "light");
+    await expect(page.getByText("Nothing was replaced.")).toBeVisible();
+    await openFixture(page, "setup=route-restoring-identity", "light");
+    await expect(page.getByTestId("status-strip").getByRole("button")).toHaveCount(0);
+    await openFixture(page, "setup=there-remove-failed", "light");
+    await expect(page.getByRole("button", { name: "Remove again…" })).toBeVisible();
   });
 });

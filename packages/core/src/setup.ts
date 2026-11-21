@@ -182,8 +182,12 @@ export type SshFailureKind =
   | "code-failed"
   /** Remove couldn't delete the route's pinned key: nothing else was forgotten. */
   | "remove-failed"
-  /** Start was run and the gateway didn't come up. */
-  | "start-failed";
+  /** OpenClaw's start command ran and exited with an error (`exit`). */
+  | "start-failed"
+  /** The start command didn't run there: its program was no longer the one the look named. */
+  | "start-not-run"
+  /** The start command ran, and Clawtrate couldn't establish afterwards that the gateway runs. */
+  | "start-unconfirmed";
 
 export type UnreachableWords =
   "connection refused" | "no such name" | "timed out" | "network unreachable";
@@ -223,6 +227,12 @@ export type SshSetup = {
   failure: { kind: SshFailureKind; cause: UnreachableWords | null; exit: number | null } | null;
   /** At launch: the saved route is being opened again with its saved token, no new pairing. */
   resume?: boolean;
+  /**
+   * Something the screen says beside its usual words: Replace stopped with
+   * its box unticked, so nothing was replaced; or, at launch, the saved
+   * route's name now resolves to another account, host or port.
+   */
+  notice?: "replace-unticked" | "endpoint-changed" | null;
 };
 
 /** Where the app's SSH route stands (§8): the status strip's words come from it. */

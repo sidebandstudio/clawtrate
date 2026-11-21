@@ -1023,10 +1023,21 @@ function sshFailureCopy(
     case "start-failed":
       return {
         lead: "OpenClaw didn't start.",
-        text:
-          failure.exit !== null && failure.exit !== 0
-            ? `OpenClaw exited with code ${failure.exit}.`
-            : "Nothing answered on its port after the start request.",
+        text: `Its start command ran on ${withPort(account, there.port)} and exited with code ${failure.exit ?? "unknown"}.`,
+        next: null,
+        retry: true,
+      };
+    case "start-not-run":
+      return {
+        lead: "Clawtrate didn't start OpenClaw.",
+        text: `OpenClaw's program on ${withPort(account, there.port)} changed since the look, so the start command didn't run. Nothing was changed there. Look again.`,
+        next: null,
+        retry: true,
+      };
+    case "start-unconfirmed":
+      return {
+        lead: "Clawtrate couldn't confirm OpenClaw started.",
+        text: `It asked OpenClaw on ${withPort(account, there.port)} to start, and couldn't establish afterwards that the gateway runs. Look again.`,
         next: null,
         retry: true,
       };
@@ -1125,6 +1136,15 @@ function AnotherComputer({
               {there.refusal.sentence}
             </Note>
           )}
+          {there?.notice === "endpoint-changed" && setup.route && (
+            <Note
+              tone="warn"
+              lead={`The SSH settings for ${there.destination} no longer lead to ${withPort(setup.route.account, setup.route.port)}.`}
+            >
+              Clawtrate didn't connect. Look there to check where they lead now, or remove the saved
+              route.
+            </Note>
+          )}
           <Actions>
             <button
               type="submit"
@@ -1138,6 +1158,7 @@ function AnotherComputer({
           </Actions>
         </form>
         {advancedLink}
+        {removeSaved}
       </>
     );
   }
@@ -1198,13 +1219,16 @@ function AnotherComputer({
       <>
         <Back onBack={cancel} />
         <Mark />
-        <Title id="setup-title">{`On ${account}`}</Title>
+        <Title id="setup-title">{`On ${withPort(account, there.port)}`}</Title>
         <Note
           tone="danger"
           lead={`SSH presented a key that differs from the saved key for ${withPort(account, there.port)}.`}
         >
           {`This happens when a computer is reinstalled, and it is also what someone between you and ${account} would cause. Clawtrate won't connect until you decide.`}
         </Note>
+        {there.notice === "replace-unticked" && (
+          <Note lead="Nothing was replaced.">{`The saved key is replaced only when the dialog's box "I checked the new key on ${account} itself" is ticked.`}</Note>
+        )}
         <div className="s-prints">
           {key.trusted && (
             <Fingerprint
@@ -1229,6 +1253,7 @@ function AnotherComputer({
             Replace the saved key…
           </SmallLink>
         </p>
+        {removeSaved}
       </>
     );
   }
@@ -1242,9 +1267,11 @@ function AnotherComputer({
         <Back onBack={atConnect ? cancel : onFirst} />
         <Mark />
         <Title id="setup-title">
-          {atConnect
-            ? `Connecting to ${withPort(account, there.port)}`
-            : `Looking on ${withPort(account, there.port)}`}
+          {there.failure.kind.startsWith("start-")
+            ? `Starting OpenClaw on ${withPort(account, there.port)}`
+            : atConnect
+              ? `Connecting to ${withPort(account, there.port)}`
+              : `Looking on ${withPort(account, there.port)}`}
         </Title>
         <Note tone="danger" lead={copy.lead}>
           {copy.text}
@@ -1258,10 +1285,14 @@ function AnotherComputer({
               Try again
             </Primary>
           )}
-          {!copy.retry && <Primary onClick={onAdvanced}>Use Advanced</Primary>}
+          {there.failure.kind === "remove-failed" ? (
+            <Primary onClick={() => void send({ type: "setupRemoveRoute" })}>Remove again…</Primary>
+          ) : (
+            !copy.retry && <Primary onClick={onAdvanced}>Use Advanced</Primary>
+          )}
         </Actions>
         {copy.retry && advancedLink}
-        {removeSaved}
+        {there.failure.kind !== "remove-failed" && removeSaved}
       </>
     );
   }

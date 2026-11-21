@@ -512,6 +512,8 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       expect(replaces[1]!.detail).toMatch(/^Tick the box to replace the key, or Cancel\./);
       expect(h.knownHosts()).toBe(pinned);
       expect(h.setup().phase).toBe("key");
+      // And the screen says nothing was replaced, rather than going quiet.
+      expect(h.setup().there?.notice).toBe("replace-unticked");
       expect(h.routes.hasToken(record!.key)).toBe(true);
       tick = true;
       await h.remote.replaceKey();
@@ -896,6 +898,89 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       }
     } finally {
       onSpawn = null;
+      stub.setStatus("default", running());
+    }
+  });
+
+  it("F-495 F-499: at launch, settings refused by name or a name that now leads elsewhere are said on the field, and the saved route's Remove stays", async () => {
+    const h = host();
+    await connected(h);
+    await h.remote.closeAll();
+    const config = readFileSync(t.world.personConfig, "utf8");
+    try {
+      t.writeConfig(
+        config.replace(
+          "Host devbox devbox-again\n",
+          "Host devbox devbox-again\n  ProxyJump elsewhere\n",
+        ),
+      );
+      const refused = host({ dir: h.dir, storage: h.storage });
+      await refused.client.start();
+      await refused.remote.resume();
+      expect(refused.setup().there?.refusal).toMatchObject({ setting: "ProxyJump" });
+      expect(refused.setup().route).not.toBeNull();
+      await refused.remote.closeAll();
+      const closed = await freePort();
+      t.writeConfig(config.replace(`  Port ${sshd.port}\n`, `  Port ${closed}\n`));
+      const moved = host({ dir: h.dir, storage: h.storage });
+      await moved.client.start();
+      await moved.remote.resume();
+      expect(moved.setup().there?.notice).toBe("endpoint-changed");
+      expect(moved.setup().route).not.toBeNull();
+      await moved.remote.closeAll();
+    } finally {
+      t.writeConfig(config);
+    }
+  });
+
+  it("F-497: Start says which it was: refused before its command ran, the command failing, or a start Clawtrate couldn't confirm", async () => {
+    const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+    const program = join(t.home, ".openclaw", "bin", "openclaw");
+    const saved = join(root, "openclaw-saved-start");
+    copyFileSync(program, saved);
+    try {
+      // The program changes between the re-read and START: the script refuses, nothing ran.
+      stub.setStatus("default", stopped);
+      let armed = false;
+      let scripts = 0;
+      const h = host({
+        answer: (question) => {
+          if (question.confirm === "Start") armed = true;
+          return { confirmed: true, checked: false };
+        },
+      });
+      await lookOnDevbox(h);
+      onSpawn = (args) => {
+        if (!armed || !args.includes("/bin/sh")) return;
+        scripts += 1;
+        if (scripts === 2) {
+          writeFileSync(program, `${readFileSync(saved, "utf8")}\n# changed\n`);
+          chmodSync(program, 0o755);
+        }
+      };
+      const calls = stub.calls().length;
+      await h.remote.start();
+      expect(h.setup().there?.failure?.kind).toBe("start-not-run");
+      expect(stub.calls().slice(calls)).not.toContain("gateway start");
+      onSpawn = null;
+      copyFileSync(saved, program);
+      chmodSync(program, 0o755);
+      // The command runs and exits 3.
+      stub.setStart("default", 3);
+      await lookOnDevbox(h);
+      await h.remote.start();
+      expect(h.setup().there?.failure).toMatchObject({ kind: "start-failed", exit: 3 });
+      // It runs and exits 0, and the gateway never shows as running.
+      stub.setStart("default", 0);
+      await lookOnDevbox(h);
+      await h.remote.start();
+      expect(h.setup().there?.failure?.kind).toBe("start-unconfirmed");
+      await h.remote.closeAll();
+    } finally {
+      onSpawn = null;
+      copyFileSync(saved, program);
+      chmodSync(program, 0o755);
+      stub.setStart("default", 0);
       stub.setStatus("default", running());
     }
   });
