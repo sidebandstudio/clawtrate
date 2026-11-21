@@ -412,6 +412,12 @@ const SESSION_LIST_PARAMS = {
 };
 const HISTORY_LIMIT = 200;
 
+/** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
+function holdsInput(history: RawRecord | null): boolean {
+  const items = asRecord(history?.pendingInputs)?.items;
+  return Array.isArray(items) && items.some((item) => asRecord(item)?.state !== "cancelled");
+}
+
 /** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
 function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
   const kept = new Map<string, RawRecord>();
@@ -793,6 +799,9 @@ export class ClawtrateClient {
   private nextIncarnation = 0;
   private readonly afterRunning = new Set<string>();
   private readonly afterAgain = new Set<string>();
+  /** Tasks whose runs' `agent.wait` check is on its way, and the runs each last checked. */
+  private readonly endChecking = new Set<string>();
+  private readonly endChecked = new Map<string, string>();
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -1199,6 +1208,7 @@ export class ClawtrateClient {
   private releaseTask(key: string): void {
     this.retained.delete(key);
     this.incarnations.delete(key);
+    this.endChecked.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -3584,36 +3594,52 @@ export class ClawtrateClient {
   }
 
   /**
-   * Two runs of the task still look active after a history read: one whose end a connection gap
-   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * Two runs of the task still look active, after a history read or from live events alone: one
+   * whose end this client missed, beside the one the gateway runs now. Stop names neither until
    * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
    * `operator.write`). A run it reports over settles as it reports; one it reports still going,
-   * or does not know, stays as it is.
+   * or does not know, stays as it is. One check at a time per task, and one per set of runs
+   * until the next history read, so answers that change nothing ask nothing more.
    */
-  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+  private async settleEndedRuns(key: string): Promise<void> {
     const transcript = this.state.transcripts[key];
     const first = transcript && activeRun(transcript);
     if (!first || runningRunId(transcript, first.id) !== null) return;
     if (!this.state.connection.canWrite || this.options.readOnly) return;
-    const incarnation = this.incarnations.get(key);
     const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
-    await Promise.all(
-      asked.map(async (run) => {
-        let answer: RawRecord | null;
-        try {
-          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
-        } catch (error) {
-          if (generation === this.generation)
-            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
-          return;
-        }
-        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
-          return;
-        this.updateActivity(key, (activity, ctx) =>
-          settleRunFromWait(activity, run.id, answer, ctx),
-        );
-      }),
-    );
+    const runIds = asked.map((run) => run.id).join("\u0000");
+    if (this.endChecking.has(key) || this.endChecked.get(key) === runIds) return;
+    this.endChecking.add(key);
+    this.endChecked.set(key, runIds);
+    const generation = this.generation;
+    const incarnation = this.incarnations.get(key);
+    try {
+      await Promise.all(
+        asked.map(async (run) => {
+          let answer: RawRecord | null;
+          try {
+            answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+          } catch (error) {
+            if (generation === this.generation)
+              this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+            return;
+          }
+          if (
+            !answer ||
+            generation !== this.generation ||
+            this.incarnations.get(key) !== incarnation
+          )
+            return;
+          this.updateActivity(key, (activity, ctx) =>
+            settleRunFromWait(activity, run.id, answer, ctx),
+          );
+        }),
+      );
+    } finally {
+      this.endChecking.delete(key);
+    }
+    // Runs that started while this check was on its way are asked now, unless they are the same set.
+    void this.settleEndedRuns(key);
   }
 
   /**
@@ -3728,8 +3754,7 @@ export class ClawtrateClient {
         aliases,
       );
       const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlight !== null || holdsInput(history);
       const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
         ids.has(run.id),
       );
@@ -4730,6 +4755,7 @@ export class ClawtrateClient {
     });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
+    void this.settleEndedRuns(key);
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -5230,6 +5256,7 @@ export class ClawtrateClient {
     this.spawnedBy.clear();
     this.foreign.clear();
     this.foreignReads.clear();
+    this.endChecked.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -5884,9 +5911,7 @@ export class ClawtrateClient {
       const scratch = new RawTable();
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy =
-        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlightId !== null || holdsInput(history);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
@@ -5950,6 +5975,8 @@ export class ClawtrateClient {
       };
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
+      // A read is news of its own: the runs it leaves active are asked again.
+      this.endChecked.delete(key);
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
@@ -5960,7 +5987,6 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
-      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({

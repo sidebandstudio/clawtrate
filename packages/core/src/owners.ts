@@ -128,6 +128,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   expiryTimers: { max: T, each: ID, row: "bookkeeping" },
   afterRunning: { max: T, each: ID, row: "bookkeeping" },
   afterAgain: { max: T, each: ID, row: "bookkeeping" },
+  // A task's `agent.wait` check in flight, and the ids of the active runs it last checked.
+  endChecking: { max: T, each: ID, row: "bookkeeping" },
+  endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
