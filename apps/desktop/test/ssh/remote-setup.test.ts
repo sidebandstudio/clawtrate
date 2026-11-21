@@ -379,6 +379,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     await sshd.stop();
     await sshd.start(fresh);
     try {
+      // The live route reconnects, meets the new key, stops and says so: nothing is sent.
+      const connects = h.fake.connects.length;
+      await until(() => h.setup().route?.phase === "key-changed", 30_000);
+      expect(h.fake.connects.length).toBe(connects);
       await h.remote.there("devbox");
       const key = h.setup().there!.key!;
       expect(h.setup().phase).toBe("key");
