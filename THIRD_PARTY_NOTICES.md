@@ -12,6 +12,8 @@ Source: https://github.com/pingdotgg/t3code, commit `18d1c4db`. Licence: MIT.
 | `packages/relay-protocol/test/register-proof.test.ts` | `packages/shared/src/dpop.test.ts`, `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts`                       |
 | `services/relay/src/core/store.ts`                    | `infra/relay/src/auth/DpopProofs.ts`, `infra/relay/src/environments/EnvironmentLinker.ts`                            |
 | `services/relay/test/store.test.ts`                   | `infra/relay/src/auth/DpopProofs.verifyAndConsume.test.ts`, `infra/relay/src/environments/EnvironmentLinker.test.ts` |
+| `packages/connector/src/supervisor.ts`                | `apps/server/src/cloud/ManagedEndpointRuntime.ts`                                                                    |
+| `packages/connector/test/supervisor.test.ts`          | `apps/server/src/cloud/ManagedEndpointRuntime.test.ts`                                                               |
 
 ```
 MIT License
