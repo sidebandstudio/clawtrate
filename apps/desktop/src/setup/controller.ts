@@ -447,7 +447,11 @@ export class SetupController implements SetupHost {
       this.publish({ ...this.state, step: 1 });
       this.owned = { attempt, url: found.url };
       this.watch(attempt, found.url, found.port);
-      await client.connectForSetup(found.url, { check: listening, verify });
+      await client.connectForSetup(found.url, {
+        check: listening,
+        verify,
+        consent: () => !expired(),
+      });
       return;
     }
     const made = await opened.run({
@@ -473,7 +477,11 @@ export class SetupController implements SetupHost {
     this.owned = { attempt, url: found.url };
     this.watch(attempt, found.url, found.port);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
-    await client.connectWithSetupCode(code, { check: listening, verify });
+    await client.connectWithSetupCode(code, {
+      check: listening,
+      verify,
+      consent: () => !expired(),
+    });
   }
 
   /**

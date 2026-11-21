@@ -5,7 +5,12 @@
 // adds pairing and nothing else, whatever the gateway grants.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, SETUP_CONNECT_REFUSED, SETUP_PAIRING_GONE } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  SETUP_CONNECT_REFUSED,
+  SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_GONE,
+} from "../src/client.ts";
 import { MAX_LOOK_OTHERS, initialSetupState } from "../src/setup.ts";
 import { PAIRING_SCOPE, READ_SCOPE, READ_SCOPES, WRITE_SCOPE } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
@@ -99,6 +104,48 @@ describe("a setup reconnect with a saved pairing", () => {
       () => gateway.connects.length > count && client.state.connection.status === "connected",
     );
     expect((gateway.connects.at(-1) as Connect).scopes).toEqual([READ_SCOPE, WRITE_SCOPE]);
+    client.stop();
+  });
+
+  it("F-492: the first frame with a credential goes only within the dialog's consent, a saved token's too", async () => {
+    for (const mode of ["saved-token", "code"] as const) {
+      const gateway = granting([READ_SCOPE]);
+      const storage = memoryStorage(
+        mode === "saved-token" ? { [tokenKey(URL)]: record([READ_SCOPE]) } : {},
+      );
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      await client.start();
+      // The dialog's two minutes have passed by the time the socket is ready to send.
+      const consent = () => false;
+      if (mode === "saved-token") await client.connectForSetup(URL, { consent });
+      else
+        await client.connectWithSetupCode(
+          {
+            url: URL,
+            bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnop",
+            expiresAtMs: Date.now() + 600_000,
+          },
+          { consent },
+        );
+      await until(() => client.state.connection.error?.code === SETUP_ENDPOINT_CHANGED);
+      await sleep(100);
+      expect(gateway.connects).toHaveLength(0);
+      client.stop();
+    }
+    // Within it, the frame goes; once its hello is in, the consent is used and a reconnect
+    // after the two minutes still goes on.
+    const gateway = granting([READ_SCOPE]);
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    let holds = true;
+    await client.connectForSetup(URL, { consent: () => holds });
+    await until(() => client.state.connection.status === "connected");
+    holds = false;
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+    );
     client.stop();
   });
 

@@ -358,6 +358,38 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
+  it("F-492: two minutes passing while the socket signs sends no credential, the code's nor a saved token's", async () => {
+    for (const saved of [false, true]) {
+      let now = Date.now();
+      const h = harness({ now: () => now });
+      if (saved)
+        h.storage.data.set(
+          tokenKey(URL),
+          JSON.stringify({
+            token: "device-token",
+            grantedScopes: ["operator.read"],
+            heldScopes: ["operator.read"],
+          }),
+        );
+      // The two minutes run out while the socket's request is being signed.
+      const host = h.client as unknown as {
+        host: { signer: { sign: (p: string) => Promise<string> } };
+      };
+      const sign = host.host.signer.sign;
+      host.host.signer.sign = async (payload) => {
+        now += OPERATION_LIFETIME_MS + 1;
+        return sign(payload);
+      };
+      await h.client.start();
+      await h.setup.look();
+      await h.setup.connect();
+      await until(() => h.setup.current.phase === "failed" || h.gateway.connects.length > 0);
+      expect(h.gateway.connects).toEqual([]);
+      expect(h.setup.current.failure?.kind).toBe("changed");
+      h.client.stop();
+    }
+  });
+
   it("F-492: a code that can't be made ends in its own state, with the exit code", async () => {
     const h = harness({
       replies: { [`qr --json --voice-node --url ${URL}`]: { exitCode: 1, stdout: "" } },

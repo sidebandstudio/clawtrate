@@ -588,14 +588,24 @@ function withinAsked(granted: readonly string[], asked: readonly string[]): stri
  * listener again, once each socket opens and again just before the frame that
  * carries its credential. Either failing sends nothing.
  */
-export type SetupEndpointCheck = { check?: () => boolean; verify?: () => Promise<boolean> };
+export type SetupEndpointCheck = {
+  check?: () => boolean;
+  verify?: () => Promise<boolean>;
+  /**
+   * Whether the host's dialog consent still holds (its two minutes), asked just before the
+   * first frame that carries a credential, a saved token's included. Once a hello is in, the
+   * consent is used and isn't asked again.
+   */
+  consent?: () => boolean;
+};
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
-  if (!setup.check && !setup.verify) return null;
+  if (!setup.check && !setup.verify && !setup.consent) return null;
   return {
     url,
     check: setup.check ?? (() => true),
     ...(setup.verify ? { verify: setup.verify } : {}),
+    ...(setup.consent ? { consent: setup.consent } : {}),
   };
 }
 
@@ -861,6 +871,8 @@ export class ClawtrateClient {
     check: () => boolean;
     /** Reads the endpoint's listener again: once each socket opens, and before its credential. */
     verify?: () => Promise<boolean>;
+    /** The dialog's consent, until the first hello: asked before the first credential frame. */
+    consent?: () => boolean;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -5455,6 +5467,14 @@ export class ClawtrateClient {
           throw new Error("the setup connection's endpoint changed");
         }
         if (generation !== this.generation) throw new Error("the connection was replaced");
+        // The first frame with a credential, a saved token's included, goes only within the
+        // dialog's consent; past it nothing is sent and the screen says "changed".
+        const consent = this.setupCheck?.url === settings.url ? this.setupCheck.consent : undefined;
+        if (setup && consent && !consent()) {
+          this.setupEndpointChanged(settings.url, generation);
+          this.close();
+          throw new Error("the setup consent ran out");
+        }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
@@ -5506,6 +5526,8 @@ export class ClawtrateClient {
         if (!live()) return;
         // Only this connection may drop this gateway's bootstrap secret.
         if (generation !== this.generation || this.settings?.url !== settings.url) return;
+        // A hello is in: the dialog's consent is used, and later retries don't ask it again.
+        if (this.setupCheck?.url === settings.url) delete this.setupCheck.consent;
         const gate = this.tokenGate;
         if (gate?.generation === generation) {
           // The code is used: it is forgotten whatever the grant.
