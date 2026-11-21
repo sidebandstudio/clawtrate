@@ -562,12 +562,8 @@ export function Shell({
                 toggleRef={toggleRef}
                 inert={drawerOpen || inert}
                 firstBot={state.accounts.firstBot}
-                policy={state.accounts.policy}
+                policies={state.accounts.policies}
                 onNewBot={openNewBot}
-                onReviewSettings={() => {
-                  setPanel(true);
-                  setWorkTab("settings");
-                }}
               />
             </WorkLinksContext.Provider>
           </OpenTaskContext.Provider>

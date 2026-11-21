@@ -8,7 +8,9 @@
 // machine's approvals file are compared with what they were, and under "Ask
 // before acting" a harmless command no allowlist lists raises the gateway's
 // own approval, which is then denied. No command runs under "Run without
-// routine approvals" here.
+// routine approvals" here. Then another admin saves Never while a new bot's
+// first task is open, and a second Create while the first bot is unfinished,
+// across a restart of the host.
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -63,19 +65,27 @@ async function approve(): Promise<void> {
     .toMatch(/^Approved /m);
 }
 
-/** One bridge command, over the host's own bridge socket. */
-async function hostCommand(command: Json): Promise<void> {
-  await page.evaluate(
+/** One bridge command, over the host's own bridge socket: its result, or the host's refusal. */
+async function hostCommand(command: Json): Promise<{ ok: boolean; error?: string }> {
+  return page.evaluate(
     (command) =>
-      new Promise<void>((resolve, reject) => {
+      new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
         const socket = new WebSocket(`ws://${location.host}/bridge`);
         socket.onmessage = (event) => {
-          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          const message = JSON.parse(String(event.data)) as {
+            type: string;
+            id?: string;
+            ok?: boolean;
+            error?: string;
+          };
           if (message.type === "hello")
             socket.send(JSON.stringify({ type: "command", id: "do", command }));
           else if (message.id === "do") {
             socket.close();
-            resolve();
+            resolve({
+              ok: message.ok === true,
+              ...(message.error ? { error: message.error } : {}),
+            });
           }
         };
         socket.onerror = () => reject(new Error("bridge socket error"));
@@ -84,8 +94,27 @@ async function hostCommand(command: Json): Promise<void> {
   );
 }
 
+/** One `config.patch` by the instance's own admin, on the hash just read. */
+async function patchConfig(patch: Json): Promise<void> {
+  const { hash } = await admin.request<{ hash: string }>("config.get", {});
+  await admin.request("config.patch", { raw: JSON.stringify(patch), baseHash: hash });
+}
+
+/** The bot's tasks, as the gateway lists them. */
+async function tasksOf(bot: string): Promise<number> {
+  const list = await admin.request<{ totalCount?: number; sessions: unknown[] }>("sessions.list", {
+    agentId: bot,
+    archived: "all",
+  });
+  return list.sessions.length;
+}
+
 /** New bot through the interface: a name, the gateway's choice of account, then a command choice. */
-async function create(name: string, choice: "Ask before acting" | "Run without routine approvals") {
+async function create(
+  name: string,
+  choice: "Ask before acting" | "Run without routine approvals",
+  closes = true,
+) {
   await page.keyboard.press("ControlOrMeta+n");
   const dialog = page.getByTestId("new-bot");
   await dialog.getByRole("textbox", { name: "Name" }).fill(name);
@@ -98,7 +127,7 @@ async function create(name: string, choice: "Ask before acting" | "Run without r
   await expect(dialog.getByTestId("create")).toBeDisabled();
   await group.getByRole("radio", { name: choice }).click();
   await dialog.getByTestId("create").click();
-  await expect(dialog).toHaveCount(0, { timeout: 60_000 });
+  if (closes) await expect(dialog).toHaveCount(0, { timeout: 60_000 });
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -246,4 +275,94 @@ test("F-051: Run without routine approvals writes full for that bot alone, and A
     );
   await expect(note).not.toContainText(/effective/i);
   await expect(page.getByTestId("composer-input")).toBeEnabled();
+});
+
+test("F-051 F-034: another admin saves Never while the new bot's first task is open: the note says what is saved now, and the composer closes until Ask is back", async () => {
+  test.setTimeout(180_000);
+  await create("Watcher", "Ask before acting");
+  const note = page.getByTestId("policy-note");
+  await expect(note).toHaveText(
+    "Watcher's saved command setting is Ask before acting.The gateway reports that the default command policy asks on an allowlist miss.",
+    { timeout: 30_000 },
+  );
+  const field = page.getByTestId("composer-input");
+  await expect(field).toBeEnabled();
+  // Another admin, on its own connection, saves Never for that bot.
+  await patchConfig({ agents: { entries: { watcher: { tools: { exec: { mode: "deny" } } } } } });
+  await expect(note).toContainText("Clawtrate couldn't confirm Watcher's command setting.", {
+    timeout: 45_000,
+  });
+  await expect(note).toContainText("Its saved command setting is Never.");
+  await expect(note).not.toContainText("asks on an allowlist miss");
+  await expect(field).toBeDisabled();
+  // Ask again: the note says so, with the label read after it, and the composer opens.
+  await patchConfig({ agents: { entries: { watcher: { tools: { exec: { mode: "ask" } } } } } });
+  await expect(note).toHaveText(
+    "Watcher's saved command setting is Ask before acting.The gateway reports that the default command policy asks on an allowlist miss.",
+    { timeout: 45_000 },
+  );
+  await expect(field).toBeEnabled();
+});
+
+test("F-034: a second Create while the first bot is unfinished keeps the first held, after a restart of the host too, until Write them again", async () => {
+  test.setTimeout(360_000);
+  // A tool server whose name can't be written as a deny pattern: step 2 stops, writing nothing.
+  await patchConfig({ mcp: { servers: { "not a pattern": { command: "/usr/bin/true" } } } });
+  await create("Holder", "Ask before acting", false);
+  const dialog = page.getByTestId("new-bot");
+  await expect(dialog).toHaveCount(0, { timeout: 60_000 });
+  expect(entries(await config()).holder?.tools).toBeUndefined();
+  expect(await tasksOf("holder")).toBe(0);
+  const note = page.getByTestId("policy-note");
+  await expect(note).toContainText("Clawtrate couldn't confirm Holder's command setting.", {
+    timeout: 30_000,
+  });
+  await patchConfig({ mcp: { servers: { "not a pattern": null } } });
+
+  // A second Create, finished.
+  await create("Second", "Run without routine approvals");
+  expect(entries(await config()).second).toMatchObject({ tools: { exec: { mode: "full" } } });
+  // The first is still held: no task, empty or not, and nothing written for it.
+  for (const command of [
+    { type: "newTask", botId: "holder" },
+    { type: "newMainTask", botId: "holder" },
+    { type: "createTask", botId: "holder", text: "hello" },
+  ]) {
+    const answer = await hostCommand(command);
+    expect(answer.ok, JSON.stringify(command)).toBe(false);
+    expect(answer.error).toMatch(/couldn't confirm Holder's/);
+  }
+  expect(await tasksOf("holder")).toBe(0);
+  expect(entries(await config()).holder?.tools).toBeUndefined();
+
+  // A fresh host, on the same data: still held.
+  await stopChild(host!.child);
+  const spawned = startHost(INSTANCE, STATIC, host!.data);
+  spawned.gated.release();
+  host = { child: spawned.host, url: await spawned.url, data: host!.data };
+  await page.goto(host.url);
+  await expect(page.getByTestId("plus")).toBeVisible({ timeout: 60_000 });
+  const again = await hostCommand({ type: "newTask", botId: "holder" });
+  expect(again.ok).toBe(false);
+  expect(again.error).toMatch(/couldn't confirm Holder's/);
+  expect(await tasksOf("holder")).toBe(0);
+
+  // Its note, rebuilt from what the host kept, writes both steps for it alone.
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Holder\b/ })
+    .click();
+  const rebuilt = page.getByTestId("policy-note");
+  await expect(rebuilt).toContainText("Clawtrate couldn't confirm Holder's command setting.", {
+    timeout: 30_000,
+  });
+  await rebuilt.getByRole("button", { name: "Write them again" }).click();
+  await expect(rebuilt).toContainText("Holder's saved command setting is Ask before acting.", {
+    timeout: 60_000,
+  });
+  expect(entries(await config()).holder).toMatchObject({
+    tools: { exec: { mode: "ask" }, deny: ["gateway", "plugins", "t3code__*"] },
+  });
+  expect(entries(await config()).second).toMatchObject({ tools: { exec: { mode: "full" } } });
+  await expect.poll(() => tasksOf("holder"), { timeout: 30_000 }).toBe(1);
 });

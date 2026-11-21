@@ -3,7 +3,7 @@
 // saved setting and the gateway's reported default policy are two facts, each
 // said only as read; nothing here combines them into what a command will do.
 
-import type { CommandChoice, NewBotPolicy, ReportedPolicy } from "@clawtrate/core";
+import type { CommandChoice, NewBotPolicy, ReportedLabel, ReportedPolicy } from "@clawtrate/core";
 
 /** The Approvals step's two rows: each title and its line. */
 export const CHOICE_ROWS: ReadonlyArray<{
@@ -28,9 +28,12 @@ export const CHOICE_ROWS: ReadonlyArray<{
 export const choiceTitle = (choice: CommandChoice) =>
   CHOICE_ROWS.find((row) => row.value === choice)!.title;
 
-/** Under the group. */
+/**
+ * Under the group. No promise of a later change in the bot's settings: they
+ * have no page that changes the command setting yet.
+ */
 export const machineLine = (bot: string) =>
-  `Commands use the machine and permissions set by the gateway. ${bot}'s command setting replaces the gateway-wide command mode for this bot. You can change this later in ${bot}'s settings.`;
+  `Commands use the machine and permissions set by the gateway. ${bot}'s command setting replaces the gateway-wide command mode for this bot.`;
 
 /** The line about the gateway's approvals file: general, or that it blocks commands. */
 export const fileLine = (blocks: boolean) =>
@@ -61,21 +64,18 @@ export function modeWord(mode: string): string {
 
 /**
  * The gateway's reported default command policy for a new bot, as read; null
- * says nothing (a label Clawtrate has no sentence for, or no read).
+ * says nothing: no read yet, or a label Clawtrate has no sentence for, which
+ * is not the same as no label.
  */
-export function reportedSentence(
-  bot: string,
-  reported: ReportedPolicy | null,
-  read: boolean,
-): string | null {
-  if (!read) return null;
+export function reportedSentence(bot: string, reported: ReportedLabel | null): string | null {
+  if (reported === null) return null;
   if (reported === "guarded")
     return "The gateway reports that the default command policy asks on an allowlist miss.";
   if (reported === "full")
     return "The gateway reports no routine approval in the default command policy.";
   if (reported === "read-only")
     return "The gateway reports that the default command policy disables commands.";
-  if (reported === null) return `The gateway didn't report a default command policy for ${bot}.`;
+  if (reported === "none") return `The gateway didn't report a default command policy for ${bot}.`;
   return null;
 }
 
@@ -90,6 +90,10 @@ export function mainPolicySentence(reported: ReportedPolicy | null): string | nu
   return null;
 }
 
+/** Where the saved command setting is: the bot's entry in the gateway's settings. */
+export const whereLine = (bot: string) =>
+  `The command setting is tools.exec.mode in ${bot}'s entry of the gateway's settings.`;
+
 /** The note in a new bot's first task: its tone, its sentences, and whether it is settled. */
 export function policyNote(policy: NewBotPolicy): {
   tone: "warn" | undefined;
@@ -100,7 +104,7 @@ export function policyNote(policy: NewBotPolicy): {
   if (policy.status === "checking")
     return { tone: undefined, title: null, lines: ["Checking what was written…"] };
   if (policy.status === "confirmed" && policy.saved === policy.chosen) {
-    const reported = reportedSentence(bot, policy.reported, policy.reportedRead);
+    const reported = reportedSentence(bot, policy.reported);
     return {
       tone: undefined,
       title: null,
@@ -113,6 +117,7 @@ export function policyNote(policy: NewBotPolicy): {
     lines: [
       "Review the gateway's settings before sending a task.",
       ...(policy.saved ? [`Its saved command setting is ${modeWord(policy.saved)}.`] : []),
+      whereLine(bot),
     ],
   };
 }

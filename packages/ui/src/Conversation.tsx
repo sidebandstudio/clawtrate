@@ -762,9 +762,8 @@ export function Conversation({
   inert = false,
   granted,
   firstBot,
-  policy,
+  policies,
   onNewBot,
-  onReviewSettings,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -796,12 +795,10 @@ export function Conversation({
   granted: boolean;
   /** Whether the gateway's reads confirmed an unused implicit `main` (bots.md section 3). */
   firstBot: FirstBotState;
-  /** The command setting of the bot Create last made, as read (controls.md section 10). */
-  policy: NewBotPolicy | null;
+  /** The command settings of the new bots on this gateway, as read (controls.md section 10). */
+  policies: readonly NewBotPolicy[];
   /** Open New bot from the first-bot prompt. */
   onNewBot: () => void;
-  /** Open the bot's settings in the Work pane. */
-  onReviewSettings: () => void;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -977,7 +974,7 @@ export function Conversation({
       transcript.runs.some((run) => run.state !== "queued" && run.state !== "cancelled"));
 
   // The note of a new bot's command setting, and its composer closed until it reads back.
-  const ownPolicy = bot && policy?.botId === bot.id ? policy : null;
+  const ownPolicy = (bot && policies.find((each) => each.botId === bot.id)) ?? null;
   const held = ownPolicy !== null && ownPolicy.status !== "confirmed";
   let body: ReactNode;
   if (!bot) {
@@ -1143,13 +1140,7 @@ export function Conversation({
       </header>
       {body}
       {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
-      {ownPolicy && (
-        <PolicyNote
-          policy={ownPolicy}
-          canAdmin={connection.canAdmin}
-          onReviewSettings={onReviewSettings}
-        />
-      )}
+      {ownPolicy && <PolicyNote policy={ownPolicy} canAdmin={connection.canAdmin} />}
       {task && bot && interactive && (
         <Composer
           held={held}

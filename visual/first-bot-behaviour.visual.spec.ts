@@ -62,7 +62,7 @@ test("F-051 F-034: the Approvals step comes after Account; nothing is chosen at 
   await expect(group).not.toContainText(/recommended/i);
   await expect(
     page.getByText(
-      "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot. You can change this later in Viral's settings.",
+      "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot.",
     ),
   ).toBeVisible();
   await expect(page.getByTestId("approvals-file")).toHaveText(
@@ -177,10 +177,113 @@ test("F-034 F-051: a Create whose reply settles nothing says so, offers Review b
   await expect(page.getByTestId("create")).toHaveCount(0);
   await note.getByRole("button", { name: "Review bots" }).click();
   await expect(newBot(page)).toHaveCount(0);
-  const types = (await sent(page)).map((each) => each.type);
+  const commands = await sent(page);
+  const types = commands.map((each) => each.type);
   expect(types.filter((type) => type === "createBot")).toHaveLength(1);
-  expect(types).toContain("dismissBotCreation");
   expect(types).not.toContain("retryBotPolicy");
+  // The outcome dismissed is that attempt's.
+  const created = commands.find((each) => each.type === "createBot")!;
+  expect(commands.find((each) => each.type === "dismissBotCreation")).toMatchObject({
+    attempt: created.attempt,
+  });
+  expect(typeof created.attempt).toBe("string");
+});
+
+test("F-034: Review bots retires the attempt: New bot opens afresh, and another name reaches Approvals with nothing chosen", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=unconfirmed`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await page.getByTestId("create-unconfirmed").getByRole("button", { name: "Review bots" }).click();
+  await expect(newBot(page)).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("heading", { name: "New bot", level: 2 })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("");
+  await approvalsStep(page, "Marlow");
+  const group = page.getByRole("radiogroup", { name: "Approvals" });
+  await expect(group.getByRole("radio", { checked: true })).toHaveCount(0);
+  await expect(page.getByTestId("create")).toBeDisabled();
+  const creates = (await sent(page)).filter((each) => each.type === "createBot");
+  expect(creates).toHaveLength(1);
+});
+
+test("F-034: an unsubmitted draft is kept through Close, and only for its gateway", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await newBot(page).getByRole("button", { name: "Close" }).click();
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("heading", { name: "Approvals", level: 2 })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Ask before acting" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await newBot(page).getByRole("button", { name: "Close" }).click();
+  // Another gateway: what was entered for the first is not offered.
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, gatewayId: 'another-gateway', gatewayUrl: 'ws://another.example:18790' } };",
+  );
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("heading", { name: "New bot", level: 2 })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("");
+});
+
+test("F-034: below admin the outcome of an unconfirmed Create stays, with Review bots; the choices and Create go", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=unconfirmed`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("create-unconfirmed")).toBeVisible();
+  await change(
+    page,
+    "return { ...state, connection: { ...state.connection, canAdmin: false, scopes: state.connection.scopes.filter((s) => s !== 'operator.admin') } };",
+  );
+  const note = page.getByTestId("create-unconfirmed");
+  await expect(note).toBeVisible();
+  await expect(note.getByRole("button", { name: "Review bots" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Approvals" })).toHaveCount(0);
+  await expect(page.getByTestId("create")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Request admin access" })).toBeVisible();
+});
+
+test("F-472: an account the host finds gone at Create sends the person back to Account, which says so", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=refused`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
+  await expect(page.getByTestId("choice-gone")).toHaveText(
+    "The account chosen is no longer on the gateway. Choose another, or let the gateway choose.",
+  );
+  await expect(page.getByTestId("account-next")).toBeDisabled();
+});
+
+test("F-472: with the gateway choosing, a default model whose provider changed is chosen again before Create", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await page.getByTestId("account-next").click();
+  await change(
+    page,
+    "return { ...state, accounts: { ...state.accounts, defaultModel: 'xai/grok-4.7' } };",
+  );
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  const created = (await sent(page)).find((each) => each.type === "createBot");
+  expect(created).toMatchObject({ account: null, provider: "xai", model: "grok-4.7" });
 });
 
 test("F-034: a refused Create says so and keeps every choice", async ({ page }) => {
@@ -230,8 +333,10 @@ test("F-051: a setting that didn't read back as chosen keeps the composer closed
   await page.getByTestId("create").click();
   const note = page.getByTestId("policy-note");
   await expect(note).toContainText(
-    "Clawtrate couldn't confirm Viral's command setting.Review the gateway's settings before sending a task.Its saved command setting is Never.",
+    "Clawtrate couldn't confirm Viral's command setting.Review the gateway's settings before sending a task.Its saved command setting is Never.The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
   );
+  // No button to a settings page that has no command setting yet.
+  await expect(note.getByRole("button", { name: "Review settings" })).toHaveCount(0);
   await expect(page.getByTestId("composer-input")).toBeDisabled();
   await note.getByRole("button", { name: "Write it again" }).click();
   await expect(note).toHaveText(
@@ -243,7 +348,7 @@ test("F-051: a setting that didn't read back as chosen keeps the composer closed
   expect(types).toContain("retryBotPolicy");
 });
 
-test("F-051: with no fresh read identifying the bot, only Review settings is offered", async ({
+test("F-051: with no fresh read identifying the bot, the note says where the setting is and offers no write", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&policy=gone`, "dark");
@@ -251,13 +356,13 @@ test("F-051: with no fresh read identifying the bot, only Review settings is off
   await page.getByRole("radio", { name: "Ask before acting" }).click();
   await page.getByTestId("create").click();
   const note = page.getByTestId("policy-note");
-  await expect(note.getByRole("button", { name: "Review settings" })).toBeVisible();
-  await expect(note.getByRole("button", { name: /Write/ })).toHaveCount(0);
-  await note.getByRole("button", { name: "Review settings" }).click();
-  await expect(page.getByRole("tab", { name: "Settings" })).toHaveAttribute(
-    "aria-selected",
-    "true",
+  await expect(note).toContainText(
+    "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
   );
+  await expect(note.getByRole("button")).toHaveCount(0);
+  await expect(page.getByTestId("composer-input")).toBeDisabled();
+  // The shown note reads the setting again, so another viewer's change reaches it.
+  expect((await sent(page)).map((each) => each.type)).toContain("refreshBotPolicies");
 });
 
 test("F-051: a report with no label says the gateway reported none for the bot", async ({

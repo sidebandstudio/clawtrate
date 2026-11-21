@@ -663,16 +663,16 @@ function createdPolicy(
   const confirmed: NewBotPolicy = {
     botId,
     name,
+    workspace: `/w/${botId}`,
     chosen,
     status: "confirmed",
     restrictive: true,
     saved: chosen,
     reported: chosen === "ask" ? "guarded" : "full",
-    reportedRead: true,
     retryable: false,
   };
-  if (how === "nolabel") return { ...confirmed, reported: null };
-  if (how === "checking") return { ...confirmed, status: "checking", saved: null };
+  if (how === "nolabel") return { ...confirmed, reported: "none" };
+  if (how === "checking") return { ...confirmed, status: "checking", saved: null, reported: null };
   if (how === "unconfirmed")
     return { ...confirmed, status: "unconfirmed", saved: "deny", retryable: true };
   if (how === "restrictive")
@@ -1067,9 +1067,26 @@ export function accountCommand(
       if (command.approvals !== "ask" && command.approvals !== "full")
         return Promise.reject(new Error("Choose how the new bot runs commands. Nothing was sent."));
       const chosen = command.approvals;
+      // create=refused: the account chosen went from the gateway while the dialog was open.
+      if (params.create === "refused") {
+        put((a) => ({ ...a, accounts: a.accounts.filter((x) => x.id !== command.account) }));
+        return Promise.reject(
+          new Error(
+            "The account chosen is no longer on the gateway. Choose another, or let the gateway choose. Nothing was sent.",
+          ),
+        );
+      }
       put((a) => ({
         ...a,
-        creation: { name, status: "creating", slow: false, botId: null, error: null, missing: [] },
+        creation: {
+          name,
+          status: "creating",
+          slow: false,
+          botId: null,
+          error: null,
+          missing: [],
+          attempt: command.attempt,
+        },
       }));
       if (params.create === "slow") {
         later(300, () =>
@@ -1149,7 +1166,7 @@ export function accountCommand(
             accounts: {
               ...state.accounts,
               firstBot: { status: "roster", mainPolicy: null },
-              policy,
+              policies: [...state.accounts.policies.filter((each) => each.botId !== id), policy],
               creation: {
                 name,
                 // create=partial: the bot exists, and its first task was not made.
@@ -1161,6 +1178,7 @@ export function accountCommand(
                     ? `${name} was created, but its first task was not made: the gateway did not answer.`
                     : null,
                 missing: params.create === "partial" ? ["task"] : [],
+                attempt: command.attempt,
               },
               bindings: [
                 ...state.accounts.bindings,
@@ -1180,28 +1198,33 @@ export function accountCommand(
       );
       return Promise.resolve({ botId: command.botId, missing: [] });
     case "retryBotPolicy":
-      put((a) =>
-        a.policy?.botId === command.botId
-          ? {
-              ...a,
-              policy: { ...createdPolicy(a.policy.botId, a.policy.name, a.policy.chosen, null) },
-            }
-          : a,
-      );
+      put((a) => ({
+        ...a,
+        policies: a.policies.map((each) =>
+          each.botId === command.botId
+            ? createdPolicy(each.botId, each.name, each.chosen, null)
+            : each,
+        ),
+      }));
       return Promise.resolve();
     case "dismissBotPolicy":
-      put((a) =>
-        a.policy?.botId === command.botId && a.policy.status === "confirmed"
-          ? { ...a, policy: null }
-          : a,
-      );
+      put((a) => ({
+        ...a,
+        policies: a.policies.filter(
+          (each) => each.botId !== command.botId || each.status !== "confirmed",
+        ),
+      }));
+      return Promise.resolve();
+    case "refreshBotPolicies":
       return Promise.resolve();
     case "readApprovalsFile":
       return Promise.resolve({ blocks: params.approvalsFile });
     case "recheckFirstBot":
       return Promise.resolve(accounts().firstBot);
     case "dismissBotCreation":
-      put((a) => ({ ...a, creation: null }));
+      put((a) =>
+        command.attempt && a.creation?.attempt !== command.attempt ? a : { ...a, creation: null },
+      );
       return Promise.resolve();
     case "changeBotAccount":
     case "setBotModel": {

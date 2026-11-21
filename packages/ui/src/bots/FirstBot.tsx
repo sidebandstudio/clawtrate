@@ -4,7 +4,7 @@
 // bot by itself and writes nothing to that `main`.
 
 import type { ConnectionState, FirstBotState, HostInfo, NewBotPolicy } from "@clawtrate/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Character } from "../Avatar.tsx";
 import { ShieldIcon } from "../icons.tsx";
 import { useBridge } from "../bridge.tsx";
@@ -80,23 +80,25 @@ export function FirstBotPrompt({
   );
 }
 
+/** How often a shown note reads the bot's setting again: another viewer may have changed it. */
+export const POLICY_READ_MS = 15_000;
+
 /**
  * What a new bot's first task says above its composer, as read: the saved
  * setting, then the reported default policy, or that the setting couldn't be
- * confirmed, with what may be done.
+ * confirmed, where it is, and what may be done. While shown, it reads both
+ * facts again now and then.
  */
-export function PolicyNote({
-  policy,
-  canAdmin,
-  onReviewSettings,
-}: {
-  policy: NewBotPolicy;
-  canAdmin: boolean;
-  onReviewSettings: () => void;
-}) {
+export function PolicyNote({ policy, canAdmin }: { policy: NewBotPolicy; canAdmin: boolean }) {
   const bridge = useBridge();
   const note = policyNote(policy);
   const settled = policy.status === "confirmed" || policy.status === "checking";
+  useEffect(() => {
+    const read = () => void bridge.send({ type: "refreshBotPolicies" }).catch(() => {});
+    read();
+    const timer = setInterval(read, POLICY_READ_MS);
+    return () => clearInterval(timer);
+  }, [bridge, policy.botId]);
   return (
     <div className="policy-note" role="status" data-testid="policy-note">
       {/* A setting read back carries the shield; one still being read, the clock. */}
@@ -112,24 +114,19 @@ export function PolicyNote({
         {note.lines.map((line) => (
           <p key={line}>{line}</p>
         ))}
-        {!settled && (
+        {!settled && policy.retryable && canAdmin && (
           <div className="b-actions">
-            <button type="button" className="button" data-size="sm" onClick={onReviewSettings}>
-              Review settings
+            <button
+              type="button"
+              className="button"
+              data-variant="primary"
+              data-size="sm"
+              onClick={() =>
+                void bridge.send({ type: "retryBotPolicy", botId: policy.botId }).catch(() => {})
+              }
+            >
+              {policy.restrictive ? "Write it again" : "Write them again"}
             </button>
-            {policy.retryable && canAdmin && (
-              <button
-                type="button"
-                className="button"
-                data-variant="primary"
-                data-size="sm"
-                onClick={() =>
-                  void bridge.send({ type: "retryBotPolicy", botId: policy.botId }).catch(() => {})
-                }
-              >
-                {policy.restrictive ? "Write it again" : "Write them again"}
-              </button>
-            )}
           </div>
         )}
       </Note>

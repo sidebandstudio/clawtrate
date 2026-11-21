@@ -18,12 +18,12 @@ import {
 const policy = (change: Partial<NewBotPolicy>): NewBotPolicy => ({
   botId: "viral",
   name: "Viral",
+  workspace: "/w/viral",
   chosen: "ask",
   status: "confirmed",
   restrictive: true,
   saved: "ask",
   reported: "guarded",
-  reportedRead: true,
   retryable: false,
   ...change,
 });
@@ -41,8 +41,10 @@ describe("F-051: the Approvals step and what it says", () => {
       ],
     ]);
     expect(machineLine("Viral")).toBe(
-      "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot. You can change this later in Viral's settings.",
+      "Commands use the machine and permissions set by the gateway. Viral's command setting replaces the gateway-wide command mode for this bot.",
     );
+    // No promise of a page the bot's settings don't have yet.
+    expect(machineLine("Viral")).not.toMatch(/later|settings\./);
     expect(fileLine(false)).toBe(
       "The gateway's approvals file can require approval or block commands.",
     );
@@ -67,12 +69,14 @@ describe("F-051: the note in the new bot's first task, as read", () => {
     expect(policyNote(policy({ reported: "read-only" })).lines[1]).toBe(
       "The gateway reports that the default command policy disables commands.",
     );
-    expect(policyNote(policy({ reported: null })).lines[1]).toBe(
+    expect(policyNote(policy({ reported: "none" })).lines[1]).toBe(
       "The gateway didn't report a default command policy for Viral.",
     );
-    // No read of the list, or a label Clawtrate has no sentence for: nothing is said of it.
-    expect(policyNote(policy({ reportedRead: false })).lines).toHaveLength(1);
+    // No read of the list since the setting was read, or a label Clawtrate has no sentence for:
+    // nothing is said of it, and an unknown label is not said to be missing.
+    expect(policyNote(policy({ reported: null })).lines).toHaveLength(1);
     expect(policyNote(policy({ reported: "workspace" })).lines).toHaveLength(1);
+    expect(policyNote(policy({ reported: "unrecognized" })).lines).toHaveLength(1);
   });
 
   it("says when the setting can't be confirmed, and the mode a fresh read returned", () => {
@@ -82,11 +86,15 @@ describe("F-051: the note in the new bot's first task, as read", () => {
       lines: [
         "Review the gateway's settings before sending a task.",
         "Its saved command setting is Never.",
+        "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
       ],
     });
     expect(
       policyNote(policy({ status: "restrictive", restrictive: false, saved: null })).lines,
-    ).toEqual(["Review the gateway's settings before sending a task."]);
+    ).toEqual([
+      "Review the gateway's settings before sending a task.",
+      "The command setting is tools.exec.mode in Viral's entry of the gateway's settings.",
+    ]);
     // A confirmed status whose mode isn't the chosen one is never said as chosen.
     expect(policyNote(policy({ saved: "full" })).tone).toBe("warn");
     expect(policyNote(policy({ status: "checking" })).lines).toEqual([
