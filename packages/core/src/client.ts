@@ -405,6 +405,12 @@ const SESSION_LIST_PARAMS = {
 };
 const HISTORY_LIMIT = 200;
 
+/** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
+function holdsInput(history: RawRecord | null): boolean {
+  const items = asRecord(history?.pendingInputs)?.items;
+  return Array.isArray(items) && items.some((item) => asRecord(item)?.state !== "cancelled");
+}
+
 /** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
 function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
   const kept = new Map<string, RawRecord>();
@@ -786,6 +792,9 @@ export class ClawtrateClient {
   private nextIncarnation = 0;
   private readonly afterRunning = new Set<string>();
   private readonly afterAgain = new Set<string>();
+  /** Tasks whose runs' `agent.wait` check is on its way, and the runs each last checked. */
+  private readonly endChecking = new Set<string>();
+  private readonly endChecked = new Map<string, string>();
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
@@ -1188,6 +1197,7 @@ export class ClawtrateClient {
   private releaseTask(key: string): void {
     this.retained.delete(key);
     this.incarnations.delete(key);
+    this.endChecked.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
     this.streams.retire(key);
@@ -3423,24 +3433,23 @@ export class ClawtrateClient {
    */
   private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
     const incarnation = this.incarnations.get(key);
+    const epoch = this.epoch;
+    const currentConnection = () => generation === this.generation && epoch === this.epoch;
     let answer: unknown;
     let before: Transcript["reactions"];
     try {
-      if (this.selfId === null) await this.readSelf(generation);
+      if (this.selfId === null) await this.readSelf(currentConnection);
+      if (!currentConnection()) return;
       // What the list will replace: an event, a change of this person's or a new history page
       // after it was asked for is newer than the list, and the list then gives way to it.
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
+      if (currentConnection())
         this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
       return;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]!.reactions !== before) {
       // Changed while the list was on its way: ask again, a few times, rather than go back.
@@ -3486,16 +3495,19 @@ export class ClawtrateClient {
     return slashRows(skills, metadata);
   }
 
-  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
-  private async readSelf(generation: number): Promise<void> {
+  /**
+   * Who this connection acts for (`users.self`), for which reactions are the person's own.
+   * `current` says whether the answer still applies when it arrives.
+   */
+  private async readSelf(current: () => boolean): Promise<void> {
     try {
       const answer = asRecord(await this.request("users.self", {}));
-      if (generation !== this.generation) return;
+      if (!current()) return;
       const id = asRecord(answer?.profile)?.id;
       this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
     } catch {
       // A refusal on an earlier connection says nothing of a later one's identity.
-      if (generation === this.generation) this.selfId = null;
+      if (current()) this.selfId = null;
     }
   }
 
@@ -3517,17 +3529,22 @@ export class ClawtrateClient {
     if (typeof emoji !== "string" || !emoji || emoji.length > 64)
       throw new Error("Choose one emoji.");
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
-    const generation = this.generation;
-    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    // A scope upgrade reconnects to the same address and keeps the opening of the task.
+    const url = this.settings?.url;
     const incarnation = this.incarnations.get(key);
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
-    if (this.selfId === null) await this.readSelf(generation);
+    if (this.settings?.url !== url) throw new Error("That message is no longer shown here.");
+    // From the identity read through the write, a new connection can act for a different person.
+    const generation = this.generation;
+    const epoch = this.epoch;
+    const sameConnection = () => generation === this.generation && epoch === this.epoch;
+    if (this.selfId === null) await this.readSelf(sameConnection);
     // After every wait, immediately before the write: its viewer is still here, and the same
     // opening of the task still shows the message.
     this.checkNotWithdrawn(options.owner);
     const now = this.state.transcripts[key];
     if (
-      generation !== this.generation ||
+      !sameConnection() ||
       this.incarnations.get(key) !== incarnation ||
       !now ||
       !shownMessageIds(now).has(messageId)
@@ -3546,18 +3563,14 @@ export class ClawtrateClient {
         }),
       );
     } catch (error) {
-      this.noteMissingScope(error);
+      if (sameConnection()) this.noteMissingScope(error);
       throw error;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!sameConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]?.reactions !== before) {
       // Something newer changed them: the gateway's list says what is true now.
-      void this.readReactions(key, generation);
+      void this.readReactions(key, this.generation);
       return;
     }
     this.applyReactions(key, messageId, answer?.reactions);
@@ -3578,36 +3591,52 @@ export class ClawtrateClient {
   }
 
   /**
-   * Two runs of the task still look active after a history read: one whose end a connection gap
-   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * Two runs of the task still look active, after a history read or from live events alone: one
+   * whose end this client missed, beside the one the gateway runs now. Stop names neither until
    * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
    * `operator.write`). A run it reports over settles as it reports; one it reports still going,
-   * or does not know, stays as it is.
+   * or does not know, stays as it is. One check at a time per task, and one per set of runs
+   * until the next history read, so answers that change nothing ask nothing more.
    */
-  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+  private async settleEndedRuns(key: string): Promise<void> {
     const transcript = this.state.transcripts[key];
     const first = transcript && activeRun(transcript);
     if (!first || runningRunId(transcript, first.id) !== null) return;
     if (!this.state.connection.canWrite || this.options.readOnly) return;
-    const incarnation = this.incarnations.get(key);
     const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
-    await Promise.all(
-      asked.map(async (run) => {
-        let answer: RawRecord | null;
-        try {
-          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
-        } catch (error) {
-          if (generation === this.generation)
-            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
-          return;
-        }
-        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
-          return;
-        this.updateActivity(key, (activity, ctx) =>
-          settleRunFromWait(activity, run.id, answer, ctx),
-        );
-      }),
-    );
+    const runIds = asked.map((run) => run.id).join("\u0000");
+    if (this.endChecking.has(key) || this.endChecked.get(key) === runIds) return;
+    this.endChecking.add(key);
+    this.endChecked.set(key, runIds);
+    const generation = this.generation;
+    const incarnation = this.incarnations.get(key);
+    try {
+      await Promise.all(
+        asked.map(async (run) => {
+          let answer: RawRecord | null;
+          try {
+            answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+          } catch (error) {
+            if (generation === this.generation)
+              this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+            return;
+          }
+          if (
+            !answer ||
+            generation !== this.generation ||
+            this.incarnations.get(key) !== incarnation
+          )
+            return;
+          this.updateActivity(key, (activity, ctx) =>
+            settleRunFromWait(activity, run.id, answer, ctx),
+          );
+        }),
+      );
+    } finally {
+      this.endChecking.delete(key);
+    }
+    // Runs that started while this check was on its way are asked now, unless they are the same set.
+    void this.settleEndedRuns(key);
   }
 
   /**
@@ -3722,8 +3751,7 @@ export class ClawtrateClient {
         aliases,
       );
       const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlight !== null || holdsInput(history);
       const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
         ids.has(run.id),
       );
@@ -4687,6 +4715,7 @@ export class ClawtrateClient {
     });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
+    void this.settleEndedRuns(key);
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -5187,6 +5216,7 @@ export class ClawtrateClient {
     this.spawnedBy.clear();
     this.foreign.clear();
     this.foreignReads.clear();
+    this.endChecked.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -5833,9 +5863,7 @@ export class ClawtrateClient {
       const scratch = new RawTable();
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
-      const pendingInputs = asRecord(history?.pendingInputs)?.items;
-      const busy =
-        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const busy = inFlightId !== null || holdsInput(history);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
@@ -5899,6 +5927,8 @@ export class ClawtrateClient {
       };
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
+      // A read is news of its own: the runs it leaves active are asked again.
+      this.endChecked.delete(key);
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
@@ -5909,7 +5939,6 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
-      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
