@@ -49,7 +49,9 @@ finish() {
   if [ "$PHASE" != installed ]; then
     if [ -n "$STAGED_ID" ] && [ -d "$TARGET" ] && [ ! -L "$TARGET" ] &&
       [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
-      say "Clawtrate is at $TARGET, but its last check did not finish." >&2
+      say "Clawtrate is at $TARGET. It passed its checks before the move, but the check after it did not finish. To repeat it, move Clawtrate to the Trash and run this again." >&2
+    elif [ -n "$LEFT" ]; then
+      say "$LEFT" >&2
     elif [ -n "$KEEP_STAGE" ]; then
       say "Nothing was installed. The checked copy is at $STAGE/$APP." >&2
     elif [ "$status" -ne 0 ]; then
@@ -180,9 +182,11 @@ JS
 }
 
 # Fetches the build: the release download address, and at most one redirect
-# to the release-asset origin, checked before it is followed.
+# to the release-asset origin, checked before it is followed. A download that
+# stalls below 1 KB/s for 30 seconds fails.
 fetch_zip() {
   first="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+    --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code} %{redirect_url}' --url "$1")" ||
     stop "the download did not finish."
   code="${first%% *}"
@@ -200,6 +204,7 @@ fetch_zip() {
     *'#'* | *' '*) stop "the download's redirect is not a plain address." ;;
   esac
   code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 2000000000 \
+    --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
     -o "$WORK/Clawtrate.zip" -w '%{http_code}' --url "$next")" ||
     stop "the download did not finish."
   [ "$code" = 200 ] || stop "the download answered HTTP $code."
@@ -345,7 +350,7 @@ main() {
   [ "$#" -eq 1 ] && [ "$1" = 'clawtrate-installer-complete' ] || exit 1
   trap - EXIT
   set -eu
-  PHASE="" WORK="" STAGE="" LOCKED="" KEEP_STAGE="" TARGET="" LOCK="" STAGED_ID="" VERSION=""
+  PHASE="" WORK="" STAGE="" LOCKED="" KEEP_STAGE="" LEFT="" TARGET="" LOCK="" STAGED_ID="" VERSION=""
   trap finish EXIT
   trap 'exit 1' INT TERM HUP
 
@@ -396,7 +401,7 @@ main() {
   # 1. The feed: a direct HTTP 200, read strictly.
   say "Reading the Beta feed: $FEED"
   code="$(curl -q -sS --globoff --proto "$PROTO" --max-redirs 0 --max-filesize 65536 \
-    -o "$WORK/latest-mac.json" -w '%{http_code}' --url "$FEED" 2>/dev/null)" ||
+    --connect-timeout 15 --max-time 30 -o "$WORK/latest-mac.json" -w '%{http_code}' --url "$FEED" 2>/dev/null)" ||
     stop "could not read the Beta feed. Check your connection and try again."
   case "$code" in
     200) ;;
@@ -465,13 +470,26 @@ main() {
     check_signature "$TARGET"
     [ "$CDHASH" = "$CHECKED_CDHASH" ] || stop "the copy at $TARGET is not the build that was checked."
   ); then
-    if [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ] && mv -n "$TARGET" "$STAGE/" &&
-      [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+    # Only this run's copy is taken out, and only what arrives is removed.
+    failed="the copy at $TARGET did not pass its final check"
+    if [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" != "$STAGED_ID" ]; then
       STAGED_ID=""
-      stop "the copy at $TARGET did not pass its final check, so it was taken out again."
+      stop "$failed, and $TARGET is no longer the copy this installer placed. It was left as it was."
+    fi
+    mv -n "$TARGET" "$STAGE/" 2>/dev/null || :
+    moved="$(stat -f '%d:%i' "$STAGE/$APP" 2>/dev/null)" || moved=""
+    if [ "$moved" = "$STAGED_ID" ]; then
+      STAGED_ID=""
+      stop "$failed, so it was taken out again."
+    elif [ -n "$moved" ]; then
+      STAGED_ID="" KEEP_STAGE=1 LEFT="What was taken out is at $STAGE/$APP. This installer did not delete it."
+      stop "$failed, and $TARGET changed while it was taken out."
+    elif [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
+      STAGED_ID="" LEFT="Move $TARGET to the Trash."
+      stop "$failed and could not be taken out."
     fi
     STAGED_ID=""
-    stop "the copy at $TARGET did not pass its final check. Move it to the Trash."
+    stop "$failed, and $TARGET is no longer the copy this installer placed. It was left as it was."
   fi
   PHASE=installed
   say "Installed Clawtrate $APP_VERSION in $TARGET."
