@@ -17,7 +17,20 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
-import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import {
+  AccountsEngine,
+  AdminNeededError,
+  type CreateBotInput,
+  type CreatedBot,
+} from "./accounts-engine.ts";
+import {
+  dismissCheckInSave,
+  loadCheckIns,
+  saveCheckIn,
+  type CheckInDraft,
+  type CheckInsContext,
+  type CheckInRead,
+} from "./check-ins.ts";
 import {
   RoutinesEngine,
   type BotRoutines,
@@ -166,6 +179,7 @@ import {
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
+  settleRunFromWait,
   settleUnboundStops,
   throughRunAliases,
   removeMessage,
@@ -879,6 +893,12 @@ export class ClawtrateClient {
   private readonly fileTransfers = new FileTransfers(() => this.now());
   /** File lists and reads in flight (`MAX_FILE_READS`). */
   private fileReads = 0;
+  /** Changes with every hello and every close, so work started on one connection never runs on the next. */
+  private epoch = 0;
+  /** The gateway's identity as read on the connection of `epoch`, once asked. */
+  private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
+  /** Check-in reads begun; only the latest one's answer is shown. */
+  private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
     request: (method, params, options) => {
@@ -3512,6 +3532,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * Two runs of the task still look active after a history read: one whose end a connection gap
+   * hid and history only infers, beside the one the gateway runs now. Stop names neither until
+   * one is current, so each is asked of the gateway's own run record (`agent.wait` with no wait,
+   * `operator.write`). A run it reports over settles as it reports; one it reports still going,
+   * or does not know, stays as it is.
+   */
+  private async settleEndedRuns(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const first = transcript && activeRun(transcript);
+    if (!first || runningRunId(transcript, first.id) !== null) return;
+    if (!this.state.connection.canWrite || this.options.readOnly) return;
+    const incarnation = this.incarnations.get(key);
+    const asked = transcript.runs.filter((run) => run.bound && isActive(run.state));
+    await Promise.all(
+      asked.map(async (run) => {
+        let answer: RawRecord | null;
+        try {
+          answer = asRecord(await this.request("agent.wait", { runId: run.id, timeoutMs: 0 }));
+        } catch (error) {
+          if (generation === this.generation)
+            this.log("warn", `agent.wait failed: ${errorMessage(error)}`);
+          return;
+        }
+        if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
+          return;
+        this.updateActivity(key, (activity, ctx) =>
+          settleRunFromWait(activity, run.id, answer, ctx),
+        );
+      }),
+    );
+  }
+
+  /**
    * Read the bot's workspace root, as the gateway names it
    * (`agents.files.list`, `operator.read`, its `workspace`), once a task's
    * history loads. A failed read leaves it unknown: an absolute path is then
@@ -4129,6 +4182,63 @@ export class ClawtrateClient {
 
   removeBotFallbacks(botId: string): Promise<void> {
     return this.accounts.removeFallbacks(botId);
+  }
+
+  // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
+
+  private checkInsContext(owner?: object | null): CheckInsContext {
+    return {
+      link: () => {
+        const protocol = this.protocol;
+        const epoch = this.epoch;
+        const alive = () =>
+          protocol !== null &&
+          this.protocol === protocol &&
+          this.epoch === epoch &&
+          this.state.connection.status === "connected";
+        return {
+          alive,
+          request: (method, params, options) =>
+            protocol && alive()
+              ? protocol.request(method, params, options)
+              : Promise.reject(new NotSentError()),
+        };
+      },
+      gateway: () => this.readGatewayIdentity(),
+      begin: () => {
+        const mine = (this.checkInReads += 1);
+        return () => mine === this.checkInReads;
+      },
+      get: () => this.state.checkIns,
+      set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
+      botIds: () => this.state.bots.map((bot) => bot.id),
+      admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+      checkNotWithdrawn: () => this.checkNotWithdrawn(owner),
+      now: () => this.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    };
+  }
+
+  /** Read the bots' check-ins: their heartbeat jobs, the scheduler and their own settings. */
+  refreshCheckIns(botId?: string): Promise<CheckInRead | null> {
+    if (this.state.connection.status !== "connected") return Promise.resolve(null);
+    return loadCheckIns(this.checkInsContext(), botId);
+  }
+
+  /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
+  saveCheckIn(
+    saveId: string,
+    botId: string,
+    draft: CheckInDraft,
+    owner?: object | null,
+  ): Promise<void> {
+    if (!this.state.connection.canAdmin)
+      return Promise.reject(new AdminNeededError("Changing check-ins"));
+    return saveCheckIn(this.checkInsContext(owner), saveId, botId, draft);
+  }
+
+  dismissCheckInSave(saveId: string): void {
+    dismissCheckInSave(this.checkInsContext(), saveId);
   }
 
   // Where a bot runs and Machines (`machines.ts`; controls.md sections 14 and 15) ----------
@@ -4871,6 +4981,7 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.attemptGreeted = true;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
@@ -4903,8 +5014,10 @@ export class ClawtrateClient {
       }),
       onClose: () => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
+        this.invalidateCheckIns();
         this.routines.onClose();
         this.usage.onClose();
         const status = this.state.connection.status;
@@ -4971,6 +5084,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
@@ -4997,8 +5111,15 @@ export class ClawtrateClient {
     this.attachmentContent.clear();
   }
 
+  private invalidateCheckIns(): void {
+    const checkIns = this.state.checkIns;
+    if (checkIns?.gatewayId)
+      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+  }
+
   private close(): void {
     this.generation += 1;
+    this.invalidateCheckIns();
     this.accounts.onClose();
     this.routines.onClose();
     this.usage.onClose();
@@ -5197,6 +5318,23 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
   }
 
+  private readGatewayIdentity(): Promise<string | null> {
+    const known = this.gatewayIdentity;
+    if (known?.epoch === this.epoch) return known.id;
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
+    void gatewayId.then((id) => {
+      if (id === null && this.gatewayIdentity?.id === gatewayId) this.gatewayIdentity = null;
+    });
+    this.gatewayIdentity = { epoch: this.epoch, id: gatewayId };
+    return gatewayId;
+  }
+
   /**
    * Every successful connect is a fresh projection: re-list, re-subscribe, reload
    * open transcripts. Bots and tasks load independently, so one failing read
@@ -5208,13 +5346,7 @@ export class ClawtrateClient {
     this.setDiscovery({ status: "loading", error: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
-    const gatewayId = this.request("gateway.identity.get", {}).then(
-      (result) => {
-        const id = asRecord(result)?.deviceId;
-        return typeof id === "string" && id ? id : null;
-      },
-      () => null,
-    );
+    const gatewayId = this.readGatewayIdentity();
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -5686,6 +5818,7 @@ export class ClawtrateClient {
       void this.readToolMap(key, generation);
       void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
+      void this.settleEndedRuns(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
