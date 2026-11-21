@@ -817,7 +817,7 @@ export function Composer({
     typeof document !== "undefined" && document.documentElement.dataset.input === "touch";
 
   return (
-    <footer className="composer" data-testid="composer">
+    <footer className="composer" data-testid="composer" data-held={held || undefined}>
       <div className="composer-inner">
         <div className="composer-shelf" aria-label="Waiting to send">
           {rows}

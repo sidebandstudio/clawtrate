@@ -6,6 +6,7 @@
 import type { ConnectionState, FirstBotState, HostInfo, NewBotPolicy } from "@clawtrate/core";
 import { useState } from "react";
 import { Character } from "../Avatar.tsx";
+import { ShieldIcon } from "../icons.tsx";
 import { useBridge } from "../bridge.tsx";
 import { AdminBar, Note } from "./parts.tsx";
 import { mainPolicySentence, policyNote } from "./policy-words.ts";
@@ -68,11 +69,8 @@ export function FirstBotPrompt({
               <div className="first-bot-below">
                 <p>Creating a bot changes the gateway's settings, which needs admin access.</p>
                 {reported && <p data-testid="main-policy">{reported}</p>}
-                <AdminBar
-                  connection={connection}
-                  info={info}
-                  need="Creating a bot changes the gateway's settings, which needs admin access."
-                />
+                {/* The line above says why; the bar asks. */}
+                <AdminBar connection={connection} info={info} need="" />
               </div>
             )}
           </div>
@@ -101,7 +99,11 @@ export function PolicyNote({
   const settled = policy.status === "confirmed" || policy.status === "checking";
   return (
     <div className="policy-note" role="status" data-testid="policy-note">
-      <Note tone={note.tone}>
+      {/* A setting read back carries the shield; one still being read, the clock. */}
+      <Note
+        tone={note.tone}
+        {...(policy.status === "confirmed" && !note.tone ? { icon: <ShieldIcon /> } : {})}
+      >
         {note.title && (
           <p>
             <b>{note.title}</b>

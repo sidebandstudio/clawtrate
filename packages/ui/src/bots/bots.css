@@ -1409,3 +1409,12 @@ button.b-open > .icon {
   max-width: calc(var(--transcript-max) - 2 * var(--space-5));
   margin: 0 auto;
 }
+
+/* A new bot's composer, closed until its command setting reads back as chosen. */
+.composer[data-held] .composer-box {
+  opacity: 0.55;
+}
+
+.composer[data-held] .composer-input {
+  cursor: not-allowed;
+}
