@@ -3,8 +3,9 @@
 // dial and its session. The Durable Object and the Node runner both drive this class.
 //
 // Nothing here lives only in memory except a registration that is waiting on its stores. Each
-// socket's state is saved on the socket (a Durable Object's WebSocket attachment, which survives
-// hibernation), and the relay id's durable state is in `RelayStore`. A room built afresh over
+// socket's state, its registration's included (`SocketRegistrationStore`), is saved on the
+// socket (a Durable Object's WebSocket attachment, which survives hibernation), and the relay
+// id's durable state is in `RelayStore`. A room built afresh over
 // the same sockets and store, as a Durable Object is after hibernation, carries on where the
 // last one stopped.
 //
@@ -24,6 +25,7 @@ import {
 } from "@clawtrate/relay-protocol";
 import { addressRateKey } from "./address.ts";
 import type { RelayLimits } from "./limits.ts";
+import { SocketRegistrationStore } from "./registration-store.ts";
 import type { Route } from "./routes.ts";
 import type { RoomStore } from "./store.ts";
 
@@ -363,13 +365,7 @@ export class RelayRoom {
       replay: store.replay,
       claims: store.claims,
       // Saved on the socket, so the latest snapshot is the only one there is.
-      persist: (snapshot) => {
-        const current = socket.load();
-        if (current?.role !== "control" || current.id !== id) {
-          throw new Error("The control socket is gone.");
-        }
-        socket.save({ ...current, reg: snapshot });
-      },
+      store: new SocketRegistrationStore(socket, id),
       ...(restore === undefined ? {} : { restore }),
     });
   }

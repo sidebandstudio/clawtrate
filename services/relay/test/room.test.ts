@@ -34,6 +34,8 @@ class FakeSocket implements RoomSocket {
   readonly sent: (string | Uint8Array)[] = [];
   closedWith: { code: number; reason: string } | null = null;
   readonly saves: SocketState[] = [];
+  /** A save this returns true for throws, as a failing attachment write would. */
+  refuse: ((state: SocketState) => boolean) | null = null;
 
   send(data: string | Uint8Array): void {
     if (!this.open) throw new Error("closed");
@@ -47,6 +49,7 @@ class FakeSocket implements RoomSocket {
     return this.state;
   }
   save(state: SocketState) {
+    if (this.refuse?.(state)) throw new Error("Test fault: the write failed.");
     this.state = state;
     this.saves.push(state);
   }
@@ -159,6 +162,10 @@ describe("the room", () => {
     await attempt;
     expect(control.texts().some((m) => m.t === "registered")).toBe(false);
     expect(real.pinnedKey(t.key.relayId)).toBeNull();
+    // The success was never stored, not even for a moment.
+    expect(control.saves.map((saved) => (saved as ControlState).reg.state)).not.toContain(
+      "registered",
+    );
   });
 
   it("does not resume a registration that hibernation cut off", async () => {
@@ -235,6 +242,30 @@ describe("the room", () => {
     expect(control.last()).toEqual({ t: "error", code: "internal" });
     expect(control.closedWith).toEqual({ code: 1011, reason: "internal" });
     expect(driver.all("SELECT COUNT(*) AS n FROM relay_pins")).toEqual([{ n: 0 }]);
+  });
+
+  it("closes and discards a socket whose success or failure could not be stored", async () => {
+    const regState = (state: SocketState) => (state as ControlState).reg.state;
+    // The commit's write fails, so its outcome is unknown; then a bad proof's failure write.
+    for (const [refused, bad] of [
+      ["registered", false],
+      ["failed", true],
+    ] as const) {
+      const t = setup();
+      const control = t.connect({ role: "control", relayId: t.key.relayId });
+      control.refuse = (state) => regState(state) === refused;
+      const other = connectorKey();
+      await t.env.room.message(
+        control,
+        JSON.stringify({ t: "register", proof: proof(bad ? other : t.key, control) }),
+      );
+      expect(control.last(), refused).toEqual({ t: "error", code: "internal" });
+      expect(control.closedWith, refused).toEqual({ code: 1011, reason: "internal" });
+      // A room rebuilt over the same sockets, as after hibernation, has no connector.
+      t.rebuild();
+      const phone = t.connect({ role: "dial", relayId: t.key.relayId });
+      expect(phone.last(), refused).toEqual({ t: "error", code: "connector_offline" });
+    }
   });
 
   it("refuses a session socket for a session id it never gave out", () => {

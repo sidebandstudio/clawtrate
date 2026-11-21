@@ -23,4 +23,5 @@ export {
   type RequestPlan,
   type Route,
 } from "./routes.ts";
+export { SocketRegistrationStore } from "./registration-store.ts";
 export { RelayStore, type RoomStore, type SqlDriver, type SqlValue } from "./store.ts";

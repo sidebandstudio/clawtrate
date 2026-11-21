@@ -119,7 +119,7 @@ export class RelayRoomObject extends DurableObject<Env> {
     }
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
-    const socket = new NewSocket(server, this.#socket(server));
+    const socket = new NewSocket(server, this.roomSocket(server));
     room.connect(socket, route, request.headers.get(FROM_HEADER) ?? "");
     socket.accept(this.ctx);
     await this.#schedule();
@@ -128,12 +128,12 @@ export class RelayRoomObject extends DurableObject<Env> {
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const data = typeof message === "string" ? message : new Uint8Array(message);
-    await this.#getRoom().message(this.#socket(ws), data);
+    await this.#getRoom().message(this.roomSocket(ws), data);
     await this.#schedule();
   }
 
   override async webSocketClose(ws: WebSocket, code: number): Promise<void> {
-    this.#getRoom().closed(this.#socket(ws));
+    this.#getRoom().closed(this.roomSocket(ws));
     // Answer the peer's close, so its side finishes now rather than at a timeout. A code it
     // may not echo becomes 1000.
     try {
@@ -145,7 +145,7 @@ export class RelayRoomObject extends DurableObject<Env> {
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
-    this.#getRoom().closed(this.#socket(ws));
+    this.#getRoom().closed(this.roomSocket(ws));
     await this.#schedule();
   }
 
@@ -167,7 +167,7 @@ export class RelayRoomObject extends DurableObject<Env> {
       limits: this.roomLimits(),
       clock: this.#getClock(),
       store: new RelayStore(this.roomSql()),
-      sockets: () => this.ctx.getWebSockets().map((ws) => this.#socket(ws)),
+      sockets: () => this.ctx.getWebSockets().map((ws) => this.roomSocket(ws)),
     });
     return this.#room;
   }
@@ -177,7 +177,8 @@ export class RelayRoomObject extends DurableObject<Env> {
     return this.#clock;
   }
 
-  #socket(ws: WebSocket): RoomSocket {
+  /** The room's view of a hibernatable socket: its state is the socket's attachment. */
+  protected roomSocket(ws: WebSocket): RoomSocket {
     const ctx = this.ctx;
     const clock = this.#getClock();
     return {

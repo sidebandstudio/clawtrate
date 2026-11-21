@@ -94,7 +94,8 @@ export function sqliteDriver(db: DatabaseSync): SqlDriver {
   };
 }
 
-class NodeSocket implements RoomSocket {
+/** The room's view of a `ws` socket: its state is kept beside it, in memory. */
+export class NodeSocket implements RoomSocket {
   readonly #ws: WebSocket;
   #state: SocketState | null = null;
 

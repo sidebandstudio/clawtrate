@@ -8,6 +8,7 @@
     "src/core/**/*.ts",
     "src/worker/**/*.ts",
     "test/fixtures/worker.ts",
-    "test/fixtures/faults.ts"
+    "test/fixtures/faults.ts",
+    "test/fixtures/registration-contract.ts"
   ]
 }
