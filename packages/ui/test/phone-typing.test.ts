@@ -5,6 +5,8 @@
 import { describe, expect, it } from "vitest";
 import {
   answered,
+  callParts,
+  cutWhole,
   emptyTyping,
   fieldText,
   nextCall,
@@ -64,5 +66,19 @@ describe("the phone's typed field", () => {
     expect(answered(b.typing, false, a.session)).toBe(b.typing);
     expect(answered(b.typing, true, a.session)).toBe(b.typing);
     expect(answered(b.typing, true, b.session)).toMatchObject({ accepted: "B", held: false });
+  });
+
+  it("never keeps or sends half a character at the 2,000-unit limit", () => {
+    const text = "a".repeat(1999) + "😀";
+    expect(cutWhole(text, 2000)).toBe("a".repeat(1999));
+    const t = typedInto(emptyTyping, text);
+    expect(t.unsent).toBe("a".repeat(1999));
+    const call = nextCall({ ...emptyTyping, unsent: text + "b" })!;
+    expect(call.text).toBe("a".repeat(1999));
+    expect(call.typing.unsent).toBe("😀b");
+    expect(callParts(text + "b", 4)).toEqual(["a".repeat(1999), "😀b"]);
+    expect(callParts("x".repeat(9000), 4).map((part) => part.length)).toEqual([
+      2000, 2000, 2000, 2000,
+    ]);
   });
 });

@@ -22,6 +22,7 @@ import {
   answered,
   emptyTyping,
   fieldText,
+  callParts,
   nextCall,
   restart,
   sendAgain,
@@ -287,8 +288,23 @@ export function ScreenView(props: ScreenViewProps) {
     if (!inputAllowed()) return;
     event.preventDefault();
     const text = event.clipboardData.getData("text/plain");
-    for (let i = 0; i < text.length && i < 8000; i += 2000)
-      props.onInput({ kind: "text", text: text.slice(i, i + 2000) });
+    // In order, one call after another's answer: a refused part stops the rest, so nothing goes
+    // after a gap, and what didn't go is said.
+    const parts = callParts(text, 4);
+    void (async () => {
+      let sent = 0;
+      for (const part of parts) {
+        if ((await Promise.resolve(props.onInput({ kind: "text", text: part }))) === false) break;
+        sent += part.length;
+      }
+      const left = [...text.slice(sent)].length;
+      if (left > 0)
+        showHint(
+          sent === 0
+            ? "The paste wasn't sent. Try again in a moment."
+            : `Only part of the paste was sent: the last ${left} characters weren't.`,
+        );
+    })();
   };
 
   const onClick = (event: React.MouseEvent) => {
@@ -729,6 +745,8 @@ function PhoneLayout(
   const [typing, setTyping] = useState(false);
   // What the field holds and where each part of it is (`phone-typing.ts`): read in handlers.
   const [text, setText] = useState<Typing>(emptyTyping);
+  /** The field's text while an input method composes; null otherwise. */
+  const [composing, setComposing] = useState<string | null>(null);
   const textRef = useRef<Typing>(emptyTyping);
   useLayoutEffect(() => {
     return () => {
@@ -758,11 +776,11 @@ function PhoneLayout(
     if (!call) return;
     setTyped(call.typing);
     void Promise.resolve(props.onInput({ kind: "text", text: call.text })).then((sent) => {
+      // A call of a field closed since (Done, reopened, or the full view gone) says nothing of
+      // the text typed now: no state is changed and nothing more is sent.
+      if (call.session !== textRef.current.session) return;
       const ok = sent === true;
-      const before = textRef.current;
-      setTyped(answered(before, ok, call.session));
-      // A call of a field closed since says nothing of the text typed now.
-      if (call.session !== before.session) return;
+      setTyped(answered(textRef.current, ok, call.session));
       if (ok) pump();
       else {
         setHint("That wasn't taken: it waits below. Send it again in a moment.");
@@ -920,9 +938,21 @@ function PhoneLayout(
             autoCapitalize="off"
             spellCheck={false}
             placeholder="Type into the page"
-            value={fieldText(text)}
+            value={composing ?? fieldText(text)}
             autoFocus
+            // An input method's text is the person's only once it is committed: until then the
+            // field holds it as it is being composed, and nothing goes.
+            onCompositionStart={(event) => setComposing(event.currentTarget.value)}
+            onCompositionEnd={(event) => {
+              setComposing(null);
+              setTyped(typedInto(textRef.current, event.currentTarget.value));
+              pump();
+            }}
             onChange={(event) => {
+              if (composing !== null || (event.nativeEvent as InputEvent).isComposing) {
+                setComposing(event.target.value);
+                return;
+              }
               // Each character typed goes as text, in order, once the host took the one before.
               setTyped(typedInto(textRef.current, event.target.value));
               pump();

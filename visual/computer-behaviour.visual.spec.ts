@@ -103,6 +103,43 @@ test.describe("the full view on the desktop", () => {
     await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
   });
 
+  test("F-142: a paste the gateway takes only part of goes in order up to the refusal, and says what wasn't sent", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    // The host takes the first input call and refuses the next, as with one queue slot left.
+    await page.evaluate(() => {
+      type Command = { type: string; input?: { text?: string } };
+      const bridge = (
+        window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
+      ).clawtrateFixture;
+      const invoke = bridge.invoke.bind(bridge);
+      let calls = 0;
+      bridge.invoke = (command) => {
+        if (command.type !== "computerInput" || !command.input?.text) return invoke(command);
+        calls += 1;
+        return calls === 1 ? invoke(command) : Promise.resolve({ sent: false });
+      };
+    });
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    await frame.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "p".repeat(3000));
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    });
+    await expect(
+      fullView(page)
+        .getByRole("status")
+        .filter({ hasText: "Only part of the paste was sent: the last 1000 characters weren't." }),
+    ).toBeVisible();
+    const texts = (await sentOf(page, "computerInput")).map(
+      (each) => (each.input as { text?: string }).text?.length,
+    );
+    expect(texts).toEqual([2000]);
+  });
+
   test("F-142: typed text, clicks and scrolling reach the page only while this viewer holds control and the picture has focus; Enter is not sent; a paste goes only on a paste", async ({
     page,
   }) => {
@@ -782,6 +819,28 @@ test.describe("the computer button, recovery and the machine", () => {
 
 test.describe("the full view on the phone (section 18, On the phone)", () => {
   test.use(contextFor(PHONE, "light"));
+
+  test("F-142: an input method's text goes only once it is committed, never the keys that composed it", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await fullView(page).getByRole("button", { name: "Type into the page" }).click();
+    const field = fullView(page).getByRole("textbox", { name: "Type into the page" });
+    await field.focus();
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.imeSetComposition", { text: "n", selectionStart: 1, selectionEnd: 1 });
+    await cdp.send("Input.imeSetComposition", { text: "ni", selectionStart: 2, selectionEnd: 2 });
+    await page.waitForTimeout(300);
+    expect(await sentOf(page, "computerInput")).toEqual([]);
+    await cdp.send("Input.insertText", { text: "你" });
+    await expect
+      .poll(async () =>
+        (await sentOf(page, "computerInput")).map((each) => (each.input as { text?: string }).text),
+      )
+      .toEqual(["你"]);
+    await expect(field).toHaveValue("你");
+  });
 
   test("F-142: a late reply from a closed typing field cannot accept text in the reopened field", async ({
     page,

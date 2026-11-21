@@ -5,8 +5,27 @@
 // anything typed after it. Nothing accepted is sent twice. Accepted is not delivered: the page
 // shows what arrived.
 
-/** One input call's text at most (`MAX_INPUT_TEXT`). */
+/** One input call's text at most (`MAX_INPUT_TEXT`), in UTF-16 units. */
 const CALL_CHARS = 2000;
+
+/** At most `max` units of `text`, never half a character: a cut inside a surrogate pair moves before it. */
+export function cutWhole(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/** `text` as input calls, in order, each whole characters within one call's limit; at most `calls`. */
+export function callParts(text: string, calls: number): string[] {
+  const out: string[] = [];
+  let rest = text;
+  while (rest && out.length < calls) {
+    const part = cutWhole(rest, CALL_CHARS);
+    out.push(part);
+    rest = rest.slice(part.length);
+  }
+  return out;
+}
 
 export type Typing = {
   /** Accepted by the host, in order. */
@@ -41,13 +60,13 @@ export function typedInto(t: Typing, value: string): Typing {
   // Only text can be sent: a deletion or a replacement of what went is not taken back.
   if (!value.startsWith(shown) || value.length === shown.length) return t;
   // One edit (a paste) is at most one call's text: what can't go in one isn't kept either.
-  return { ...t, unsent: t.unsent + value.slice(shown.length, shown.length + CALL_CHARS) };
+  return { ...t, unsent: t.unsent + cutWhole(value.slice(shown.length), CALL_CHARS) };
 }
 
 /** The next call to make, if any: the oldest text not accepted, one call's worth, never two at once. */
 export function nextCall(t: Typing): { typing: Typing; text: string; session: number } | null {
   if (t.flight || t.held || !t.unsent) return null;
-  const text = t.unsent.slice(0, CALL_CHARS);
+  const text = cutWhole(t.unsent, CALL_CHARS);
   return {
     typing: { ...t, flight: text, unsent: t.unsent.slice(text.length) },
     text,
