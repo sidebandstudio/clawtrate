@@ -1285,6 +1285,37 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewals);
   });
 
+  it("a Check refused as the tab gone, arriving after the viewer left and a later hand-back began, ends nothing", async () => {
+    vi.useFakeTimers();
+    let reject!: (error: unknown) => void;
+    let releases = 0;
+    let held = false;
+    const h = harness({
+      "clawtrate-computer.control.release": () => {
+        releases += 1;
+        if (releases === 1) throw refused("FORBIDDEN", "not_holder");
+        return never();
+      },
+      "clawtrate-computer.view.renew": () =>
+        held ? new Promise((_resolve, fail) => (reject = fail)) : { leaseRenewed: true },
+    });
+    await granted(h);
+    h.views.release(h.viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control.status).toBe("unconfirmed");
+    held = true;
+    const checking = h.views.check(h.viewer);
+    h.views.leave(h.viewer);
+    // Back, and giving control back again: that hand-back is on its way.
+    h.views.show(h.viewer, KEY);
+    h.views.release(h.viewer);
+    expect(h.pane().control.status).toBe("releasing");
+    reject(refused("UNAVAILABLE", "tab_not_in_bots_browser"));
+    await checking;
+    expect(h.pane().control).toMatchObject({ status: "releasing", key: KEY });
+    expect(h.views.input(h.viewer, { kind: "text", text: "x" })).toBe(false);
+  });
+
   it("a viewer that goes away gives control back and leaves no pane", async () => {
     const h = harness();
     await granted(h);

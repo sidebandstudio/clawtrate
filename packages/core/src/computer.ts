@@ -1804,8 +1804,11 @@ export class ComputerViews {
         this.reschedule(live);
       } else this.leaseEnded(live, null);
     } catch (error) {
-      if (refusal(error).reason === "tab_not_in_bots_browser" && live.lease === lease)
-        this.leaseEnded(live, null);
+      // Retired as a reply is: a Check from before the viewer left, or from a state since
+      // replaced (a later hand-back), ends nothing.
+      const now = this.pane(viewer)?.control;
+      if (live.lease !== lease || now?.status !== checked || live.closed !== closed) return;
+      if (refusal(error).reason === "tab_not_in_bots_browser") this.leaseEnded(live, null);
       // Otherwise nothing is established: the line stays as it is.
     }
   }
