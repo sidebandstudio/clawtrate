@@ -16,7 +16,7 @@
 // its record behind, and the next run in this checkout cleans it up once that
 // run's runner is proven gone.
 
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,9 +91,26 @@ export function runningOthers(own: string[], keep: string[] = []): string[] {
     .sort();
 }
 
-/** Reset one of this run's instances, only if it still holds the run this run gave it. */
-const resetInstance = (name: string, runId: string) => {
-  devGateway(name, "reset", "--run-id", runId);
+/**
+ * Reset one of this run's instances, only if it still holds the run this run
+ * gave it. A reset that fails throws with everything it printed, so a failed
+ * teardown says what kept the instance.
+ */
+export const resetInstance = (name: string, runId: string) => {
+  const args = ["reset", "--run-id", runId, "--instance", name];
+  const result = spawnSync(process.execPath, [CLI, ...args], {
+    cwd: ROOT,
+    env: cliEnv(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0) {
+    const printed = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    throw new Error(
+      `dev-gateway ${args.join(" ")} failed (${result.error?.message ?? result.status ?? result.signal})` +
+        (printed ? `:\n${printed}` : " and printed nothing"),
+    );
+  }
 };
 
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
