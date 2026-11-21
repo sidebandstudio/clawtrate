@@ -89,7 +89,7 @@ const test = base.extend<{ desktopApp: TestApp }>({
       server.route("/stable", json(manifest));
       server.route(
         "/nightly",
-        json({ ...manifest, track: "nightly", version: "0.1.0-nightly.20261101.1" }),
+        json({ ...manifest, track: "nightly", version: "0.1.0-beta.20261101.1" }),
       );
       server.route(filePath, async (_, response) => {
         response.writeHead(200, { "content-length": body.length });
@@ -199,7 +199,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
   expect(server.requests).toEqual(["/stable"]);
   await expect(page.locator("#update-source")).toHaveText(
-    "Downloads Clawtrate 1.1.0 from 127.0.0.1, only when you choose to.",
+    "Downloads Clawtrate 1.1.0, only when you choose to.",
   );
   const download = page.getByRole("button", { name: "Download", exact: true });
   await download.focus();
@@ -224,14 +224,14 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     { timeout: 30_000 },
   );
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
-  const nightly = page.getByRole("radio", { name: "Nightly" });
+  const nightly = page.getByRole("radio", { name: "Beta" });
   await nightly.click();
   await expect(nightly).toBeChecked();
   await expect(line).toHaveText("Not checked yet.");
   expect(server.requests).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText(
-    "No newer Nightly build was offered. Clawtrate 0.1.0 is still running.",
+    "No newer Beta build was offered. Clawtrate 0.1.0 is still running.",
   );
   expect(server.requests).toEqual(["/stable", filePath, "/nightly"]);
 
@@ -355,7 +355,7 @@ for (const stage of ["check", "download"] as const) {
       const check = page.getByRole("button", { name: "Check for Updates" });
       const download = page.getByRole("button", { name: "Download", exact: true });
       const stable = page.getByRole("radio", { name: "Stable" }),
-        nightly = page.getByRole("radio", { name: "Nightly" });
+        nightly = page.getByRole("radio", { name: "Beta" });
       await check.focus();
       const notes = test.info().annotations;
       notes.push({ type: "focus before Enter", description: await focusedElement(page) });
@@ -386,7 +386,7 @@ for (const stage of ["check", "download"] as const) {
       await nightly.click();
       const pending = page
         .locator(".b-hint")
-        .filter({ hasText: "Saving Nightly as the update track…" });
+        .filter({ hasText: "Saving Beta as the update track…" });
       await expect(pending).toBeVisible();
       await expect(stable).toBeChecked();
       await expect(check).toHaveCount(0);
@@ -467,7 +467,7 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   expect(choice.outcome).toBe("accepted");
   await expect(page.getByRole("radio", { name: "Stable" })).toBeChecked();
   await check.click();
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(page.locator(".update-result")).toContainText(
     "The update track changed. Check the selected source again.",
   );

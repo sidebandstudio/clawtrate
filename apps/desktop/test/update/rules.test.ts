@@ -217,24 +217,24 @@ describe("versions", () => {
 
   it.each([
     ["1.10.0", "1.9.0", true],
-    ["1.0.0-nightly.20261102.1", "1.0.0-nightly.20261101.11", true],
-    ["1.0.0-nightly.20261101.10", "1.0.0-nightly.20261101.2", true],
-    ["1.0.0", "1.0.0-nightly.20261101.1", true],
-    ["1.0.1-nightly.20261101.1", "1.0.0", true],
-    ["1.0.0-nightly.20261101.1", "1.0.0", false],
+    ["1.0.0-beta.20261102.1", "1.0.0-beta.20261101.11", true],
+    ["1.0.0-beta.20261101.10", "1.0.0-beta.20261101.2", true],
+    ["1.0.0", "1.0.0-beta.20261101.1", true],
+    ["1.0.1-beta.20261101.1", "1.0.0", true],
+    ["1.0.0-beta.20261101.1", "1.0.0", false],
     ["1.0.0", "1.0.0", false],
-    ["1.0.0-nightly.20261101.1", "1.0.0-nightly.20261101.1", false],
+    ["1.0.0-beta.20261101.1", "1.0.0-beta.20261101.1", false],
     ["0.9.0", "1.0.0", false],
   ] as const)("%s against %s is newer: %s", (a, b, expected) => {
     expect(isNewer(v(a), v(b))).toBe(expected);
   });
 
-  it("round trips the maximum nightly and the first supported year", () => {
-    const max = "999999.999999.999999-nightly.99991231.999999999999";
-    expect(max.length).toBe(50);
-    for (const version of [max, "0.0.0-nightly.10000101.0"])
+  it("round trips the longest beta version and the first supported year", () => {
+    const max = "999999.999999.999999-beta.99991231.999999999999";
+    expect(max.length).toBe(47);
+    for (const version of [max, "0.0.0-beta.10000101.0"])
       expect(formatVersion(parseVersion(version)!)).toBe(version);
-    expect(parseVersion("0.0.0-nightly.09991231.0")).toBeNull();
+    expect(parseVersion("0.0.0-beta.09991231.0")).toBeNull();
   });
 
   it("refuses versions outside the stable and nightly grammar", () => {
@@ -247,10 +247,12 @@ describe("versions", () => {
       " 1.0.0",
       "v1.0.0",
       "1.0.0.0",
-      "1.0.0-nightly.20260230.1",
-      "1.0.0-nightly.20261101.01",
-      "1.0.0-nightly.20261101.1234567890123",
-      "1.0.0-nightly.20261101.2\n",
+      "1.0.0-beta.20260230.1",
+      "1.0.0-beta.20261101.01",
+      "1.0.0-beta.20261101.1234567890123",
+      "1.0.0-beta.20261101.2\n",
+      // The Beta track was called Nightly before any build was published.
+      "1.0.0-nightly.20261101.1",
       "9999999.0.0",
     ]) {
       expect(parseVersion(text), text).toBeNull();

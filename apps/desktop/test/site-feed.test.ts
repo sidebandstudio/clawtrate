@@ -1,0 +1,419 @@
+// The site takes its Beta feed from the newest published beta release, and
+// only after checking the feed and latest-mac.json against each other and the
+// release's tag. GitHub's API and downloads are stand-ins here.
+
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { checkBetaFiles, makeLatestMac, releaseFolder } from "../packaging/beta-files.ts";
+import {
+  assembleSite,
+  newestBeta,
+  writeSiteFeed,
+  type Get,
+  type ReleaseRow,
+} from "../packaging/site-feed.ts";
+
+/** Each zip as GitHub serves it here: 100 bytes. */
+const ZIP = "z".repeat(100);
+const SHA512 = createHash("sha512").update(ZIP).digest("base64");
+const SHA256 = createHash("sha256").update(ZIP).digest("hex");
+
+function files(version: string) {
+  const tag = `v${version}`;
+  const url = (key: string) => `${releaseFolder(tag)}Clawtrate-${version}-${key}.zip`;
+  const feed = JSON.stringify({
+    format: 1,
+    track: "nightly",
+    version,
+    releaseDate: "2026-11-20T18:00:00.000Z",
+    files: {
+      "mac-arm64": { url: url("mac-arm64"), size: 100, sha512: SHA512 },
+      "mac-x64": { url: url("mac-x64"), size: 100, sha512: SHA512 },
+    },
+  });
+  const latest = JSON.stringify(
+    makeLatestMac(version, "TEAMID1234", {
+      "mac-arm64": { url: url("mac-arm64"), sha256: SHA256 },
+      "mac-x64": { url: url("mac-x64"), sha256: SHA256 },
+      "win-x64": undefined,
+    }),
+  );
+  return { tag, feed, latest };
+}
+
+function row(version: string, extra: Partial<ReleaseRow> = {}): ReleaseRow {
+  const tag = `v${version}`;
+  return {
+    tag_name: tag,
+    draft: false,
+    prerelease: true,
+    assets: [
+      "feed.json",
+      "latest-mac.json",
+      `Clawtrate-${version}-mac-arm64.zip`,
+      `Clawtrate-${version}-mac-x64.zip`,
+    ].map((name) => ({
+      name,
+      size: 100,
+      digest: `sha256:${SHA256}`,
+      state: "uploaded",
+      browser_download_url: `${releaseFolder(tag)}${name}`,
+    })),
+    ...extra,
+  };
+}
+
+describe("which release the site takes", () => {
+  it("takes the newest published beta that carries both files", () => {
+    const rows = [
+      row("0.1.1-beta.20261120.1"),
+      row("0.1.1-beta.20261120.10"),
+      row("0.1.1-beta.20261121.1", { draft: true }),
+      row("0.1.1-beta.20261121.2", { prerelease: false }),
+      row("0.1.1-beta.20261122.1", { assets: [] }),
+      // Only the Apple silicon zip: not a complete beta.
+      row("0.1.1-beta.20261122.2", {
+        assets: row("0.1.1-beta.20261122.2").assets.filter((asset) => !asset.name.includes("x64")),
+      }),
+      row("0.1.1"),
+      { ...row("0.1.2-beta.20261123.1"), tag_name: "0.1.2-beta.20261123.1" },
+    ];
+    expect(newestBeta(rows)?.tag_name).toBe("v0.1.1-beta.20261120.10");
+    expect(newestBeta([row("0.1.1-beta.20261121.1", { draft: true })])).toBeNull();
+  });
+});
+
+describe("what the site checks before it serves a beta's files", () => {
+  const version = "0.1.1-beta.20261120.2";
+  const good = files(version);
+
+  it("accepts a beta's own feed and latest-mac.json, unchanged", () => {
+    expect(checkBetaFiles(good.tag, good.feed, good.latest)).toEqual({
+      feed: good.feed,
+      latest: good.latest,
+    });
+  });
+
+  it.each([
+    ["the feed of another version", files("0.1.1-beta.20261120.1").feed, good.latest],
+    ["latest-mac.json of another version", good.feed, files("0.1.1-beta.20261120.1").latest],
+    ["a feed that is not JSON", "{", good.latest],
+    ["latest-mac.json that is not JSON", good.feed, "{"],
+    [
+      "latest-mac.json without a team",
+      good.feed,
+      JSON.stringify({ ...JSON.parse(good.latest), teamIdentifier: "" }),
+    ],
+    [
+      "a file in another release",
+      good.feed.replaceAll(`/download/${good.tag}/`, "/download/v0.1.0/"),
+      good.latest,
+    ],
+    [
+      "a feed without the Intel file",
+      JSON.stringify({
+        ...JSON.parse(good.feed),
+        files: { "mac-arm64": JSON.parse(good.feed).files["mac-arm64"] },
+      }),
+      good.latest,
+    ],
+    ["a feed for the Stable track", good.feed.replace('"nightly"', '"stable"'), good.latest],
+    [
+      "both architectures naming the Apple silicon zip",
+      good.feed.replace(`${version}-mac-x64.zip`, `${version}-mac-arm64.zip`),
+      good.latest.replace(`${version}-mac-x64.zip`, `${version}-mac-arm64.zip`),
+    ],
+  ])("refuses %s", (_name, feed, latest) => {
+    expect(() => checkBetaFiles(good.tag, feed, latest)).toThrow();
+  });
+});
+
+describe("writing the site's feed", () => {
+  let site: string;
+  beforeEach(() => {
+    site = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
+  });
+  afterEach(() => rmSync(site, { recursive: true, force: true }));
+
+  function github(
+    rows: ReleaseRow[],
+    bodies: Record<string, string>,
+  ): { get: Get; asked: string[] } {
+    const asked: string[] = [];
+    const get: Get = async (url, headers) => {
+      asked.push(url);
+      if (url.startsWith("https://api.github.com/")) {
+        expect(headers.authorization).toBe("Bearer made-up-token");
+        return new Response(JSON.stringify(rows));
+      }
+      // Every zip serves the same 100 bytes unless `bodies` says otherwise.
+      const body = bodies[url] ?? (url.endsWith(".zip") ? ZIP : undefined);
+      return body === undefined ? new Response("", { status: 404 }) : new Response(body);
+    };
+    return { get, asked };
+  }
+
+  it("writes the newest beta's feed and latest-mac.json under updates/beta", async () => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, feed, latest } = files(version);
+    const { get, asked } = github([row("0.1.1-beta.20261120.1"), row(version)], {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: latest,
+    });
+    expect(await writeSiteFeed(site, get, "made-up-token")).toBe(tag);
+    expect(readFileSync(join(site, "updates/beta/feed.json"), "utf8")).toBe(feed);
+    expect(readFileSync(join(site, "updates/beta/latest-mac.json"), "utf8")).toBe(latest);
+    expect(asked).toEqual([
+      "https://api.github.com/repos/sidebandstudio/clawtrate/releases?per_page=100&page=1",
+      `${releaseFolder(tag)}feed.json`,
+      `${releaseFolder(tag)}latest-mac.json`,
+      `${releaseFolder(tag)}Clawtrate-${version}-mac-arm64.zip`,
+      `${releaseFolder(tag)}Clawtrate-${version}-mac-x64.zip`,
+    ]);
+  });
+
+  it("writes nothing when no beta is published, as after the first one is withdrawn", async () => {
+    const { get } = github([row("0.1.1-beta.20261120.1", { draft: true })], {});
+    expect(await writeSiteFeed(site, get, "made-up-token")).toBeNull();
+    expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  it("fails the deploy, writing nothing, when the newest beta's files do not agree", async () => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, feed } = files(version);
+    const { get } = github([row(version)], {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: files("0.1.1-beta.20261120.1").latest,
+    });
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow("does not match");
+    expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  it.each<[string, (row: ReleaseRow) => void]>([
+    [
+      "GitHub's digest of the Intel zip",
+      (beta) => (beta.assets.find((asset) => asset.name.endsWith("x64.zip"))!.digest = "sha256:00"),
+    ],
+    [
+      "GitHub's size of the Apple silicon zip",
+      (beta) => (beta.assets.find((asset) => asset.name.endsWith("arm64.zip"))!.size = 99),
+    ],
+  ])("fails the deploy when %s is not the one the files name", async (_name, change) => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, feed, latest } = files(version);
+    const beta = row(version);
+    change(beta);
+    const { get } = github([beta], {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: latest,
+    });
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+      "is not the file its feed and latest-mac.json name",
+    );
+    expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  it.each<[string, (beta: ReleaseRow, bodies: Record<string, string>, tag: string) => string]>([
+    ["the feed names another SHA-512 though GitHub's SHA-256 matches", () => "feed"],
+    [
+      "GitHub serves other bytes for the Intel zip",
+      (_beta, bodies, tag) => {
+        bodies[`${releaseFolder(tag)}Clawtrate-${tag.slice(1)}-mac-x64.zip`] = "y".repeat(100);
+        return "";
+      },
+    ],
+    [
+      "the Intel zip is not fully uploaded",
+      (beta) => {
+        beta.assets.find((asset) => asset.name.endsWith("x64.zip"))!.state = "starter";
+        return "";
+      },
+    ],
+    [
+      "the Intel zip's address is not its release address",
+      (beta) => {
+        beta.assets.find((asset) => asset.name.endsWith("x64.zip"))!.browser_download_url =
+          "https://example.com/Clawtrate.zip";
+        return "";
+      },
+    ],
+  ])("fails the deploy, writing neither file, when %s", async (_name, change) => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, latest } = files(version);
+    let { feed } = files(version);
+    const beta = row(version);
+    const bodies: Record<string, string> = {};
+    if (change(beta, bodies, tag) === "feed") {
+      const wrong = JSON.parse(feed);
+      wrong.files["mac-x64"].sha512 = Buffer.alloc(64, 1).toString("base64");
+      feed = JSON.stringify(wrong);
+    }
+    bodies[`${releaseFolder(tag)}feed.json`] = feed;
+    bodies[`${releaseFolder(tag)}latest-mac.json`] = latest;
+    const { get } = github([beta], bodies);
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+      `Clawtrate-${version}-mac-x64.zip on ${tag} is not the file its feed and latest-mac.json name.`,
+    );
+    expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  it("refuses a site that has its own updates/beta, even with no beta to write", async () => {
+    mkdirSync(join(site, "updates/beta"), { recursive: true });
+    writeFileSync(join(site, "updates/beta/feed.json"), "an old feed");
+    const { get } = github([], {});
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+      "updates/beta/ is the generated Beta feed's folder",
+    );
+  });
+});
+
+describe("assembling the site", () => {
+  let root: string;
+  let source: string;
+  let output: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
+    source = join(root, "site");
+    output = join(root, "_site");
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const none: Get = async () => new Response("[]");
+  const version = "0.1.1-beta.20261120.2";
+  const tag = `v${version}`;
+
+  /** The website's own shape, in miniature: the home page, the download template and install.sh. */
+  function fixture(team = "TEAMID1234") {
+    mkdirSync(join(source, "download/mac"), { recursive: true });
+    writeFileSync(join(source, "index.html"), "<!doctype html><title>Clawtrate</title>");
+    writeFileSync(
+      join(source, "download/mac/index.html"),
+      [
+        "<!-- __CLAWTRATE_BETA_VERSION__ __CLAWTRATE_ARM64_ZIP__ __CLAWTRATE_X64_ZIP__ __CLAWTRATE_RELEASE_PAGE__ -->",
+        "<p>Beta __CLAWTRATE_BETA_VERSION__</p>",
+        '<a href="__CLAWTRATE_ARM64_ZIP__">Apple silicon</a>',
+        '<a href="__CLAWTRATE_X64_ZIP__">Intel</a>',
+        '<a href="__CLAWTRATE_RELEASE_PAGE__">This beta on GitHub</a>',
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(source, "install.sh"),
+      `#!/bin/sh\nCLAWTRATE_TEAM_ID="${team}"\nmain() { :; }\nmain "$@"\n`,
+    );
+  }
+
+  /** GitHub with one published beta, signed by TEAMID1234, and its zips. */
+  const oneBeta: Get = async (url) => {
+    const { feed, latest } = files(version);
+    if (url.startsWith("https://api.github.com/"))
+      return new Response(JSON.stringify([row(version)]));
+    if (url === `${releaseFolder(tag)}feed.json`) return new Response(feed);
+    if (url === `${releaseFolder(tag)}latest-mac.json`) return new Response(latest);
+    if (url.endsWith(".zip")) return new Response(ZIP);
+    return new Response("", { status: 404 });
+  };
+
+  it("refuses, deploying nothing, when there is no site source", async () => {
+    await expect(assembleSite(source, output, none, undefined)).rejects.toThrow(
+      "index.html does not exist: there is no site to deploy.",
+    );
+    mkdirSync(source);
+    await expect(assembleSite(source, output, none, undefined)).rejects.toThrow(
+      "there is no site to deploy",
+    );
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("refuses a site source with its own updates/beta", async () => {
+    fixture();
+    mkdirSync(join(source, "updates/beta"), { recursive: true });
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      "updates/beta/ is reserved for the generated Beta feed.",
+    );
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each(["download/mac/index.html", "install.sh"])(
+    "refuses a site source without %s",
+    async (missing) => {
+      fixture();
+      rmSync(join(source, missing));
+      await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+        `${missing} does not exist: there is no site to deploy.`,
+      );
+      expect(existsSync(output)).toBe(false);
+    },
+  );
+
+  it("fills the download page from the beta it serves, and copies the rest", async () => {
+    fixture();
+    expect(await assembleSite(source, output, oneBeta, undefined)).toBe(tag);
+    const page = readFileSync(join(output, "download/mac/index.html"), "utf8");
+    const zip = (key: string) => `${releaseFolder(tag)}Clawtrate-${version}-${key}.zip`;
+    expect(page).toContain(`<p>Beta ${version}</p>`);
+    expect(page).toContain(`<a href="${zip("mac-arm64")}">Apple silicon</a>`);
+    expect(page).toContain(`<a href="${zip("mac-x64")}">Intel</a>`);
+    expect(page).toContain(
+      `<a href="https://github.com/sidebandstudio/clawtrate/releases/tag/${tag}">This beta on GitHub</a>`,
+    );
+    expect(page).not.toMatch(/__CLAWTRATE_/);
+    expect(readFileSync(join(output, "install.sh"), "utf8")).toContain(
+      'CLAWTRATE_TEAM_ID="TEAMID1234"',
+    );
+    expect(readFileSync(join(output, "updates/beta/latest-mac.json"), "utf8")).toBe(
+      files(version).latest,
+    );
+    // The source is left a template.
+    expect(readFileSync(join(source, "download/mac/index.html"), "utf8")).toContain(
+      "__CLAWTRATE_ARM64_ZIP__",
+    );
+  });
+
+  it("refuses when no beta is published, since the download page cannot be filled", async () => {
+    fixture();
+    await expect(assembleSite(source, output, none, undefined)).rejects.toThrow(
+      "No published beta: the download page cannot be filled, so nothing deploys.",
+    );
+  });
+
+  it.each([
+    ["download/mac/index.html", "<p>__CLAWTRATE_CHANNEL__</p>"],
+    ["index.html", '<a href="__CLAWTRATE_ARM64_ZIP__">Download</a>'],
+  ])("refuses while %s holds a token the assembly does not fill", async (file, extra) => {
+    fixture();
+    writeFileSync(join(source, file), `${readFileSync(join(source, file), "utf8")}\n${extra}`);
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      `${file} still holds __CLAWTRATE_`,
+    );
+  });
+
+  it("refuses while install.sh pins the placeholder team", async () => {
+    fixture("APPLE_CLAWTRATE_TEAM_ID");
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      "install.sh still pins the placeholder APPLE_CLAWTRATE_TEAM_ID, so nothing deploys.",
+    );
+  });
+
+  it("refuses while install.sh pins another team than the beta's", async () => {
+    fixture("OTHERTEAM1");
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      `install.sh pins team OTHERTEAM1, but ${tag} is signed by TEAMID1234, so nothing deploys.`,
+    );
+  });
+
+  it.each([
+    ["no pin", (text: string) => text.replace(/^CLAWTRATE_TEAM_ID=.*$/m, "")],
+    ["a second pin", (text: string) => `${text}CLAWTRATE_TEAM_ID="TEAMID1234"\n`],
+  ])("refuses an install.sh with %s", async (_name, change) => {
+    fixture();
+    writeFileSync(
+      join(source, "install.sh"),
+      change(readFileSync(join(source, "install.sh"), "utf8")),
+    );
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow(
+      "install.sh must pin CLAWTRATE_TEAM_ID exactly once, so nothing deploys.",
+    );
+  });
+});

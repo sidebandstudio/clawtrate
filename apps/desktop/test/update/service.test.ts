@@ -20,7 +20,7 @@ let dir: ReturnType<typeof tempDir>;
 let updates: string;
 const snapshots: DesktopUpdateSnapshot[] = [];
 const fixture = payload(4000);
-const nightly = "1.1.0-nightly.20261101.9";
+const nightly = "1.1.0-beta.20261101.9";
 function document(version: string, track: string) {
   return feedFor(
     server.origin,
@@ -178,13 +178,13 @@ it("keeps the previous track when saving fails and checks it next", async () => 
   expect(server.requests).toEqual(["/stable"]);
 });
 it("reports the running version when the selected track offers an older build", async () => {
-  const service = await start({ version: "2.0.0-nightly.20261102.1" });
+  const service = await start({ version: "2.0.0-beta.20261102.1" });
   expect(service.get().selectedTrack).toBe("nightly");
   await service.chooseTrack("stable");
   expect(
     (await service.check(service.get().selectedTrack, service.get().revision)).snapshot,
   ).toMatchObject({
-    runningVersion: "2.0.0-nightly.20261102.1",
+    runningVersion: "2.0.0-beta.20261102.1",
     state: { kind: "nothing-newer" },
   });
 });

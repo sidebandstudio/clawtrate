@@ -3,10 +3,22 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
@@ -14,9 +26,15 @@ import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
+import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
-import { appEnv } from "./desktop-driver.ts";
-import { packagedExecutable } from "./global-setup.ts";
+import { recordSuccessor } from "../e2e/run-record.ts";
+import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
+import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { appEnv, debuggingPort } from "./desktop-driver.ts";
+import { quitWithin } from "./quit.ts";
+import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
   integrityLevels,
   mainWindowTitle,
@@ -31,6 +49,7 @@ const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
+const RECORD = process.env.CLAWTRATE_PACKAGED_RECORD ?? "";
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -447,4 +466,149 @@ test("stays on its own content", async () => {
   // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
   expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
+test("opens with the same pairing and tasks after a newer build takes its place", async () => {
+  // An update in place quits the app and starts a newer build of the same
+  // bundle id, name and data folder. Here the newer build is a copy of this
+  // one with only its version raised and an ad hoc signature, so this shows
+  // the paths a signed update keeps, not Squirrel's handoff itself.
+  test.skip(WINDOWS, NO_GATEWAY);
+  test.setTimeout(300_000);
+  const gateway = join(USER_DATA, "gateway");
+  const key = readFileSync(join(gateway, "device-key.pem"));
+  const state = () =>
+    JSON.parse(readFileSync(join(gateway, "state.json"), "utf8")) as Record<string, string>;
+  const before = state();
+  expect(before.connection).toBeTruthy();
+  expect(Object.keys(before).some((name) => name.startsWith("deviceToken:"))).toBe(true);
+
+  const running = packagedManifest(APP);
+  const [major, minor, patch] = parseVersion(running.version as string)!;
+  const newer = `${major}.${minor}.${patch + 1}`;
+  const run = dirname(USER_DATA);
+  const updated = join(run, "updated", "Clawtrate.app");
+  mkdirSync(dirname(updated));
+  await newerCopy(APP, updated, newer, join(run, "newer-scratch"));
+  // Only the version differs, so the name the data folder is derived from does not.
+  expect({ ...packagedManifest(updated), version: running.version }).toEqual(running);
+  expect(
+    execFileSync(
+      "plutil",
+      ["-extract", "CFBundleIdentifier", "raw", join(updated, "Contents/Info.plist")],
+      {
+        encoding: "utf8",
+      },
+    ).trim(),
+  ).toBe(APP_ID);
+
+  // Quit the running app as an update does, and wait for it and its helpers,
+  // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
+  // Asked while the debugging client is attached, as the teardown asks; the
+  // 15 seconds start at SIGTERM, and closing that client runs alongside.
+  const firstGone = async () => {
+    for (const end = Date.now() + 20_000; Date.now() < end; await sleep(100)) {
+      // The runner that started the app reaps it; until then `ps` shows a zombie.
+      const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
+        encoding: "utf8",
+      }).stdout.trim();
+      if (!state || state.startsWith("Z")) return;
+    }
+    await new Promise(() => undefined);
+  };
+  const firstQuit = await quitWithin(
+    () => process.kill(APP_PID, "SIGTERM"),
+    firstGone,
+    () => browser.close(),
+    15_000,
+  );
+  expect(firstQuit, "the app quits within 15 seconds, as an update asks it").toBe(true);
+  // From the app's exit: its helpers' own 10 seconds.
+  await expect
+    .poll(() => processesUsing(USER_DATA), {
+      timeout: 10_000,
+      message: "the app's helpers end within 10 seconds of it",
+    })
+    .toEqual([]);
+
+  rmSync(join(USER_DATA, "DevToolsActivePort"), { force: true });
+  const logFd = openSync(join(run, "updated.log"), "a", 0o600);
+  // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+  const gated = gatedSpawn(
+    spawn,
+    packagedExecutable(updated),
+    [`--user-data-dir=${USER_DATA}`, "--remote-debugging-port=0"],
+    { env: appEnv(), stdio: ["ignore", logFd, logFd] },
+  );
+  const next = gated.child;
+  const exited = new Promise((resolve) => next.once("exit", resolve));
+  const found = processIdentity(next.pid!);
+  if (found.state !== "alive") {
+    gated.abort();
+    throw new Error("could not record the newer build's process");
+  }
+  recordSuccessor(RECORD, { pid: next.pid!, identity: found.identity });
+  gated.release();
+  let second: Browser | undefined;
+  try {
+    const port = await debuggingPort(USER_DATA, next);
+    second = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    await expect
+      .poll(() => second!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const view = second.contexts().flatMap((context) => context.pages())[0]!;
+
+    // Straight back to the gateway, with no address to type and no device to approve.
+    const bots = view.getByTestId("bot");
+    await expect(bots).toHaveCount(4, { timeout: 30_000 });
+    await expect(view.getByPlaceholder("Gateway address")).toHaveCount(0);
+    await expect(view.getByRole("heading", { name: "Approve this device" })).toHaveCount(0);
+    // The rail may remember Otto open from before the update; open it only if not.
+    const otto = view.getByRole("button", { name: /^Otto, \d+ tasks?/ });
+    if ((await otto.getAttribute("aria-expanded")) !== "true") await otto.click();
+    await expect(
+      view
+        .getByRole("list", { name: "Otto's tasks" })
+        .getByTestId("task")
+        .filter({ hasText: "Disk almost full on the media box" }),
+    ).toHaveCount(1);
+    const updates = await view.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.get(),
+    );
+    expect(updates.runningVersion).toBe(newer);
+
+    // The same device key, saved connection and device token.
+    expect(readFileSync(join(gateway, "device-key.pem")).equals(key)).toBe(true);
+    const after = state();
+    expect(after.connection).toBe(before.connection);
+    for (const name of Object.keys(before).filter((each) => each.startsWith("deviceToken:")))
+      expect(after[name], name).toBeTruthy();
+  } finally {
+    // Asked to quit while the debugging client is still attached, as the first
+    // app was: a SIGTERM right after that client leaves was seen to go unanswered.
+    // The 15 seconds start at SIGTERM; closing the client runs alongside.
+    const quit =
+      next.exitCode !== null || next.signalCode !== null
+        ? (await second?.close(), true)
+        : await quitWithin(
+            () => next.kill("SIGTERM"),
+            () => exited,
+            async () => second?.close(),
+            15_000,
+          );
+    const outcome = quit ? "exited" : "running";
+    if (outcome === "running") {
+      // Ended by its PID, and its helpers by theirs: nothing outlives the test.
+      next.kill("SIGKILL");
+      await exited;
+    }
+    for (let i = 0; i < 50 && processesUsing(USER_DATA).length > 0; i += 1) await sleep(200);
+    const left = processesUsing(USER_DATA);
+    for (const pid of left) process.kill(pid, "SIGKILL");
+    closeSync(logFd);
+    expect(outcome, "the newer build quits within 15 seconds").not.toBe("running");
+    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
+  }
 });

@@ -49,7 +49,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           pendingTrack: null,
           tracks: [
             { track: "stable", source: "stable.example" },
-            { track: "nightly", source: "nightly.example" },
+            { track: "nightly", source: "beta.example" },
           ],
           lastCheck: null,
           preferenceIssue: null,
@@ -174,7 +174,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await expect(radio).toBeFocused();
   expect(await page.evaluate(() => window.updateProbe.mutations)).toBe(0);
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeFocused();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeFocused();
   await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
   await expect(status).toHaveText("Changing the update track…");
   await page.evaluate(() => window.updateProbe.emit(8, { kind: "not-checked" }, "nightly"));
@@ -183,13 +183,13 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await expect(radio).toBeChecked();
   const line = page.locator(".update-result dd");
   await page.evaluate(() => window.updateProbe.emit(9, { kind: "not-checked" }, null, "nightly"));
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(status).toHaveText("Not checked yet.");
   await expect(page.locator(".updates-section")).not.toContainText("Saving");
   const check = page.getByRole("button", { name: "Check for Updates" });
   await expect(check).toBeVisible();
   await expect(check).toHaveAccessibleDescription(
-    "Checks nightly.example for a newer build, only when you choose to.",
+    "Checks beta.example for a newer build, only when you choose to.",
   );
   await radio.click();
   await expect(status).toHaveText("Changing the update track…");
@@ -206,10 +206,10 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await page.evaluate(() =>
     window.updateProbe.emit(11, { kind: "not-checked" }, null, "nightly", "track-not-saved"),
   );
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(line).toHaveText("Not checked yet.");
   await expect(page.locator(".update-result p").first()).toHaveText(
-    "Couldn't save the track. Nightly is still selected.",
+    "Couldn't save the track. Beta is still selected.",
   );
   await expect(check).toBeVisible();
   await expect(status).not.toContainText("Saving");
