@@ -9,12 +9,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,8 +37,11 @@ import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { appEnv, debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
+import { dictionaryRequests } from "./net-log.ts";
 import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
+  askToClose,
+  forceEnd,
   integrityLevels,
   mainWindowTitle,
   taskbarOverlayDescription,
@@ -495,6 +500,93 @@ test("stays on its own content", async () => {
   // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
   expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
+test("F-393: checking spelling asks no outside host for a dictionary", async () => {
+  // Windows checks spelling with its own checker. For a language it has no
+  // checker for, Chromium falls back to a Hunspell dictionary and downloads it
+  // the first time, in a request the browser process makes outside the
+  // session's request filter. Faroese has a Hunspell dictionary, and a
+  // Windows without Faroese installed has no checker for it, so a second copy
+  // of the app with Faroese as its spelling language takes that path as it
+  // starts. Its network log, complete once it has quit, shows every request:
+  // on Windows the dictionary must be asked of the app's own folder, never of
+  // a host. macOS checks every language with the system's checker, so nothing
+  // asks for one.
+  test.setTimeout(120_000);
+  // A new folder each time: one that already holds a dictionary never asks for it.
+  const data = join(mkdtempSync(join(dirname(USER_DATA), "spelling-")), "data");
+  const netLog = join(dirname(data), "net-log.json");
+  mkdirSync(data);
+  writeFileSync(
+    join(data, "Preferences"),
+    JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
+  );
+  const copy = spawn(
+    packagedExecutable(APP),
+    [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`],
+    { env: appEnv(), stdio: "ignore" },
+  );
+  // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
+  const exited = new Promise((resolve) => {
+    copy.once("exit", resolve);
+    copy.once("error", resolve);
+  });
+  let view: Browser | undefined;
+  try {
+    view = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(data, copy)}`);
+    await expect
+      .poll(() => view!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const shown = view.contexts().flatMap((context) => context.pages())[0]!;
+    await expect(shown.getByPlaceholder("Gateway address")).toBeVisible();
+    if (WINDOWS) {
+      // Chromium makes this folder just before it asks for the dictionary.
+      await expect
+        .poll(() => existsSync(join(data, "Dictionaries")), { timeout: 30_000 })
+        .toBe(true);
+      // Windows refuses the close message until the window is shown.
+      await expect.poll(() => mainWindowTitle(copy.pid!), { timeout: 20_000 }).toBe("Clawtrate");
+    }
+    const quit = await quitWithin(
+      () => {
+        if (WINDOWS) expect(askToClose(copy.pid!), "asking the copy to close").toBeNull();
+        else copy.kill("SIGTERM");
+      },
+      () => exited,
+      async () => view?.close(),
+      15_000,
+    );
+    expect(quit, "the copy quits within 15 seconds").toBe(true);
+    expect(copy.exitCode, "the copy's exit code").toBe(0);
+  } finally {
+    // Whatever is left is ended by PID: nothing outlives the test.
+    if (copy.exitCode === null && copy.signalCode === null) {
+      if (WINDOWS) forceEnd(copy.pid!);
+      else copy.kill("SIGKILL");
+      await exited;
+    }
+    for (let i = 0; i < 50 && processesUsing(data).length > 0; i += 1) await sleep(200);
+    for (const pid of processesUsing(data)) {
+      if (WINDOWS) forceEnd(pid);
+      else {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // gone since the listing
+        }
+      }
+    }
+  }
+  const asked = dictionaryRequests(readFileSync(netLog, "utf8"));
+  if (!WINDOWS) {
+    expect(asked, "the dictionaries the network log shows requests for").toEqual([]);
+    return;
+  }
+  const folder = join(realpathSync(APP), "resources/app.asar/out/renderer/dictionaries");
+  const own = `${decodeURI(pathToFileURL(folder).href)}/`;
+  expect(asked.length, "the dictionaries the network log shows requests for").toBeGreaterThan(0);
+  for (const url of asked) expect(decodeURI(url).startsWith(own), url).toBe(true);
 });
 
 test("opens with the same pairing and tasks after a newer build takes its place", async () => {
