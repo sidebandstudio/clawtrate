@@ -1018,7 +1018,7 @@ describe("a choice whose viewer goes away, or whose Ask doesn't take effect", ()
       kind: "list-cut",
       lists: ["every-deny"],
     });
-    expect(permissionGroups(view.lines).without.map((each) => each.id)).not.toContain("read");
+    expect(permissionGroups(view.lines).without).not.toContain("read");
     // A line the entries read deny whole stays Never, set on the gateway.
     expect(line(view, "browser")).toMatchObject({ value: "never", mark: "set" });
   });
