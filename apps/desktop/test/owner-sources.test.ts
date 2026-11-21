@@ -57,6 +57,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/new-bot.ts:COMMAND_CHOICES": "static, the two command choices",
+  "packages/core/src/new-bot.ts:REPORTED": "static, the four reported command policies",
+  "packages/core/src/new-bot.ts:KEPT_DENIED": "static, two tool names",
+  "packages/core/src/new-bot.ts:FINAL_DENY": "static, three tool names",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",

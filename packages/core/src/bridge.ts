@@ -24,6 +24,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import type { CommandChoice, FirstBotState } from "./new-bot.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -205,7 +206,11 @@ export type BridgeCommand =
   | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
   | { type: "setAccountLabel"; profileId: string; label: string }
   | { type: "disconnectAccount"; profileId: string }
-  /** New bot: its name and picture, and the account it runs on (null: the gateway chooses). */
+  /**
+   * New bot: its name and picture, the account it runs on (null: the gateway
+   * chooses) and the command policy chosen in its Approvals step; without a
+   * policy the host sends nothing.
+   */
   | {
       type: "createBot";
       name: string;
@@ -214,10 +219,19 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      approvals: CommandChoice | null;
     }
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id. */
   | { type: "finishBot"; botId: string }
+  /** "Write it again": the new bot's command policy, for its id, never Create. */
+  | { type: "retryBotPolicy"; botId: string }
+  /** The new bot's first message went out. */
+  | { type: "dismissBotPolicy"; botId: string }
+  /** Whether the gateway's approvals file blocks commands for a bot of this name (admin). */
+  | { type: "readApprovalsFile"; name: string }
+  /** The first-bot prompt's reads again, before New bot opens from it. */
+  | { type: "recheckFirstBot" }
   | {
       type: "changeBotAccount";
       botId: string;
@@ -337,51 +351,55 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                           ? { profileId: string | null }
                                           : C extends { type: "createBot" | "finishBot" }
                                             ? { botId: string; missing: MissingStep[] }
-                                            : C extends { type: "newTask" | "newMainTask" }
-                                              ? { key: string }
-                                              : C extends { type: "archiveTask" }
-                                                ? ArchiveResult
-                                                : C extends { type: "listArchived" }
-                                                  ? ArchivedList
-                                                  : C extends { type: "readComposerMenu" }
-                                                    ? MenuRow[]
-                                                    : C extends { type: "readUsage" }
-                                                      ? UsageReport | UsageBusy
-                                                      : C extends { type: "listRoutines" }
-                                                        ? BudgetRoutine[]
-                                                        : C extends { type: "readPlacement" }
-                                                          ? BotPlacement
-                                                          : C extends { type: "readMachines" }
-                                                            ? MachinesView
-                                                            : C extends {
-                                                                  type: "setCommandMachine";
-                                                                }
-                                                              ? ConfigSave
-                                                              : C extends {
-                                                                    type: "setBotWorkspace";
-                                                                  }
-                                                                ? {
-                                                                    workspace: string | null;
-                                                                    asTyped: boolean;
-                                                                  }
+                                            : C extends { type: "readApprovalsFile" }
+                                              ? { blocks: boolean }
+                                              : C extends { type: "recheckFirstBot" }
+                                                ? FirstBotState
+                                                : C extends { type: "newTask" | "newMainTask" }
+                                                  ? { key: string }
+                                                  : C extends { type: "archiveTask" }
+                                                    ? ArchiveResult
+                                                    : C extends { type: "listArchived" }
+                                                      ? ArchivedList
+                                                      : C extends { type: "readComposerMenu" }
+                                                        ? MenuRow[]
+                                                        : C extends { type: "readUsage" }
+                                                          ? UsageReport | UsageBusy
+                                                          : C extends { type: "listRoutines" }
+                                                            ? BudgetRoutine[]
+                                                            : C extends { type: "readPlacement" }
+                                                              ? BotPlacement
+                                                              : C extends { type: "readMachines" }
+                                                                ? MachinesView
                                                                 : C extends {
-                                                                      type: "setMachineDefaults";
+                                                                      type: "setCommandMachine";
                                                                     }
-                                                                  ? ApprovalsFile
+                                                                  ? ConfigSave
                                                                   : C extends {
-                                                                        type: "refreshCheckIns";
-                                                                        botId: string;
+                                                                        type: "setBotWorkspace";
                                                                       }
-                                                                    ? CheckInRead | null
+                                                                    ? {
+                                                                        workspace: string | null;
+                                                                        asTyped: boolean;
+                                                                      }
                                                                     : C extends {
-                                                                          type: "listMemory";
+                                                                          type: "setMachineDefaults";
                                                                         }
-                                                                      ? MemoryList
+                                                                      ? ApprovalsFile
                                                                       : C extends {
-                                                                            type: "readMemory";
+                                                                            type: "refreshCheckIns";
+                                                                            botId: string;
                                                                           }
-                                                                        ? MemoryDocument
-                                                                        : void;
+                                                                        ? CheckInRead | null
+                                                                        : C extends {
+                                                                              type: "listMemory";
+                                                                            }
+                                                                          ? MemoryList
+                                                                          : C extends {
+                                                                                type: "readMemory";
+                                                                              }
+                                                                            ? MemoryDocument
+                                                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -750,11 +768,16 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "dismissSignIn":
     case "recheckSignIn":
     case "dismissBotCreation":
+    case "recheckFirstBot":
       return { type: command.type };
     case "checkLock":
     case "finishBot":
     case "removeBotFallbacks":
+    case "retryBotPolicy":
+    case "dismissBotPolicy":
       return { type: command.type, botId: botId(command.botId) };
+    case "readApprovalsFile":
+      return { type: "readApprovalsFile", name: shortText(command.name, 128, "name") };
     case "startSignIn":
       return {
         type: "startSignIn",
@@ -798,6 +821,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        approvals:
+          command.approvals === "ask" || command.approvals === "full" ? command.approvals : null,
       };
     case "changeBotAccount":
       return {
@@ -1357,11 +1382,20 @@ class ViewerSession implements BridgeSession {
           provider: command.provider,
           model: command.model,
           effort: command.effort,
+          approvals: command.approvals,
         });
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
         return client.finishBot(command.botId);
+      case "retryBotPolicy":
+        return client.retryBotPolicy(command.botId);
+      case "dismissBotPolicy":
+        return client.dismissBotPolicy(command.botId);
+      case "readApprovalsFile":
+        return client.readApprovalsFile(command.name);
+      case "recheckFirstBot":
+        return client.recheckFirstBot();
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,

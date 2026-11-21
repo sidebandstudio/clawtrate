@@ -23,6 +23,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
+import type { FirstBotState } from "./new-bot.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -1579,6 +1580,9 @@ export class ClawtrateClient {
   sendMessage(key: string, text: string, options: SendOptions = {}): string {
     const transcript = this.state.transcripts[key];
     if (!transcript) throw new Error("Open the task before sending to it.");
+    const target = botIdFromSessionKey(key);
+    const notYet = target === null ? null : this.accounts.heldBack(target);
+    if (notYet) throw new Error(notYet);
     const body = text.trim();
     const attachments = options.attachments ?? [];
     this.checkOutboxRoom(key);
@@ -1926,6 +1930,8 @@ export class ClawtrateClient {
     if (!body) throw new Error("The message is empty.");
     if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
       throw new Error("The message is too long.");
+    const held = this.accounts.heldBack(botId);
+    if (held) throw new Error(held);
     const label = options.label?.trim() || null;
     // Kept as asked, never cut: a cut field would ask the gateway something else on a later ask.
     if (
@@ -4206,6 +4212,32 @@ export class ClawtrateClient {
     this.accounts.dismissCreation();
   }
 
+  /** "Write it again": the new bot's command policy, for its id alone, never Create. */
+  retryBotPolicy(botId: string): Promise<void> {
+    return this.accounts.retryPolicy(botId);
+  }
+
+  /** The new bot's first message went out: its note is done. */
+  dismissBotPolicy(botId: string): void {
+    this.accounts.dismissPolicy(botId);
+  }
+
+  /** Whether the gateway's approvals file blocks commands for a bot of this name. */
+  readApprovalsFile(name: string): Promise<{ blocks: boolean }> {
+    return this.accounts.approvalsFile(name);
+  }
+
+  /** The first-bot prompt's check of the current gateway, again, before New bot opens. */
+  async recheckFirstBot(): Promise<FirstBotState> {
+    if (this.state.connection.status !== "connected") return { status: "roster", mainPolicy: null };
+    try {
+      await this.refreshBots();
+    } catch {
+      return { status: "roster", mainPolicy: null };
+    }
+    return this.state.accounts.firstBot;
+  }
+
   changeBotAccount(
     botId: string,
     account: string | null,
@@ -4337,13 +4369,15 @@ export class ClawtrateClient {
     return this.machines.removeDevice(deviceId);
   }
 
-  /** Read the bot list again, after a bot was created. */
-  private async refreshBots(): Promise<void> {
+  /** Read the bot list again, after a bot was created; the gateway's answer, as it came. */
+  private async refreshBots(): Promise<unknown> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
-    if (generation !== this.generation || !this.newestBots(issued)) return;
+    if (generation !== this.generation || !this.newestBots(issued)) return result;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    await this.accounts.checkFirstBot(result);
+    return result;
   }
 
   /**
@@ -5416,6 +5450,8 @@ export class ClawtrateClient {
             connection: { ...state.connection, gatewayId: id },
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
+          // Whether the app opens on the first-bot prompt: its own reads, after the bots show.
+          if (newest) void this.accounts.checkFirstBot(result);
         }
         return result;
       }),

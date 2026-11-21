@@ -30,6 +30,7 @@ import {
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
+import type { FirstBotState, NewBotPolicy } from "./new-bot.ts";
 import {
   MAX_ROUTINE_TEXT_CHARS,
   MAX_ROUTINES,
@@ -972,8 +973,19 @@ const botCreation = object<BotCreationState>()({
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
   missing: list(4, ENUM),
-  uncertain: FLAG,
 });
+const newBotPolicy = object<NewBotPolicy>()({
+  botId: ID,
+  name: NAME,
+  chosen: ENUM,
+  status: ENUM,
+  restrictive: FLAG,
+  saved: ENUM,
+  reported: ENUM,
+  reportedRead: FLAG,
+  retryable: FLAG,
+});
+const firstBot = object<FirstBotState>()({ status: ENUM, mainPolicy: ENUM });
 const accountWrite = object<AccountWrite>()({
   what: ENUM,
   target: ID,
@@ -996,6 +1008,8 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  policy: newBotPolicy,
+  firstBot,
 });
 
 // Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.

@@ -17,6 +17,7 @@ import {
   MAX_SECRET_CHARS,
   parseModelRef,
   readBotView,
+  readFirstBot,
   retainedOrder,
   unlockCommand,
   unreadEvidence,
@@ -389,155 +390,381 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
   });
 });
 
-describe("creating a bot", () => {
-  it("on an account: the model with its suffix, an empty fallback list, and the bot read back", async () => {
+type Entry = Record<string, unknown>;
+const entries = (fake: AccountsGateway) =>
+  (fake.config.agents as { entries: Record<string, Entry> }).entries;
+const patches = (fake: AccountsGateway) =>
+  (
+    fake.gateway.calls("config.patch") as Array<{
+      raw: string;
+      baseHash?: string;
+      replacePaths?: string[];
+    }>
+  ).map((call) => ({ ...call, patch: JSON.parse(call.raw) as Record<string, unknown> }));
+
+const viral = {
+  name: "Viral",
+  avatar: null,
+  account: "acme:work",
+  provider: "acme",
+  model: "dev-1",
+  effort: null,
+  approvals: "ask",
+} as const;
+
+describe("creating a bot: the one Create sequence (bots.md section 3, controls.md section 10)", () => {
+  it("confirmed: agents.create once, then step 2 and step 3 for the id it returned, each guarded by the hash just read and read back", async () => {
     const { client, fake, accounts } = await accountsClient();
-    const { botId } = await client.createBot({
-      name: "Viral",
-      avatar: "data:image/png;base64,iVBORw0KGgo=",
-      account: "acme:home",
-      provider: "acme",
-      model: "dev-1",
-      effort: "low",
-    });
+    const others = JSON.parse(JSON.stringify(entries(fake))) as Record<string, Entry>;
+    const tools = JSON.stringify((fake.config as { tools?: unknown }).tools ?? null);
+    const { botId } = await client.createBot({ ...viral, effort: "low" });
     expect(botId).toBe("viral");
     expect(fake.gateway.calls("agents.create")).toEqual([
-      {
-        name: "Viral",
-        model: "acme/dev-1@acme:home",
-        avatar: "data:image/png;base64,iVBORw0KGgo=",
-      },
+      { name: "Viral", model: "acme/dev-1@acme:work" },
     ]);
-    const patch = fake.gateway.calls("config.patch").at(-1) as {
-      raw: string;
-      replacePaths: string[];
-    };
-    expect(JSON.parse(patch.raw)).toEqual({
+    const [step2, step3] = patches(fake);
+    expect(patches(fake)).toHaveLength(2);
+    // Step 2: Never, the restrictive deny list and the model with no fallbacks, for that id only.
+    expect(step2!.patch).toEqual({
       agents: {
         entries: {
           viral: {
-            model: { primary: "acme/dev-1@acme:home", fallbacks: [] },
+            tools: {
+              exec: { mode: "deny" },
+              deny: ["gateway", "plugins", "automations", "browser", "message", "t3code__*"],
+            },
+            model: { primary: "acme/dev-1@acme:work", fallbacks: [] },
             thinkingDefault: "low",
           },
         },
       },
     });
-    expect(client.state.bots.map((b) => b.id)).toContain("viral");
-    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
-    expect(binding(accounts(), "viral")).toMatchObject({
-      mode: "account",
-      account: "acme:home",
-      fallbacks: [],
+    expect(step2!.baseHash).toBe("h2");
+    // Step 3: only the chosen mode and the final deny list, with that list's path to replace.
+    expect(step3!.patch).toEqual({
+      agents: {
+        entries: {
+          viral: { tools: { exec: { mode: "ask" }, deny: ["gateway", "plugins", "t3code__*"] } },
+        },
+      },
     });
-    client.stop();
-  });
-
-  it("with the gateway choosing: no account suffix and an empty fallback list", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    await client.createBot({
-      name: "",
-      avatar: null,
-      account: null,
-      provider: "acme",
-      model: "dev-1",
-      effort: null,
-    });
-    expect(fake.gateway.calls("agents.create")).toEqual([{ name: "New bot", model: "acme/dev-1" }]);
-    expect(binding(accounts(), "new-bot")).toMatchObject({
-      mode: "gateway",
-      account: null,
-      fallbacks: [],
-    });
-    expect(accountWord(binding(accounts(), "new-bot"))).toBe("gateway");
-    client.stop();
-  });
-
-  it("a create that got no answer is never sent twice: the bot list is read for the one it made", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    // The gateway makes the bot, and the connection drops before its answer.
-    fake.silentCreate = true;
-    const original = fake.gateway.handlers["agents.create"]!;
-    fake.gateway.handlers["agents.create"] = (params) => {
-      const answer = original(params);
-      setTimeout(() => fake.gateway.dropAll(), 10);
-      return answer;
-    };
-    const { botId } = await client.createBot({
+    expect(step3!.baseHash).toBe("h3");
+    expect(step3!.replacePaths).toEqual(["agents.entries.viral.tools.deny"]);
+    // Read back: the saved setting and the gateway's reported label, as two facts.
+    expect(accounts().policy).toEqual({
+      botId: "viral",
       name: "Viral",
-      avatar: null,
-      account: "acme:work",
-      provider: "acme",
-      model: "dev-1",
-      effort: null,
+      chosen: "ask",
+      status: "confirmed",
+      restrictive: true,
+      saved: "ask",
+      reported: "guarded",
+      reportedRead: true,
+      retryable: false,
     });
-    expect(botId).toBe("viral");
-    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
-    expect(accounts().creation?.status).toBe("created");
+    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral", missing: [] });
+    // No other bot's entry and no setting for every bot changed.
+    const after = entries(fake);
+    for (const [id, entry] of Object.entries(others)) expect(after[id]).toEqual(entry);
+    expect(JSON.stringify((fake.config as { tools?: unknown }).tools ?? null)).toBe(tools);
+    // Its first task came after step 2, and the bot list shows it.
+    expect(fake.gateway.calls("sessions.create")).toEqual([
+      { key: "agent:viral:main", agentId: "viral", label: "Main" },
+    ]);
+    expect(client.state.bots.map((b) => b.id)).toContain("viral");
+    expect(binding(accounts(), "viral")).toMatchObject({ account: "acme:work", fallbacks: [] });
     client.stop();
   });
 
-  it("a refused create fails and keeps nothing; a refused fallback write leaves the bot with the write to try again", async () => {
+  it("Run without routine approvals writes full, and the same deny list; the read says no label when the gateway reports none", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const list = fake.gateway.handlers["agents.list"]!;
+    fake.gateway.handlers["agents.list"] = (params) => {
+      const answer = list(params) as { agents: Array<Record<string, unknown>> };
+      return {
+        ...answer,
+        agents: answer.agents.map(({ defaultPermissionMode: _, ...agent }) => agent),
+      };
+    };
+    await client.createBot({ ...viral, account: null, approvals: "full" });
+    expect(patches(fake)[1]!.patch).toEqual({
+      agents: {
+        entries: {
+          viral: { tools: { exec: { mode: "full" }, deny: ["gateway", "plugins", "t3code__*"] } },
+        },
+      },
+    });
+    expect(accounts().policy).toMatchObject({
+      status: "confirmed",
+      saved: "full",
+      reported: null,
+      reportedRead: true,
+    });
+    client.stop();
+  });
+
+  it("names every tool server the config has in step 2, and lets step 3 drop them", async () => {
+    const fake = new AccountsGateway();
+    fake.config.mcp = { servers: { coder: { command: "x" } } };
+    const { client } = await accountsClient({ gateway: fake });
+    await client.createBot({ ...viral });
+    const deny = (call: { patch: Record<string, unknown> }) =>
+      (call.patch as { agents: { entries: { viral: { tools: { deny: string[] } } } } }).agents
+        .entries.viral.tools.deny;
+    expect(deny(patches(fake)[0]!)).toEqual([
+      "gateway",
+      "plugins",
+      "automations",
+      "browser",
+      "message",
+      "t3code__*",
+      "coder__*",
+    ]);
+    expect(deny(patches(fake)[1]!)).toEqual(["gateway", "plugins", "t3code__*"]);
+    expect(entries(fake).viral!.tools).toEqual({
+      exec: { mode: "ask" },
+      deny: ["gateway", "plugins", "t3code__*"],
+    });
+    client.stop();
+  });
+
+  it("the host refuses a Create with no command choice, or no account choice: nothing is sent", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await expect(client.createBot({ ...viral, approvals: null })).rejects.toThrow(
+      /Choose how the new bot runs commands/,
+    );
+    await expect(client.createBot({ ...viral, provider: "", model: "" })).rejects.toThrow(
+      /Choose an account/,
+    );
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
+    expect(accounts().creation).toBeNull();
+    expect(accounts().policy).toBeNull();
+    client.stop();
+  });
+
+  for (const [why, answer] of [
+    ["no answer before the connection dropped", "drop"],
+    ["an answer that it was saved but not applied", "unapplied"],
+    ["a reply without an id", "no-id"],
+  ] as const) {
+    it(`a lost or ambiguous reply (${why}) is not confirmed: no policy or model write, no task, and a bot of that name found later is not adopted`, async () => {
+      const { client, fake, accounts } = await accountsClient();
+      const create = fake.gateway.handlers["agents.create"]!;
+      fake.gateway.handlers["agents.create"] = async (params) => {
+        const made = await create(params);
+        if (answer === "no-id") return { ok: true, name: "Viral", workspace: "/w/viral" };
+        if (answer === "unapplied")
+          throw new GatewayError({
+            code: "UNAVAILABLE",
+            message:
+              "Agent configuration was saved but its application to the active Gateway was not confirmed",
+          });
+        setTimeout(() => fake.gateway.dropAll(), 0);
+        return new Promise(() => made);
+      };
+      await expect(client.createBot({ ...viral })).rejects.toThrow();
+      expect(accounts().creation).toMatchObject({ status: "unconfirmed", botId: null });
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+      expect(fake.gateway.calls("config.patch")).toEqual([]);
+      expect(fake.gateway.calls("sessions.create")).toEqual([]);
+      expect(fake.prefs["clawtrate.bot-account.viral"]).toBeUndefined();
+      expect(accounts().policy).toBeNull();
+      // The gateway made it after all, and lists it: still not taken to be this Create's.
+      await until(() => client.state.connection.status === "connected");
+      await client.retryNow();
+      expect(client.state.bots.some((bot) => bot.id === "viral")).toBe(true);
+      expect(accounts().creation?.status).toBe("unconfirmed");
+      expect(entries(fake).viral!.tools).toBeUndefined();
+      // Create is not offered again from this attempt; "Review bots" reads the list again.
+      await expect(client.createBot({ ...viral })).rejects.toThrow(/Review the gateway's bot list/);
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+      const lists = fake.gateway.calls("agents.list").length;
+      client.dismissBotCreation();
+      await until(() => fake.gateway.calls("agents.list").length > lists);
+      expect(accounts().creation).toBeNull();
+      client.stop();
+    });
+  }
+
+  it("a refusal that establishes nothing was made fails, and Create may be tried again", async () => {
     const { client, fake, accounts } = await accountsClient();
     fake.gateway.handlers["agents.create"] = () => {
-      throw new (class extends Error {})("refused");
+      throw new GatewayError({ code: "INVALID_REQUEST", message: 'agent "viral" already exists' });
     };
-    await expect(
-      client.createBot({
-        name: "Viral",
-        avatar: null,
-        account: "acme:work",
-        provider: "acme",
-        model: "dev-1",
-        effort: null,
-      }),
-    ).rejects.toThrow();
-    expect(accounts().creation?.status).toBe("failed");
-
-    const fresh = await accountsClient();
-    fresh.fake.failPatch = "config is locked";
-    await fresh.client.createBot({
-      name: "Viral",
-      avatar: null,
-      account: "acme:work",
-      provider: "acme",
-      model: "dev-1",
-      effort: null,
-    });
-    expect(binding(fresh.accounts(), "viral").fallbacksUnwritten).toBe(true);
-    await fresh.client.removeBotFallbacks("viral");
-    expect(binding(fresh.accounts(), "viral").fallbacksUnwritten).toBe(false);
+    await expect(client.createBot({ ...viral })).rejects.toThrow(/already exists/);
+    expect(accounts().creation).toMatchObject({ status: "failed" });
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
     client.stop();
-    fresh.client.stop();
+  });
+
+  it("a hash that changed before step 3 stops it: nothing more is written, the list is read again, the composer stays closed; Write it again repeats step 3 alone", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let seen = 0;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      seen += 1;
+      // Another client changes the config between step 3's read and its write.
+      if (seen === 2) {
+        fake.config.ui = { changedBy: "another client" };
+        fake.revision += 1;
+      }
+      return patch(params);
+    };
+    const lists = () => fake.gateway.calls("agents.list").length;
+    const before = lists();
+    await client.createBot({ ...viral });
+    expect(fake.gateway.calls("config.patch")).toHaveLength(2);
+    expect(entries(fake).viral!.tools).toMatchObject({ exec: { mode: "deny" } });
+    expect(accounts().policy).toMatchObject({
+      status: "unconfirmed",
+      restrictive: true,
+      saved: "deny",
+      retryable: true,
+    });
+    expect(lists()).toBeGreaterThan(before + 1);
+    // Nothing is sent to it until its setting reads back as chosen.
+    await client.openSession("agent:viral:main");
+    expect(() => client.sendMessage("agent:viral:main", "hello")).toThrow(
+      /couldn't confirm Viral's command setting/,
+    );
+    await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
+    await client.retryBotPolicy("viral");
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    const last = patches(fake).at(-1)!;
+    expect(last.patch).toEqual({
+      agents: {
+        entries: {
+          viral: { tools: { exec: { mode: "ask" }, deny: ["gateway", "plugins", "t3code__*"] } },
+        },
+      },
+    });
+    expect(accounts().policy).toMatchObject({ status: "confirmed", saved: "ask" });
+    expect(() => client.sendMessage("agent:viral:main", "hello")).not.toThrow();
+    client.stop();
+  });
+
+  it("step 3 names the deny list in replacePaths: without it the gateway refuses to drop step 2's entries", async () => {
+    const { client, fake } = await accountsClient();
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const { replacePaths: _, ...rest } = params as Record<string, unknown>;
+      return patch(rest);
+    };
+    await client.createBot({ ...viral });
+    expect(client.state.accounts.policy).toMatchObject({ status: "unconfirmed", saved: "deny" });
+    client.stop();
+  });
+
+  it("a bot deleted before step 2 is never written: no entry is made for it, and no task", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      const made = await create(params);
+      delete entries(fake).viral;
+      fake.bots = fake.bots.filter((bot) => bot.id !== "viral");
+      fake.revision += 1;
+      return made;
+    };
+    await client.createBot({ ...viral });
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
+    expect(entries(fake).viral).toBeUndefined();
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    expect(accounts().policy).toMatchObject({
+      status: "restrictive",
+      restrictive: false,
+      retryable: false,
+    });
+    await expect(client.retryBotPolicy("viral")).rejects.toThrow(/can't identify/);
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it("an id that no longer identifies the bot Create returned is not written: a replacement at that id keeps its own settings", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    let replaceAt = 1;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      // After step 2, the bot is deleted and another made at the same id.
+      if (replaceAt-- === 1) {
+        entries(fake).viral = { name: "Viral 2", workspace: "/w/elsewhere" };
+        fake.revision += 1;
+      }
+      return answer;
+    };
+    await client.createBot({ ...viral });
+    // Step 2's read-back finds another bot there: step 3 is never sent, and nothing is offered.
+    expect(fake.gateway.calls("config.patch")).toHaveLength(1);
+    expect(entries(fake).viral).toEqual({ name: "Viral 2", workspace: "/w/elsewhere" });
+    expect(accounts().policy).toMatchObject({ status: "restrictive", retryable: false });
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    client.stop();
+  });
+
+  it("a step 2 that doesn't read back sends nothing to the bot, its first task included; Write it again writes both steps, then the task", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "config is locked";
+    const made = await client.createBot({ ...viral });
+    expect(made).toEqual({ botId: "viral", missing: [] });
+    expect(accounts().policy).toMatchObject({
+      status: "restrictive",
+      restrictive: false,
+      retryable: true,
+    });
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    expect(binding(accounts(), "viral").fallbacksUnwritten).toBe(true);
+    await expect(client.createTask("viral", "hello")).rejects.toThrow(/couldn't confirm/);
+    await client.retryBotPolicy("viral");
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(entries(fake).viral).toMatchObject({
+      tools: { exec: { mode: "ask" }, deny: ["gateway", "plugins", "t3code__*"] },
+      model: { primary: "acme/dev-1@acme:work", fallbacks: [] },
+    });
+    expect(accounts().policy).toMatchObject({ status: "confirmed", restrictive: true });
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("the note goes once the first message is sent, only from a confirmed setting", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "config is locked";
+    await client.createBot({ ...viral });
+    client.dismissBotPolicy("viral");
+    expect(accounts().policy?.botId).toBe("viral");
+    await client.retryBotPolicy("viral");
+    client.dismissBotPolicy("viral");
+    expect(accounts().policy).toBeNull();
+    client.stop();
+  });
+
+  it("the gateway's approvals file blocks commands only when its defaults deny and no entry for the bot says otherwise", async () => {
+    const { client, fake } = await accountsClient();
+    expect(await client.readApprovalsFile("Viral")).toEqual({ blocks: false });
+    fake.approvalsFile = { version: 1, defaults: { security: "deny" }, agents: {} };
+    expect(await client.readApprovalsFile("Viral")).toEqual({ blocks: true });
+    fake.approvalsFile = {
+      version: 1,
+      defaults: { security: "deny" },
+      agents: { viral: { security: "allowlist" } },
+    };
+    expect(await client.readApprovalsFile("Viral")).toEqual({ blocks: false });
+    fake.approvalsFile = {
+      version: 1,
+      defaults: { security: "deny" },
+      agents: { "*": { security: "full" } },
+    };
+    expect(await client.readApprovalsFile("Viral")).toEqual({ blocks: false });
+    fake.gateway.handlers["exec.approvals.get"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "no file" });
+    };
+    expect(await client.readApprovalsFile("Viral")).toEqual({ blocks: false });
+    client.stop();
   });
 });
 
 describe("a bot left half-made", () => {
-  const input = {
-    name: "Viral",
-    avatar: null,
-    account: "acme:work",
-    provider: "acme",
-    model: "dev-1",
-    effort: null,
-  } as const;
-
-  it("Finish writes everything Create would have: the model with its empty fallback list and its effort", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    fake.failPatch = "the gateway refused the patch";
-    const made = await client.createBot({ ...input, effort: "high" });
-    expect(made).toEqual({ botId: "viral", missing: ["fallbacks"] });
-    expect(accounts().creation?.error).toMatch(
-      /its model with an empty fallback list and its effort were not written/,
-    );
-    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
-    const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
-      .entries;
-    expect(entries.viral).toMatchObject({
-      model: { primary: "acme/dev-1@acme:work", fallbacks: [] },
-      thinkingDefault: "high",
-    });
-    client.stop();
-  });
+  const input = viral;
 
   it("a record of the bot's account that is not saved leaves it partial, and Finish saves it", async () => {
     const { client, fake, accounts } = await accountsClient();
@@ -557,10 +784,12 @@ describe("a bot left half-made", () => {
       mode: "account",
       account: "acme:work",
     });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(fake.gateway.calls("config.patch")).toHaveLength(2);
     client.stop();
   });
 
-  it("a bot list that can't be read after the write is no proof it was created: partial until a read shows it", async () => {
+  it("a bot list that can't be read after the writes is no proof it was created: partial until a read shows it", async () => {
     const { client, fake, accounts } = await accountsClient();
     const list = fake.gateway.handlers["agents.list"]!;
     fake.gateway.handlers["agents.list"] = () => {
@@ -570,6 +799,7 @@ describe("a bot left half-made", () => {
     expect(made.missing).toContain("listed");
     expect(accounts().creation).toMatchObject({ status: "partial", botId: "viral" });
     expect(accounts().creation?.error).toMatch(/reading the gateway's bot list afterwards failed/);
+    expect(accounts().policy).toMatchObject({ status: "confirmed", reportedRead: false });
     fake.gateway.handlers["agents.list"] = list;
     expect((await client.finishBot("viral")).missing).toEqual([]);
     expect(client.state.bots.some((bot) => bot.id === "viral")).toBe(true);
@@ -600,66 +830,6 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
-  it("an answer lost to a dropped connection is followed by a look that waits for a list read that succeeds", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    const create = fake.gateway.handlers["agents.create"]!;
-    const list = fake.gateway.handlers["agents.list"]!;
-    let refused = 0;
-    fake.gateway.handlers["agents.create"] = async (params) => {
-      await create(params);
-      // The gateway made it, and its answer is lost; the first reads of the list fail too.
-      fake.gateway.handlers["agents.list"] = (listParams) => {
-        if (refused < 2) {
-          refused += 1;
-          throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
-        }
-        return list(listParams);
-      };
-      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
-    };
-    expect((await client.createBot({ ...input })).botId).toBe("viral");
-    expect(refused).toBe(2);
-    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
-    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
-    client.stop();
-  });
-
-  it("after an answer in doubt, a retry adopts only a bot that was not there before: never an older one of that name", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    const create = fake.gateway.handlers["agents.create"]!;
-    fake.gateway.handlers["agents.create"] = () => {
-      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
-    };
-    // Otto existed before: a Create named Otto that got no answer cannot have made it.
-    await expect(client.createBot({ ...input, name: "Otto" })).rejects.toThrow();
-    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
-    fake.gateway.handlers["agents.create"] = () => {
-      throw new GatewayError({ code: "INVALID_REQUEST", message: "agent already exists" });
-    };
-    await expect(client.createBot({ ...input, name: "Otto" })).rejects.toThrow();
-    expect(fake.gateway.calls("config.patch")).toHaveLength(0);
-    expect(fake.gateway.calls("sessions.create")).toHaveLength(0);
-    expect(fake.prefs["clawtrate.bot-account.otto"]).toBeUndefined();
-    // One the first Create made, absent before it and present now, is the one it made.
-    const list = fake.gateway.handlers["agents.list"]!;
-    fake.gateway.handlers["agents.create"] = async (params) => {
-      await create(params);
-      // The gateway made it, its answer is lost, and its list doesn't show it yet.
-      fake.gateway.handlers["agents.list"] = (listParams) => {
-        const answer = list(listParams) as { agents: Array<{ id: string }> };
-        return { ...answer, agents: answer.agents.filter((bot) => bot.id !== "viral") };
-      };
-      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
-    };
-    await expect(client.createBot({ ...input })).rejects.toThrow();
-    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
-    fake.gateway.handlers["agents.list"] = list;
-    fake.gateway.handlers["agents.create"] = create;
-    expect((await client.createBot({ ...input })).botId).toBe("viral");
-    expect(fake.gateway.calls("agents.create")).toHaveLength(3);
-    client.stop();
-  });
-
   it("a bot written whose first task fails is reported with what exists and what is missing, and is finished by its id", async () => {
     const { client, fake, accounts } = await accountsClient();
     fake.gateway.handlers["sessions.create"] = () => {
@@ -685,46 +855,16 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
-  it("an answer that the bot was saved but not applied is followed by a look for it, never by Create again", async () => {
+  it("with the gateway choosing: no account suffix and an empty fallback list", async () => {
     const { client, fake, accounts } = await accountsClient();
-    const create = fake.gateway.handlers["agents.create"]!;
-    fake.gateway.handlers["agents.create"] = async (params) => {
-      await create(params);
-      throw new GatewayError({
-        code: "UNAVAILABLE",
-        message:
-          "Agent configuration was saved but its application to the active Gateway was not confirmed",
-      });
-    };
-    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
-    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
-    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
-    expect(binding(accounts(), "viral")).toMatchObject({ account: "acme:work", fallbacks: [] });
-    client.stop();
-  });
-
-  it("an answer that settles nothing, with no bot found, fails; the next Create looks for the bot before asking again", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    fake.gateway.handlers["agents.create"] = () => {
-      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
-    };
-    await expect(client.createBot({ ...input })).rejects.toThrow();
-    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
-    expect(accounts().creation?.error).toMatch(/did not say whether Viral was made/);
-    // The gateway did make it, as it turns out.
-    fake.bots.push({ id: "viral", name: "Viral" });
-    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
-    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
-    client.stop();
-  });
-
-  it("a refusal that establishes nothing was written fails at once, and is not uncertain", async () => {
-    const { client, fake, accounts } = await accountsClient();
-    fake.gateway.handlers["agents.create"] = () => {
-      throw new GatewayError({ code: "INVALID_REQUEST", message: 'agent "viral" already exists' });
-    };
-    await expect(client.createBot({ ...input })).rejects.toThrow(/already exists/);
-    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: false });
+    await client.createBot({ ...input, name: "", account: null });
+    expect(fake.gateway.calls("agents.create")).toEqual([{ name: "New bot", model: "acme/dev-1" }]);
+    expect(binding(accounts(), "new-bot")).toMatchObject({
+      mode: "gateway",
+      account: null,
+      fallbacks: [],
+    });
+    expect(accountWord(binding(accounts(), "new-bot"))).toBe("gateway");
     client.stop();
   });
 
@@ -741,6 +881,153 @@ describe("a bot left half-made", () => {
     expect(binding(accounts(), "pip")).toMatchObject({ fallbacks: null, fallbacksUnwritten: true });
     // A bot Clawtrate never set is not its to report.
     expect(binding(accounts(), "otto").fallbacksUnwritten).toBe(false);
+    client.stop();
+  });
+});
+
+describe("the first bot (bots.md section 3): only on a confirmed unused implicit main", () => {
+  const unnamedMain = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "main", defaultPermissionMode: "read-only" }],
+  };
+  const noRoster = { config: { gateway: { mode: "local" } }, hash: "h1" };
+  const noTasks = { sessions: [], hasMore: false };
+
+  it("successful reads of exactly one unnamed, non-degraded main, no roster in the config and no tasks: the prompt, with Main's reported policy", () => {
+    expect(readFirstBot(unnamedMain, noRoster, noTasks)).toEqual({
+      status: "prompt",
+      mainPolicy: "read-only",
+    });
+    expect(readFirstBot({ ...unnamedMain, agents: [{ id: "main" }] }, noRoster, noTasks)).toEqual({
+      status: "prompt",
+      mainPolicy: null,
+    });
+    expect(
+      readFirstBot(
+        unnamedMain,
+        { config: { agents: { defaults: { model: { primary: "acme/dev-1" } } } } },
+        noTasks,
+      ).status,
+    ).toBe("prompt");
+  });
+
+  for (const [why, list, config, sessions] of [
+    [
+      "the legacy agents.list in the config",
+      unnamedMain,
+      { config: { agents: { list: [{ id: "main" }] } } },
+      noTasks,
+    ],
+    [
+      "a main configured in agents.entries",
+      unnamedMain,
+      { config: { agents: { entries: { main: {} } } } },
+      noTasks,
+    ],
+    [
+      "main with tasks",
+      unnamedMain,
+      noRoster,
+      { sessions: [{ key: "agent:main:main" }], hasMore: false },
+    ],
+    ["a session list with more to read", unnamedMain, noRoster, { sessions: [], hasMore: true }],
+    ["a session list that isn't one", unnamedMain, noRoster, { ok: true }],
+    ["a config read that carried no config", unnamedMain, { hash: "h1" }, noTasks],
+    [
+      "a named main",
+      { ...unnamedMain, agents: [{ id: "main", name: "Juniper" }] },
+      noRoster,
+      noTasks,
+    ],
+    [
+      "a main named in its identity",
+      { ...unnamedMain, agents: [{ id: "main", identity: { name: "Juniper" } }] },
+      noRoster,
+      noTasks,
+    ],
+    [
+      "a degraded main",
+      { ...unnamedMain, agents: [{ id: "main", status: "degraded" }] },
+      noRoster,
+      noTasks,
+    ],
+    ["two agents", { ...unnamedMain, agents: [{ id: "main" }, { id: "pip" }] }, noRoster, noTasks],
+    ["no agents", { ...unnamedMain, agents: [] }, noRoster, noTasks],
+    ["another default", { ...unnamedMain, defaultId: "pip" }, noRoster, noTasks],
+    ["a list that isn't one", null, noRoster, noTasks],
+  ] as const) {
+    it(`the normal roster with ${why}`, () => {
+      expect(readFirstBot(list, config, sessions)).toEqual({ status: "roster", mainPolicy: null });
+    });
+  }
+
+  const implicitGateway = () => {
+    const fake = new AccountsGateway();
+    fake.bots = [];
+    fake.config = {
+      gateway: { mode: "local" },
+      agents: { defaults: { model: { primary: "acme/dev-1" } } },
+    };
+    fake.gateway.handlers["agents.list"] = () => {
+      const listed = fake.bots.length > 0 ? fake.bots : [{ id: "main", name: "" }];
+      return {
+        defaultId: fake.bots[0]?.id ?? "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: listed.map((bot) => ({
+          id: bot.id,
+          ...(bot.name ? { identity: { name: bot.name } } : {}),
+          defaultPermissionMode: fake.reportedPolicy(bot.id),
+        })),
+      };
+    };
+    return fake;
+  };
+
+  it("a client on such a gateway opens on the prompt; after Create the roster is what the gateway lists, the new bot alone", async () => {
+    const fake = implicitGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().firstBot.status === "prompt");
+    expect(accounts().firstBot).toEqual({ status: "prompt", mainPolicy: "read-only" });
+    expect(fake.gateway.calls("sessions.list")).toContainEqual({
+      agentId: "main",
+      archived: "all",
+      limit: 1,
+    });
+    expect(await client.recheckFirstBot()).toEqual({ status: "prompt", mainPolicy: "read-only" });
+    await client.createBot({ ...viral, account: null });
+    expect(client.state.bots.map((bot) => bot.id)).toEqual(["viral"]);
+    expect(accounts().firstBot.status).toBe("roster");
+    expect(accounts().policy).toMatchObject({ status: "confirmed", reported: "guarded" });
+    client.stop();
+  });
+
+  it("a failed read of the config or the session list shows the normal roster", async () => {
+    for (const method of ["config.get", "sessions.list"]) {
+      const fake = implicitGateway();
+      const real = fake.gateway.handlers[method]!;
+      fake.gateway.handlers[method] = (params) => {
+        if (method === "sessions.list" && (params as { agentId?: string }).agentId !== "main")
+          return real(params);
+        throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      };
+      const { client, accounts } = await accountsClient({ gateway: fake });
+      await until(() => accounts().firstBot.status === "roster");
+      client.stop();
+    }
+  });
+
+  it("main with tasks on the gateway is the normal roster, shown as a bot", async () => {
+    const fake = implicitGateway();
+    fake.gateway.handlers["sessions.list"] = () => ({
+      sessions: [{ key: "agent:main:main", sessionId: "s1" }],
+      hasMore: false,
+    });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().firstBot.status === "roster");
+    expect(client.state.bots.map((bot) => bot.id)).toEqual(["main"]);
     client.stop();
   });
 });
@@ -1502,6 +1789,7 @@ describe("admin access", () => {
         provider: "acme",
         model: "dev-1",
         effort: null,
+        approvals: "ask",
       }),
     ).rejects.toThrow(/needs admin access/);
     expect(fake.gateway.calls("agents.create")).toEqual([]);

@@ -251,8 +251,6 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
-  // The bots there before the first Create of the bot being made, while its answer is in doubt.
-  "accounts.before": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
