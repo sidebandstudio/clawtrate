@@ -181,6 +181,10 @@ export function ComputerTab(props: ComputerTabProps) {
   // After a release that was to answer in the chat: the full view closes and focus goes to the card.
   // The question it was offered for, kept from the click: a card rendered since is not it.
   const answerInChat = useRef<{ questionId: string | undefined } | null>(null);
+  // Leaving Computer retires it: a confirmation after the person left moves nothing.
+  useEffect(() => {
+    if (!shown) answerInChat.current = null;
+  }, [shown]);
   useEffect(() => {
     if (!control) return;
     const asked = answerInChat.current;

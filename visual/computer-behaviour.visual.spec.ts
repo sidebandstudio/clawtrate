@@ -319,6 +319,26 @@ test.describe("the full view on the desktop", () => {
     await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
   });
 
+  test("F-145: leaving Computer while Give back control and answer is on its way retires it: the late confirmation moves nothing", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=complexreleaseslow`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Give back control and answer" }).click();
+    await expect(controlBar(page)).toContainText("Giving control back…");
+    await fullView(page).getByRole("button", { name: "Close the full view (Esc)" }).click();
+    const files = page.getByRole("tab", { name: "Files" });
+    await files.click();
+    await expect(files).toBeFocused();
+    // The release is confirmed after the person left.
+    await expect
+      .poll(async () => (await pane(page))?.control.status, { timeout: 8_000 })
+      .toBe("none");
+    await page.waitForTimeout(500);
+    await expect(files).toBeFocused();
+    await expect(files).toHaveAttribute("aria-selected", "true");
+  });
+
   test("F-145: answering in the chat goes to the question it was offered for, not a later card below it", async ({
     page,
   }) => {

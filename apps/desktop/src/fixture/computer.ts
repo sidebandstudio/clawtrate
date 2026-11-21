@@ -54,6 +54,7 @@ export const COMPUTER_STATES = [
   "elsewhere-taking",
   "releasefail",
   "complexreleasefail",
+  "complexreleaseslow",
   "tabslater",
   "tabsfail",
   "controlended",
@@ -228,6 +229,7 @@ export function withComputerRuns(
     const complex =
       params.mode === "complexquestion" ||
       params.mode === "complexreleasefail" ||
+      params.mode === "complexreleaseslow" ||
       params.mode === "complexlater";
     const asking = active ? [] : [question(now, run.id, complex)];
     // A question asked after the pending one and already answered: its card comes later.
@@ -636,6 +638,8 @@ export function computerFixture(
         if ((mode === "releasefail" || mode === "complexreleasefail") && releases === 1)
           throw refuse("FORBIDDEN", "not_holder");
         if (mode === "releaseunknown" && releases === 1) return forever;
+        // `complexreleaseslow`: the hand-back is confirmed 3 s after it is asked.
+        if (mode === "complexreleaseslow") await wait(3_000);
         const gen = String(p.generation);
         if (gen === generation.current) generation.current = "";
         event("released", gen);
