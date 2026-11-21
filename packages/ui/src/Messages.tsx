@@ -5,7 +5,14 @@
 // a message and the replies to it from the gateway's own reply references,
 // since the gateway keeps a reply only as a reference with no thread of its own.
 
-import type { MessageReaction, OutgoingMessage, Transcript, TranscriptItem } from "@clawtrate/core";
+import {
+  MAX_OUTBOX,
+  namesOutgoing,
+  type MessageReaction,
+  type OutgoingMessage,
+  type Transcript,
+  type TranscriptItem,
+} from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -423,12 +430,20 @@ const accepted = (message: OutgoingMessage) =>
 
 /**
  * The replies to a message, in the order they were written: the rows history marks as replies to
- * it, and yours on their way. Only what the gateway has counts as a reply (`count`).
+ * it, and yours on their way. A bot's turn of several rows joins only by the bubbles whose own row
+ * names the message. Only what the gateway has counts as a reply (`count`).
  */
 export function repliesTo(transcript: Transcript, messageId: string) {
-  const history = transcript.items.filter(
-    (item) => item.role === "user" && item.replyTo?.id === messageId,
-  );
+  const history: Array<{ key: string; role: "user" | "assistant"; text: string }> = [];
+  for (const item of transcript.items) {
+    if (item.role === "user" && item.replyTo?.id === messageId)
+      history.push({ key: item.id, role: "user", text: itemText(item) });
+    if (item.role !== "assistant") continue;
+    item.blocks.forEach((block, index) => {
+      if (block.kind === "text" && block.replyToId === messageId)
+        history.push({ key: `${item.id}:${index}`, role: "assistant", text: block.text });
+    });
+  }
   const pending = transcript.outbox.filter(
     (message) =>
       message.replyToId === messageId &&
@@ -495,10 +510,36 @@ function RepliesLink({ message }: { message: MessageRef }) {
   );
 }
 
+type ReplyReceipt = Pick<OutgoingMessage, "id" | "mode" | "runId">;
+
+/** Keep all live receipts and the newest sends missing from the outbox, up to its own limit. */
+export function reconcileReplyReceipts(
+  receipts: Map<string, ReplyReceipt>,
+  transcript: Pick<Transcript, "outbox" | "items">,
+): string[] {
+  const delivered: string[] = [];
+  const absent: string[] = [];
+  for (const [id, previous] of receipts) {
+    const outgoing = transcript.outbox.find((message) => message.id === id);
+    const receipt = outgoing ? { id, mode: outgoing.mode, runId: outgoing.runId } : previous;
+    // The outbox can drop a reply before history arrives. Only its gateway key proves delivery.
+    if (transcript.items.some((item) => namesOutgoing(item.idempotencyKey ?? null, receipt))) {
+      receipts.delete(id);
+      delivered.push(id);
+    } else if (outgoing) {
+      receipts.set(id, receipt);
+    } else {
+      absent.push(id);
+    }
+  }
+  for (const id of absent.slice(0, Math.max(0, absent.length - MAX_OUTBOX))) receipts.delete(id);
+  return delivered;
+}
+
 /**
  * A message and its replies, with a field to reply from. The gateway keeps no thread, so it is
  * assembled here from its own reply references and nothing else: the message, then each row
- * history marks as a reply to it (yours, or an answer the gateway delivered as one). A reply on
+ * history marks as a reply to it (yours, or a bot's bubble the gateway delivered as one). A reply on
  * its way shows as the main composer shows it: held, queued, not sent, failed or sent, with the
  * same recovery.
  */
@@ -524,6 +565,15 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     // Escape reaches it. Write access ending removes the field, and the focus it held with it.
     (field.current ?? panel.current)?.focus();
   }, [messageId, writable]);
+  /** The replies sent from here that history does not hold yet, as the outbox last showed each. */
+  const sent = useRef(new Map<string, ReplyReceipt>());
+  const [added, setAdded] = useState(0);
+  const watched = env?.transcript;
+  const announce = env?.announce;
+  useEffect(() => {
+    if (!watched || !announce) return;
+    reconcileReplyReceipts(sent.current, watched).forEach(() => announce("Reply sent"));
+  }, [watched, announce, added]);
   if (!env) return null;
   const transcript = env.transcript;
   const root = messageOf(transcript, messageId);
@@ -538,7 +588,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     setText("");
     setError(null);
     try {
-      await bridge.invoke({
+      const answer = await bridge.invoke({
         type: "sendMessage",
         key: env.taskKey,
         text: body,
@@ -546,6 +596,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         attachmentIds: [],
         replyToId: messageId,
       });
+      sent.current.set(answer.messageId, { id: answer.messageId, mode: "new", runId: null });
+      setAdded((count) => count + 1);
     } catch (failure) {
       // The refused words come back, ahead of anything typed since.
       setText((current) => (current.trim() ? `${body}\n${current}` : body));
@@ -606,7 +658,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         <p className="thread-count" data-testid="thread-count">
           {count === 0 ? "No replies yet" : repliesWord(count)}
         </p>
-        {history.map((reply) => line({ role: reply.role, text: itemText(reply) }, reply.id))}
+        {history.map((reply) => line(reply, reply.key))}
         {pending.map((message) =>
           shelfMessages({ ...transcript, outbox: [message] }).length > 0 ? (
             <ShelfRow
