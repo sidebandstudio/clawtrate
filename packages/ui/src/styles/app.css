@@ -914,6 +914,7 @@ textarea {
    reaches the strip. The transcript itself never reflows. */
 .transcript {
   --clear: calc(var(--header-height) + 6px);
+  position: relative;
   flex: 1;
   overflow-y: auto;
   /* The reader's place is held in code (useHoldPlace), so the browser's own
@@ -926,6 +927,18 @@ textarea {
     #000 var(--clear)
   );
   mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 34px), #000 var(--clear));
+}
+
+/* The floor under a followed end (TranscriptView's pinAt): the scrollable
+   area reaches at least the pinned scroll position plus the view's own height,
+   which tracks the view as the composer or shelf resizes it. */
+.transcript::after {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: calc(var(--follow-floor, 0px) + 100%);
+  pointer-events: none;
+  content: "";
 }
 
 /* While the strip shows, text stays fully hidden through the strip's bottom
