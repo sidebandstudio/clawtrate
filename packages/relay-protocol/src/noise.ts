@@ -40,8 +40,10 @@ export function generateKeyPair(random: RandomBytes = secureRandomBytes): KeyPai
 }
 
 export function keyPairFromSecret(secretKey: Uint8Array): KeyPair {
-  if (secretKey.length !== KEY_BYTES) fail("bad_key", "An X25519 secret key is 32 bytes.");
-  return { secretKey: Uint8Array.from(secretKey), publicKey: x25519.getPublicKey(secretKey) };
+  // One copy, read from the bytes and not through an iterator, serves both halves.
+  const copy = new Uint8Array(secretKey);
+  if (copy.length !== KEY_BYTES) fail("bad_key", "An X25519 secret key is 32 bytes.");
+  return { secretKey: copy, publicKey: x25519.getPublicKey(copy) };
 }
 
 function dh(secretKey: Uint8Array, publicKey: Uint8Array): Uint8Array {

@@ -445,9 +445,9 @@ function copySnapshot(snapshot: RegistrationSnapshot): RegistrationSnapshot {
 export class MemoryRegistrationStore implements RegistrationStore {
   #latest: RegistrationSnapshot | null = null;
 
-  /** The snapshot to restore from; null before the first write. */
+  /** A copy of the snapshot to restore from; null before the first write. */
   get latest(): RegistrationSnapshot | null {
-    return this.#latest;
+    return this.#latest === null ? null : { ...this.#latest };
   }
 
   persist(snapshot: RegistrationSnapshot): void {
@@ -616,6 +616,11 @@ export class ControlRegistration {
     } catch {
       result = { ok: false, code: "store_failed" };
     }
+    // A denial that arrives after the attempt ended reports why it ended (a timer's clock
+    // failure, an expiry or an abort), not what the slow check found. A storage fault still wins.
+    if (!result.ok && result.code !== "store_failed" && !this.#current(token)) {
+      result = { ok: false, code: this.#cause() };
+    }
     if (result.ok) {
       // From here to completion nothing waits. Anything that ended the attempt since the proof
       // checked out wins over storing it.
@@ -635,28 +640,44 @@ export class ControlRegistration {
 
   /**
    * Publishes the success and completes the registration in one step: null once the state is
-   * `registered`, or else why not. `cancelled` counts only when the liveness reading ended the
-   * attempt; a store that throws, answers anything else (a promise included), or cancels an
-   * attempt still live, or commits one that ended, is `store_failed`.
+   * `registered`, or else why not. Each reply is checked against the last liveness reading the
+   * store took through this commit's `live`: `cancelled` counts only after a false reading with
+   * the attempt ended, and `committed` only after a true reading with it still current. A store
+   * that throws, answers anything else (a promise included), or replies without a reading or
+   * against it, is `store_failed`.
    */
   #complete(token: object, store: RegistrationStore | undefined): RegisterProofFailureCode | null {
     if (store) {
+      let lastRead: boolean | null = null;
+      const check = (): boolean => this.#check(token) === null;
+      const view = {
+        get live(): boolean {
+          lastRead = check();
+          return lastRead;
+        },
+      };
       let outcome: unknown;
       try {
-        outcome = store.commitRegistered(
-          { ...this.snapshot(), state: "registered" },
-          this.#view(token),
-        );
+        outcome = store.commitRegistered({ ...this.snapshot(), state: "registered" }, view);
       } catch {
         return "store_failed";
       }
-      const current = this.#attempt === token && this.#state === "verifying";
-      if (outcome === "cancelled" && !current) return this.#cause();
-      if (outcome !== "committed" || !current) {
-        // What a promise publishes, and when, is not known here; its failure is not reported.
-        if (outcome instanceof Promise) outcome.then(undefined, () => {});
-        return "store_failed";
+      const current = this.#current(token);
+      const read = lastRead as boolean | null;
+      if (outcome === "cancelled" && read === false && !current) return this.#cause();
+      if (outcome === "committed" && read === true && current) {
+        this.#attempt = null;
+        this.#state = "registered";
+        return null;
       }
+      // What a promise publishes, and when, is not known here; its failure is not reported.
+      // Observing it is best effort: a thenable or proxy that throws changes nothing.
+      try {
+        Promise.prototype.then.call(outcome, undefined, () => {});
+      } catch {
+        // Not a promise, or one that cannot be observed.
+      }
+      return "store_failed";
     }
     this.#attempt = null;
     this.#state = "registered";
@@ -682,10 +703,12 @@ export class ControlRegistration {
       replay: options.replay,
       allowLoopbackWs: this.#allowLoopbackWs,
     });
-    if (!result.ok) return result;
-    // A store that took its time may have outlasted the challenge or the socket.
+    // A store that took its time may have outlasted the challenge or the socket, whatever it
+    // answered. A storage fault stays a storage fault.
+    if (!result.ok && result.code === "store_failed") return result;
     lost = this.#check(token);
     if (lost !== null) return { ok: false, code: lost };
+    if (!result.ok) return result;
     let claimed: boolean;
     try {
       claimed = await options.claims.claim(
@@ -723,6 +746,11 @@ export class ControlRegistration {
     this.#clockFailure = clock;
     this.#end();
     return clock;
+  }
+
+  /** True while `token` is the attempt in flight. Reads no clock. */
+  #current(token: object): boolean {
+    return this.#attempt === token && this.#state === "verifying";
   }
 
   /** Why an ended attempt ended: the first clock failure seen, or else an abort. */
