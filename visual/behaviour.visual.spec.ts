@@ -138,6 +138,8 @@ test.describe("the rail", () => {
     await page.keyboard.press("Enter");
     await page.getByRole("menuitemradio", { name: "Dark" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // Dark is also what an empty store gives, so the save itself is checked.
+    expect(await page.evaluate(() => localStorage.getItem("clawtrate.theme"))).toBe("dark");
     await page.goto(`/?scene=main&${OTTO_DISK}`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await page
@@ -146,6 +148,48 @@ test.describe("the rail", () => {
       .click();
     await page.getByRole("menuitemradio", { name: "Match the system" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+    expect(await page.evaluate(() => localStorage.getItem("clawtrate.theme"))).toBe("system");
+  });
+
+  test("draws a stored Light before the bundle runs, even on a dark system", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext(contextFor(WIDE, "dark"));
+    const page = await context.newPage();
+    await page.goto(`/?scene=main&${OTTO_DISK}`);
+    await page.evaluate(() => localStorage.setItem("clawtrate.theme", "light"));
+    // Hold the app's bundle: until it runs, only the page's head and stylesheet draw.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(/\/assets\/index-[^/]*\.js$/, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.reload({ waitUntil: "commit" });
+    const early = () =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        return {
+          theme: root.dataset.theme,
+          scheme: getComputedStyle(root).colorScheme,
+          ground: getComputedStyle(root).getPropertyValue("--bg").trim(),
+          meta: document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.content,
+          rendered: (document.getElementById("root")?.childElementCount ?? 0) > 0,
+        };
+      });
+    // The stylesheet is in once the root's ground is set.
+    await expect.poll(async () => (await early()).ground, { timeout: 5_000 }).not.toBe("");
+    expect(await early()).toEqual({
+      theme: "light",
+      scheme: "light",
+      ground: "#fff",
+      meta: "light",
+      rendered: false,
+    });
+    release();
+    await page.locator(".app").waitFor();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await context.close();
   });
 
   test("opens dark with no theme chosen, even on a light system, and says Dark is the default", async ({

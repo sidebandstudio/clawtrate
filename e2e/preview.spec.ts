@@ -747,15 +747,53 @@ test("the gateway menu opens from the keyboard and keeps the theme", async ({ pa
     await page.keyboard.press("Escape");
     await expect(trigger).toBeFocused();
   }
+  const html = page.locator("html");
+  const stored = () => page.evaluate(() => localStorage.getItem("clawtrate.theme"));
+  const reload = async () => {
+    await page.reload();
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  };
+
+  // Dark is also what an empty store gives, so the save itself is checked.
   await trigger.click();
   await page.getByRole("menuitemradio", { name: "Dark" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  expect(await stored()).toBe("dark");
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  expect(await stored()).toBe("dark");
+
+  // Light stays light on a dark system, from before the bundle runs.
+  await trigger.click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  expect(await stored()).toBe("light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/assets\/index-[^/]*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.reload({ waitUntil: "commit" });
+  const ground = () =>
+    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+  await expect.poll(ground, { timeout: 5_000 }).not.toBe("");
+  expect(await ground()).toBe("#fff");
+  expect(await page.locator("#root > *").count()).toBe(0);
+  release();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(html).toHaveAttribute("data-theme", "light");
+  expect(await scheme()).toBe("light");
+
+  // Match the system is kept, and follows the system both ways.
   await trigger.click();
   await page.getByRole("menuitemradio", { name: "Match the system" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+  expect(await stored()).toBe("system");
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "system");
+  expect(await stored()).toBe("system");
+  expect(await scheme()).toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
   await expect.poll(scheme).toBe("light");
 });
 
