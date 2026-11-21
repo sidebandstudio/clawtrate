@@ -178,7 +178,7 @@ test.describe("the full view on the desktop", () => {
     expect(attempts.map((cmd) => cmd.input)).toEqual([{ kind: "text", text: "a".repeat(2000) }]);
   });
 
-  test("F-142: a key typed while a paste is still going goes after the paste, never between its calls", async ({
+  test("F-142: a scroll, click and key during a paste reach the page in order after the paste", async ({
     page,
   }) => {
     await openFixture(page, `${COMPUTER}&computer=control`, "light");
@@ -205,13 +205,22 @@ test.describe("the full view on the desktop", () => {
       element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
     });
     await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(1);
+    await frame.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const point = { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+      element.dispatchEvent(new WheelEvent("wheel", { ...point, deltaY: 120, cancelable: true }));
+      element.dispatchEvent(new MouseEvent("click", { ...point, bubbles: true }));
+    });
     await page.keyboard.type("x");
     await page.evaluate(() => window.dispatchEvent(new Event("ack-paste")));
     await expect
       .poll(async () =>
-        (await sentOf(page, "computerInput")).map((each) => (each.input as { text?: string }).text),
+        (await sentOf(page, "computerInput")).map((each) => {
+          const input = each.input as { kind: string; text?: string };
+          return input.text ?? input.kind;
+        }),
       )
-      .toEqual(["a".repeat(2000), "b", "x"]);
+      .toEqual(["a".repeat(2000), "b", "scroll", "click", "x"]);
   });
 
   test("F-142: typed text, clicks and scrolling reach the page only while this viewer holds control and the picture has focus; Enter is not sent; a paste goes only on a paste", async ({
@@ -984,6 +993,16 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
     await cdp.send("Input.imeSetComposition", { text: "ni", selectionStart: 2, selectionEnd: 2 });
     await page.waitForTimeout(300);
     expect(await sentOf(page, "computerInput")).toEqual([]);
+    // A candidate-confirmation Enter belongs to the input method, including a 229 keydown.
+    const accepted = await field.evaluate((input) =>
+      [{ isComposing: true }, { keyCode: 229 }].map((flags) =>
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...flags }),
+        ),
+      ),
+    );
+    expect(accepted).toEqual([true, true]);
+    await expect(fullView(page).getByText(/Enter isn't sent to the page/)).toHaveCount(0);
     await cdp.send("Input.insertText", { text: "你" });
     await expect
       .poll(async () =>
@@ -1001,24 +1020,40 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
     // "a" is answered only on "ack-a", and refused.
     await page.evaluate(() => {
       type Command = { type: string; input?: { text?: string } };
-      const bridge = (
-        window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
-      ).clawtrateFixture;
+      const fixture = window as unknown as {
+        clawtrateFixture: { invoke(command: Command): Promise<unknown> };
+        refusedInput: string[];
+        acceptedInput: string[];
+      };
+      fixture.refusedInput = [];
+      fixture.acceptedInput = [];
+      const bridge = fixture.clawtrateFixture;
       const invoke = bridge.invoke.bind(bridge);
       const ack = new Promise<void>((resolve) =>
         window.addEventListener("ack-a", () => resolve(), { once: true }),
       );
       bridge.invoke = async (command) => {
-        if (command.type !== "computerInput" || command.input?.text !== "a") return invoke(command);
-        await invoke(command);
-        await ack;
-        return { sent: false };
+        if (command.type !== "computerInput" || !command.input?.text) return invoke(command);
+        const text = command.input.text;
+        if (text === "a") {
+          fixture.refusedInput.push(text);
+          await ack;
+          return { sent: false };
+        }
+        const answer = (await invoke(command)) as { sent: boolean };
+        if (answer.sent) fixture.acceptedInput.push(text);
+        return answer;
       };
     });
     await fullView(page).getByRole("button", { name: "Type into the page" }).click();
     const field = fullView(page).getByRole("textbox", { name: "Type into the page" });
     await field.pressSequentially("a");
-    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(1);
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { refusedInput: string[] }).refusedInput),
+      )
+      .toEqual(["a"]);
+    expect(await sentOf(page, "computerInput")).toEqual([]);
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Input.imeSetComposition", { text: "n", selectionStart: 1, selectionEnd: 1 });
     await page.evaluate(() => window.dispatchEvent(new Event("ack-a")));
@@ -1028,10 +1063,11 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
     await expect(unsent).toContainText("Not sent yet: a你");
     await unsent.getByRole("button", { name: "Send again" }).click();
     await expect(field).toHaveValue("a你");
-    const texts = (await sentOf(page, "computerInput")).map(
-      (each) => (each.input as { text?: string }).text,
-    );
-    expect(texts).toEqual(["a", "a你"]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { acceptedInput: string[] }).acceptedInput),
+      )
+      .toEqual(["a你"]);
   });
 
   test("F-142: a late reply from a closed typing field cannot accept text in the reopened field", async ({

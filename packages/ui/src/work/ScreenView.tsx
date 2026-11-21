@@ -173,8 +173,25 @@ export function ScreenView(props: ScreenViewProps) {
     timer: null,
   });
   const inputSession = useRef(0);
-  /** Typed and pasted text, in the order it came: each goes after the one before it went. */
-  const textOrder = useRef<Promise<void>>(Promise.resolve());
+  // A paste can take several calls. Later page input waits until it finishes.
+  const inputOrder = useRef<Promise<void>>(Promise.resolve());
+  const queueInput = (input: ComputerInput) => {
+    const session = inputSession.current;
+    inputOrder.current = inputOrder.current.then(async () => {
+      if (session === inputSession.current) await props.onInput(input);
+    });
+  };
+  const flushWheel = () => {
+    const w = wheel.current;
+    if (w.timer === null) return;
+    window.clearTimeout(w.timer);
+    w.timer = null;
+    const { dx, dy, x, y } = w;
+    w.dx = 0;
+    w.dy = 0;
+    if (inputAllowed() && (dy !== 0 || dx !== 0))
+      queueInput({ kind: "scroll", x, y, deltaX: Math.round(dx), deltaY: Math.round(dy) });
+  };
   /** A queued scroll or the rest of a paste belongs to the focused picture that received it. */
   const retireInput = () => {
     inputSession.current++;
@@ -201,15 +218,7 @@ export function ScreenView(props: ScreenViewProps) {
       w.x = point.x;
       w.y = point.y;
       if (w.timer !== null) return;
-      w.timer = window.setTimeout(() => {
-        w.timer = null;
-        const { dx, dy, x, y } = w;
-        w.dx = 0;
-        w.dy = 0;
-        if (!inputAllowed()) return;
-        if (dy !== 0 || dx !== 0)
-          props.onInput({ kind: "scroll", x, y, deltaX: Math.round(dx), deltaY: Math.round(dy) });
-      }, 80);
+      w.timer = window.setTimeout(flushWheel, 80);
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     element.addEventListener("blur", retireInput);
@@ -245,12 +254,8 @@ export function ScreenView(props: ScreenViewProps) {
     if (inFrame && inputAllowed()) {
       if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
-        const session = inputSession.current;
-        const text = event.key;
-        // After any paste still going: a key never lands between its calls.
-        textOrder.current = textOrder.current.then(() => {
-          if (session === inputSession.current) props.onInput({ kind: "text", text });
-        });
+        flushWheel();
+        queueInput({ kind: "text", text: event.key });
         return;
       }
       if (event.key === "Enter" || event.key === "Backspace" || event.key === "Tab") {
@@ -299,10 +304,11 @@ export function ScreenView(props: ScreenViewProps) {
     const text = event.clipboardData.getData("text/plain");
     // In order, one call after another's answer: a refused part stops the rest, so nothing goes
     // after a gap, and what didn't go is said.
-    // Typed keys and a later paste wait until this paste is done or stopped.
+    // Flush any earlier wheel motion before adding the paste to the queue.
+    flushWheel();
     const parts = callParts(text, 4);
     const session = inputSession.current;
-    textOrder.current = textOrder.current.then(async () => {
+    inputOrder.current = inputOrder.current.then(async () => {
       let sent = 0;
       for (const part of parts) {
         if (session !== inputSession.current) break;
@@ -323,7 +329,10 @@ export function ScreenView(props: ScreenViewProps) {
     if (!granted) return;
     frameRef.current?.focus();
     const point = pagePoint(event.clientX, event.clientY);
-    if (point) props.onInput({ kind: "click", ...point });
+    if (point && inputAllowed()) {
+      flushWheel();
+      queueInput({ kind: "click", ...point });
+    }
   };
 
   const bar = <ControlBar {...props} phone={phone} />;
@@ -978,6 +987,7 @@ function PhoneLayout(
               pump();
             }}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Enter") {
                 event.preventDefault();
                 setHint("Enter isn't sent to the page. Tap the page's button instead.");
