@@ -6312,8 +6312,12 @@ export class ClawtrateClient {
     }
     // Each as the conversation's Stop: stopping until the run's end, back to running with the
     // gateway's refusal (`revertStop`).
-    for (const run of runs)
-      await this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true });
+    // All at once: one run's slow answer never holds another's Stop back.
+    await Promise.all(
+      runs.map((run) =>
+        this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
+      ),
+    );
     return { runIds: runs.map((run) => run.id), aborted: null };
   }
 

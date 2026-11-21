@@ -94,4 +94,27 @@ describe("the Computer tab's Stop", () => {
     expect(closed).toHaveBeenCalledWith(KEY, "ask_1", "cancelled");
     client.stop();
   });
+
+  it("F-145: asks the gateway to stop every run at once, not one after another's answer", async () => {
+    const gateway = grantingGateway();
+    const slow = deferred<unknown>();
+    gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId?: string }).runId === "run-1"
+        ? slow.promise
+        : { ok: true, aborted: true, runIds: [] };
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("run-2", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.filter((each) => each.state === "running").length === 2);
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "computerShow", key: KEY });
+    const stopping = viewer.apply({ type: "computerStopTask" });
+    // The first run's answer hasn't come: the second run's Stop has gone anyway.
+    await until(() => gateway.calls("chat.abort").length === 2);
+    slow.resolve({ ok: true, aborted: true, runIds: [] });
+    await stopping;
+    viewer.dispose();
+    client.stop();
+  });
 });
