@@ -672,6 +672,155 @@ describe("one control socket's registration", () => {
     }
   });
 
+  it("a denial that arrives after the attempt ended reports why it ended", async () => {
+    // The replay check waits; meanwhile the timer sees a clock rollback, an expired deadline,
+    // or the socket closes. The clock then recovers and the replay check answers "seen".
+    const cases: [
+      string,
+      (registration: ControlRegistration, set: (ms: number) => void) => void,
+      string,
+    ][] = [
+      [
+        "a clock that went back",
+        (registration, set) => {
+          set(4_000);
+          expect(registration.expire()).toBe(true);
+          set(5_000);
+        },
+        "bad_clock",
+      ],
+      [
+        "a deadline that passed",
+        (registration, set) => {
+          set(5_000 + 60_001);
+          expect(registration.expire()).toBe(true);
+        },
+        "challenge_expired",
+      ],
+      ["an abort", (registration) => registration.abort(), "aborted"],
+    ];
+    for (const [label, end, code] of cases) {
+      let now = 5_000;
+      let answer = (_seen: boolean): void => {};
+      const saved = recording();
+      const registration = socket({
+        clock: () => now,
+        store: saved.store,
+        replay: { consume: () => new Promise<boolean>((resolve) => (answer = resolve)) },
+      });
+      const pending = registration.register(proofFor(registration));
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      end(registration, (ms) => (now = ms));
+      answer(false);
+      expect(await pending, label).toEqual({ ok: false, code });
+      expect(saved.latest().state, label).toBe("failed");
+    }
+    // A storage fault still wins over the cause.
+    let fail = (_error: unknown): void => {};
+    const faulty = socket({
+      replay: { consume: () => new Promise<boolean>((_resolve, reject) => (fail = reject)) },
+      store: recording().store,
+    });
+    const faultPending = faulty.register(proofFor(faulty));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    faulty.abort();
+    fail(new Error("down"));
+    expect(await faultPending).toEqual({ ok: false, code: "store_failed" });
+  });
+
+  it("checks each commit reply against the liveness reading the store took", async () => {
+    type Answer = (
+      attempt: { readonly live: boolean },
+      end: () => void,
+    ) => "committed" | "cancelled";
+    const answers: Record<string, Answer> = {
+      "committed without a reading": () => "committed",
+      "cancelled after a direct abort, without a reading": (_attempt, end) => (end(), "cancelled"),
+      "cancelled after a true reading, then an abort": (attempt, end) => {
+        void attempt.live;
+        end();
+        return "cancelled";
+      },
+    };
+    for (const [label, answer] of Object.entries(answers)) {
+      const memory = new MemoryRegistrationStore();
+      const registration: ControlRegistration = socket({
+        store: {
+          persist: (snapshot) => memory.persist(snapshot),
+          commitRegistered: (_snapshot, attempt) => answer(attempt, () => registration.abort()),
+        },
+      });
+      expect(await registration.register(proofFor(registration)), label).toEqual({
+        ok: false,
+        code: "store_failed",
+      });
+      expect(registration.state, label).toBe("failed");
+      expect(memory.latest?.state, label).toBe("failed");
+    }
+    // A false reading with the attempt ended is a real cancellation.
+    let now = 5_000;
+    const cancelled = socket({
+      clock: () => now,
+      store: {
+        persist: () => {},
+        commitRegistered: (_snapshot, attempt) => {
+          now = 5_000 + 60_001;
+          return attempt.live ? "committed" : "cancelled";
+        },
+      },
+    });
+    expect(await cancelled.register(proofFor(cancelled))).toEqual({
+      ok: false,
+      code: "challenge_expired",
+    });
+  });
+
+  it("a malformed reply that cannot be observed still ends the attempt as a storage fault", async () => {
+    const throwingThen = Promise.resolve("committed");
+    Object.defineProperty(throwingThen, "then", {
+      get() {
+        throw new Error("then getter");
+      },
+    });
+    const throwingConstructor = Promise.resolve("committed");
+    Object.defineProperty(throwingConstructor, "constructor", {
+      get() {
+        throw new Error("constructor getter");
+      },
+    });
+    const hostileProxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("prototype trap");
+        },
+        get() {
+          throw new Error("get trap");
+        },
+      },
+    );
+    const replies: Record<string, unknown> = {
+      "a promise whose own then getter throws": throwingThen,
+      "a promise whose constructor getter throws": throwingConstructor,
+      "a proxy that throws on every trap": hostileProxy,
+    };
+    for (const [label, reply] of Object.entries(replies)) {
+      const memory = new MemoryRegistrationStore();
+      const registration = socket({
+        store: {
+          persist: (snapshot) => memory.persist(snapshot),
+          commitRegistered: (_snapshot, attempt) => (void attempt.live, reply as "committed"),
+        },
+      });
+      expect(await registration.register(proofFor(registration)), label).toEqual({
+        ok: false,
+        code: "store_failed",
+      });
+      expect(registration.state, label).toBe("failed");
+      expect(memory.latest?.state, label).toBe("failed");
+    }
+  });
+
   it("an abort just after the proof checks out asks the store for no success", async () => {
     let afterClaim = false;
     const saved = recording();
