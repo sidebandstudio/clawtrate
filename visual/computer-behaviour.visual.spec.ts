@@ -744,6 +744,76 @@ test.describe("the computer button, recovery and the machine", () => {
 test.describe("the full view on the phone (section 18, On the phone)", () => {
   test.use(contextFor(PHONE, "light"));
 
+  test("F-142: a late reply from a closed typing field cannot accept text in the reopened field", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await page.evaluate(() => {
+      type Command = { type: string; input?: { text?: string } };
+      const bridge = (
+        window as unknown as {
+          clawtrateFixture: { invoke(command: Command): Promise<unknown> };
+        }
+      ).clawtrateFixture;
+      const invoke = bridge.invoke.bind(bridge);
+      bridge.invoke = (command) => {
+        if (command.type !== "computerInput" || !command.input?.text) return invoke(command);
+        const text = command.input.text;
+        return new Promise((resolve) =>
+          window.addEventListener(`ack-${text}`, () => resolve({ sent: text === "old" }), {
+            once: true,
+          }),
+        );
+      };
+    });
+    const view = fullView(page);
+    const keyboard = view.getByRole("button", { name: "Type into the page" });
+    const field = view.getByRole("textbox", { name: "Type into the page" });
+    await keyboard.click();
+    await field.fill("old");
+    await view.getByRole("button", { name: "Done", exact: true }).click();
+    await keyboard.click();
+    await field.fill("new");
+    await page.evaluate(() => window.dispatchEvent(new Event("ack-old")));
+    await page.evaluate(() => window.dispatchEvent(new Event("ack-new")));
+    await expect(view.getByTestId("type-unsent")).toContainText("Not sent yet: new");
+    await expect(field).toHaveValue("");
+  });
+
+  test("F-142: closing the full view drops phone text still waiting for the previous reply", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await page.evaluate(() => {
+      type Command = { type: string; input?: { text?: string } };
+      const bridge = (
+        window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
+      ).clawtrateFixture;
+      const invoke = bridge.invoke.bind(bridge);
+      bridge.invoke = async (command) => {
+        const result = await invoke(command);
+        if (command.type === "computerInput" && command.input?.text === "a")
+          await new Promise<void>((resolve) =>
+            window.addEventListener("first-input-accepted", () => resolve(), { once: true }),
+          );
+        return result;
+      };
+    });
+    const view = fullView(page);
+    await view.getByRole("button", { name: "Type into the page" }).click();
+    await view.getByRole("textbox", { name: "Type into the page" }).pressSequentially("ab");
+    await view.getByRole("button", { name: "Close the full view" }).click();
+    await expect(view).toHaveCount(0);
+    await page.evaluate(async () => {
+      window.dispatchEvent(new Event("first-input-accepted"));
+      await new Promise(requestAnimationFrame);
+    });
+    const inputs = await sentOf(page, "computerInput");
+    expect(inputs.map((command) => command.input)).toEqual([{ kind: "text", text: "a" }]);
+  });
+
   test("F-142: with the input queue full, text the gateway didn't take stays out of the field, shown as not sent; sent again, it goes once and in order", async ({
     page,
   }) => {

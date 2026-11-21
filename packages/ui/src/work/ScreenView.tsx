@@ -732,6 +732,12 @@ function PhoneLayout(
   // What the field holds and where each part of it is (`phone-typing.ts`): read in handlers.
   const [text, setText] = useState<Typing>(emptyTyping);
   const textRef = useRef<Typing>(emptyTyping);
+  useLayoutEffect(() => {
+    return () => {
+      // Closing the full view retires the field just as Done does.
+      textRef.current = restart(textRef.current);
+    };
+  }, []);
   const setTyped = (next: Typing) => {
     textRef.current = next;
     setText(next);
