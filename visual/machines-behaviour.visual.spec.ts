@@ -404,10 +404,18 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   );
   // One explanation: the bar asks, the section says why.
   await expect(page.getByTestId("device-bar")).not.toContainText("needs device access");
+  // The owner's approval is held and then let through by the check, not left to a page timer: on a
+  // loaded machine that timer can stay unfired for longer than the check waits (#248).
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
   await page.getByTestId("device-bar").getByRole("button", { name: "Request access" }).click();
   expect((await sent(page)).filter((c) => c.type === "requestAccess")).toEqual([
     { type: "requestAccess", tier: "pairing" },
   ]);
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
   const list = page.getByTestId("device-list");
   await expect(list).toBeVisible();
   await expect(list.locator("dt").first()).toHaveText("This device");
