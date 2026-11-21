@@ -31,6 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
+import { Permissions, PermissionsRow } from "./Permissions.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
@@ -56,7 +57,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect" | "runs" | "memory";
+type View = "main" | "account" | "change" | "connect" | "runs" | "permissions" | "memory";
 
 export function BotSettings({
   bot,
@@ -216,6 +217,20 @@ export function BotSettings({
     );
   }
 
+  // --- What the bot may do (controls.md sections 4 and 5): its own read, whatever the accounts do
+  if (view === "permissions") {
+    return (
+      <Permissions
+        bot={bot}
+        connection={connection}
+        info={info}
+        visible={visible}
+        announce={announce}
+        onBack={() => go("main", "[data-bs='permissions']")}
+      />
+    );
+  }
+
   if (view === "memory") {
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
@@ -275,6 +290,13 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        <h3 className="b-tabgroup">Tools</h3>
+        <PermissionsRow
+          bot={bot}
+          connection={connection}
+          visible={visible}
+          onOpen={() => go("permissions")}
+        />
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
@@ -411,6 +433,13 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
+        <h3 className="b-tabgroup">Tools</h3>
+        <PermissionsRow
+          bot={bot}
+          connection={connection}
+          visible={visible}
+          onOpen={() => go("permissions")}
+        />
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}

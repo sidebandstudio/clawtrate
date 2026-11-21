@@ -28,7 +28,9 @@ export const INTERACTIVE_SCOPES: readonly string[] = [
 /**
  * Tier three, asked for only when the person starts something that changes
  * the gateway's settings (bots.md section 2): creating a bot, changing its
- * account, connecting an account. It includes the interactive tier.
+ * account, connecting an account. It includes the interactive tier. The
+ * request for it adds only `operator.admin` to the interactive scopes held,
+ * which the gateway reads as covering every operator scope.
  */
 export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCOPE];
 

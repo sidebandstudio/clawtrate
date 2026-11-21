@@ -61,6 +61,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { permissionCommands, type PermissionParams } from "./permissions.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
@@ -482,6 +483,7 @@ export function createFixtureBridge(
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    permissions?: PermissionParams;
     checkIns?: CheckInParams;
   } = {},
 ): ClawtrateBridge & {
@@ -571,10 +573,21 @@ export function createFixtureBridge(
   const railRefused = new Set<string>();
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
+  // What a bot may do: answered on the fixture's own made-up facts.
+  const permissionCommand = permissionCommands(
+    now,
+    options.permissions ?? { rules: null, read: null, perm: null, override: false, write: null },
+    () => state.connection.canAdmin,
+  );
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const permission = permissionCommand(command);
+    if (permission) {
+      sent.push(command);
+      return permission;
+    }
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
       sent.push(command);

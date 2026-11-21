@@ -1483,6 +1483,21 @@ describe("labels", () => {
 });
 
 describe("admin access", () => {
+  it("asked for from a read-only connection (a bot's permissions page), adds only operator.admin to what it holds", async () => {
+    const fake = new AccountsGateway();
+    fake.gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-7" });
+    fake.gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    const { client } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
+    expect(client.state.connection).toMatchObject({ canWrite: false, canAdmin: false });
+    await client.requestAccess("admin");
+    await until(() => client.state.connection.upgrade.status === "pending");
+    expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([
+      { scopes: ["operator.read", "operator.admin"] },
+    ]);
+    expect(client.state.connection.upgrade.scopes).toEqual(["operator.read", "operator.admin"]);
+    client.stop();
+  });
+
   it("is asked for only when the person asks, through the same request, and held once granted", async () => {
     const fake = new AccountsGateway();
     const wait = deferred<unknown>();
