@@ -68,8 +68,8 @@ describe("the systemd user unit", () => {
   });
 
   it("escapes what systemd would expand", () => {
-    const unit = systemdUserUnit({ ...SPEC, stateDir: '/home/a/100%"$HOME"\\x' });
-    expect(unit).toContain('"/home/a/100%%\\"$$HOME\\"\\\\x"');
+    const unit = systemdUserUnit({ ...SPEC, stateDir: '/srv/c/100%"$HOME"\\x' });
+    expect(unit).toContain('"/srv/c/100%%\\"$$HOME\\"\\\\x"');
   });
 });
 
