@@ -37,7 +37,7 @@ export type SearchTarget =
   | { kind: "bot"; botId: string }
   | { kind: "task"; botId: string; key: string }
   | { kind: "message"; botId: string; key: string; messageId: string; said: string }
-  | { kind: "routine"; id: string }
+  | { kind: "routine"; botId: string; id: string }
   | { kind: "setting"; section: SettingsSection };
 
 /** Asked after typing pauses (search.md §6). */
@@ -126,8 +126,12 @@ type Opening = {
   rowKey: string;
   key: string;
   hit: { botId: string; messageId: string; timestamp: number | null; said: string };
+  /** The session the result came from, and whether the task list held it then. */
+  sessionId: string | null;
+  wasListed: boolean;
   status: "loading" | "failed" | "earlier" | "missing" | "gone";
   line: string | null;
+  gen: number;
 };
 
 type Row = {
@@ -212,6 +216,7 @@ export function SearchPalette({
   const bridge = useBridge();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState("");
   const query = text.trim();
@@ -416,6 +421,16 @@ export function SearchPalette({
     return () => clearTimeout(timer);
   }, [query, ask, restart]);
 
+  // Asked before any bot was known, Files starts when the roster comes; the other groups stay.
+  useEffect(() => {
+    if (files.status === "unloaded" && state.bots.length > 0)
+      searchFileBots(
+        generation.current,
+        latest.current.query,
+        state.bots.slice(0, FILE_BATCH).map((bot) => bot.id),
+      );
+  }, [files.status, state.bots, searchFileBots]);
+
   const connectionKey = `${state.connection.status}\n${state.connection.gatewayUrl}\n${state.connection.scopes.join(",")}`;
   const lastConnection = useRef(connectionKey);
   useEffect(() => {
@@ -426,16 +441,15 @@ export function SearchPalette({
   }, [connectionKey, ask, restart]);
 
   const searchEach = useCallback(
-    (gen: number, q: string, from: number) => {
-      const roster = latest.current.state.bots.map((bot) => bot.id);
-      const asked = roster.slice(from, from + EACH_BOTS);
+    (gen: number, q: string, botIds: string[]) => {
+      const asked = botIds.slice(0, EACH_BOTS);
       setMessages((now) =>
         now.status === "done"
           ? {
               ...now,
               each: {
                 bots: asked.map((botId) => ({ botId, state: "queued" })),
-                notAsked: roster.slice(from + EACH_BOTS),
+                notAsked: botIds.slice(EACH_BOTS),
               },
             }
           : now,
@@ -501,11 +515,39 @@ export function SearchPalette({
     [bridge],
   );
 
-  // A message opens only once its task's loaded history holds it (search.md §9).
+  /** The place a result names, checked against what the app keeps now; the line when it can't open. */
+  const goneLine = useCallback(
+    (botId: string, key: string, sessionId: string | null, wasListed: boolean): string | null => {
+      const now = latest.current.state;
+      if (!now.bots.some((bot) => bot.id === botId))
+        return `${botName(botId)} is no longer in this connection's list of bots.`;
+      const task = Object.values(now.tasksByBot)
+        .flat()
+        .find((each) => each.key === key);
+      if (!task)
+        return wasListed
+          ? "This task is no longer in this device's task list."
+          : `This task isn't in this device's task list, which keeps up to ${LISTED} tasks.`;
+      if (sessionId !== null && task.sessionId !== null && task.sessionId !== sessionId)
+        return "This task's conversation was replaced since the search. Search again.";
+      return null;
+    },
+    [botName],
+  );
+
+  // A message opens only once its task's loaded history holds it (search.md §9),
+  // and only while the task still holds the session the result came from.
   const finishOpening = useCallback(
     (open: Opening) => {
+      // A restart in the same commit leaves this effect the previous render's opening.
+      if (open.gen !== generation.current) return;
       const transcript = latest.current.state.transcripts[open.key];
       if (!transcript || transcript.status === "loading") return;
+      const gone = goneLine(open.hit.botId, open.key, open.sessionId, open.wasListed);
+      if (gone) {
+        setOpening({ ...open, status: "gone", line: gone });
+        return;
+      }
       if (transcript.status === "error") {
         setOpening({
           ...open,
@@ -539,30 +581,29 @@ export function SearchPalette({
           : "This message isn't in the conversation's loaded messages.",
       });
     },
-    [onOpen],
+    [onOpen, goneLine],
   );
   useEffect(() => {
     if (opening?.status === "loading") finishOpening(opening);
   }, [opening, state.transcripts, finishOpening]);
 
-  /** The place a result names, checked against what the app keeps now; the line when it can't open. */
-  const goneLine = useCallback(
-    (botId: string, key: string, sessionId: string | null, wasListed: boolean): string | null => {
-      const now = latest.current.state;
-      if (!now.bots.some((bot) => bot.id === botId))
-        return `${botName(botId)} is no longer in this connection's list of bots.`;
-      const task = Object.values(now.tasksByBot)
-        .flat()
-        .find((each) => each.key === key);
-      if (!task)
-        return wasListed
-          ? "This task is no longer in this device's task list."
-          : `This task isn't in this device's task list, which keeps up to ${LISTED} tasks.`;
-      if (sessionId !== null && task.sessionId !== null && task.sessionId !== sessionId)
-        return "This task's conversation was replaced since the search. Search again.";
-      return null;
+  /** Ask for a task's history; a refusal shows on the result that asked. */
+  const load = useCallback(
+    (open: Opening) => {
+      opened.current = open.key;
+      bridge.send({ type: "openSession", key: open.key }).catch((error: unknown) =>
+        setOpening((now) =>
+          now === open
+            ? {
+                ...open,
+                status: "failed",
+                line: `Couldn't load this conversation: ${reason(error)}.`,
+              }
+            : now,
+        ),
+      );
     },
-    [botName],
+    [bridge],
   );
 
   const openMessage = useCallback(
@@ -587,8 +628,11 @@ export function SearchPalette({
         rowKey,
         key: hit.sessionKey,
         hit: { botId: hit.botId, messageId: hit.messageId, timestamp: hit.timestamp, said },
+        sessionId: hit.sessionId,
+        wasListed,
         status: gone ? "gone" : "loading",
         line: gone,
+        gen: generation.current,
       };
       setOpening(open);
       if (gone) return;
@@ -596,14 +640,16 @@ export function SearchPalette({
       if (!latest.current.state.transcripts[hit.sessionKey]) {
         if (opened.current && opened.current !== hit.sessionKey)
           void bridge.send({ type: "closeSession", key: opened.current });
-        opened.current = hit.sessionKey;
-        void bridge.send({ type: "openSession", key: hit.sessionKey });
+        load(open);
       } else finishOpening(open);
     },
-    [bridge, botName, goneLine, finishOpening],
+    [bridge, botName, goneLine, finishOpening, load],
   );
   useEffect(
     () => () => {
+      // Nothing queued starts once the palette has closed.
+      generation.current += 1;
+      pool.current.queue = [];
       if (opened.current) void bridge.send({ type: "closeSession", key: opened.current });
     },
     [bridge],
@@ -694,7 +740,7 @@ export function SearchPalette({
         const task = taskByKey.get(link.sessionKey);
         const botId = task?.botId ?? link.sessionKey.split(":")[1] ?? "";
         const title = task?.title ?? link.sessionKey;
-        const rowKey = `link:${link.messageId}:${link.address}`;
+        const rowKey = `link:${link.sessionKey}:${link.messageId}:${link.address}`;
         return {
           key: rowKey,
           kind: "link",
@@ -874,7 +920,15 @@ export function SearchPalette({
       const incomplete = reply.truncated || flags.length > 0;
       const eachAction =
         incomplete && !each
-          ? [action("messages:each", "Search each bot for more", () => searchEach(gen, query, 0))]
+          ? [
+              action("messages:each", "Search each bot for more", () =>
+                searchEach(
+                  gen,
+                  query,
+                  state.bots.map((bot) => bot.id),
+                ),
+              ),
+            ]
           : [];
       if (each) {
         const answered = each.bots.filter((bot) => bot.state === "done");
@@ -935,7 +989,12 @@ export function SearchPalette({
                 action(
                   "messages:each-next",
                   `Search the next ${plural(Math.min(EACH_BOTS, each.notAsked.length), "bot")}`,
-                  () => searchEach(gen, query, state.bots.length - each.notAsked.length),
+                  () =>
+                    searchEach(
+                      gen,
+                      query,
+                      each.notAsked.filter((id) => state.bots.some((bot) => bot.id === id)),
+                    ),
                 ),
               ]
             : []),
@@ -1154,7 +1213,7 @@ export function SearchPalette({
           first: <Marked text={routine.name} query={query} />,
           second: `${owner} · ${state}${onlyId ? ` · Matched its id, ${routine.id}` : ""}`,
           hint: "Open routine",
-          open: () => onOpen({ kind: "routine", id: routine.id }),
+          open: () => onOpen({ kind: "routine", botId: routine.botId, id: routine.id }),
         };
       });
       const lines: string[] = [];
@@ -1282,11 +1341,12 @@ export function SearchPalette({
                       name: "Try again",
                       first: "Try again",
                       open: () => {
+                        const retry: Opening = { ...opening, status: "loading", line: null };
                         void bridge
                           .send({ type: "closeSession", key: opening.key })
-                          .then(() => bridge.send({ type: "openSession", key: opening.key }));
+                          .then(() => retry.gen === generation.current && load(retry));
                         opened.current = opening.key;
-                        setOpening({ ...opening, status: "loading", line: null });
+                        setOpening(retry);
                       },
                     },
                   ]
@@ -1313,7 +1373,7 @@ export function SearchPalette({
       return { group, sections, actions };
     });
     return { groups: out, options };
-  }, [drawn, shown, opening, goneLine, onOpen, bridge]);
+  }, [drawn, shown, opening, goneLine, onOpen, bridge, load]);
 
   const options = view.options;
   const active = options.find((row) => row.key === activeKey) ?? options[0] ?? null;
@@ -1362,7 +1422,11 @@ export function SearchPalette({
     if (command && event.key.toLowerCase() === "k") {
       event.preventDefault();
       fieldRef.current?.select();
-    } else if (event.key === "ArrowDown") {
+      return;
+    }
+    // An input method's keys, and Cancel's own, are left alone: only the field moves the list.
+    if (event.nativeEvent.isComposing || event.target !== fieldRef.current) return;
+    if (event.key === "ArrowDown") {
       event.preventDefault();
       move(index + 1);
     } else if (event.key === "ArrowUp") {
@@ -1382,7 +1446,8 @@ export function SearchPalette({
     } else if (event.key === "Enter") {
       // Shift+Enter hands a link to the browser only once the link confirmation exists (#71).
       event.preventDefault();
-    } else if (event.key === "Tab") {
+    } else if (event.key === "Tab" && !cancelRef.current?.checkVisibility()) {
+      // The field is the palette's one stop; where Cancel shows (the phone), Tab reaches it.
       event.preventDefault();
     }
   };
@@ -1445,7 +1510,13 @@ export function SearchPalette({
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
-          <button type="button" className="button s-cancel" data-variant="quiet" onClick={onClose}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="button s-cancel"
+            data-variant="quiet"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -1550,7 +1621,7 @@ export function SearchPalette({
   );
 }
 
-const cssId = (key: string) => key.replace(/[^A-Za-z0-9_-]/g, (char) => `_${char.charCodeAt(0)}`);
+const cssId = (key: string) => key.replace(/[^A-Za-z0-9-]/g, (char) => `_${char.charCodeAt(0)}_`);
 
 function Option({
   row,

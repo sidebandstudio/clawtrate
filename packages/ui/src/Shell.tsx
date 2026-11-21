@@ -436,19 +436,36 @@ export function Shell({
       }
       if (target.kind === "routine") {
         closePalette(false);
-        openRoutines({ ...ROUTINES_HOME, routine: target.id, run: null });
+        // A routine past those the app keeps is found by reading its bot's routines.
+        const kept = state.routines.routines.some((each) => each.id === target.id);
+        openRoutines({ ...ROUTINES_HOME, bot: kept ? null : target.botId, routine: target.id });
         return;
       }
       if (target.kind === "bot") selection.selectBot(target.botId);
       else selection.selectTask(target.botId, target.key);
-      if (target.kind === "message")
+      if (target.kind === "message") {
         setReveal({ key: target.key, messageId: target.messageId, said: target.said });
+        // As a drawer Work closes, so the message can be seen and take focus.
+        if (drawerOpen) {
+          keepFocus.current = true;
+          setPanel(false);
+        }
+      }
       openDetail();
       closePalette(target.kind !== "message" && !onePane);
     },
     // openRoutines is redefined each render and reads only refs and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [closePalette, onOpenSettings, selection, openDetail, onePane],
+    [
+      closePalette,
+      onOpenSettings,
+      selection,
+      openDetail,
+      onePane,
+      drawerOpen,
+      setPanel,
+      state.routines,
+    ],
   );
   const revealReady = reveal !== null && reveal.key === taskKey && transcript?.status === "ready";
   useEffect(() => {

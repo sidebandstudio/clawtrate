@@ -24,6 +24,7 @@ import type {
   RoutineSearch,
   Transcript,
 } from "@clawtrate/core";
+import { unkeptRoutines } from "./routines.ts";
 
 export type SearchParams = {
   ids: boolean;
@@ -169,11 +170,15 @@ function findMessages(
 }
 
 const never = () => new Promise<never>(() => {});
-const answer = <T>(value: () => T, ms = 120) =>
-  new Promise<T>((resolve) => setTimeout(() => resolve(value()), ms));
 
 /** The fixture's answer to a search command, or undefined for any other command. */
-export function searchCommands(params: SearchParams) {
+export function searchCommands(
+  params: SearchParams,
+  deferred: (run: () => void, ms: number) => void,
+) {
+  // Answers wait as the bridge's other delayed answers do, so a test's hold() keeps them.
+  const answer = <T>(value: () => T) =>
+    new Promise<T>((resolve) => deferred(() => resolve(value()), 120));
   let messageSearches = 0;
   let eachFailed = false;
   let routinesFailed = false;
@@ -206,7 +211,11 @@ export function searchCommands(params: SearchParams) {
           const state = get();
           const q = command.query.toLowerCase();
           const names = new Map(state.bots.map((bot) => [bot.id, bot.name]));
-          const all = state.routines.routines.filter((routine) =>
+          const gateway = [
+            ...state.routines.routines,
+            ...(state.routines.omitted > 0 ? unkeptRoutines(Date.now()) : []),
+          ];
+          const all = gateway.filter((routine) =>
             [routine.id, routine.name, routine.botId, names.get(routine.botId) ?? ""]
               .join("\n")
               .toLowerCase()

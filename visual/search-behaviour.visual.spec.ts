@@ -3,10 +3,13 @@
 // it lives, and the partial, failed and offline states. The fixture's
 // messages, files and routines are made up (apps/desktop/src/fixture/search.ts);
 // the gateway's part is checked against a development gateway in e2e/search.spec.ts.
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
+const DRAWER = SIZES.find((size) => size.name === "1100")!;
+const PHONE = SIZES.find((size) => size.phone)!;
 const BASE = `scene=main&${OTTO_DISK}&search=on&routines=on`;
 
 const palette = (page: Page) => page.getByTestId("search-palette");
@@ -33,6 +36,26 @@ const sent = (page: Page, type: string) =>
       ).clawtrateFixture.sent.filter((each) => each.type === type),
     type,
   );
+
+/** The fixture bridge's controls for a check (apps/desktop/src/fixture/bridge-fixture.ts). */
+type Fixture = {
+  hold(): void;
+  release(): void;
+  setState(change: (state: ClawtrateState) => ClawtrateState): void;
+  sent: Array<{ type: string }>;
+};
+
+/** Hold the fixture's delayed answers and drop a task's loaded history, so opening it reads it again. */
+const unload = (page: Page, key: string) =>
+  page.evaluate((key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.hold();
+    fixture.setState((state) => {
+      const transcripts = { ...state.transcripts };
+      delete transcripts[key];
+      return { ...state, transcripts };
+    });
+  }, key);
 
 test.use(contextFor(WIDE, "light"));
 
@@ -209,6 +232,178 @@ test("F-033: a message opens in its conversation, scrolled into view and ringed,
   await expect(page.getByTestId("chat-link-announcer")).toHaveText(
     "Opened Disk almost full on the media box, at the user message of Nov 16",
   );
+});
+
+test("F-033: a message whose conversation is replaced while its history loads stays in search and says so", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", `scene=main&bot=pip&task=agent:pip:week&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await unload(page, key);
+  await user.click();
+  await expect(user).toContainText("Opening…");
+  // A new session takes the same key before the history comes.
+  await page.evaluate((key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      tasksByBot: {
+        ...state.tasksByBot,
+        otto: state.tasksByBot.otto!.map((task) =>
+          task.key === key ? { ...task, sessionId: "otto-disk-space-2" } : task,
+        ),
+      },
+    }));
+    fixture.release();
+  }, key);
+  await expect(user).toContainText(
+    "This task's conversation was replaced since the search. Search again.",
+  );
+  await expect(palette(page)).toBeVisible();
+  await expect(page.locator(".title-pill-task")).not.toHaveText(
+    "Disk almost full on the media box",
+  );
+});
+
+test("F-033: a message whose history comes as the connection's access changes doesn't open", async ({
+  page,
+}) => {
+  await search(page, "clear the transcode", `scene=main&bot=pip&task=agent:pip:week&search=on`);
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await unload(page, "agent:otto:disk-space");
+  await user.click();
+  await expect(user).toContainText("Opening…");
+  // The history and the change of scopes reach the palette together.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        scopes: [...state.connection.scopes, "operator.approvals"],
+      },
+    }));
+    fixture.release();
+    // The search the change starts again stays pending, so its state can be seen.
+    fixture.hold();
+  });
+  await expect(group(page, "messages")).toContainText("Searching…");
+  await expect(palette(page)).toBeVisible();
+  await expect(page.locator(".title-pill-task")).not.toHaveText(
+    "Disk almost full on the media box",
+  );
+});
+
+test("F-033: closing search stops the per-bot searches still queued", async ({ page }) => {
+  await search(page, "backup", `${BASE}&src=truncated`);
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.hold(),
+  );
+  await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
+  // The wide search, then four of the five bots; the fifth waits for a free lane.
+  await expect.poll(async () => (await sent(page, "searchMessages")).length).toBe(5);
+  await page.keyboard.press("Escape");
+  await expect(palette(page)).toHaveCount(0);
+  const after = await page.evaluate(async () => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.release();
+    // The lanes go on in promise callbacks: one task later, any next search has been sent.
+    await new Promise((resolve) => setTimeout(resolve));
+    return fixture.sent.filter((each) => each.type === "searchMessages").length;
+  });
+  expect(after).toBe(5);
+});
+
+test("F-033: asked before the bots load, Files searches once they come", async ({ page }) => {
+  await openFixture(page, BASE, "light");
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => {
+      (window as unknown as { keptBots: unknown }).keptBots = state.bots;
+      return { ...state, bots: [] };
+    });
+  });
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.type("md");
+  await expect(group(page, "files")).toContainText(
+    "Not searched: the gateway's bots haven't loaded yet.",
+  );
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const bots = (window as unknown as { keptBots: ClawtrateState["bots"] }).keptBots;
+    fixture.setState((state) => ({ ...state, bots }));
+  });
+  await expect(group(page, "files")).toContainText("Names the gateway returned");
+  expect((await sent(page, "searchMessages")).length).toBe(1);
+});
+
+test("F-033: Enter that confirms an input method's text doesn't open the active result", async ({
+  page,
+}) => {
+  await search(page, "marlow");
+  await expect(options(page, "bots").first()).toHaveAttribute("aria-selected", "true");
+  await field(page).dispatchEvent("keydown", { key: "Enter", isComposing: true });
+  await expect(palette(page)).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(palette(page)).toHaveCount(0);
+});
+
+test.describe("at phone width", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("F-033: Tab reaches Cancel, and Enter on it closes search without opening a result", async ({
+    page,
+  }) => {
+    await search(page, "marlow");
+    await expect(options(page, "bots").first()).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Tab");
+    await expect(palette(page).getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(palette(page)).toHaveCount(0);
+    await expect(page.locator(".title-pill")).not.toContainText("Marlow");
+  });
+});
+
+test.describe("at drawer width", () => {
+  test.use(contextFor(DRAWER, "light"));
+
+  test("F-033: with Work open as a drawer, a message opened from search closes Work, shows the message and focuses it", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&bot=pip&task=agent:pip:week&search=on&panel=open`, "light");
+    await expect(page.getByTestId("work-panel")).toHaveAttribute("role", "dialog");
+    await page.keyboard.press("ControlOrMeta+K");
+    await expect(field(page)).toBeFocused();
+    await page.keyboard.type("clear the transcode");
+    const user = options(page, "messages").filter({ hasText: "· User" });
+    await user.click();
+    await expect(palette(page)).toHaveCount(0);
+    await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
+    const unit = page
+      .locator(".transcript .msg-unit")
+      .filter({ hasText: "Yes, clear the transcode cache." });
+    await expect(unit).toBeInViewport();
+    const turn = page.locator(".turn[data-search-focus]");
+    await expect(turn).toBeFocused();
+    await expect(turn).toContainText("Yes, clear the transcode cache.");
+  });
+});
+
+test("F-033: a routine past the ones this device keeps opens its page, read with its bot's routines", async ({
+  page,
+}) => {
+  await search(page, "trail", `scene=main&${OTTO_DISK}&search=on&routines=truncated`);
+  const routine = options(page, "routines").first();
+  await expect(routine).toHaveAccessibleName("Routine Trail conditions, Pip, on. Opens routine.");
+  await routine.click();
+  await expect(palette(page)).toHaveCount(0);
+  await expect(
+    page.getByTestId("routines-view").getByRole("heading", { name: "Trail conditions" }),
+  ).toBeVisible();
+  expect(await sent(page, "readBotRoutines")).toEqual([{ type: "readBotRoutines", botId: "pip" }]);
 });
 
 test("F-033: a message that can't be shown in place says why, and the palette stays", async ({

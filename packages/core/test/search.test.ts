@@ -3,6 +3,7 @@ import { parseBridgeCommand } from "../src/bridge.ts";
 import {
   MAX_FILE_HITS,
   MAX_SEARCH_QUERY_CHARS,
+  readRoutineSearch,
   searchFiles,
   searchMessages,
   searchRoutines,
@@ -120,6 +121,22 @@ describe("searchRoutines", () => {
       nextOffset: 50,
       revision: "7",
     });
+  });
+
+  it("names a routine's bot as the Routines view does when the job has no agentId", () => {
+    const page = readRoutineSearch(
+      {
+        jobs: [
+          { id: "nightly", name: "Nightly", effectiveAgentId: "otto" },
+          { id: "stretch", name: "Stretch break" },
+        ],
+      },
+      0,
+    );
+    expect(page.routines.map((each) => [each.id, each.botId])).toEqual([
+      ["nightly", "otto"],
+      ["stretch", "main"],
+    ]);
   });
 
   it("offers no next page at an offset already read", async () => {

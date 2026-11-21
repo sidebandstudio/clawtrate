@@ -11,10 +11,10 @@ function folded(text: string): { text: string; from: number[] } {
   const from: number[] = [];
   let at = 0;
   for (const char of text) {
-    for (const piece of foldChar(char)) {
-      out += piece;
-      from.push(at);
-    }
+    const piece = foldChar(char);
+    out += piece;
+    // One place per UTF-16 unit, as indexOf and length count them.
+    for (let unit = 0; unit < piece.length; unit += 1) from.push(at);
     at += char.length;
   }
   return { text: out, from };
@@ -52,7 +52,7 @@ const LINK =
 function canonical(raw: string): Pick<IndexedLink, "address" | "host" | "refused"> {
   let url: URL;
   try {
-    url = new URL(raw.startsWith("www.") ? `http://${raw}` : raw);
+    url = new URL(/^www\./i.test(raw) ? `http://${raw}` : raw);
   } catch {
     return { address: raw, host: null, refused: "it isn't a web address" };
   }
@@ -66,6 +66,7 @@ function canonical(raw: string): Pick<IndexedLink, "address" | "host" | "refused
 /** Links in the user and assistant messages of the transcripts this view holds, each with its message. */
 export function indexLinks(transcripts: Record<string, Transcript>): IndexedLink[] {
   const out: IndexedLink[] = [];
+  const seen = new Set<string>();
   for (const [sessionKey, transcript] of Object.entries(transcripts)) {
     if (transcript.status !== "ready") continue;
     for (const item of transcript.items) {
@@ -76,7 +77,13 @@ export function indexLinks(transcripts: Record<string, Transcript>): IndexedLink
         if (!messageId) continue;
         for (const match of block.text.matchAll(LINK)) {
           const raw = match[1] ?? match[2];
-          if (raw) out.push({ ...canonical(raw), sessionKey, messageId, role: item.role });
+          if (!raw) continue;
+          const link = canonical(raw);
+          // An address a message repeats is one result.
+          const key = `${sessionKey}\n${messageId}\n${link.address}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ ...link, sessionKey, messageId, role: item.role });
         }
       }
     }

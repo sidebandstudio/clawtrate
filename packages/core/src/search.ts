@@ -176,8 +176,9 @@ export function readRoutineSearch(reply: RawRecord | null, offset: number): Rout
   for (const raw of Array.isArray(reply?.jobs) ? reply.jobs : []) {
     const job = asRecord(raw);
     const id = exactId(job?.id);
-    const botId = exactId(job?.agentId);
-    if (!job || !id || !botId) continue;
+    // The bot as the Routines view resolves it (routines.ts), so both list the same routines.
+    const botId = exactId(job?.agentId) ?? exactId(job?.effectiveAgentId) ?? "main";
+    if (!job || !id) continue;
     routines.push({
       id,
       name: cutText(str(job.name) ?? id, MAX_TASK_LABEL_CHARS),

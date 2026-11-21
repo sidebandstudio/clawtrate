@@ -544,7 +544,7 @@ export function createFixtureBridge(
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
-  const searchCommand = searchCommands(search);
+  const histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -565,6 +565,7 @@ export function createFixtureBridge(
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
   const { deferred } = timers;
+  const searchCommand = searchCommands(search, deferred);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
     deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
@@ -661,7 +662,10 @@ export function createFixtureBridge(
           await new Promise((resolve) => setTimeout(resolve, 500));
           pairingChecks += 1;
           if (pairingChecks === 1) set(withConnection(state, { retryAt: Date.now() + 5000 }));
-          else set(loaded(Date.now()));
+          else {
+            const next = loaded(Date.now());
+            set(search.ids ? { ...next, transcripts: withMessageIds(next.transcripts) } : next);
+          }
           return;
         }
         if (status === "connected" && state.discovery.status !== "error") return;
@@ -693,7 +697,16 @@ export function createFixtureBridge(
         setTimeout(() => set(caughtUp(state)), 700);
         return;
       }
-      case "openSession":
+      case "openSession": {
+        // A history the state no longer holds is read again, as a delayed answer a test can hold.
+        const history = histories[command.key];
+        if (history && !state.transcripts[command.key])
+          later(120, (current) => ({
+            ...current,
+            transcripts: { ...current.transcripts, [command.key]: history },
+          }));
+        return;
+      }
       case "closeSession":
       case "requestAccess":
         return;
