@@ -29,6 +29,9 @@ import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
 import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
+import { recordSuccessor } from "../e2e/run-record.ts";
+import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
+import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { appEnv, debuggingPort } from "./desktop-driver.ts";
 import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
@@ -45,6 +48,7 @@ const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
+const RECORD = process.env.CLAWTRATE_PACKAGED_RECORD ?? "";
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -497,7 +501,8 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     ).trim(),
   ).toBe(APP_ID);
 
-  // Quit the running app as an update does, and wait for it and its helpers.
+  // Quit the running app as an update does, and wait for it and its helpers,
+  // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
   // Asked while the debugging client is attached, as the teardown asks.
   process.kill(APP_PID, "SIGTERM");
   await browser.close();
@@ -508,22 +513,36 @@ test("opens with the same pairing and tasks after a newer build takes its place"
         const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
           encoding: "utf8",
         }).stdout.trim();
-        if (state && !state.startsWith("Z")) return `running (${state})`;
-        return processesUsing(USER_DATA).length ? "helpers running" : "gone";
+        return state && !state.startsWith("Z") ? `running (${state})` : "gone";
       },
-      // Its own quit time is the teardown's check; under load it has taken over 20 seconds.
-      { timeout: 60_000, message: "the app quits when asked, as an update asks it" },
+      { timeout: 15_000, message: "the app quits within 15 seconds, as an update asks it" },
     )
     .toBe("gone");
+  await expect
+    .poll(() => processesUsing(USER_DATA), {
+      timeout: 10_000,
+      message: "the app's helpers end within 10 seconds of it",
+    })
+    .toEqual([]);
 
   rmSync(join(USER_DATA, "DevToolsActivePort"), { force: true });
   const logFd = openSync(join(run, "updated.log"), "a", 0o600);
-  const next = spawn(
+  // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+  const gated = gatedSpawn(
+    spawn,
     packagedExecutable(updated),
     [`--user-data-dir=${USER_DATA}`, "--remote-debugging-port=0"],
     { env: appEnv(), stdio: ["ignore", logFd, logFd] },
   );
+  const next = gated.child;
   const exited = new Promise((resolve) => next.once("exit", resolve));
+  const found = processIdentity(next.pid!);
+  if (found.state !== "alive") {
+    gated.abort();
+    throw new Error("could not record the newer build's process");
+  }
+  recordSuccessor(RECORD, { pid: next.pid!, identity: found.identity });
+  gated.release();
   let second: Browser | undefined;
   try {
     const port = await debuggingPort(USER_DATA, next);
@@ -565,8 +584,17 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     // app was: a SIGTERM right after that client leaves was seen to go unanswered.
     if (next.exitCode === null && next.signalCode === null) next.kill("SIGTERM");
     await second?.close();
-    const outcome = await Promise.race([exited, sleep(60_000).then(() => "running")]);
+    const outcome = await Promise.race([exited, sleep(15_000).then(() => "running")]);
+    if (outcome === "running") {
+      // Ended by its PID, and its helpers by theirs: nothing outlives the test.
+      next.kill("SIGKILL");
+      await exited;
+    }
+    for (let i = 0; i < 50 && processesUsing(USER_DATA).length > 0; i += 1) await sleep(200);
+    const left = processesUsing(USER_DATA);
+    for (const pid of left) process.kill(pid, "SIGKILL");
     closeSync(logFd);
-    expect(outcome, "the newer build quits when asked").not.toBe("running");
+    expect(outcome, "the newer build quits within 15 seconds").not.toBe("running");
+    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
   }
 });

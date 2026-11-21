@@ -27,6 +27,8 @@ export type RunRecord = {
   /** Written before the preview host is spawned; it is gated until `host` is written. */
   hostPending?: true;
   host: Proc | null;
+  /** A newer build a test starts on the host's data folder, written before it runs. */
+  successor?: Proc;
   dirs: string[];
 };
 
@@ -55,6 +57,7 @@ export function readRecord(path: string): RunRecord | null {
       /^[0-9a-f]{8}$/.test(record.run) &&
       isProc(record.runner) &&
       (record.host === null || isProc(record.host)) &&
+      (record.successor === undefined || isProc(record.successor)) &&
       (record.hostPending === undefined || record.hostPending === true) &&
       Array.isArray(record.instances) &&
       // Only this run's own instances, each with a run id of the tool's format.
@@ -74,6 +77,13 @@ export function readRecord(path: string): RunRecord | null {
     // unreadable: left alone
   }
   return null;
+}
+
+/** Records a newer build started on the run's data folder, so the run's cleanup stops it too. */
+export function recordSuccessor(path: string, successor: Proc): void {
+  const record = readRecord(path);
+  if (!record) throw new Error(`${path} is not a run record`);
+  saveRecord(dirname(path), { ...record, successor });
 }
 
 /** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */
@@ -99,8 +109,12 @@ export function cleanUp(
   const problems: string[] = [];
   // A pending host without a record never ran: its gate opens only after the record.
   let hostGone = true;
-  if (record.host) {
-    const { pid, identity } = record.host;
+  const hosts = [
+    ...(record.host ? [{ proc: record.host, label: "the preview host" }] : []),
+    ...(record.successor ? [{ proc: record.successor, label: "the newer build" }] : []),
+  ];
+  for (const { proc, label } of hosts) {
+    const { pid, identity } = proc;
     let verdict = processVerdict(pid, identity, identify);
     if (verdict.state === "alive") {
       process.kill(pid, "SIGTERM");
@@ -115,8 +129,8 @@ export function cleanUp(
       hostGone = false;
       problems.push(
         verdict.state === "alive"
-          ? `the preview host (pid ${pid}) did not exit after SIGTERM; its folders are kept`
-          : `could not determine whether the preview host (pid ${pid}) is running: ${verdict.reason}; its folders are kept`,
+          ? `${label} (pid ${pid}) did not exit after SIGTERM; its folders are kept`
+          : `could not determine whether ${label} (pid ${pid}) is running: ${verdict.reason}; its folders are kept`,
       );
     }
   }

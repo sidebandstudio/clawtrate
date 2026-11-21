@@ -10,6 +10,7 @@ import {
   cleanUp,
   readRecord,
   recordPath,
+  recordSuccessor,
   recoverDeadRuns,
   saveRecord,
   TEMP_PREFIX,
@@ -129,6 +130,38 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     const run = aRun(deadProcess(), { pid: stubborn.pid!, identity: found.identity });
     const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
     expect(problems.join("\n")).toMatch(/did not exit after SIGTERM; its folders are kept/);
+    expect(run.kept()).toBe(true);
+    stubborn.kill("SIGKILL");
+  });
+
+  it("stops a newer build a test recorded on the run, before removing its folders", () => {
+    const host = liveProcess();
+    const successor = liveProcess();
+    const run = aRun(deadProcess(), host);
+    recordSuccessor(recordPath(run.records, run.record.run), successor);
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
+    expect(processState(host.pid, host.identity, processIdentity)).toBe("dead");
+    expect(run.gone()).toBe(true);
+  });
+
+  it("keeps the folders while the newer build has not exited, and says which process it is", () => {
+    const stubborn = spawn("/bin/sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], {
+      stdio: "ignore",
+    });
+    children.push(stubborn);
+    const found = processIdentity(stubborn.pid!);
+    if (found.state !== "alive") throw new Error("stand-in did not start");
+    const run = aRun(deadProcess());
+    run.record.successor = { pid: stubborn.pid!, identity: found.identity };
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))?.successor).toEqual(
+      run.record.successor,
+    );
+    const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
+    expect(problems.join("\n")).toMatch(
+      /the newer build \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
+    );
     expect(run.kept()).toBe(true);
     stubborn.kill("SIGKILL");
   });

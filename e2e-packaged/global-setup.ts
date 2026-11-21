@@ -50,6 +50,8 @@ import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-set
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
 import {
   cleanUp,
+  readRecord,
+  recordPath,
   recoverDeadRuns,
   saveRecord,
   TEMP_PREFIX,
@@ -281,7 +283,12 @@ export default async function globalSetup() {
     });
   };
   let cleaned: string[] | null = null;
-  const cleanUpOnce = () => (cleaned ??= cleanUp(RECORDS, record, reset));
+  const cleanUpOnce = () => {
+    // A test may have recorded a newer build it started on the same data folder.
+    const saved = readRecord(recordPath(RECORDS, record.run));
+    if (saved?.successor) record.successor = saved.successor;
+    return (cleaned ??= cleanUp(RECORDS, record, reset));
+  };
   // Restored after the app is gone, which cleanUp makes sure of.
   const finish = () => {
     const problems = [...cleanUpOnce()];
@@ -415,6 +422,7 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
     process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
     process.env.CLAWTRATE_PACKAGED_LOG = log;
+    process.env.CLAWTRATE_PACKAGED_RECORD = recordPath(RECORDS, record.run);
   } catch (error) {
     await teardown().catch((problem: unknown) => console.error(String(problem)));
     throw error;
