@@ -183,17 +183,6 @@ function world(now: number, params: MachineParams) {
   };
 }
 
-const later = <T>(ms: number, value: () => T) =>
-  new Promise<T>((resolve, reject) =>
-    setTimeout(() => {
-      try {
-        resolve(value());
-      } catch (error) {
-        reject(error);
-      }
-    }, ms),
-  );
-
 /**
  * The machine commands, answered on the fixture's world. Returns undefined for
  * a command that is not one of them.
@@ -355,6 +344,17 @@ export function machineCommands(now: number, params: MachineParams) {
     deferred: (run: () => void, ms: number) => void,
   ): Promise<unknown> | undefined {
     const state = get();
+    // Every answer is one a test can hold, to look at what shows until it comes.
+    const later = <T>(ms: number, value: () => T) =>
+      new Promise<T>((resolve, reject) =>
+        deferred(() => {
+          try {
+            resolve(value());
+          } catch (error) {
+            reject(error);
+          }
+        }, ms),
+      );
     switch (command.type) {
       case "readPlacement":
         if (params.machine === "loading" || params.slow === command.botId)

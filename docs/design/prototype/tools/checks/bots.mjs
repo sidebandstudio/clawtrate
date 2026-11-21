@@ -12,10 +12,17 @@ const check = (name, ok, extra = "") => {
   out.push(`${ok ? "ok  " : "FAIL"} ${name} ${extra}`);
 };
 const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
-  const p = await b.newPage({ viewport });
+  const context = await b.newContext({ viewport });
+  // The page's timers run on a paused clock that each step moves on by the time it names, so a
+  // check sees the state that time leads to however slowly the machine runs. The pause is set
+  // before the context has a page, so it has no deadline to miss.
+  await context.clock.install();
+  await context.clock.pauseAt(Date.now());
+  const p = await context.newPage();
   p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  p.close = () => context.close();
   await p.goto(base + (query ? "&" + query : ""));
-  await p.waitForTimeout(150);
+  await p.clock.runFor(150);
   return p;
 };
 const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textContent || "", sel);
@@ -33,7 +40,7 @@ process.on("uncaughtException", (e) => {
 let p = await open();
 await p.click("#new-button");
 await p.click('[data-action="new-bot"]');
-await p.waitForTimeout(60);
+await p.clock.runFor(60);
 check("P1 New bot opens the dialog with focus on the name", (await dlg(p)) && (await focused(p)) === "b-name");
 await p.keyboard.type("Viral");
 await p.focus('.b-shape[aria-checked="true"]');
@@ -53,7 +60,7 @@ await p.keyboard.press("Tab");
 await p.keyboard.press("Tab");
 check("FM-17 Tab reaches the account list with nothing chosen: its first row", await p.evaluate(() => document.activeElement.getAttribute("role") === "radio" && document.activeElement.dataset.bChoose === "openai:work"));
 await p.keyboard.press("Space");
-await p.waitForTimeout(60);
+await p.clock.runFor(60);
 check("FM-17 Space chooses the row and focus stays on it", await p.evaluate(() => document.activeElement.dataset.bChoose === "openai:work" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
 check("P1 two accounts of one provider are told apart by label", await p.evaluate(() => { const t = [...document.querySelectorAll("#create-dialog .b-choice-title")].map((x) => x.textContent); return t.includes("OpenAI · Work") && t.includes("OpenAI · Home"); }));
 await p.click('[data-b-choose="xai:default"]');
@@ -69,33 +76,33 @@ check("P1 the API key path is collapsed and not preselected", await p.evaluate((
 check("P1 the API key path says it is billed per token", (await text(p, "#create-dialog .b-disclosure")).includes("bills each request by the tokens it uses"));
 await p.click('[data-b-option="xai/xai-oauth"]');
 check("P1 starting: the gateway is asked", (await text(p, "#create-dialog .b-body")).includes("Asking the gateway to start the sign-in"));
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P1 waiting: a link and a code the gateway polls for", await p.evaluate(() => document.querySelector("#create-dialog .b-code code")?.textContent === "QK4F-7PZD" && document.querySelector('#create-dialog [data-b="open-link"]') && document.querySelector("#create-dialog .b-wait")));
 await p.click('[data-b="cancel-signin"]');
 check("FM-05 cancelled: says so, and what the gateway's accounts now show", (await text(p, "#create-dialog .b-result")).includes("Sign-in cancelled") && (await text(p, "#create-dialog")).includes("Clawtrate checked the gateway's accounts"));
 await p.click('[data-b="restart-signin"]');
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 await p.evaluate(() => window.bots.connectTo("connected"));
-await p.waitForTimeout(100);
+await p.clock.runFor(100);
 check("P1 connected: the label step, with focus in the field", (await text(p, "#create-dialog .b-result h3")).includes("Connected to xAI") && (await p.evaluate(() => document.activeElement.matches("[data-b-label]"))));
 await p.keyboard.type("Studio");
 await p.click('[data-b="label-done"]');
 check("P1 back on the Account step with the new account chosen and the bot kept", (await text(p, "#create-title")) === "Account" && (await p.evaluate(() => document.querySelector('[role="radio"][aria-checked="true"]')?.textContent.includes("xAI · Studio") && document.querySelector("#create-dialog .b-lead").textContent.includes("Viral"))));
 await p.click('[data-b="create"]');
 check("P1 Create reads Creating… and is disabled", await p.evaluate(() => { const c = document.querySelector('[data-b="create"]'); return c.disabled && c.textContent === "Creating…"; }));
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P1 after Create the new bot's composer has focus", await p.evaluate(() => document.activeElement.classList.contains("composer-input")));
 check("P1 the new bot is created on its account and opened", !(await dlg(p)) && (await p.evaluate(() => document.querySelector("#title-pill").getAttribute("aria-label").startsWith("Viral, Main") && window.bots.accounts().find((a) => a.id === window.bots.binding.viral.account)?.label === "Studio")));
 await p.close();
 
 // The other two sign-in kinds.
 p = await open("open=create&step=connect&name=Viral&connect=openai/openai");
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P1 paste: the field is a password field and says the code is not kept", await p.evaluate(() => document.querySelector("[data-b-paste]")?.type === "password" && document.querySelector("#create-dialog").textContent.includes("Clawtrate does not keep it")));
 await p.fill("[data-b-paste]", "one-time-code");
 await p.click('[data-b="paste-next"]');
 check("P1 paste: checking with the provider", (await text(p, "#create-dialog .b-body")).includes("Finishing the sign-in"));
-await p.waitForTimeout(1000);
+await p.clock.runFor(1000);
 check("P1 paste: a second OpenAI account must have a label", await p.evaluate(() => document.querySelector('[data-b="label-done"]').disabled));
 await p.keyboard.type("Work");
 check("P1 a label already used by that provider is refused", (await text(p, ".b-field-error")).includes("Another OpenAI account is called Work") && (await p.evaluate(() => document.querySelector('[data-b="label-done"]').disabled)));
@@ -134,14 +141,14 @@ check("P1 no accounts: the way to connect one, and Let the gateway choose with t
 await p.close();
 p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=failed");
 await p.click('[data-b="create"]');
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P1 a failed create keeps the dialog and says so", (await dlg(p)) && (await text(p, "#create-dialog .b-foot")).includes("Could not create the bot. Please try again."));
 await p.close();
 p = await open("open=create&step=account&name=Viral&access=write");
 check("P1 below admin: no Create, the admin request instead", await p.evaluate(() => !document.querySelector('[data-b="create"]') && document.querySelector("#create-dialog .access-bar").textContent.includes("Admin access needed.")));
 await p.click('#create-dialog [data-b="request"]');
 check("P1 asking the gateway", (await text(p, "#create-dialog .access-bar")).includes("Asking the gateway"));
-await p.waitForTimeout(800);
+await p.clock.runFor(800);
 check("P1 requested: the host's command and the request id", await p.evaluate(() => document.querySelector("#create-dialog .access-bar code").textContent === "openclaw devices approve 3f9a2c71" && document.querySelector('#create-dialog [aria-label="Copy request id"]')));
 await p.click('#create-dialog [data-b="request-check"]');
 check("P1 granted: Create appears, nothing chosen was lost", await p.evaluate(() => !!document.querySelector('[data-b="create"]') && document.querySelector("#create-dialog .b-lead").textContent.includes("Viral")));
@@ -153,7 +160,7 @@ await p.close();
 // R2-03: where a sign-in lands is read after it, and said before it when known.
 p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=waiting&landed=juniper");
 await p.evaluate(() => window.bots.connectTo("connected"));
-await p.waitForTimeout(100);
+await p.clock.runFor(100);
 check("R2-03 a sign-in that turns out not to be shared says whose it is", (await text(p, "#create-dialog")).includes("Saved for Juniper only. Other bots can't use it."));
 await p.keyboard.type("Studio");
 await p.click('[data-b="label-done"]');
@@ -161,7 +168,7 @@ check("R2-03 and New bot does not offer it, saying why", await p.evaluate(() => 
 await p.close();
 p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=waiting");
 await p.evaluate(() => window.bots.connectTo("connected"));
-await p.waitForTimeout(100);
+await p.clock.runFor(100);
 check("R2-03 a shared sign-in is called available to every bot only from the gateway's views", (await text(p, "#create-dialog")).includes("Every bot can use it: the gateway shows it to other bots as shared."));
 await p.close();
 p = await open("open=create&step=connect&name=Viral&nomain=1");
@@ -173,7 +180,7 @@ p = await open("open=create&step=account&name=Viral");
 await p.click('[data-b-choose="__gateway"]');
 check("FM-01 Let the gateway choose enables Create and shows the default model's provider", await p.evaluate(() => !document.querySelector('[data-b="create"]').disabled && document.querySelector('#create-dialog [data-b-select="model"]').textContent.includes("gpt-5.5")));
 await p.click('[data-b="create"]');
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("FM-01 the bot is created with no fixed account, in its own state", await p.evaluate(() => window.bots.binding.viral.mode === "gateway" && window.bots.binding.viral.account === null));
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 check("FM-01 its settings say the gateway chooses, not No account", (await text(p, '#panel-settings [data-bs="account"]')).includes("Gateway chooses") && !(await text(p, "#panel-settings")).includes("No account"));
@@ -185,7 +192,7 @@ check("FM-01 when the default model names an account, it is chosen, and the step
 await p.close();
 p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=partial");
 await p.click('[data-b="create"]');
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 await p.click('#panel-settings [data-bs="account"]');
 check("FM-13 created but the fallback write refused: said on the account page, with Try again for that bot", (await text(p, "#panel-settings")).includes("Clawtrate couldn't write Viral's empty fallback list") && (await p.evaluate(() => !!document.querySelector('#panel-settings [data-bs="write-fallbacks"]'))));
@@ -193,9 +200,9 @@ check("R2-02 the note says no fallback models are set and that in-request rerout
 await p.close();
 p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=timeout");
 await p.click('[data-b="create"]');
-await p.waitForTimeout(650);
+await p.clock.runFor(650);
 check("FM-13 a first write that timed out looks for the bot before anything is sent again", (await text(p, "#create-dialog .b-foot")).includes("Checking whether Viral was created"));
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("FM-13 and continues with the one it finds: one bot, not two", await p.evaluate(() => window.app.bots.filter((b) => b.name === "Viral").length === 1));
 await p.close();
 
@@ -219,8 +226,14 @@ await p.click('[data-b="disconnect"]');
 check("P1 disconnecting asks, naming the bots that use it", (await dlg(p, "confirm-dialog")) && (await text(p, "#confirm-text")).includes("Otto and Marlow use it"));
 await p.click('[data-b="confirm-ok"]');
 check("P1 after disconnecting, those bots have no account", await p.evaluate(() => window.bots.binding.otto.account === null && window.bots.binding.marlow.account === null && !window.bots.accounts().some((a) => a.id === "openai:work")));
+// The dialog's close event, which hands focus back to its opener, comes with the browser's next
+// frame, not on the page's clock: wait for it, then give the page its usual 50 ms.
+await p.evaluate(() => {
+  window.settingsClosed = new Promise((closed) => document.querySelector("#settings-dialog").addEventListener("close", closed, { once: true }));
+});
 await p.keyboard.press("Escape");
-await p.waitForTimeout(50);
+await p.evaluate(() => window.settingsClosed);
+await p.clock.runFor(50);
 check("P1 closing Settings returns focus to the gateway row", !(await dlg(p, "settings-dialog")) && (await p.evaluate(() => document.activeElement.classList.contains("gateway-pill"))));
 await p.close();
 p = await open("open=settings&section=accounts&access=read");
@@ -264,6 +277,7 @@ await p.close();
 // The tab bar: tabs that don't fit never wrap or shorten.
 p = await open("bot=marlow&panel=open&tab=settings", { width: 1100, height: 800 });
 await p.evaluate(() => { const words = ["Einzelheiten", "Dateien", "Computer", "Einstellungen"]; document.querySelectorAll(".work-panel .tab").forEach((t, i) => (t.textContent = words[i])); });
+// The tab bar fits itself from the browser's observers and layout, not a page timer.
 await p.waitForTimeout(100);
 check("Tab bar: longer words stay on one row, unshortened, with the chosen tab in view", await p.evaluate(() => { const bar = document.querySelector(".work-panel .tabs"); const tabs = [...bar.querySelectorAll(".tab")]; const on = bar.querySelector('[aria-selected="true"]'); const b = bar.getBoundingClientRect(); const r = on.getBoundingClientRect(); return new Set(tabs.map((t) => Math.round(t.getBoundingClientRect().top))).size === 1 && tabs.every((t) => t.scrollWidth <= t.clientWidth + 1) && r.left >= b.left - 1 && r.right <= b.right + 1 && bar.dataset.fit; }));
 await p.close();
@@ -280,20 +294,20 @@ check("P2 the model menu lists only the account's models", pm.length === 3 && pm
 await p.click('.b-menu [data-value="gpt-5.5-mini"]');
 check("P2 a chosen model is saved and focus returns to its select", (await text(p, '#panel-settings [data-b-select="model"]')).includes("gpt-5.5-mini") && (await p.evaluate(() => document.activeElement.dataset.bSelect === "model")));
 await p.click('#panel-settings [data-bs="account"]');
-await p.waitForTimeout(50);
+await p.clock.runFor(50);
 check("P2 Account opens with focus on its title", await p.evaluate(() => document.activeElement.textContent === "Account"));
 check("P2 bound: says plainly that the gateway may use another account", (await pane(p)).includes("Bound. Marlow runs on OpenAI · Work. If that account fails, the gateway may use another OpenAI account"));
 check("P2 the lock is one command, ready to copy", (await text(p, "#panel-settings .command-line code")) === "openclaw models auth order set --provider openai --agent marlow openai:work" && (await p.evaluate(() => !!document.querySelector('#panel-settings .copy[aria-label="Copy lock command"]'))));
 check("P2 bound: says what it cannot see", (await pane(p)).includes("a run can start on another OpenAI account without leaving a record Clawtrate can read"));
 check("P2 the ways round a lock are listed, folded", await p.evaluate(() => { const d = [...document.querySelectorAll("#panel-settings .b-disclosure")].find((x) => x.textContent.includes("What a lock doesn't cover")); return d && !d.open && d.querySelectorAll("li").length === 8; }));
 await p.click('#panel-settings .copy[aria-label="Copy lock command"]');
-await p.waitForTimeout(80);
+await p.clock.runFor(80);
 check("P2 copying the command starts checking the gateway", (await text(p, "#panel-settings .b-wait")).includes("Checking the gateway for the lock"));
 await p.click('#panel-settings [data-bs="lock-check"]');
 check("FM-03 Check now reads the gateway: no order yet, so not locked", !(await pane(p)).includes("Locked.") && (await p.evaluate(() => document.activeElement.dataset.bs === "lock-check")));
 await p.focus('#panel-settings [data-bs="main"]');
 await p.evaluate(() => (window.botSettings.GW.order.marlow = ["openai:work"]));
-await p.waitForTimeout(4600);
+await p.clock.runFor(4600);
 check("FM-03 once the gateway has the order, the page turns Locked by itself", (await pane(p)).includes("Locked. Marlow's ordinary runs use OpenAI · Work only") && (await pane(p)).includes("Checked with the gateway at"));
 check("FM-03 a read in the background does not move focus", await p.evaluate(() => document.activeElement.dataset.bs === "main"));
 check("FM-03 Locked says the ordinary-run boundary on the page itself", (await pane(p)).includes("A run started with another account named still goes round it."));
@@ -392,7 +406,7 @@ check("P2 Change account opens the bot's settings on it", (await pane(p)).includ
 await p.close();
 p = await open("fail=signedout");
 await p.click('[data-testid="account-error"] [data-bs="sign-in-again"]');
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P2 signed out: Sign in again starts the provider's sign-in in Settings", (await dlg(p, "settings-dialog")) && (await text(p, "#b-section-title")).startsWith("Sign in to ChatGPT"));
 await p.close();
 
@@ -484,7 +498,7 @@ await p.close();
 p = await open("open=settings&section=integrations&t3=on&t3obs=none&t3origin=1");
 await p.click('[data-t3="signin"]');
 check("P3 a qualifying connection starts the gateway's sign-in", (await text(p, "#settings-dialog .b-section-body")).includes("Asking the gateway to start the sign-in"));
-await p.waitForTimeout(900);
+await p.clock.runFor(900);
 check("P3 waiting: approve on T3 Code's page, or a pairing code", (await text(p, "#settings-dialog .b-section-body")).includes("enter a pairing code") && (await text(p, "#settings-dialog .b-wait")).includes("10 minutes"));
 await p.click('[data-t3="cancel"]');
 check("FM-05 a cancelled T3 Code sign-in claims nothing about what was saved", (await text(p, "#settings-dialog .b-result")).includes("Sign-in cancelled") && !(await text(p, "#settings-dialog")).includes("Nothing was saved"));
@@ -543,7 +557,7 @@ check("FM-17 the projects group has one tab stop", await p.evaluate(() => [...do
 await p.click('#panel-settings [data-t3="projects"][data-value="some"]');
 check("P3 only some projects needs at least one, and nothing is saved until then", (await text(p, "#panel-settings")).includes("Choose at least one project, or allow all. Nothing is saved until then."));
 await p.click('#panel-settings [data-bs="main"]');
-await p.waitForTimeout(60);
+await p.clock.runFor(60);
 check("FM-17 Back returns focus to the row that opened the page", await p.evaluate(() => document.activeElement.dataset.bs === "t3"));
 await p.close();
 // R2-04: a bot that follows the gateway's default skill list.
