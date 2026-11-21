@@ -3468,24 +3468,23 @@ export class ClawtrateClient {
    */
   private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
     const incarnation = this.incarnations.get(key);
+    const epoch = this.epoch;
+    const currentConnection = () => generation === this.generation && epoch === this.epoch;
     let answer: unknown;
     let before: Transcript["reactions"];
     try {
-      if (this.selfId === null) await this.readSelf(generation);
+      if (this.selfId === null) await this.readSelf(currentConnection);
+      if (!currentConnection()) return;
       // What the list will replace: an event, a change of this person's or a new history page
       // after it was asked for is newer than the list, and the list then gives way to it.
       before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
-      if (generation === this.generation)
+      if (currentConnection())
         this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
       return;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!currentConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]!.reactions !== before) {
       // Changed while the list was on its way: ask again, a few times, rather than go back.
@@ -3531,16 +3530,19 @@ export class ClawtrateClient {
     return slashRows(skills, metadata);
   }
 
-  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
-  private async readSelf(generation: number): Promise<void> {
+  /**
+   * Who this connection acts for (`users.self`), for which reactions are the person's own.
+   * `current` says whether the answer still applies when it arrives.
+   */
+  private async readSelf(current: () => boolean): Promise<void> {
     try {
       const answer = asRecord(await this.request("users.self", {}));
-      if (generation !== this.generation) return;
+      if (!current()) return;
       const id = asRecord(answer?.profile)?.id;
       this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
     } catch {
       // A refusal on an earlier connection says nothing of a later one's identity.
-      if (generation === this.generation) this.selfId = null;
+      if (current()) this.selfId = null;
     }
   }
 
@@ -3562,17 +3564,22 @@ export class ClawtrateClient {
     if (typeof emoji !== "string" || !emoji || emoji.length > 64)
       throw new Error("Choose one emoji.");
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
-    const generation = this.generation;
-    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    // A scope upgrade reconnects to the same address and keeps the opening of the task.
+    const url = this.settings?.url;
     const incarnation = this.incarnations.get(key);
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
-    if (this.selfId === null) await this.readSelf(generation);
+    if (this.settings?.url !== url) throw new Error("That message is no longer shown here.");
+    // From the identity read through the write, a new connection can act for a different person.
+    const generation = this.generation;
+    const epoch = this.epoch;
+    const sameConnection = () => generation === this.generation && epoch === this.epoch;
+    if (this.selfId === null) await this.readSelf(sameConnection);
     // After every wait, immediately before the write: its viewer is still here, and the same
     // opening of the task still shows the message.
     this.checkNotWithdrawn(options.owner);
     const now = this.state.transcripts[key];
     if (
-      generation !== this.generation ||
+      !sameConnection() ||
       this.incarnations.get(key) !== incarnation ||
       !now ||
       !shownMessageIds(now).has(messageId)
@@ -3591,18 +3598,14 @@ export class ClawtrateClient {
         }),
       );
     } catch (error) {
-      this.noteMissingScope(error);
+      if (sameConnection()) this.noteMissingScope(error);
       throw error;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    )
+    if (!sameConnection() || !this.tracked(key) || this.incarnations.get(key) !== incarnation)
       return;
     if (this.state.transcripts[key]?.reactions !== before) {
       // Something newer changed them: the gateway's list says what is true now.
-      void this.readReactions(key, generation);
+      void this.readReactions(key, this.generation);
       return;
     }
     this.applyReactions(key, messageId, answer?.reactions);
