@@ -98,12 +98,13 @@ function harness(
 ) {
   const timeline: string[] = [];
   const requests: ProgramRequest[] = [];
+  const now = options.now ?? Date.now;
   const replies: Record<string, Reply> = {
     "--version": { stdout: VERSION_LINE },
     "gateway status --json": { stdout: statusJson({ port: PORT }) },
     "gateway status --json --deep": { stdout: statusJson({ port: PORT }) },
     "config get gateway.auth.mode --json": { stdout: authJson() },
-    [`qr --json --voice-node --url ${URL}`]: { stdout: qrJson(URL, CODE, Date.now() + 600_000) },
+    [`qr --json --voice-node --url ${URL}`]: () => ({ stdout: qrJson(URL, CODE, now() + 600_000) }),
     ...options.replies,
   };
   const run = async (request: ProgramRequest): Promise<ProgramResult> => {
@@ -141,6 +142,7 @@ function harness(
   const logs: string[] = [];
   const host = {
     ...testHost(gateway, storage),
+    now,
     log: (_level: string, line: string) => void logs.push(line),
   };
   const client = new ClawtrateClient(host, { reconnect: { initialMs: 20, maxMs: 40 } });
@@ -166,7 +168,7 @@ function harness(
     stopPrograms: () => void (stopped += 1),
     confirm,
     log: (line) => logs.push(line),
-    ...(options.now ? { now: options.now } : {}),
+    now,
   });
   /** Everything the code must never reach, as one string. */
   const everywhere = () =>
@@ -369,7 +371,7 @@ describe("Connect on this computer", () => {
 
   it("F-492: two minutes passing while the socket signs sends no credential, the code's nor a saved token's", async () => {
     for (const saved of [false, true]) {
-      let now = Date.now();
+      let now = 1_000_000;
       const h = harness({ now: () => now });
       if (saved)
         h.storage.data.set(
@@ -384,7 +386,7 @@ describe("Connect on this computer", () => {
       const host = h.client as unknown as {
         host: { signer: { sign: (p: string) => Promise<string> } };
       };
-      const sign = host.host.signer.sign;
+      const sign = vi.fn(host.host.signer.sign);
       host.host.signer.sign = async (payload) => {
         now += OPERATION_LIFETIME_MS + 1;
         return sign(payload);
@@ -393,6 +395,7 @@ describe("Connect on this computer", () => {
       await h.setup.look();
       await h.setup.connect();
       await until(() => h.setup.current.phase === "failed" || h.gateway.connects.length > 0);
+      expect(sign).toHaveBeenCalled();
       expect(h.gateway.connects).toEqual([]);
       expect(h.setup.current.failure?.kind).toBe("changed");
       h.client.stop();
