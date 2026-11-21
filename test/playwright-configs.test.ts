@@ -13,6 +13,7 @@ describe("the Playwright configurations", () => {
       "playwright.config.ts",
       "playwright.visual.config.ts",
       "playwright.packaged.config.ts",
+      "playwright.desktop.config.ts",
     ]) {
       const config = (await import(join(ROOT, file))).default as { outputDir?: string };
       // Playwright's default is test-results/ itself, which holds every run's folder.

@@ -13,6 +13,8 @@
     "e2e-packaged/**/*.ts",
     "e2e-updates/**/*.ts",
     "playwright.updates.config.ts",
+    "e2e-desktop/**/*.ts",
+    "playwright.desktop.config.ts",
     "test/**/*.ts",
     "plugins/*/test/**/*.ts",
     "playwright.config.ts",

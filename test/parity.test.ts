@@ -27,6 +27,7 @@ describe("the parity table", () => {
         "playwright.config.ts",
         "playwright.visual.config.ts",
         "playwright.updates.config.ts",
+        "playwright.desktop.config.ts",
       ];
       const listings = new Map(
         configs.map((config) => [config, listPlaywright(ROOT, join(ROOT, config))]),
@@ -39,7 +40,16 @@ describe("the parity table", () => {
       expect(checks.length).toBeGreaterThan(400);
       expect(parityProblems(rows, new Set(checkIds(checks)))).toEqual([]);
       // No file that names a row skips any of its checks. The guard's own tests are exempt.
-      const files = ["e2e", "e2e-updates", "visual", "test", "packages", "apps", "tools"]
+      const files = [
+        "e2e",
+        "e2e-updates",
+        "e2e-desktop",
+        "visual",
+        "test",
+        "packages",
+        "apps",
+        "tools",
+      ]
         .flatMap((dir) => testFiles(join(ROOT, dir)))
         .map((path) => relative(ROOT, path))
         .filter((path) => !path.startsWith("test/parity"));
