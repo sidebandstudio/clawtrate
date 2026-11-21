@@ -168,6 +168,14 @@ export type SshFailureKind =
   | "app-files-unsafe"
   | "forwarding-refused"
   | "gateway-not-answering"
+  /** The forward's LOOK found the gateway's service proven stopped (`provenStopped`). */
+  | "gateway-stopped"
+  /** The forward's LOOK found another service at the gateway's port than the card named. */
+  | "service-changed"
+  /** The forward's LOOK couldn't tell what answers at the gateway's port. */
+  | "service-cant-tell"
+  /** The key presented when the forward opened isn't the pinned one. */
+  | "key-changed"
   /** This computer can't keep a route's device token encrypted: no pairing over SSH. */
   | "no-token-storage"
   /** The one-time code wasn't made on that computer; `exit` is OpenClaw's. */

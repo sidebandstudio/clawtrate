@@ -867,6 +867,39 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     await h.remote.closeAll();
   });
 
+  it("F-496: a first forward that finds another service, or the service stopped, says which, and connects nothing", async () => {
+    const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+    const other = statusJson({
+      port: gateway.port,
+      home: t.home,
+      configPath: `${t.home}/.openclaw/other.json`,
+    });
+    try {
+      for (const [status, kind] of [
+        [other, "service-changed"],
+        [stopped, "gateway-stopped"],
+      ] as const) {
+        const h = host();
+        await lookOnDevbox(h);
+        // When the forward starts, its own LOOK finds this instead of what the card named.
+        onSpawn = (args) => {
+          if (args.includes("-L")) stub.setStatus("default", status);
+        };
+        const sockets = h.fake.sockets.length;
+        await h.remote.connect();
+        await until(() => h.setup().phase === "failed", 60_000);
+        expect(h.setup().there?.failure?.kind, kind).toBe(kind);
+        expect(h.fake.sockets.length).toBe(sockets);
+        onSpawn = null;
+        stub.setStatus("default", running());
+        await h.remote.closeAll();
+      }
+    } finally {
+      onSpawn = null;
+      stub.setStatus("default", running());
+    }
+  });
+
   it("F-498: a forward that drops comes back by itself, the strip says restoring until the gateway answered there with the route's identity, then that it is back", async () => {
     const h = host();
     await connected(h);

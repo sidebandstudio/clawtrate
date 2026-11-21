@@ -12,6 +12,7 @@ import {
 } from "@clawtrate/core";
 
 import {
+  provenStopped,
   serviceOnPort,
   type FoundService,
   type GatewayStatus,
@@ -65,28 +66,6 @@ const empty = (outcome: SetupLook["outcome"], reason: SetupLook["reason"] = null
   others: [],
 });
 
-/**
- * Proven stopped: the status command succeeded, a loaded service of a known
- * kind reports itself stopped, the port is reported free with no listener,
- * the gateway's RPC failed, and the installed CLI is one setup supports.
- * Anything less, or anything that disagrees, is not proven.
- */
-function provenStopped(status: GatewayStatus, cli: Version): boolean {
-  return (
-    status.exit === 0 &&
-    status.service !== null &&
-    status.service.label !== "other" &&
-    status.service.loaded === true &&
-    status.service.running === false &&
-    status.port !== null &&
-    status.configPath !== null &&
-    status.portStatus === "free" &&
-    status.listenerPids !== null &&
-    status.listenerPids.length === 0 &&
-    status.rpcOk === false &&
-    compare([cli.year, cli.month, cli.day], parts(OLDEST_OPENCLAW_VERSION)) >= 0
-  );
-}
 
 /** The found card's result from the LOOK's facts, and what Connect or Start would act on. */
 export function sshLook(facts: LookFacts): SshLook {
@@ -110,11 +89,14 @@ export function sshLook(facts: LookFacts): SshLook {
     statuses.filter((status) => status.profile === profile),
   );
   let unsure = false;
+  /** A gateway answering, but not on its loopback endpoint as far as the status shows. */
+  let offLoopback = false;
   for (const status of ordered) {
     if (status.port === null) continue;
     const found = serviceOnPort(facts, status.port);
     if (!found.ok) {
       if (found.reason === "cant-tell") unsure = true;
+      if (found.reason === "endpoint") offLoopback = true;
       continue;
     }
     if (found.service.profile !== status.profile) continue;
@@ -142,6 +124,8 @@ export function sshLook(facts: LookFacts): SshLook {
       programSum: facts.programSum,
     };
   }
+  // A gateway that answered somewhere other than its loopback endpoint: not offered (§6, "endpoint").
+  if (offLoopback) return { look: empty("cant-tell", "endpoint"), ...none };
   // The results disagree, or say too little: running or not can't be told.
   if (unsure) return { look: empty("cant-tell", "contradictory"), ...none };
   for (const status of ordered) {

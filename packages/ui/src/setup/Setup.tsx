@@ -973,6 +973,41 @@ function sshFailureCopy(
         next: null,
         retry: true,
       };
+    case "gateway-stopped":
+      return {
+        lead: `OpenClaw stopped on ${withPort(account, there.port)}`,
+        text: "Its service reports itself stopped and nothing listens on its port. Look again to start it.",
+        next: null,
+        retry: true,
+      };
+    case "service-changed":
+      return {
+        lead: "Another service answered at the gateway's port",
+        text: "What answered when the private connection opened isn't the service the look named. Clawtrate didn't connect. Look again.",
+        next: null,
+        retry: true,
+      };
+    case "service-cant-tell":
+      return {
+        lead: "Clawtrate couldn't tell what answers at the gateway's port",
+        text: "OpenClaw's status there didn't say whether its service runs. Clawtrate didn't connect. Look again, or use Advanced.",
+        next: null,
+        retry: true,
+      };
+    case "key-changed":
+      return {
+        lead: `${withPort(account, there.port)}'s key has changed`,
+        text: "The key presented when the private connection opened isn't the trusted one. Clawtrate didn't connect. Look again to compare the keys.",
+        next: null,
+        retry: true,
+      };
+    case "remove-failed":
+      return {
+        lead: "Clawtrate couldn't remove this route",
+        text: "Its trusted key couldn't be deleted from Clawtrate's own SSH files, so the route, its key and its token are kept. Try Remove again.",
+        next: null,
+        retry: false,
+      };
     case "code-failed":
       return {
         lead: "Couldn't make a one-time code.",

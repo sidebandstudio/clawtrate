@@ -1616,8 +1616,11 @@ function forwardFailure(state: ForwardState): SshSetup["failure"] {
       case "forwarding-refused":
         return { kind: "forwarding-refused", cause: null, exit: null };
       case "gateway-not-answering":
-      case "gateway-not-running":
         return { kind: "gateway-not-answering", cause: null, exit: null };
+      case "gateway-not-running":
+        return { kind: "gateway-stopped", cause: null, exit: null };
+      case "cant-tell":
+        return { kind: "service-cant-tell", cause: null, exit: null };
       case "timed-out":
         return { kind: "timed-out", cause: null, exit: null };
       case "spawn-failed":
@@ -1628,6 +1631,10 @@ function forwardFailure(state: ForwardState): SshSetup["failure"] {
         return { kind: "ssh-stopped", cause: null, exit: null };
     }
   }
+  if (state.phase === "closed" && state.reason === "key-changed")
+    return { kind: "key-changed", cause: null, exit: null };
+  if (state.phase === "closed" && state.reason === "different-gateway")
+    return { kind: "service-changed", cause: null, exit: null };
   return { kind: "ssh-stopped", cause: null, exit: null };
 }
 

@@ -12,6 +12,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { OLDEST_OPENCLAW_VERSION } from "@clawtrate/core";
+
 /** The fixed places, in order; the facts name a place by its index. */
 export const PROGRAM_PLACES = [
   "~/.openclaw/bin/openclaw",
@@ -419,10 +421,37 @@ export type FoundService = { ok: true; service: GatewayService; holdsPort: true 
  * every listener on the port. A service that reports itself stopped is
  * "not-running"; anything less certain is "cant-tell".
  */
+/**
+ * The one verdict of "stopped", for the found card's Start and the forward's
+ * "OpenClaw stopped": the status command succeeded, a loaded service of a
+ * known kind reports itself stopped, the port is reported free with no
+ * listener, the gateway's RPC failed, and the installed CLI is one setup
+ * supports. Anything less, or anything that disagrees, is not proven.
+ */
+export function provenStopped(status: GatewayStatus, cli: LookFacts["version"]): boolean {
+  if (cli === null || cli === "unreadable") return false;
+  const [year, month, day] = OLDEST_OPENCLAW_VERSION.split(".").map(Number) as [number, number, number];
+  const supported = cli.year - year || cli.month - month || cli.day - day;
+  return (
+    status.exit === 0 &&
+    status.service !== null &&
+    status.service.label !== "other" &&
+    status.service.loaded === true &&
+    status.service.running === false &&
+    status.port !== null &&
+    status.configPath !== null &&
+    status.portStatus === "free" &&
+    status.listenerPids !== null &&
+    status.listenerPids.length === 0 &&
+    status.rpcOk === false &&
+    supported >= 0
+  );
+}
+
 export function serviceOnPort(
   facts: LookFacts,
   port: number,
-): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" } {
+): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" | "endpoint" } {
   for (const gateway of facts.gateways) {
     if ("unreadable" in gateway) return { ok: false, reason: "cant-tell" };
     if (gateway.port !== port) continue;
@@ -431,11 +460,8 @@ export function serviceOnPort(
       return { ok: false, reason: "cant-tell" };
     }
     if (service.running === false) {
-      // Stopped only when nothing else says it runs: a free port, a failed RPC, no listener.
-      return gateway.portStatus === "free" &&
-        gateway.rpcOk === false &&
-        gateway.listenerPids !== null &&
-        gateway.listenerPids.length === 0
+      // Stopped only as the found card's Start judges it (`provenStopped`).
+      return provenStopped(gateway, facts.version)
         ? { ok: false, reason: "not-running" }
         : { ok: false, reason: "cant-tell" };
     }
@@ -444,12 +470,13 @@ export function serviceOnPort(
       service.loaded !== true ||
       gateway.rpcOk !== true ||
       gateway.portStatus !== "busy" ||
-      // The RPC answered at exactly the gateway's loopback endpoint, from a gateway of a version.
-      gateway.rpcUrl !== `ws://127.0.0.1:${port}` ||
       gateway.version === null
     ) {
       return { ok: false, reason: "cant-tell" };
     }
+    // The RPC answered at exactly the gateway's loopback endpoint: a tailnet or custom bind is
+    // probed elsewhere, and Clawtrate can't establish the loopback endpoint it forwards to.
+    if (gateway.rpcUrl !== `ws://127.0.0.1:${port}`) return { ok: false, reason: "endpoint" };
     const pid = service.pid;
     if (
       pid === null ||
