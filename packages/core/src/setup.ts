@@ -60,6 +60,13 @@ export type SetupLook = {
   access: "new" | "paired" | null;
   /** Other OpenClaw services and profiles the look saw, named and never used. */
   others: string[];
+  /**
+   * The host proved this gateway is the one Clawtrate set up (§10): its three
+   * ownership records name one id and its service runs the checked install.
+   */
+  managed?: boolean;
+  /** An earlier setup attempt of Clawtrate's that never reached onboarding is there, and setting up removes it first. */
+  leftover?: boolean;
 };
 
 /** Where Connect, or the look, failed (§7), each in fixed copy. */
@@ -120,20 +127,47 @@ export type SetupPhase =
 export const INSTALL_NODE_VERSION = "24.22.1";
 
 /**
- * Why setting OpenClaw up failed (§10), each in fixed copy: something named
- * `clawtrate` was there already; a download; a fingerprint; the installer's
- * exit; its Node.js step; onboarding; the status wait; or the facts changed
- * between the look and the host's dialog.
+ * Why setting OpenClaw up failed (§10), each in fixed copy.
  */
 export type InstallFailureKind =
+  /** A `clawtrate` folder, service or install record was there already. */
   | "exists"
+  /** Clawtrate couldn't write a file of the install's (permission or space). */
+  | "write"
+  /** Linux: this session's systemd user manager can't be reached. */
+  | "user-service"
+  /** A download failed in transport, or answered other than 200. */
   | "download"
+  /** A download ended before all its bytes arrived. */
+  | "download-short"
+  /** The disk ran out of space while a download was saved. */
+  | "download-space"
   | "fingerprint"
+  /** A checked download couldn't be unpacked. */
+  | "unpack"
+  /** The checked installer isn't the one this build was made for. */
+  | "installer-changed"
+  /** The installer stopped before it reported completion. */
   | "installer"
+  /** The installed program couldn't be found, or isn't the checked one. */
+  | "no-program"
   | "node-not-checked"
   | "onboard"
+  /** OpenClaw couldn't install the profile's user service. */
+  | "service"
   | "not-answering"
-  | "changed";
+  /** The facts changed between the look and the host's dialog, or before onboarding. */
+  | "changed"
+  /** The host's dialog was answered after the prepared operation's two minutes. */
+  | "expired";
+
+/**
+ * What a failed attempt left: nothing made (`none`); removed and proven
+ * removed (`removed`, the only case that offers Try again); a cleanup that
+ * couldn't be proven (`unproven`); or an attempt that had begun onboarding,
+ * which this version doesn't remove (`kept`).
+ */
+export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
 
 /** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
 export type OnboardClassification =
@@ -156,6 +190,7 @@ export type InstallFailure = {
    * the host removed, and checked it removed, everything it had made.
    */
   retry: boolean;
+  cleanup: InstallCleanup;
 };
 
 /** Where setting OpenClaw up stands (§10). */

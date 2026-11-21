@@ -100,10 +100,11 @@ Reset the instance when you are done: `pnpm dev-gateway reset --instance look`.
 "Set up OpenClaw here" downloads and runs OpenClaw's installer, so no checkout, test or automated run ever offers it: only a person's packaged app gets an installer ([`docs/decisions.md`](../decisions.md), "Setting OpenClaw up on this computer"). Never run OpenClaw's installer, onboarding or update on a computer whose OpenClaw you use.
 
 - `apps/desktop/test/setup-install.test.ts` runs the host's installer against stand-ins only ([`apps/desktop/test/fixtures/install-stand-in.ts`](../../apps/desktop/test/fixtures/install-stand-in.ts)):
-  - the two downloads are served from loopback out of a temporary folder;
-  - `install-cli.sh` and `openclaw` are the test's own scripts;
-  - a stand-in service manager records what would be registered;
-  - every folder is under a temporary home. The installer refuses a stand-in home anywhere else.
-- `apps/desktop/test/setup-install-controller.test.ts` covers the host's dialog, its two minutes, and when an install is offered and tried again.
+  - the two downloads are served from loopback out of a temporary folder, and can be answered missing, redirected, partial or short;
+  - `install-cli.sh` is the test's own script, with the checked installer's Node.js step word for word, and `openclaw` is the tarball's `dist/entry.js`, run by a stand-in `node`;
+  - a stand-in service manager answers `launchctl print` or `systemctl --user show` from what was registered;
+  - every folder is under a temporary home, in an app-data folder whose name has a space. The installer refuses a stand-in home anywhere else.
+- `apps/desktop/test/setup-install-controller.test.ts` covers the host's dialog, its two minutes, the file checks after it, one install at a time, the look of the installed gateway alone, and when an install is offered and tried again.
+- `e2e/setup.spec.ts` checks that the sandboxed app offers no install and refuses the install command.
 - The real install runs only on GitHub's hosted runners, in [`.github/workflows/setup-install.yml`](../../.github/workflows/setup-install.yml). Its script, `apps/desktop/test/hosted/real-install.ts`, refuses to start anywhere else.
 - `pnpm fixture` shows the install's screens: `?setup=not-found` then "Set up OpenClaw here", and `?setup=installing`, `installing-node`, `install-installer`, `install-onboard`, `install-exists` and the rest in [`apps/desktop/src/fixture/setup.ts`](../../apps/desktop/src/fixture/setup.ts).

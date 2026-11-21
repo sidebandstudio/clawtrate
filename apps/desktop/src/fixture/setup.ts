@@ -71,7 +71,15 @@ const installFailed = (
   install: {
     step: Math.max(step, 0),
     nodeChecked: step > 1,
-    failure: { kind, step, exitCode: null, classification: null, retry: false, ...extra },
+    failure: {
+      kind,
+      step,
+      exitCode: null,
+      classification: null,
+      retry: extra.cleanup === "removed",
+      cleanup: "none",
+      ...extra,
+    },
   },
 });
 
@@ -134,19 +142,27 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "installing-node": installing({ step: 1, nodeChecked: true }),
   "installing-gateway": installing({ step: 2, nodeChecked: true }),
   "installing-check": installing({ step: 3, nodeChecked: true }),
-  "install-download": installFailed("download", 0, { retry: true }),
-  "install-fingerprint": installFailed("fingerprint", 0, { retry: true }),
-  "install-installer": installFailed("installer", 1, { exitCode: 1, retry: true }),
-  "install-node": installFailed("node-not-checked", 1, { retry: true }),
+  "install-download": installFailed("download", 0, { cleanup: "removed" }),
+  "install-download-space": installFailed("download-space", 0, { cleanup: "removed" }),
+  "install-fingerprint": installFailed("fingerprint", 0, { cleanup: "removed" }),
+  "install-installer": installFailed("installer", 1, { exitCode: 1, cleanup: "removed" }),
+  "install-node": installFailed("node-not-checked", 1, { cleanup: "removed" }),
+  "install-unproven": installFailed("write", 1, { cleanup: "unproven" }),
   "install-onboard": installFailed("onboard", 2, {
     exitCode: 1,
-    classification: "systemd-user-unavailable",
+    classification: "startup-blocked",
+    cleanup: "kept",
   }),
-  "install-not-answering": installFailed("not-answering", 3),
+  "install-service": installFailed("service", 2, { exitCode: 1, cleanup: "kept" }),
+  "install-not-answering": installFailed("not-answering", 3, { cleanup: "kept" }),
   "install-exists": installFailed("exists", -1),
+  "install-user-service": installFailed("user-service", -1),
   "install-changed": installFailed("changed", -1),
-  /** The gateway Clawtrate set up, found by the look that follows the install. */
-  "found-installed": looked({ profile: "clawtrate", port: 52114 }),
+  "install-expired": installFailed("expired", -1),
+  /** An earlier attempt of Clawtrate's that never reached onboarding: setting up removes it first. */
+  "not-found-leftover": looked({ ...notFound, leftover: true }),
+  /** The gateway Clawtrate set up, found by the look that follows the install, and proven Clawtrate's. */
+  "found-installed": looked({ profile: "clawtrate", port: 52114, managed: true }),
 };
 
 export function isSetupState(name: string | null): name is string {

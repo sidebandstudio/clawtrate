@@ -120,9 +120,10 @@ const exists = (path: string) =>
     () => false,
   );
 
-/** The first candidate that is a regular executable file. */
-async function findProgram(world: LookWorld): Promise<string | null> {
+/** The first candidate that is a regular executable file, past an early leftover of Clawtrate's own. */
+async function findProgram(world: LookWorld, skip: string | null): Promise<string | null> {
   for (const candidate of world.candidates) {
+    if (candidate === skip) continue;
     try {
       const found = await stat(candidate);
       if (found.isFile() && (found.mode & 0o111) !== 0) return candidate;
@@ -175,7 +176,38 @@ export type LookOptions = {
    * throws the refusal. Asked before the file checks and after every wait.
    */
   checkActive?: () => void;
+  /**
+   * The program of an attempt of Clawtrate's own that never reached
+   * onboarding, proven by the installer: not taken for an OpenClaw (§10).
+   */
+  skipProgram?: string | null;
 };
+
+/**
+ * The look's file checks alone, run again after the host's dialog to set
+ * OpenClaw up (§10): whether a program or a sign of OpenClaw is there now.
+ * Nothing is run, a newly found program included.
+ */
+export async function anythingHere(
+  world: LookWorld,
+  skipProgram: string | null = null,
+): Promise<"nothing" | "something" | "timeout"> {
+  if (world.installed)
+    return world.installed.program || world.installed.signs ? "something" : "nothing";
+  const files = Date.now() + FILE_CHECK_MS;
+  try {
+    const program = await withDeadline(findProgram(world, skipProgram), files);
+    if (program) return "something";
+    const signs = await withDeadline(
+      Promise.all([join(world.home, ".openclaw"), ...world.serviceFiles].map(exists)),
+      files,
+    );
+    return signs.some(Boolean) ? "something" : "nothing";
+  } catch (error) {
+    if (error instanceof FileCheckTimeout) return "timeout";
+    throw error;
+  }
+}
 
 /** Whether a program couldn't be started at all: spawn failed, or the system said it can't run it. */
 const couldNotRun = (result: ProgramResult) =>
@@ -214,7 +246,7 @@ export async function lookHere(
   try {
     program = world.installed
       ? world.installed.program
-      : await withDeadline(findProgram(world), files);
+      : await withDeadline(findProgram(world, options.skipProgram ?? null), files);
     active();
     if (!program) {
       // A sandbox answers from its scenario: no file is checked.

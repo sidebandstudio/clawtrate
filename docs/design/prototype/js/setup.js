@@ -173,7 +173,7 @@
     install: {
       message: "Set up OpenClaw on this computer?",
       detail:
-        "<p>Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.</p>",
+        "<p>Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.</p>",
       confirm: "Set up",
       to: () => go("installing", { play: "1" }),
     },
@@ -239,7 +239,7 @@
       hint(
         windows
           ? "New to OpenClaw? Choose Another computer to use or set up OpenClaw on a Mac or a Linux computer."
-          : "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there.",
+          : "New to OpenClaw? Choose This computer to look for OpenClaw or set it up here.",
       ),
 
     "looking-here": () =>
@@ -490,18 +490,18 @@
       title("Set up OpenClaw on this computer") +
       sentenceFacts([
         ["What", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1"],
-        ["Where", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs."],
+        ["Where", "Clawtrate puts the program in its app data and gateway data in the clawtrate profile. OpenClaw also adds a user service and can write service logs."],
         [
           "Checked",
-          "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+          "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
         ],
         [
           "Then",
-          "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot.",
+          "OpenClaw sets up a gateway configured for this computer only, with token sign-in and no AI provider. Its user service is configured to start when you log in.",
         ],
       ]) +
-      hint("Nothing is asked for: no account and no model key.") +
-      hint("OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version.") +
+      hint("Setup asks for no provider account or model key.") +
+      hint("OpenClaw runs as a separate user service. Removing the Clawtrate app does not remove that service. Clawtrate does not offer OpenClaw removal in this version.") +
       actions(button("Set up OpenClaw…", { variant: "primary", host: "install" }), button("Cancel", { to: "notfound" })),
 
     installing: () =>
@@ -525,7 +525,7 @@
         ["Set up the gateway", "waiting"],
         ["Start and check", "waiting"],
       ]) +
-      note("danger", "Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.") +
+      note("danger", "Install Node.js and OpenClaw failed.", "Clawtrate couldn't confirm the installer would use the checked Node.js.") +
       disclosure("Show details", sentenceFacts([["Step", "Install Node.js and OpenClaw"], ["Error", "Node.js check"], ["Exit status", "1"]])),
   };
 

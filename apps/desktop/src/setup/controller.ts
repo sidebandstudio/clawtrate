@@ -15,15 +15,24 @@ import {
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
-import { fileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
+import {
+  anythingHere,
+  fileIdentity,
+  LIMITS,
+  lookHere,
+  type FoundGateway,
+  type LookReport,
+} from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { InstallOutcome, Installer } from "./install.ts";
 import type { ProgramResult } from "./programs.ts";
 import type { Opened } from "./sandbox.ts";
-import { guardPort, programPath, SetupRefusedError } from "./world.ts";
+import { guardPort, installedWorld, programPath, SetupRefusedError } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
+/** What an external request gets while setting OpenClaw up holds the controller. */
+const BUSY = "Setting OpenClaw up is under way.";
 /** After this long, the look says it is still looking (§4). */
 export const SLOW_LOOK_MS = 8_000;
 const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
@@ -63,7 +72,7 @@ export type SetupControllerOptions = {
 export const INSTALL_CONFIRMATION: Confirmation = {
   message: "Set up OpenClaw on this computer?",
   detail:
-    "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+    "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
   confirm: "Set up OpenClaw",
 };
 
@@ -99,6 +108,11 @@ export class SetupController implements SetupHost {
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
   private owned: { attempt: number; url: string } | null = null;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Held by setting OpenClaw up from its dialog to the look that follows: no
+   * other look, Connect or second install starts meanwhile (§10).
+   */
+  private busy = false;
   private watching: (() => void) | null = null;
   private readonly now: () => number;
 
@@ -159,6 +173,26 @@ export class SetupController implements SetupHost {
   }
 
   async look(): Promise<void> {
+    if (this.busy) throw new Error(BUSY);
+    await this.runLook(null);
+  }
+
+  /** The program of a proven early leftover of Clawtrate's own, which the look passes over. */
+  private async leftoverProgram(): Promise<string | null> {
+    const make = this.options.installer;
+    if (!make) return null;
+    return make()
+      .leftoverProgram()
+      .catch(() => null);
+  }
+
+  /**
+   * A look: of everything (`installed` null), or of the gateway just set up
+   * alone, which must answer on the install's port to be offered.
+   */
+  private async runLook(
+    installed: { port: number; program: string; env: Record<string, string> } | null,
+  ): Promise<void> {
     this.stopWatching();
     // Another look: the earlier one's programs end before this one asks anything.
     this.options.stopPrograms();
@@ -180,8 +214,14 @@ export class SetupController implements SetupHost {
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
     let refusal: SetupRefusedError | null = null;
-    const report = await lookHere(opened.world, opened.run, {
+    const skip = installed ? null : await this.leftoverProgram();
+    if (attempt !== this.attempt) return;
+    const world = installed
+      ? installedWorld(opened.world, installed.program, installed.env)
+      : opened.world;
+    let report: LookReport | null = await lookHere(world, opened.run, {
       identify: opened.identify,
+      skipProgram: skip,
       ...(opened.assertActive ? { checkActive: opened.assertActive } : {}),
       onStep: (step) => {
         if (attempt === this.attempt && this.state.phase === "looking")
@@ -219,6 +259,24 @@ export class SetupController implements SetupHost {
       });
       return;
     }
+    // The gateway just set up, and no other, is the one Connect may pair with.
+    if (installed && report.found && report.found.port !== installed.port)
+      report = {
+        look: { ...report.look, outcome: "cant-tell", reason: "endpoint", access: null },
+        found: null,
+      };
+    // Said to be Clawtrate's only once its records and its service prove it.
+    const make = this.options.installer;
+    const managed =
+      make && report.found?.profile.name === "clawtrate"
+        ? await make()
+            .owned(report.found.port)
+            .catch(() => false)
+        : false;
+    if (attempt !== this.attempt) return;
+    if (managed) report = { ...report, look: { ...report.look, managed: true } };
+    if (skip !== null && report.look.outcome === "not-found")
+      report = { ...report, look: { ...report.look, leftover: true } };
     this.found = report.found;
     // What this device can already do on the gateway found, said on its card and in the dialog.
     const access = report.found
@@ -241,15 +299,12 @@ export class SetupController implements SetupHost {
 
   cancel(): void {
     const phase = this.state.phase;
-    // Cancelling an install isn't offered in this version (§10): it runs to its end.
-    if (phase === "installing") return;
+    // Cancelling an install isn't offered in this version (§10): it runs to its end, and the
+    // look after it too. Only its dialog can be left.
+    if (phase === "installing" || (this.busy && phase !== "confirming")) return;
     if (phase === "install-failed") {
-      this.attempt += 1;
-      this.publish(
-        this.state.look
-          ? { ...initialSetupState, phase: "found", look: this.state.look }
-          : initialSetupState,
-      );
+      // What a failed attempt left is looked at again before anything else is offered.
+      void this.runLook(null);
       return;
     }
     this.attempt += 1;
@@ -276,7 +331,8 @@ export class SetupController implements SetupHost {
   }
 
   reset(): void {
-    if (this.state.phase === "installing") return;
+    if (this.state.phase === "installing" || (this.busy && this.state.phase !== "confirming"))
+      return;
     this.attempt += 1;
     this.clearSlow();
     this.stopWatching();
@@ -294,6 +350,7 @@ export class SetupController implements SetupHost {
    * done the look runs again, and finds the `clawtrate` gateway.
    */
   async install(): Promise<void> {
+    if (this.busy) throw new Error(BUSY);
     const { phase, look, install } = this.state;
     const retry = phase === "install-failed" && install?.failure?.retry === true;
     if (!retry && !(phase === "found" && look?.outcome === "not-found"))
@@ -301,6 +358,20 @@ export class SetupController implements SetupHost {
     const make = this.options.installer;
     const confirm = this.options.confirm;
     if (!make || !confirm) throw new Error("This host doesn't set OpenClaw up.");
+    this.busy = true;
+    try {
+      await this.installHeld(make, confirm, retry);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async installHeld(
+    make: () => Installer,
+    confirm: (confirmation: Confirmation) => Promise<boolean>,
+    retry: boolean,
+  ): Promise<void> {
+    const { look } = this.state;
     const attempt = (this.attempt += 1);
     const at = this.now();
     const before = this.state;
@@ -318,7 +389,7 @@ export class SetupController implements SetupHost {
       return;
     }
     const start = { step: 0, nodeChecked: false, failure: null };
-    if (this.now() - at > OPERATION_LIFETIME_MS) {
+    const stoppedBefore = (kind: "expired" | "changed") =>
       this.publish({
         ...initialSetupState,
         look,
@@ -326,14 +397,31 @@ export class SetupController implements SetupHost {
         install: {
           ...start,
           failure: {
-            kind: "changed",
+            kind,
             step: -1,
             exitCode: null,
             classification: null,
             retry: false,
+            cleanup: "none",
           },
         },
       });
+    if (this.now() - at > OPERATION_LIFETIME_MS) {
+      stoppedBefore("expired");
+      return;
+    }
+    // The look's file checks again, after the dialog: anything that appeared since ends it here.
+    let here: Awaited<ReturnType<typeof anythingHere>>;
+    try {
+      const opened = await this.open();
+      here = await anythingHere(opened.world, await this.leftoverProgram());
+    } catch {
+      here = "timeout";
+    }
+    if (attempt !== this.attempt) return;
+    if (here !== "nothing") {
+      this.log("something of OpenClaw's appeared after the look");
+      stoppedBefore("changed");
       return;
     }
     this.publish({ ...initialSetupState, look, phase: "installing", install: start });
@@ -356,6 +444,7 @@ export class SetupController implements SetupHost {
           exitCode: null,
           classification: null,
           retry: false,
+          cleanup: "unproven",
         },
       };
     }
@@ -369,8 +458,8 @@ export class SetupController implements SetupHost {
       });
       return;
     }
-    // The look finds what was set up, and Connect pairs with it as with any gateway found (§7).
-    await this.look();
+    // The look finds what was set up, and no other gateway, and Connect pairs with it (§7).
+    await this.runLook(outcome);
   }
 
   /**
@@ -392,6 +481,7 @@ export class SetupController implements SetupHost {
   }
 
   async connect(): Promise<void> {
+    if (this.busy) throw new Error(BUSY);
     const found = this.found;
     const phase = this.state.phase;
     if (

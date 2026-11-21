@@ -192,3 +192,31 @@ export function guardPort(port: number, world: LookWorld): void {
 export function programPath(program: string): string {
   return [dirname(program), ...SYSTEM_PATH].join(":");
 }
+
+/**
+ * The look that follows setting OpenClaw up (§10): the installed program
+ * alone, the `clawtrate` profile alone, no deep status, and the session's
+ * bus on Linux as the install had it. It runs no command of the default
+ * profile's.
+ */
+export function installedWorld(
+  world: LookWorld,
+  program: string,
+  env: Record<string, string>,
+): LookWorld {
+  return {
+    ...world,
+    candidates: [program],
+    profiles: [
+      {
+        name: "clawtrate",
+        args: ["--profile", "clawtrate"],
+        stateDir: join(world.home, ".openclaw-clawtrate"),
+        required: true,
+        env: {},
+      },
+    ],
+    env: { ...world.env, ...env },
+    deep: false,
+  };
+}

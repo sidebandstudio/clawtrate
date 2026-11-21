@@ -3,19 +3,19 @@ name: Setup install
 # A real install of OpenClaw through Clawtrate's own host code (docs/design/setup.md §10, §19).
 # It never runs on a developer's computer: it runs only on GitHub's hosted runners, which are
 # discarded after each job, and the script refuses anywhere else. A decoy default OpenClaw home
-# stands for a person's own OpenClaw and must come through unchanged.
+# and a sentinel default service definition stand for a person's own OpenClaw and must come
+# through unchanged.
 
 on:
   pull_request:
     paths:
-      - "apps/desktop/src/setup/install*.ts"
-      - "apps/desktop/src/setup/controller.ts"
-      - "apps/desktop/src/setup/look.ts"
-      - "apps/desktop/src/setup/parse.ts"
-      - "apps/desktop/src/setup/programs.ts"
-      - "apps/desktop/src/setup/world.ts"
+      - "apps/desktop/src/setup/**"
+      - "apps/desktop/src/main/**"
+      - "apps/desktop/src/host/**"
       - "apps/desktop/test/hosted/**"
       - "packages/core/src/setup.ts"
+      - "packages/core/src/bridge.ts"
+      - "pnpm-lock.yaml"
       - ".github/workflows/setup-install.yml"
   workflow_dispatch:
 
@@ -49,12 +49,16 @@ jobs:
         run: |
           test ! -e "$HOME/.openclaw"
           test ! -e "$HOME/.openclaw-clawtrate"
-      - name: User services on Linux
+      # The user manager runs without lingering, as on a person's computer with nothing changed:
+      # the install must never turn lingering on, and the script checks it is still off after.
+      - name: A user manager without lingering, on Linux
         if: runner.os == 'Linux'
         run: |
-          sudo loginctl enable-linger "$USER"
+          test ! -e "/var/lib/systemd/linger/$USER"
+          sudo systemctl start "user@$(id -u).service"
           for _ in $(seq 30); do test -S "/run/user/$(id -u)/bus" && break; sleep 1; done
           test -S "/run/user/$(id -u)/bus"
+          test ! -e "/var/lib/systemd/linger/$USER"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Install, look, connect read-only, uninstall, and check nothing is left

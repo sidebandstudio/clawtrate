@@ -91,8 +91,13 @@ let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
-/** The programs an install started, ended by PID when the app quits. */
+/** The programs an install started, each in its own process group, ended and waited for when the app quits. */
 const installPrograms = new InstallRunner();
+/** Aborted when the app quits: an install downloads nothing more. */
+const installStop = new AbortController();
+/** How long the quit waits for an install's programs to end. */
+const INSTALL_QUIT_WAIT_MS = 5_000;
+let installDrained = false;
 let closeSetup: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
@@ -215,6 +220,7 @@ function setupInstaller(): (() => Installer) | null {
       }),
       pins: PINS,
       run: (request, check) => installPrograms.run(request, check),
+      signal: installStop.signal,
       personsApp: true,
       accountHome: home,
       log: (line) => console.log(line),
@@ -522,9 +528,21 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   programs.stopAll();
-  installPrograms.stopAll();
+  // An install's programs, descendants too, are ended and waited for, within a bound, before the
+  // app goes: nothing of an attempt runs on after it.
+  if (!installDrained && installPrograms.running().length > 0) {
+    event.preventDefault();
+    installStop.abort();
+    void installPrograms.close(INSTALL_QUIT_WAIT_MS).then(() => {
+      installDrained = true;
+      app.quit();
+    });
+    return;
+  }
+  installStop.abort();
+  void installPrograms.close(0);
   void closeSetup();
   runtime?.client.stop();
 });

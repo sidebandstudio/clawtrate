@@ -282,6 +282,8 @@ function runningFacts(look: SetupLook): Array<[string, string]> {
           : NOT_REPORTED,
     ],
     ["Service", serviceWords(look.service)],
+    // Only where the host proved it: the install's records and its service's command.
+    ...(look.managed ? ([["Installed by", "Clawtrate"]] as Array<[string, string]>) : []),
   ];
 }
 
@@ -476,6 +478,12 @@ function LookResult({
       if (offer.install && onInstall)
         return (
           <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
+            {look.leftover && (
+              <Lede>
+                An earlier setup attempt of Clawtrate's didn't finish. Setting up removes its files
+                first.
+              </Lede>
+            )}
             <Actions>
               <Primary onClick={onInstall}>Set up OpenClaw here</Primary>
               <Quiet onClick={onAnother}>It runs on another computer</Quiet>
@@ -623,40 +631,81 @@ const CLASSIFICATION: Record<OnboardClassification, string> = {
 function installCause(failure: InstallFailure): string {
   switch (failure.kind) {
     case "exists":
-      return "Clawtrate won't change it.";
+      return "Clawtrate won't replace it.";
+    case "write":
+      return "Clawtrate couldn't read or write a file it needs. Check that there is space and that its app data can be written.";
+    case "user-service":
+      return "Setting OpenClaw up here needs a running systemd user manager, as a desktop login has.";
     case "download":
       return "The download didn't finish.";
+    case "download-short":
+      return "The download ended before all its bytes arrived.";
+    case "download-space":
+      return "Clawtrate ran out of space while saving a download.";
     case "fingerprint":
-      return "A download didn't match the fingerprint built into Clawtrate, so nothing was installed.";
+      return "A download didn't match its expected fingerprint. Setup stopped before extracting either archive.";
+    case "unpack":
+      return "Clawtrate couldn't unpack a checked download.";
+    case "installer-changed":
+      return "The checked installer isn't the one this version of Clawtrate expects.";
     case "installer":
-      return failure.exitCode === null
-        ? "The installer stopped."
-        : `The installer stopped (exit ${failure.exitCode}).`;
+      return "The installer stopped before reporting completion.";
+    case "no-program":
+      return "Clawtrate couldn't find the installed OpenClaw program, or it isn't the checked one.";
     case "node-not-checked":
-      return "The installer didn't use the checked Node.js.";
+      return "Clawtrate couldn't confirm the installer would use the checked Node.js.";
     case "onboard":
       return failure.classification
         ? CLASSIFICATION[failure.classification]
         : failure.exitCode === null || failure.exitCode === 0
           ? "OpenClaw's setup didn't report a gateway Clawtrate can use."
           : `OpenClaw's setup stopped (exit ${failure.exitCode}).`;
+    case "service":
+      return "OpenClaw couldn't install the gateway's user service.";
     case "not-answering":
-      return "The gateway didn't answer after it was set up.";
+      return "Clawtrate couldn't confirm the new gateway was running on its chosen port.";
     case "changed":
+    case "expired":
       return "Look again.";
   }
 }
 
+/** What a failed attempt left, said after its cause. */
+const CLEANUP: Record<InstallFailure["cleanup"], string> = {
+  none: "",
+  removed: " Clawtrate removed this attempt's program files and install record.",
+  unproven: " Clawtrate couldn't confirm what this attempt left. Trying again is unavailable.",
+  kept: " Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered.",
+};
+
+/** A failure before the first step: its own lead, and no step drawn as failed. */
+const BEFORE: Partial<Record<InstallFailure["kind"], string>> = {
+  exists: "A clawtrate folder, service or install record already exists.",
+  write: "Clawtrate couldn't prepare the install.",
+  "user-service": "This session can't run a systemd user service.",
+  changed: "This changed since you looked.",
+  expired: "This setup confirmation expired.",
+};
+
 /** The typed record of a failed step (§10): the step, the error category, the exit code. */
 const CATEGORY: Record<InstallFailure["kind"], string> = {
   exists: "Already set up",
+  write: "Write",
+  "user-service": "User service manager",
   download: "Download",
+  "download-short": "Download incomplete",
+  "download-space": "No space",
   fingerprint: "Fingerprint",
+  unpack: "Unpack",
+  "installer-changed": "Installer not expected",
   installer: "Installer",
+  "no-program": "Installed program",
   "node-not-checked": "Node.js not checked",
   onboard: "Gateway setup",
+  service: "User service",
   "not-answering": "No answer",
   changed: "Changed",
+  expired: "Expired",
 };
 
 /** "Set up OpenClaw on this computer" (§10, F-501): what, where, checked and then, before anything runs. */
@@ -677,17 +726,17 @@ function InstallReview({
     ],
     [
       "Where",
-      "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.",
+      "Clawtrate puts the program in its app data and gateway data in the clawtrate profile. OpenClaw also adds a user service and can write service logs.",
     ],
     [
       "Checked",
-      "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+      "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
     ],
     [
       "Then",
       platform === "linux"
-        ? "A gateway that listens on this computer only, as a systemd user service that starts with your session, with no AI provider yet. You sign in to one when you make your first bot."
-        : "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot.",
+        ? "OpenClaw sets up a gateway configured for this computer only, with token sign-in and no AI provider. Its user service is configured to start when your user session starts."
+        : "OpenClaw sets up a gateway configured for this computer only, with token sign-in and no AI provider. Its user service is configured to start when you log in.",
     ],
   ];
   return (
@@ -703,10 +752,16 @@ function InstallReview({
           </div>
         ))}
       </dl>
-      <Hint>Nothing is asked for: no account and no model key.</Hint>
+      <Hint>Setup asks for no provider account or model key.</Hint>
+      {platform === "linux" && (
+        <Hint>
+          A systemd user service stops when you log out unless lingering is on for your account
+          (loginctl enable-linger). Clawtrate doesn't change that setting.
+        </Hint>
+      )}
       <Hint>
-        OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also
-        stop it; removing OpenClaw isn't offered in this version.
+        OpenClaw runs as a separate user service. Removing the Clawtrate app does not remove that
+        service. Clawtrate does not offer OpenClaw removal in this version.
       </Hint>
       <Actions>
         <button
@@ -735,11 +790,10 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
   const current = failure ? failure.step : install.step;
   const details = [null, install.nodeChecked ? `Node.js ${INSTALL_NODE_VERSION}, checked` : null];
   let lead = "";
-  if (failure?.kind === "exists")
-    lead = "Something named clawtrate is already set up on this computer.";
-  else if (failure?.kind === "changed") lead = "This changed since you looked.";
+  if (failure && failure.step < 0) lead = BEFORE[failure.kind] ?? "Setup couldn't start.";
+  else if (failure?.kind === "changed") lead = BEFORE.changed!;
   else if (failure) lead = `${INSTALL_STEPS[failure.step] ?? INSTALL_STEPS[0]} failed.`;
-  const reachedOnboarding = failure !== null && failure.step >= 2;
+  const again = failure?.kind === "changed" || failure?.kind === "expired";
   return (
     <>
       {failure && <Back onBack={onBack} />}
@@ -750,13 +804,9 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
         <>
           <Note tone="danger" lead={lead}>
             {installCause(failure)}
-            {failure.retry
-              ? " Clawtrate removed what this attempt had installed."
-              : reachedOnboarding
-                ? " Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered."
-                : ""}
+            {CLEANUP[failure.cleanup]}
           </Note>
-          {failure.kind !== "exists" && failure.kind !== "changed" && (
+          {failure.step >= 0 && failure.kind !== "changed" && (
             <details className="b-disclosure s-disclosure" data-testid="setup-install-details">
               <summary>Show details</summary>
               <div className="b-disclosure-body">
@@ -785,7 +835,7 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
             {failure.retry && (
               <Primary onClick={() => void send({ type: "setupInstall" })}>Try again</Primary>
             )}
-            {failure.kind === "changed" ? (
+            {again ? (
               <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
             ) : (
               !failure.retry && <Primary onClick={onBack}>Back</Primary>
@@ -1072,7 +1122,7 @@ function FirstScreen({
         {offer.platform === "win32"
           ? "New to OpenClaw? Clawtrate doesn't set it up on Windows. Use Advanced with a gateway on a Mac or a Linux computer."
           : offer.install
-            ? "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there."
+            ? "New to OpenClaw? Choose This computer to look for OpenClaw or set it up here."
             : "New to OpenClaw? Choose where it should run, and Clawtrate says what it finds there."}
       </Hint>
     </>

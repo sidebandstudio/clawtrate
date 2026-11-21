@@ -8,17 +8,23 @@ import { contextFor, openFixture, settle, SIZES, type Theme } from "./fixture.ts
 
 const STATES = [
   "not-found",
+  "not-found-leftover",
   "installing",
   "installing-node",
   "installing-check",
   "install-download",
+  "install-download-space",
   "install-fingerprint",
   "install-installer",
   "install-node",
+  "install-unproven",
   "install-onboard",
+  "install-service",
   "install-not-answering",
   "install-exists",
+  "install-user-service",
   "install-changed",
+  "install-expired",
   "found-installed",
 ];
 const THEMES_DARK_FIRST: Theme[] = ["dark", "light"];
@@ -71,15 +77,23 @@ test.describe("behaviour", () => {
     await expect(facts.locator("dd").nth(0)).toHaveText(
       "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1",
     );
-    await expect(facts.locator("dd").nth(2)).toContainText(
-      "Setup also installs code from npm that Clawtrate hasn't pinned or verified.",
+    await expect(facts.locator("dd").nth(1)).toHaveText(
+      "Clawtrate puts the program in its app data and gateway data in the clawtrate profile. OpenClaw also adds a user service and can write service logs.",
     );
-    await expect(facts.locator("dd").nth(3)).toContainText(
-      "as a LaunchAgent that starts when you log in",
+    await expect(facts.locator("dd").nth(2)).toHaveText(
+      "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version before extracting either archive. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
     );
+    await expect(facts.locator("dd").nth(3)).toHaveText(
+      "OpenClaw sets up a gateway configured for this computer only, with token sign-in and no AI provider. Its user service is configured to start when you log in.",
+    );
+    await expect(page.getByText("Setup asks for no provider account or model key.")).toBeVisible();
     await expect(
-      page.getByText("Nothing is asked for: no account and no model key."),
+      page.getByText(
+        "OpenClaw runs as a separate user service. Removing the Clawtrate app does not remove that service. Clawtrate does not offer OpenClaw removal in this version.",
+      ),
     ).toBeVisible();
+    // Nothing promises a Settings action the app doesn't have.
+    await expect(page.getByText(/Settings/)).toHaveCount(0);
     expect(await sent(page)).toEqual([]);
     await page.getByRole("button", { name: "Cancel" }).click();
     await expect(
@@ -107,6 +121,7 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible();
     await expect(page.getByTestId("setup-found")).toContainText("clawtrate");
+    await expect(page.getByTestId("setup-found")).toContainText("Installed byClawtrate");
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
@@ -127,7 +142,7 @@ test.describe("behaviour", () => {
     await expect(steps.nth(1)).toHaveAttribute("data-state", "failed");
     await expect(steps.nth(2)).toHaveAttribute("data-state", "waiting");
     await expect(page.getByRole("alert")).toHaveText(
-      "Install Node.js and OpenClaw failed. The installer stopped (exit 1). Clawtrate removed what this attempt had installed.",
+      "Install Node.js and OpenClaw failed. The installer stopped before reporting completion. Clawtrate removed this attempt's program files and install record.",
     );
     await page.getByText("Show details").click();
     const details = page.getByTestId("setup-install-details").locator("dd");
@@ -141,27 +156,62 @@ test.describe("behaviour", () => {
   }) => {
     await openFixture(page, "setup=install-onboard", "dark");
     await expect(page.getByRole("alert")).toHaveText(
-      "Set up the gateway failed. This session can't run a systemd user service. Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered.",
+      "Set up the gateway failed. The gateway reported a problem when starting. Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered.",
     );
     await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
     await page.getByRole("button", { name: "Back" }).first().click();
     expect(await sent(page)).toEqual(["setupCancel"]);
   });
 
-  test("F-501: something named clawtrate already there is refused in the design's words", async ({
+  test("F-502: a cleanup that couldn't be proven says so, and offers no Try again", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-unproven", "dark");
+    await expect(page.getByRole("alert")).toContainText(
+      "Clawtrate couldn't confirm what this attempt left. Trying again is unavailable.",
+    );
+    await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+  });
+
+  test("F-501: a confirmation answered too late says it expired, and offers a look again", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-expired", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "This setup confirmation expired. Look again.",
+    );
+    await page.getByRole("button", { name: "Look again" }).click();
+    expect(await sent(page)).toEqual(["setupLook"]);
+  });
+
+  test("F-502: an earlier attempt of Clawtrate's own is named on the card, and setting up is still offered", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=not-found-leftover", "dark");
+    await expect(
+      page.getByText(
+        "An earlier setup attempt of Clawtrate's didn't finish. Setting up removes its files first.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toBeVisible();
+  });
+
+  test("F-501: a clawtrate folder, service or record already there is refused in the design's words", async ({
     page,
   }) => {
     await openFixture(page, "setup=install-exists", "dark");
     await expect(page.getByRole("alert")).toHaveText(
-      "Something named clawtrate is already set up on this computer. Clawtrate won't change it.",
+      "A clawtrate folder, service or install record already exists. Clawtrate won't replace it.",
     );
     await expect(page.locator(".s-steps [data-state='failed']")).toHaveCount(0);
   });
 
-  test("F-502: a fingerprint that didn't match says nothing was installed", async ({ page }) => {
+  test("F-502: a fingerprint that didn't match says setup stopped before extracting either archive", async ({
+    page,
+  }) => {
     await openFixture(page, "setup=install-fingerprint", "dark");
     await expect(page.getByRole("alert")).toContainText(
-      "A download didn't match the fingerprint built into Clawtrate, so nothing was installed.",
+      "A download didn't match its expected fingerprint. Setup stopped before extracting either archive.",
     );
   });
 });
