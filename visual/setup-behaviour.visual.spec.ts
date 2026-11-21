@@ -217,11 +217,12 @@ test("F-493: Advanced is the address-and-token form as it was, and Back returns 
   await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
 });
 
-test("Another computer leads to Advanced until reaching it over SSH is built", async ({ page }) => {
+test("Another computer opens the SSH field, with Advanced under it", async ({ page }) => {
   await openFixture(page, "setup=first", "light");
   await rows(page).nth(1).click();
   await expect(page.getByRole("heading", { name: "Another computer" })).toBeFocused();
-  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(page.getByRole("textbox", { name: "SSH host or alias" })).toBeVisible();
+  await page.getByRole("button", { name: "Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
 });
 

@@ -347,16 +347,15 @@ export const MAX_FORWARD_LISTENERS = 8;
 export const MAX_HOST_KEY_CHARS = 8192;
 
 /**
- * The desktop app's SSH transport (`apps/desktop/src/main/ssh/`). It is not
- * held by a bridge session yet, so nothing here is counted in a row of the
- * host's worst case; the unit that puts it behind the interface gives its
- * captured keys a row.
+ * The desktop app's SSH transport (`apps/desktop/src/main/ssh/`), behind the
+ * setup screens of "Another computer": its captured keys wait for the
+ * person's decision, and count in the host's worst case (`sshCaptures`).
  */
 export const SSH_TRANSPORT_OWNERS: Record<string, Owner> = {
   captures: {
     max: MAX_SSH_CAPTURES,
     each: 3 * ID + MAX_HOST_KEY_CHARS + SHORT,
-    row: null,
+    row: "sshCaptures",
     opaque: "one public host key, at most `MAX_HOST_KEY_CHARS`, each dropped after 2 minutes",
   },
   forwards: { max: MAX_SSH_FORWARDS, each: N, row: null },
@@ -421,5 +420,6 @@ export function ownerRows(viewers: number): Record<string, number> {
   add(ATTACHMENT_OWNERS, 1);
   add(SAVE_OWNERS, 1);
   add(UPDATE_PREFERENCE_OWNERS, 1);
+  add(SSH_TRANSPORT_OWNERS, 1);
   return rows;
 }

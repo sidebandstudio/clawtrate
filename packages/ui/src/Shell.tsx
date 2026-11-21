@@ -482,6 +482,7 @@ export function Shell({
       inert={inert}
     >
       <Rail
+        routeName={state.setup?.route?.account ?? null}
         bots={state.bots}
         tasksByBot={state.tasksByBot}
         discovery={state.discovery}

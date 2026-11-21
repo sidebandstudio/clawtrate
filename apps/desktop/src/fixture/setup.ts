@@ -8,8 +8,10 @@ import {
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  type RouteStatus,
   type SetupLook,
   type SetupState,
+  type SshSetup,
 } from "@clawtrate/core";
 
 const running: SetupLook = {
@@ -36,6 +38,46 @@ const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): S
   phase: "failed",
   look: running,
   failure: { kind, exitCode: null, port: null, reason: null, ...extra },
+});
+
+/** Another computer (§5): devbox, as the person's SSH configuration resolves it. */
+const devbox: SshSetup = {
+  destination: "devbox",
+  account: "you@devbox.example",
+  name: "devbox",
+  port: 22,
+  invalid: false,
+  refusal: null,
+  key: null,
+  failure: null,
+};
+const PRESENTED = {
+  label: "ED25519",
+  fingerprint: "SHA256:Q3v8Lw0eXk2Rj9TaNf5Hc1UbYm7Pd4GsZi6Ko2EaVr8",
+};
+const TRUSTED = {
+  label: "ED25519",
+  fingerprint: "SHA256:k4Pq9Zs1Nb7Xc3Vr8Lm2Tw6Yh5Gd0Fj1Ae9Ou4Ri7Kx",
+  pinnedAt: "2026-10-02T09:12:00.000Z",
+};
+const there = (patch: Partial<SetupState>, at: Partial<SshSetup> = {}): SetupState => ({
+  ...initialSetupState,
+  ...patch,
+  there: { ...devbox, ...at },
+});
+const thereFound = (look: Partial<SetupLook> = {}) =>
+  there({ phase: "found", look: { ...running, ...look } });
+const thereFailed = (failure: NonNullable<SshSetup["failure"]>, look: SetupLook | null = null) =>
+  there({ phase: "failed", look }, { failure });
+/** The app's SSH route, as the status strip and Settings read it (§8). */
+const route = (phase: RouteStatus["phase"], patch: Partial<RouteStatus> = {}): RouteStatus => ({
+  name: "devbox",
+  account: "you@devbox.example",
+  phase,
+  cause: null,
+  profile: "default",
+  startedByClawtrate: false,
+  ...patch,
 });
 
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
@@ -93,7 +135,68 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "cant-tell-not-set-up": looked({ outcome: "cant-tell", reason: "not-set-up" }),
   "cant-tell-no-answer": looked({ outcome: "cant-tell", reason: "no-answer" }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
+  // Another computer over SSH.
+  there: there({}, { destination: "" }),
+  "there-invalid": there(
+    {},
+    { destination: "-oProxyCommand=x", account: null, name: null, port: null, invalid: true },
+  ),
+  "there-refused": there(
+    {},
+    {
+      account: null,
+      port: null,
+      refusal: {
+        category: "jump-host",
+        setting: "ProxyJump",
+        title: "devbox is reached through another computer.",
+        sentence:
+          "Clawtrate doesn't connect through jump hosts yet. Use a setup code made on devbox, or Advanced.",
+      },
+    },
+  ),
+  "there-looking": there({ phase: "looking", step: 1 }),
+  "there-hostkey": there(
+    { phase: "key" },
+    { key: { state: "first-contact", presented: PRESENTED, trusted: null } },
+  ),
+  "there-changed": there(
+    { phase: "key" },
+    { key: { state: "changed", presented: PRESENTED, trusted: TRUSTED } },
+  ),
+  "there-found": thereFound(),
+  "there-found-paired": thereFound({ access: "paired" }),
+  "there-stopped": thereFound({ outcome: "stopped", service: "launchagent-stopped" }),
+  "there-not-found": thereFound({
+    outcome: "not-found",
+    version: null,
+    profile: null,
+    listens: null,
+    service: null,
+  }),
+  "there-connecting": there({ phase: "connecting", step: 1, look: running }),
+  "there-starting": there({
+    phase: "connecting",
+    step: 0,
+    look: { ...running, outcome: "stopped", service: "launchagent-stopped" },
+  }),
+  "there-unreachable": thereFailed({ kind: "unreachable", cause: "connection refused", exit: 255 }),
+  "there-sign-in": thereFailed({ kind: "sign-in-refused", cause: null, exit: 255 }),
+  "there-code-failed": thereFailed({ kind: "code-failed", cause: null, exit: 1 }, running),
+  "there-app-files": thereFailed({ kind: "app-files-unsafe", cause: null, exit: null }),
+  // The SSH route in the app: the status strip's words, and Settings' Remove (§8).
+  "route-restoring": { ...initialSetupState, route: route("restoring") },
+  "route-restored": { ...initialSetupState, route: route("restored") },
+  "route-unreachable": {
+    ...initialSetupState,
+    route: route("unreachable", { cause: "timed out" }),
+  },
+  "route-key-changed": { ...initialSetupState, route: route("key-changed") },
+  "route-up": { ...initialSetupState, route: route("up") },
 };
+
+/** A route state shows the app itself, with its strip: the main scene, not the first screen. */
+export const isRouteState = (name: string | null) => name !== null && name.startsWith("route-");
 
 export function isSetupState(name: string | null): name is string {
   return name !== null && Object.hasOwn(SETUP_STATES, name);
@@ -105,7 +208,12 @@ export function setupInfo(info: HostInfo, name: string): HostInfo {
     ...info,
     kind: "desktop",
     devGateway: null,
-    setup: { look: true, pair: true, platform: name === "windows" ? "win32" : "darwin" },
+    setup: {
+      look: true,
+      pair: true,
+      platform: name === "windows" ? "win32" : "darwin",
+      ssh: true,
+    },
   };
 }
 
@@ -181,6 +289,35 @@ export function setupCommand(
     }
     case "setupReset":
       setup(initialSetupState);
+      return true;
+    case "setupThere": {
+      const typed = command.destination.trim();
+      if (!/^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(typed)) {
+        setup(
+          there({}, { destination: typed, account: null, name: null, port: null, invalid: true }),
+        );
+        return true;
+      }
+      // The fixture has no native dialog: the account is taken as confirmed.
+      setup(there({ phase: "looking", step: 0 }, { destination: typed }));
+      later(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
+      later(
+        600,
+        () =>
+          current().phase === "looking" && setup({ ...current(), phase: "found", look: running }),
+      );
+      return true;
+    }
+    case "setupTrustKey":
+    case "setupReplaceKey":
+      setup({ ...current(), phase: "found", look: running, there: { ...devbox } });
+      return true;
+    case "setupStart":
+      setup({ ...current(), phase: "connecting", step: 0 });
+      later(600, () => setup({ ...current(), phase: "found", look: running }));
+      return true;
+    case "setupRetryRoute":
+    case "setupRemoveRoute":
       return true;
     default:
       return false;

@@ -85,7 +85,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     let identity = "gateway-identity-1";
     fake.handlers["gateway.identity.get"] = () => ({ deviceId: identity, publicKey: "key" });
     fake.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], DEVICE_TOKEN) });
-    const client = new ClawtrateClient(testHost(fake, routedStorage(storage, routes)), {
+    const host = testHost(fake);
+    host.storage = routedStorage(storage, routes);
+    const client = new ClawtrateClient(host, {
       reconnect: { initialMs: 50, maxMs: 200 },
     });
     const slice = new SetupSlice(client);

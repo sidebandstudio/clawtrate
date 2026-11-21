@@ -127,6 +127,7 @@ export function App({
           info={info}
           accounts={state.accounts}
           bots={state.bots}
+          route={state.setup?.route ?? null}
           updateReading={updated}
           initialUpdates={openUpdates}
           onClose={closeSettings}

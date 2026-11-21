@@ -11,6 +11,7 @@ import {
   type AccountsState,
   type Bot,
   type ConnectionState,
+  type RouteStatus,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -151,8 +152,11 @@ export function Settings({
   initialUpdates,
   updateReading,
   onClose,
+  route = null,
 }: {
   connection: ConnectionState;
+  /** The SSH route the app is connected through, when it is one (docs/design/setup.md §8). */
+  route?: RouteStatus | null;
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
@@ -285,10 +289,19 @@ export function Settings({
   const gatewayPane = (
     <>
       <dl className="facts" data-testid="gateway-facts">
-        <div>
-          <dt>Address</dt>
-          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? "None yet"}</dd>
-        </div>
+        {route ? (
+          <div>
+            <dt>Route</dt>
+            <dd className="b-wrap-value">{`Over SSH to ${route.account}, ${route.profile} profile`}</dd>
+          </div>
+        ) : (
+          <div>
+            <dt>Address</dt>
+            <dd title={connection.gatewayUrl ?? undefined}>
+              {connection.gatewayUrl ?? "None yet"}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>State</dt>
           <dd className="settings-state" data-testid="gateway-state">
@@ -365,7 +378,7 @@ export function Settings({
             Disconnect
           </button>
         )}
-        {connection.gatewayUrl && (
+        {connection.gatewayUrl && !route && (
           <button
             type="button"
             className="button"
@@ -376,6 +389,16 @@ export function Settings({
             }}
           >
             Use another gateway
+          </button>
+        )}
+        {route && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            onClick={() => void send({ type: "setupRemoveRoute" })}
+          >
+            Remove this gateway…
           </button>
         )}
       </div>

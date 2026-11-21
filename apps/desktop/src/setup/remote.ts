@@ -90,6 +90,10 @@ export function sshRouteKey(parts: {
 const newRouteId = () => `r${randomBytes(6).toString("hex")}`;
 /** Destinations whose route id this run remembers. */
 const MAX_REMEMBERED_IDS = 16;
+/** Forward addresses the routes had that a socket is refused for: the newest, each one port. */
+const MAX_ROUTE_ADDRESSES = 64;
+/** Gateways this run started over SSH, by endpoint, profile and port. */
+const MAX_STARTED = 16;
 
 const emptyThere = (destination: string): SshSetup => ({
   destination,
@@ -196,6 +200,16 @@ export class RemoteSetup {
 
   private failThere(failure: SshSetup["failure"], look = this.state.look): void {
     this.publish({ ...this.state, phase: "failed", look, there: this.withThere({ failure }) });
+  }
+
+  /** A forward's local address, kept among the last `MAX_ROUTE_ADDRESSES` the routes had. */
+  private remember(url: string): void {
+    this.localUrls.delete(url);
+    this.localUrls.add(url);
+    for (const old of this.localUrls) {
+      if (this.localUrls.size <= MAX_ROUTE_ADDRESSES) break;
+      this.localUrls.delete(old);
+    }
   }
 
   /**
@@ -657,7 +671,7 @@ export class RemoteSetup {
       return;
     }
     const url = `ws://127.0.0.1:${up.localPort}`;
-    this.localUrls.add(url);
+    this.remember(url);
     this.pending.url = url;
     // The route is recorded before its first token, which only the store keeps.
     this.options.routes.put(record);
@@ -823,7 +837,7 @@ export class RemoteSetup {
           if (!down) return;
           down = false;
           const url = `ws://127.0.0.1:${state.localPort}`;
-          this.localUrls.add(url);
+          this.remember(url);
           live.url = url;
           // Back: the route's own token, sent by itself to the gateway's port on the pinned computer.
           void client.connectRoute({ url, route: key });
@@ -951,6 +965,10 @@ export class RemoteSetup {
     }
     // Clawtrate's record: it started this gateway (rule 9), so Remove may offer to stop it.
     this.started.add(startedKey(route.endpoint, stopped.profile, stopped.port));
+    for (const old of this.started) {
+      if (this.started.size <= MAX_STARTED) break;
+      this.started.delete(old);
+    }
     this.publish({ ...this.state, step: 1 });
     for (let i = 0; i < START_LOOKS; i += 1) {
       const look = await transport.look(route);
@@ -1089,7 +1107,7 @@ export class RemoteSetup {
       return;
     }
     const url = `ws://127.0.0.1:${up.localPort}`;
-    this.localUrls.add(url);
+    this.remember(url);
     this.pending.url = url;
     this.publish({ ...this.state, step: 2 });
     this.watchConnect(attempt, record.key);

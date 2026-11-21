@@ -61,7 +61,7 @@ import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } fro
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import { memoryCommands } from "./memory.ts";
-import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
+import { isRouteState, isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -504,7 +504,10 @@ export function createFixtureBridge(
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
-  const { initial: sceneInitial, steps } = scene(setupName ? "connect" : name, now);
+  const { initial: sceneInitial, steps } = scene(
+    setupName && !isRouteState(setupName) ? "connect" : name,
+    now,
+  );
   const initial = setupName ? { ...sceneInitial, setup: SETUP_STATES[setupName]! } : sceneInitial;
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };

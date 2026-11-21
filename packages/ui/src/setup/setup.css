@@ -300,21 +300,16 @@
   font-size: var(--text-md);
   line-height: 1.6;
   word-spacing: 0.25em;
-  overflow-wrap: anywhere;
 }
 
+/* Two fingerprints to compare, the trusted one above the one presented now: the
+   setup column is too narrow to set them side by side (setup.md §2). */
 .s-prints {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 
 .s-prints .s-print {
   margin-top: var(--space-3);
-}
-
-@media (max-width: 520px) {
-  .s-prints {
-    grid-template-columns: 1fr;
-  }
 }
