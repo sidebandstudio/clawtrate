@@ -31,7 +31,7 @@ test("F-491: the first screen asks where OpenClaw runs, with two answers and Adv
   ]);
   await expect(page.getByRole("button", { name: "Advanced" })).toBeVisible();
   await expect(page.getByPlaceholder("Gateway address")).toHaveCount(0);
-  await expect(page.getByPlaceholder("Token, for the first pairing only")).toHaveCount(0);
+  await expect(page.getByPlaceholder("Gateway token, for pairing")).toHaveCount(0);
 });
 
 test("F-491: Up, Down, Home and End move between the two answers", async ({ page }) => {
@@ -203,7 +203,7 @@ test("F-493: Advanced is the address-and-token form as it was, and Back returns 
   await openFixture(page, "setup=first", "light");
   await page.getByRole("button", { name: "Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
-  await expect(page.getByPlaceholder("Token, for the first pairing only")).toHaveAttribute(
+  await expect(page.getByPlaceholder("Gateway token, for pairing")).toHaveAttribute(
     "type",
     "password",
   );
@@ -353,7 +353,7 @@ test("F-494: the setup screens take no token; only Advanced's form has a token f
   }
   await openFixture(page, "setup=first", "light");
   await page.getByRole("button", { name: "Advanced" }).click();
-  await expect(page.getByPlaceholder("Token, for the first pairing only")).toHaveAttribute(
+  await expect(page.getByPlaceholder("Gateway token, for pairing")).toHaveAttribute(
     "type",
     "password",
   );
