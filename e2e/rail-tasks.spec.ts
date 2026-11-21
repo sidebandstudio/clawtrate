@@ -56,6 +56,12 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   );
 }
 
+/** What a host's state snapshot holds that the checks read. */
+type HeldState = {
+  tasksByBot: Record<string, Array<{ key: string }> | undefined>;
+  transcripts: Record<string, { outbox: Array<{ text: string; status: string }> } | undefined>;
+};
+
 type Row = {
   key: string;
   sessionId?: string;
@@ -556,6 +562,71 @@ test("F-278: Delete, confirmed, stops the task's active run first, then removes 
   expect(readFileSync(memory, "utf8")).toBe(saved);
   await expect(taskRow(page, task.title)).toHaveCount(0);
   await expect(taskRow(second, task.title)).toHaveCount(0, { timeout: 20_000 });
+});
+
+test("F-278: a message sent in a task just deleted elsewhere does not start a new task: it stays with its words, says the task was deleted, and the task stays on screen", async () => {
+  const task = await ownTask("pip", "Pip", "Deleted elsewhere");
+  const words = "Are you still there?";
+  // What the host tells this page can be held back: the page goes on showing what it last heard.
+  let holding = false;
+  let held: HeldState | null = null;
+  let heldFrame = "";
+  let toPage: ((message: string) => void) | null = null;
+  /** Every state the message was in, as the host's snapshots said. */
+  const states = new Set<string>();
+  await page.routeWebSocket(/\/bridge$/, (ws) => {
+    const server = ws.connectToServer();
+    toPage = (message) => ws.send(message);
+    ws.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      const frame = JSON.parse(String(message)) as { type?: string; state?: HeldState };
+      if (frame.type === "state" && frame.state) {
+        held = frame.state;
+        heldFrame = String(message);
+        const state = held.transcripts[task.key]?.outbox.find((each) => each.text === words);
+        if (state) states.add(state.status);
+      }
+      if (!holding || frame.type !== "state") ws.send(message);
+    });
+  });
+  await reload(page);
+  await unfold(page, "Pip");
+  await sendInTask(page, task.title, "Hello");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  // The reply, which quotes the message, is on screen.
+  await expect(
+    page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
+  ).toBeVisible();
+  // The task is deleted from outside the app, with the gateway's own command line, and the
+  // person sends before this page has heard of it.
+  holding = true;
+  await gatewayCall("sessions.delete", { key: task.key, deleteTranscript: true });
+  await gateway.poll(async () => await describe(task.key)).toBeNull();
+  await page.getByTestId("composer-input").fill(words);
+  await page.getByTestId("composer-input").press("Enter");
+  // The gateway answered it, and made nothing under the deleted task's key: it refused it.
+  await gateway.poll(() => states.has("sent") || states.has("failed")).toBe(true);
+  expect(await describe(task.key)).toBeNull();
+  expect([...states]).not.toContain("sent");
+  // The page then hears both at once: the task gone from the list, and the refusal.
+  await gateway
+    .poll(() => held?.tasksByBot.pip?.some((row) => row.key === task.key) ?? true)
+    .toBe(false);
+  holding = false;
+  toPage!(heldFrame);
+  const sent = page.getByTestId("outgoing").filter({ hasText: words });
+  await expect(sent).toContainText("Not sent. This task was deleted elsewhere.");
+  await expect(sent.getByRole("button", { name: "Resend" })).toHaveCount(0);
+  await expect(page.locator(".conversation-header")).toContainText(task.title);
+  await shot(page, "deleted-elsewhere");
+  // Nothing is sent there later.
+  await page.waitForTimeout(2_000);
+  expect(await describe(task.key)).toBeNull();
+  expect((await listed("pip", "all")).some((row) => row.key === task.key)).toBe(false);
+  // Deleting the message leaves the task, which the gateway no longer has.
+  await sent.getByRole("button", { name: "Delete" }).click();
+  await expect(sent).toHaveCount(0);
+  await expect(page.locator(".conversation-header")).not.toContainText(task.title);
 });
 
 test("F-277: Stop and archive stops a working task's run and archives it; restored, its history is as it was", async () => {
