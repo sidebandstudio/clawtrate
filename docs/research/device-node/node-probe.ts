@@ -45,6 +45,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { openInstance, recordedStartOptions } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
+import { readProbeAllowlist } from "./probe-allowlist.ts";
 import { probeEndpoint, probeTarget } from "./probe-endpoint.ts";
 
 const requireFromTool = createRequire(new URL("../../../tools/dev-gateway/package.json", import.meta.url));
@@ -306,11 +307,7 @@ function pendingSummary(list: unknown) {
 
 /** The instance's stored allowlist, and the hash to write against. */
 async function allowOf(admin: Conn) {
-  const got = (await admin.request("config.get", {})) as {
-    hash?: string;
-    config?: { gateway?: { nodes?: { commands?: { allow?: string[] } } } };
-  };
-  return { hash: got.hash, allow: got.config?.gateway?.nodes?.commands?.allow ?? [] };
+  return readProbeAllowlist(await admin.request("config.get", {}));
 }
 
 /**

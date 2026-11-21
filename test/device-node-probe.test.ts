@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { readProbeAllowlist } from "../docs/research/device-node/probe-allowlist.ts";
 import { CHECKOUT_DIR } from "../tools/dev-gateway/src/env.ts";
 import {
   NAMED_PORT_BLOCK,
@@ -100,4 +101,47 @@ describe("the device-node probe proves its endpoint before it sends a credential
       rmSync(stale.home, { recursive: true, force: true });
     }
   }, 90_000);
+});
+
+describe("the device-node probe's allowlist read", () => {
+  const hash = "stored-revision";
+  const snapshot = (allow: unknown) => ({
+    valid: true,
+    hash,
+    config: { gateway: { nodes: { commands: { allow } } } },
+  });
+
+  it("rejects the empty fallback config from an invalid snapshot", () => {
+    expect(() => readProbeAllowlist({ valid: false, hash, config: {} })).toThrow(
+      "did not confirm a valid configuration",
+    );
+  });
+
+  it("requires a configuration object and a usable revision", () => {
+    expect(() => readProbeAllowlist({ valid: true, config: {} })).toThrow(
+      "did not return a configuration hash",
+    );
+    expect(() => readProbeAllowlist({ valid: true, hash: " ", config: {} })).toThrow(
+      "did not return a configuration hash",
+    );
+    expect(() => readProbeAllowlist({ valid: true, hash })).toThrow(
+      "did not return a configuration object",
+    );
+  });
+
+  it("accepts absent and empty allowlists from valid snapshots", () => {
+    expect(readProbeAllowlist({ valid: true, hash, config: {} })).toEqual({ hash, allow: [] });
+    expect(readProbeAllowlist(snapshot([]))).toEqual({ hash, allow: [] });
+  });
+
+  it("preserves populated lists and rejects malformed ones", () => {
+    const allow = ["clawtrate.probe.echo", "other.command"];
+    expect(readProbeAllowlist(snapshot(allow))).toEqual({ hash, allow });
+    expect(() => readProbeAllowlist(snapshot(["clawtrate.probe.echo", 1]))).toThrow(
+      "invalid node command allowlist",
+    );
+    expect(() =>
+      readProbeAllowlist({ valid: true, hash, config: { gateway: { nodes: false } } }),
+    ).toThrow("invalid gateway node configuration");
+  });
 });
