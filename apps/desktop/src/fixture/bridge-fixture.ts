@@ -545,7 +545,8 @@ export function createFixtureBridge(
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
-  const histories = state.transcripts;
+  // The histories a dropped or failed transcript is read again from; pairing loads its own.
+  let histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -665,8 +666,12 @@ export function createFixtureBridge(
           pairingChecks += 1;
           if (pairingChecks === 1) set(withConnection(state, { retryAt: Date.now() + 5000 }));
           else {
-            const next = loaded(Date.now());
-            set(search.ids ? { ...next, transcripts: withMessageIds(next.transcripts) } : next);
+            const loadedNow = loaded(Date.now());
+            const next = search.ids
+              ? { ...loadedNow, transcripts: withMessageIds(loadedNow.transcripts) }
+              : loadedNow;
+            histories = next.transcripts;
+            set(next);
           }
           return;
         }
@@ -708,7 +713,12 @@ export function createFixtureBridge(
         if (!history || history === current || (current && current.status !== "error")) return;
         const reading = { ...history, status: "loading" as const, error: null };
         set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
-        later(120, (now) => ({ ...now, transcripts: { ...now.transcripts, [key]: history } }));
+        // Only onto the read it answers: a disconnect or a replacement since has the last word.
+        later(120, (now) =>
+          now.transcripts[key] === reading
+            ? { ...now, transcripts: { ...now.transcripts, [key]: history } }
+            : now,
+        );
         return;
       }
       case "closeSession":

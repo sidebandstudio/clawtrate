@@ -43,6 +43,8 @@ type Fixture = {
   release(): void;
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   sent: Array<{ type: string; key?: string }>;
+  send(command: { type: string; key?: string }): Promise<void>;
+  getState(): ClawtrateState;
 };
 
 /** Hold the fixture's delayed answers and drop a task's loaded history, so opening it reads it again. */
@@ -394,6 +396,47 @@ test("F-033: a retry of the selected task's history doesn't reopen it once the s
   await expect(page.locator(".title-pill-task")).toHaveText("Router firmware");
   // The shell released the old task; the retry's answer must not take it back.
   expect((await sessionsAfter(page, key)).at(-1)).toBe("closeSession");
+});
+
+test("the fixture reads a history again after pairing, and drops a read that a disconnect overtook", async ({
+  page,
+}) => {
+  const key = "agent:otto:disk-space";
+  // Paired by the second "Check now": the histories it loads can be read again.
+  await openFixture(page, "scene=pairing&search=on", "light");
+  const reread = await page.evaluate(async (key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    await fixture.send({ type: "retry" });
+    await fixture.send({ type: "retry" });
+    fixture.hold();
+    fixture.setState((state) => {
+      const transcripts = { ...state.transcripts };
+      delete transcripts[key];
+      return { ...state, transcripts };
+    });
+    await fixture.send({ type: "openSession", key });
+    const reading = fixture.getState().transcripts[key]?.status;
+    fixture.release();
+    return [reading, fixture.getState().transcripts[key]?.status];
+  }, key);
+  expect(reread).toEqual(["loading", "ready"]);
+
+  // A disconnect before the history answers clears the task; the late answer doesn't bring it back.
+  await openFixture(page, `scene=main&search=on`, "light");
+  const after = await page.evaluate(async (key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.hold();
+    fixture.setState((state) => {
+      const transcripts = { ...state.transcripts };
+      delete transcripts[key];
+      return { ...state, transcripts };
+    });
+    await fixture.send({ type: "openSession", key });
+    await fixture.send({ type: "disconnect" });
+    fixture.release();
+    return fixture.getState().transcripts[key];
+  }, key);
+  expect(after).toBeUndefined();
 });
 
 test("F-033: closing search stops the per-bot searches still queued", async ({ page }) => {
