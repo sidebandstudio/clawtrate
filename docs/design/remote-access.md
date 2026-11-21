@@ -84,12 +84,12 @@ The dialog's title is "Connect a phone". It explains, then asks the host.
 - "Your iPhone can reach this gateway from anywhere through Clawtrate's relay, relay.example." (15)
 - A fact block:
 
-|           |                                                                                                                                                                                             |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Relay     | "relay.example passes the connection on and can't read it. It sees addresses, times and sizes." with a disclosure, "What the relay sees and keeps", holding section 3's paragraph          |
-| On devbox | "Clawtrate's connector, in its own folder. It connects to the relay and to the gateway on devbox only."                                                                                    |
+|           |                                                                                                                                                                                              |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Relay     | "relay.example passes the connection on and can't read it. It sees addresses, times and sizes." with a disclosure, "What the relay sees and keeps", holding section 3's paragraph            |
+| On devbox | "Clawtrate's connector, in its own folder. It connects to the relay and to the gateway on devbox only."                                                                                      |
 | Gateway   | "Clawtrate adds 127.0.0.1 and ::1 to the gateway's trusted proxies, so each phone that comes through the relay waits for your approval. Turning remote access off puts back what was there." |
-| Phones    | "Each phone uses a one-time code, then waits for you to approve it, read-only."                                                                                                            |
+| Phones    | "Each phone uses a one-time code, then waits for you to approve it, read-only."                                                                                                              |
 
 - A `--warn` note when the look saw a Tailscale Serve route that Clawtrate did not make (`setup.md` §14, F-512): "**A Tailscale route to this gateway that Clawtrate didn't make will start to work too.** The gateway refuses it today because it adds forwarded headers. Once it trusts this computer's own addresses, it accepts it as a remote route, and new devices through it wait for approval." (`setup-flow.md` §3, and R0's note on branch `relay-r0`.)
 - "Turn on remote access…" (primary), which asks the host, and "Cancel".
@@ -98,12 +98,12 @@ The dialog's title is "Connect a phone". It explains, then asks the host.
 
 **The steps**, title "Turning on remote access", in a step list (`setup.md` §2):
 
-| Step                                      | What the host runs (section 10)                                                                  | Done when                                                                        |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| "Putting Clawtrate's connector on devbox" | Waits for a distribution (below)                                                                 | The program answers with its version, the one built with this Clawtrate          |
-| "Adding this computer to trusted proxies" | `clawtrate-connector setup --relay <relay> --gateway-port <port> [--openclaw-profile clawtrate]` | `status --json`'s record reads back `applied` covering loopback (research §5)    |
-| "Starting the connector"                  | Nothing: the person runs the service command (4.2)                                               | `status --json` says `running` is `connecting` or `registered`                   |
-| "Reaching the relay"                      | `status --json` every 4 s                                                                        | `running` is `registered`                                                        |
+| Step                                      | What the host runs (section 10)                                                                  | Done when                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| "Putting Clawtrate's connector on devbox" | Waits for a distribution (below)                                                                 | The program answers with its version, the one built with this Clawtrate       |
+| "Adding this computer to trusted proxies" | `clawtrate-connector setup --relay <relay> --gateway-port <port> [--openclaw-profile clawtrate]` | `status --json`'s record reads back `applied` covering loopback (research §5) |
+| "Starting the connector"                  | Nothing: the person runs the service command (4.2)                                               | `status --json` says `running` is `connecting` or `registered`                |
+| "Reaching the relay"                      | `status --json` every 4 s                                                                        | `running` is `registered`                                                     |
 
 Step 2's line under it says what it found, from the record: "Added 127.0.0.1 and ::1 (there were none)", "Added ::1 (127.0.0.1 was there)", or "Already there; nothing changed". The change applies to the running gateway with no restart (research §5).
 
@@ -121,13 +121,13 @@ When `status --json` reads `registered`, the steps finish and the next screen op
 
 **Failures while turning on**, each a `--danger` note under the step list, in fixed copy, with what is left on the gateway's computer:
 
-| Fact                                                                 | Note                                                                                                                         | What is left                                                                                                     | Actions                                |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| The connector couldn't be put there                                  | **Putting Clawtrate's connector on devbox failed.** "Nothing was changed on the gateway."                                    | Nothing                                                                                                          | "Try again" (a new dialog)             |
-| `setup` exits non-zero before writing (`openclaw config get` failed) | **Clawtrate couldn't read the gateway's settings.** "Nothing was changed on the gateway."                                    | The connector's folder and keys                                                                                  | "Try again"                            |
-| `setup` refused: the value changed after an earlier `setup`          | **The gateway's trusted proxies changed after Clawtrate set them.** "Clawtrate left them as they are. Check them on devbox." | The value as the other change left it; the connector's record of the earlier value                               | "Look again"                           |
+| Fact                                                                 | Note                                                                                                                         | What is left                                                                                                    | Actions                                |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| The connector couldn't be put there                                  | **Putting Clawtrate's connector on devbox failed.** "Nothing was changed on the gateway."                                    | Nothing                                                                                                         | "Try again" (a new dialog)             |
+| `setup` exits non-zero before writing (`openclaw config get` failed) | **Clawtrate couldn't read the gateway's settings.** "Nothing was changed on the gateway."                                    | The connector's folder and keys                                                                                 | "Try again"                            |
+| `setup` refused: the value changed after an earlier `setup`          | **The gateway's trusted proxies changed after Clawtrate set them.** "Clawtrate left them as they are. Check them on devbox." | The value as the other change left it; the connector's record of the earlier value                              | "Look again"                           |
 | The value reads back other than the union                            | **The gateway's trusted proxies didn't read back as expected.** "Clawtrate didn't go on."                                    | Whatever the gateway reports, shown as the list it read; the record, so Turn off can put back the earlier value | "Turn off remote access…"              |
-| The connector stays `waiting` or `connecting` for 60 s               | **The connector on devbox can't reach relay.example.** "Check that devbox can reach the internet. Clawtrate keeps checking." | The connector running and retrying; the trusted proxies set                                                      | "Check now", "Turn off remote access…" |
+| The connector stays `waiting` or `connecting` for 60 s               | **The connector on devbox can't reach relay.example.** "Check that devbox can reach the internet. Clawtrate keeps checking." | The connector running and retrying; the trusted proxies set                                                     | "Check now", "Turn off remote access…" |
 
 Back during the steps stops what the host is running. A step that already finished stays done and is said: the Remote access row shows what is set (section 6).
 
@@ -148,23 +148,23 @@ With remote access on, the dialog shows one field, "Phone's name" (a pill field 
 
 **Failures making a code**:
 
-| Fact                                                                  | Note                                                                                  | What is left                                                                  |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `openclaw qr` failed inside `pair-phone` (exit non-zero)              | **Couldn't make a one-time code.** "OpenClaw exited with code 1."                     | Nothing new                                                                   |
-| `pair-phone` refused: eight codes already open                        | **Too many codes are open.** "Wait until one is used or expires, at most 10 minutes." | The open codes, until they expire                                             |
-| `pair-phone` refused: 32 phones                                       | **This connector has 32 phones.** "Remove one in Settings first."                     | Nothing new                                                                   |
-| `pair-phone` refused the setup code (other fields, another address)   | **OpenClaw made a code Clawtrate can't use.** "Nothing was handed out."               | OpenClaw's own setup code, unused, until it expires (no command withdraws it) |
+| Fact                                                                | Note                                                                                  | What is left                                                                  |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `openclaw qr` failed inside `pair-phone` (exit non-zero)            | **Couldn't make a one-time code.** "OpenClaw exited with code 1."                     | Nothing new                                                                   |
+| `pair-phone` refused: eight codes already open                      | **Too many codes are open.** "Wait until one is used or expires, at most 10 minutes." | The open codes, until they expire                                             |
+| `pair-phone` refused: 32 phones                                     | **This connector has 32 phones.** "Remove one in Settings first."                     | Nothing new                                                                   |
+| `pair-phone` refused the setup code (other fields, another address) | **OpenClaw made a code Clawtrate can't use.** "Nothing was handed out."               | OpenClaw's own setup code, unused, until it expires (no command withdraws it) |
 
 ## 5. After the code is used: approving, and what else can happen
 
 When the connector reports the phone, the host reads the gateway's devices (`openclaw devices list --json`) every 4 s for the code's remaining life, and shows one of these. They are told apart by the gateway's own fields (research §2, §4):
 
-| The gateway lists, made after the code                                                                                                                  | Screen                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| A pending request: `clientId` `gateway-client`, `role` `operator`, `roles` `["operator"]`, `scopes` `["operator.read"]`, not a repair, with `remoteIp` | A phone asks to read (5.1)                                                |
-| A pending request with anything else                                                                                                                    | A phone asks for more (5.3)                                               |
-| A paired device with `approvedVia` `bootstrap` and a `remoteIp`                                                                                         | Let in by the code (5.4)                                                  |
-| Nothing yet                                                                                                                                             | "The phone used the code. Waiting for its request, checking again in 4s" |
+| The gateway lists, made after the code                                                                                                                 | Screen                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| A pending request: `clientId` `gateway-client`, `role` `operator`, `roles` `["operator"]`, `scopes` `["operator.read"]`, not a repair, with `remoteIp` | A phone asks to read (5.1)                                               |
+| A pending request with anything else                                                                                                                   | A phone asks for more (5.3)                                              |
+| A paired device with `approvedVia` `bootstrap` and a `remoteIp`                                                                                        | Let in by the code (5.4)                                                 |
+| Nothing yet                                                                                                                                            | "The phone used the code. Waiting for its request, checking again in 4s" |
 
 ### 5.1 A phone asks to read
 
@@ -201,7 +201,7 @@ Title "This phone asks for more than read". The device code; the scopes it asks 
 
 ### 5.4 Let in by the code alone
 
-A `--danger` note, title "**A device was let in by this code without your approval**": "devbox's gateway lists a new device that came through the relay and was approved by the code alone, as OpenClaw's own apps can be. If it isn't yours, remove it." Facts: the device code; it calls itself "node-host" (the client id, as text); Approved "by the code"; Access, the roles and scopes read back. Actions: "Remove it from the gateway…" (the host's dialog, `openclaw devices remove <deviceId> --json`, read back) and "Remove it from remote access…" (6.2). Both say afterwards what is left, step by step.
+A `--danger` note, title "**A device was let in by this code without your approval.**" "devbox's gateway lists a new device that came through the relay and was approved by the code alone, as OpenClaw's own apps can be. If it isn't yours, remove it." Facts: the device code; it calls itself "node-host" (the client id, as text); Approved "by the code"; Access, the roles and scopes read back. Actions: "Remove it from the gateway…" (the host's dialog, `openclaw devices remove <deviceId> --json`, read back) and "Remove it from remote access…" (6.2). Both say afterwards what is left, step by step.
 
 Clawtrate's own iPhone app never takes this path: it connects as `gateway-client` and asks for read (research §1).
 
@@ -211,13 +211,13 @@ A row in Settings, Gateway, under "Private access with Tailscale" (`setup.md` §
 
 ### 6.1 The row
 
-| The connector reports                                   | The row                                                                                                                                          | Actions                                             |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
-| No state folder (`status` exits with "Run setup first") | **Remote access** · "Off. Reach this gateway from your iPhone anywhere, through Clawtrate's relay."                                             | "Connect a phone…"                                  |
-| `running` `registered`                                  | **Remote access** · "On. The connector on devbox is connected to relay.example."                                                                | "Connect another phone…", "Turn off remote access…" |
-| `running` `connecting` or `waiting`                     | "On. The connector on devbox can't reach relay.example right now. Phones can't connect until it does." (`--warn`)                                | "Check now", "Turn off remote access…"              |
+| The connector reports                                   | The row                                                                                                                                        | Actions                                             |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| No state folder (`status` exits with "Run setup first") | **Remote access** · "Off. Reach this gateway from your iPhone anywhere, through Clawtrate's relay."                                            | "Connect a phone…"                                  |
+| `running` `registered`                                  | **Remote access** · "On. The connector on devbox is connected to relay.example."                                                               | "Connect another phone…", "Turn off remote access…" |
+| `running` `connecting` or `waiting`                     | "On. The connector on devbox can't reach relay.example right now. Phones can't connect until it does." (`--warn`)                              | "Check now", "Turn off remote access…"              |
 | `running` `stopped` or `not running`                    | "On, but the connector on devbox isn't running. Phones can't connect." (`--warn`), and a disclosure "Start it" with the service command of 4.2 | "Check now", "Turn off remote access…"              |
-| `status` failed or printed something else               | "Clawtrate couldn't read the connector's status on devbox." (`--warn`)                                                                           | "Look again"                                        |
+| `status` failed or printed something else               | "Clawtrate couldn't read the connector's status on devbox." (`--warn`)                                                                         | "Look again"                                        |
 
 Under an "On" row, two groups of facts:
 
@@ -243,10 +243,10 @@ The link is the host's own. When Approve from here approved a request in the sam
 
 **Steps**, title "Turning off remote access":
 
-| Step                               | What happens                                                                                                                                                                                                                                                                      | Read back                                                                          |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Step                               | What happens                                                                                                                                                                                                                                                                 | Read back                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | "Stopping the connector"           | The person runs the stop command, shown as in 4.2: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.clawtrate.connector.plist` (Linux: `systemctl --user disable --now clawtrate-connector.service`), with the waiting line. Skipped when it already isn't running | `status --json` says `stopped` or `not running`                                    |
-| "Putting back the trusted proxies" | `clawtrate-connector teardown`                                                                                                                                                                                                                                                    | `openclaw config get gateway --json` reads the earlier value (absent, or the list) |
+| "Putting back the trusted proxies" | `clawtrate-connector teardown`                                                                                                                                                                                                                                               | `openclaw config get gateway --json` reads the earlier value (absent, or the list) |
 
 The connector is stopped before the setting is restored, so no phone is cut off mid-request by a refused upgrade (research §5, the 1011). The stop commands are the standard ones for a LaunchAgent and a systemd user unit; R3 doesn't print them, and they were not run here (no service may be loaded on this machine).
 
@@ -297,13 +297,13 @@ The code carries no name for the gateway's computer, so the review names it by i
 
 **Failures while connecting**, in fixed copy:
 
-| R4 reports                                 | Title and line                                                                                                          | Actions                      |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| 4403, the connector refused the code       | **This code was already used, or it expired.** "Make a new code in Clawtrate on your computer."                        | "Scan a code" (first screen) |
-| 4502 `relay:connector_offline`             | **The gateway's computer isn't connected to the relay.** "Check that Clawtrate's connector runs there, then try again." | "Try again", Back            |
-| 1006, or the 15-second open timeout        | **Can't reach relay.example.** "Check this iPhone's connection, then try again."                                        | "Try again", Back            |
-| 4400, 4408, 4413, or 4502 with another code | **The connection to the gateway's computer failed.** "Try again. If it keeps failing, make a new code."                | "Try again", Back            |
-| The gateway refused the bootstrap token    | **The code didn't work.** "Make a new code in Clawtrate on your computer."                                              | "Scan a code"                |
+| R4 reports                                  | Title and line                                                                                                          | Actions                      |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| 4403, the connector refused the code        | **This code was already used, or it expired.** "Make a new code in Clawtrate on your computer."                         | "Scan a code" (first screen) |
+| 4502 `relay:connector_offline`              | **The gateway's computer isn't connected to the relay.** "Check that Clawtrate's connector runs there, then try again." | "Try again", Back            |
+| 1006, or the 15-second open timeout         | **Can't reach relay.example.** "Check this iPhone's connection, then try again."                                        | "Try again", Back            |
+| 4400, 4408, 4413, or 4502 with another code | **The connection to the gateway's computer failed.** "Try again. If it keeps failing, make a new code."                 | "Try again", Back            |
+| The gateway refused the bootstrap token     | **The code didn't work.** "Make a new code in Clawtrate on your computer."                                              | "Scan a code"                |
 
 The code's secret and token are wiped once used (R4). "Try again" after the phone has enrolled redials without the secret.
 
@@ -311,15 +311,15 @@ The code's secret and token are wiped once used (R4). "Try again" after the phon
 
 Once connected, the relay route behaves as every route does, with the status strip (`visual-language.md` §11). R4's reconnect policy decides when to try again: backoff from 1–2 s up to 5 minutes, and at once when the app comes to the foreground. It stops on a refusal that only the person can change (research §6).
 
-| What happened                          | R4 or the gateway reports      | The strip                                                                                       | Then                                          |
-| -------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| No network, or the relay is down       | 1006                           | **Can't reach relay.example** · "showing saved messages", "Retry now"                           | Keeps retrying with backoff                   |
-| The connector is stopped or offline    | 4502 `relay:connector_offline` | **The gateway's computer isn't connected to the relay** · "showing saved messages", "Retry now" | Keeps retrying with backoff                   |
-| The phone was removed at the connector | 4401                           | **This iPhone was removed from remote access** · "Connect again"                                | Stops; "Connect again" opens the first screen |
-| The device was removed on the gateway  | `AUTH_DEVICE_TOKEN_MISMATCH`   | **The gateway no longer accepts this iPhone** · "Connect again"                                 | Stops; drops this route's device token        |
-| Back after either of the first two     | hello                          | **Connected again** for 4 s                                                                     |                                               |
+| What happened                          | R4 or the gateway reports      | The strip                                                                                  | Then                                          |
+| -------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| No network, or the relay is down       | 1006                           | **Can't reach relay.example** · "showing saved messages", "Retry now"                      | Keeps retrying with backoff                   |
+| The connector is stopped or offline    | 4502 `relay:connector_offline` | **Connector offline** · "the gateway's computer isn't connected to the relay", "Retry now" | Keeps retrying with backoff                   |
+| The phone was removed at the connector | 4401                           | **Removed from remote access** · "Connect again"                                           | Stops; "Connect again" opens the first screen |
+| The device was removed on the gateway  | `AUTH_DEVICE_TOKEN_MISMATCH`   | **Not accepted by the gateway** · "Connect again"                                          | Stops; drops this route's device token        |
+| Back after either of the first two     | hello                          | **Connected again** for 4 s                                                                |                                               |
 
-A 1006 can't tell a relay that is down from a phone with no network, so the strip names the relay as what it can't reach and says no more.
+The strip's state words are short so that they show in full at phone width; its explanation shortens first (`visual-language.md` §11). A 1006 can't tell a relay that is down from a phone with no network, so the strip names the relay as what it can't reach and says no more.
 
 ## 8. What each fact drives
 
@@ -360,14 +360,14 @@ Statuses don't change: F-500, F-506 and F-507 stay `todo`.
 
 ### What each part uses
 
-| Screen                        | Existing                                                        | New                                                     |
-| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------- |
-| Connect a phone (dialogs)     | `.b-dialog`, fact block, notes, step list, the host's dialog    | none                                                    |
-| Start or stop the connector   | The pairing screen's command block and waiting line             | none                                                    |
+| Screen                        | Existing                                                        | New                                                         |
+| ----------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------- |
+| Connect a phone (dialogs)     | `.b-dialog`, fact block, notes, step list, the host's dialog    | none                                                        |
+| Start or stop the connector   | The pairing screen's command block and waiting line             | none                                                        |
 | The code                      | Fact block, `.s-code-field`, the copy button                    | QR block (`.r-qr`); the key code in the device code's style |
-| Approve, ask for more, let in | Device code (`.s-device`), fact block, notes                    | none                                                    |
-| Remote access row             | `.s-rows` in Settings (`setup.md` §14)                          | Phone rows (`.r-phones`)                                |
-| iPhone                        | The connection column, step list, device code, the status strip | none                                                    |
+| Approve, ask for more, let in | Device code (`.s-device`), fact block, notes                    | none                                                        |
+| Remote access row             | `.s-rows` in Settings (`setup.md` §14)                          | Phone rows (`.r-phones`)                                    |
+| iPhone                        | The connection column, step list, device code, the status strip | none                                                        |
 
 **QR block** (`.r-qr`): the code as a QR code, 240 px square, dark modules on white with a 16 px quiet zone in both themes, radius 14, with `role="img"` and the label "QR code of the code below". The prototype draws a stand-in pattern, labelled as one. **Phone rows** (`.r-phones`): rows of 48 px with the phone's name (15), its date (13, faint), the device code when known (mono, 13), and a small default "Remove…" button. No new tokens.
 
@@ -416,25 +416,27 @@ Reads, at once: `remote.status {routeId}` (`clawtrate-connector status --json`) 
 
 `remote.html?screen=<id>`, with the shared `theme`, `width`, `motion` and `chrome`, and `host=<operation>` to open a host dialog. Dark is this page's default theme. The bar's "State" menu lists every state, and events from outside the app (a phone using the code, the owner approving, the connector reporting) are buttons in a dashed "Prototype" box.
 
-| Walk                                | From                   | Through                                                                                                   | To                                                    |
-| ----------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Turn on, then a code                | `settings-off`         | `intro`, the dialog `remoteOn`, `turning-on`, `start-connector`, `make`, the dialog `makeCode`            | `code`                                                |
-| The code is used, approve from here | `code`                 | "A phone uses the code", `request`, the dialog `approvePhone`, `approving`                                | `approved`                                            |
-| The request changed                 | `request`              | "The phone asks again", then the dialog                                                                   | `approve-changed`                                     |
-| The answer differs                  | `approving` (`differs=1`) |                                                                                                        | `approve-differs`, then Remove to `device-removed`    |
-| A request for more                  | `code`                 | "A phone asks for more"                                                                                   | `request-more`                                        |
-| Let in by the code                  | `code`                 | "A device is let in by the code"                                                                          | `let-in`, then Remove to `device-removed`             |
-| The code expires                    | `code`                 | "The code expires"                                                                                        | `expired`, then "Make a new code…" to `make`          |
-| Failures turning on                 | `turning-on`           | "Fail: connector", "Fail: trusted proxies", "Fail: relay"                                                 | `fail-install`, `fail-proxies`, `fail-relay`          |
-| Failure making a code               | `make`                 | "Fail: OpenClaw's code", then the dialog                                                                  | `fail-code`                                           |
-| Remove a phone                      | `settings-on`          | "Remove…", the dialog `removePhone` with its box                                                          | `removed`; with `fail=gateway`, `remove-partial`      |
-| Turn off                            | `settings-on`          | the dialog `remoteOff`, `stop-connector`                                                                  | `turned-off`                                          |
-| Turn off, changed elsewhere         | `stop-connector` (`changed=1`) |                                                                                                   | `turn-off-changed`                                    |
-| The connector's states in the row   | `settings-on`          | "Connector: waiting", "Connector: stopped", "Status unreadable"                                           | `settings-waiting`, `settings-stopped`, `settings-unreadable` |
-| The iPhone, scan                    | `iphone`               | "Scan a code", `iphone-review`, Connect, `iphone-connecting`, `iphone-waiting`, "The owner approves"      | `iphone-done`                                         |
-| The iPhone, paste                   | `iphone`               | "Paste a code", `iphone-paste`: an expired code, a malformed one, a good one                              | `iphone-review`                                       |
-| The iPhone's connect failures       | `iphone-connecting`    | "Code already used", "Connector offline", "Relay unreachable"                                             | `iphone-used`, `iphone-offline-first`, `iphone-unreachable-first` |
-| The iPhone later                    | `iphone-done`          | "Relay unreachable", "Connector offline", "Removed", "Revoked"                                            | `later-unreachable`, `later-offline`, `later-removed`, `later-revoked` |
+| Walk                                | From                           | Through                                                                                              | To                                                                     |
+| ----------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Turn on, then a code                | `settings-off`                 | `intro`, the dialog `remoteOn`, `turning-on`, `start-connector`, `make`, the dialog `makeCode`       | `code`                                                                 |
+| The code is used, approve from here | `code`                         | "A phone uses the code", `request`, the dialog `approvePhone`, `approving`                           | `approved`                                                             |
+| The request changed                 | `request`                      | "The phone asks again", then the dialog                                                              | `approve-changed`                                                      |
+| The answer differs                  | `approving` (`differs=1`)      |                                                                                                      | `approve-differs`, then Remove to `device-removed`                     |
+| A request for more                  | `code`                         | "A phone asks for more"                                                                              | `request-more`                                                         |
+| Let in by the code                  | `code`                         | "A device is let in by the code"                                                                     | `let-in`, then Remove to `device-removed`                              |
+| The code expires                    | `code`                         | "The code expires"                                                                                   | `expired`, then "Make a new code…" to `make`                           |
+| Failures turning on                 | `turning-on`                   | "Fail: connector", "Fail: trusted proxies", "Fail: relay"                                            | `fail-install`, `fail-proxies`, `fail-relay`                           |
+| Failure making a code               | `make`                         | "Fail: OpenClaw's code", then the dialog                                                             | `fail-code`                                                            |
+| Remove a phone                      | `settings-on`                  | "Remove…", the dialog `removePhone` with its box                                                     | `removed`; with `fail=gateway`, `remove-partial`                       |
+| Turn off                            | `settings-on`                  | the dialog `remoteOff`, `stop-connector`                                                             | `turned-off`                                                           |
+| Turn off, changed elsewhere         | `stop-connector` (`changed=1`) |                                                                                                      | `turn-off-changed`                                                     |
+| The connector's states in the row   | `settings-on`                  | "Connector: waiting", "Connector: stopped", "Status unreadable"                                      | `settings-waiting`, `settings-stopped`, `settings-unreadable`          |
+| The iPhone, scan                    | `iphone`                       | "Scan a code", `iphone-review`, Connect, `iphone-connecting`, `iphone-waiting`, "The owner approves" | `iphone-done`                                                          |
+| The iPhone, paste                   | `iphone`                       | "Paste a code", `iphone-paste`: an expired code, a malformed one, a good one                         | `iphone-review`                                                        |
+| The iPhone's connect failures       | `iphone-connecting`            | "Code already used", "Connector offline", "Relay unreachable"                                        | `iphone-used`, `iphone-offline-first`, `iphone-unreachable-first`      |
+| The iPhone later                    | `iphone-done`                  | "Relay unreachable", "Connector offline", "Removed", "Revoked"                                       | `later-unreachable`, `later-offline`, `later-removed`, `later-revoked` |
+
+The other states are reached from the bar's State menu or the address: `settings-address` (an address route, the row read-only), `fail-settings`, `fail-readback`, `fail-too-many`, `fail-phones`, `fail-setupcode`, `approve-gone`, `approve-unread`, `iphone-failed`, `iphone-code-refused` and `later-back`; `code-used` is the short wait between a phone using the code and its request; `intro&tailscale=1` adds the Tailscale warning. Every state's words are asserted by the check.
 
 ## 11. Not covered here
 
