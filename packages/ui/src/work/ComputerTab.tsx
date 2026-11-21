@@ -41,6 +41,7 @@ import {
 import { hostWords } from "../machines/words.ts";
 import { readPreference, writePreference } from "../preferences.ts";
 import { pictureWords, useFrames, useNow, type FrameCanvases, type Picture } from "./frames.ts";
+import { machineReader } from "./machine-reads.ts";
 import { ScreenView } from "./ScreenView.tsx";
 import "./computer.css";
 
@@ -957,42 +958,28 @@ function MachineSection({
       return next;
     });
   }, []);
-  // Each read's number: only the newest one's answer or failure is kept, by either path.
-  const reads = useRef(0);
-  // "Check again" and "Prepare it again": the same read, and when it was made.
-  const read = (manual: boolean, probe = false) => {
-    if (!online) return;
-    const mine = ++reads.current;
-    if (manual) setChecking(true);
-    ask(probe).then(
-      (answer) => {
-        setChecking(false);
-        if (mine !== reads.current) return;
+  // Only the newest read's answer or failure is kept, by either path (`machine-reads.ts`). A
+  // failed read keeps what was shown, as the last read: never "not connected".
+  const [reader] = useState(() =>
+    machineReader<MachineFacts>({
+      keep: (answer, manual) => {
         keep(answer);
         if (manual) setChecked(answer.readAt);
       },
-      // Kept as it was, as the last read: a failed read is never shown as "not connected".
-      () => {
-        setChecking(false);
-        if (mine === reads.current) setFailed(true);
-      },
-    );
+      fail: () => setFailed(true),
+      checking: setChecking,
+    }),
+  );
+  // "Check again" and "Prepare it again": the same read, and when it was made.
+  const read = (manual: boolean, probe = false) => {
+    if (online) reader.read(() => ask(probe), manual);
   };
   useEffect(() => {
     if (!online) return;
-    const mine = ++reads.current;
-    ask(false).then(
-      (answer) => {
-        if (mine === reads.current) keep(answer);
-      },
-      () => {
-        if (mine === reads.current) setFailed(true);
-      },
-    );
-    return () => {
-      if (reads.current === mine) reads.current += 1;
-    };
-  }, [ask, keep, online]);
+    reader.read(() => ask(false), false);
+    // The nodes, the task or the connection changed: what is still out is no longer asked for.
+    return () => reader.invalidate();
+  }, [ask, online, reader]);
   // Times are read against when the facts were read.
   const now = facts?.readAt ?? 0;
   // After a failed read or a dropped connection, what is shown is the last read, at its time.
