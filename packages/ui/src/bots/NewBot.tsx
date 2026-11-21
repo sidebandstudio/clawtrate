@@ -164,7 +164,10 @@ export function NewBot({
     ...freshDraft(),
     ...keptFor(route)?.draft,
   }));
-  const [step, setStepState] = useState<Step>(() => keptFor(route)?.step ?? "look");
+  // A bot made and not finished is offered where its Finish is, without new choices.
+  const [step, setStepState] = useState<Step>(
+    () => keptFor(route)?.step ?? (accounts.creation?.status === "partial" ? "approvals" : "look"),
+  );
   /** Why the host refused the account or model chosen, said on the Account step. */
   const [choiceRefusal, setChoiceRefusal] = useState<string | null>(null);
   const [announcer, announce] = useAnnouncer();
@@ -254,11 +257,26 @@ export function NewBot({
     draft.account === GATEWAY_CHOICE ||
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
-  const busy = creation?.status === "creating";
+  const submitting = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  /** A refusal of Create that no creation outcome names. */
+  const [refused, setRefused] = useState<string | null>(null);
+  const open = useRef(true);
+  useEffect(
+    () => () => {
+      open.current = false;
+    },
+    [],
+  );
+  const busy = creation?.status === "creating" || preparing;
   const unconfirmed = creation?.status === "unconfirmed" ? creation : null;
   const accountReady = !!draft.account && listedChoice && !!provider && !!draft.model;
   const create = async () => {
-    if (!accountReady || !draft.approvals || busy || unconfirmed) return;
+    if (!accountReady || !draft.approvals || busy || unconfirmed || submitting.current) return;
+    // Taken before the picture is drawn: a second click meanwhile sends nothing.
+    submitting.current = true;
+    setPreparing(true);
+    setRefused(null);
     announce("Creating the bot");
     try {
       const avatar = await pictureOf(previewRef.current?.querySelector("svg"));
@@ -276,6 +294,11 @@ export function NewBot({
         attempt: draft.attempt,
         gateway: { id: route.id, url: route.url ?? "" },
       });
+      // Closed meanwhile: a wizard opened since owns the screen; this one only lets go of its draft.
+      if (!open.current) {
+        if (keptFor(route)?.draft.attempt === draft.attempt) remember(slot, null);
+        return;
+      }
       remember(slot, null);
       if (!onRoute()) return;
       // The bot exists; what did not land is said here, and finished by its id.
@@ -289,11 +312,25 @@ export function NewBot({
     } catch (error) {
       // The account or model chosen is no longer one the gateway has: back to where it is chosen.
       const words = error instanceof Error ? error.message : String(error);
+      if (!open.current) return;
       if (onRoute() && isChoiceRefusal(words)) {
         setChoiceRefusal(words);
         setStep("account");
+        return;
       }
-      // Otherwise announced from the outcome the state names, below.
+      // A refusal or an unknown outcome the state names is said from it, below; one it doesn't
+      // name (refused before Create began, as on a lost admin grant) is said here.
+      const outcome = bridge.getState().accounts.creation;
+      const named =
+        outcome?.attempt === draft.attempt &&
+        (outcome.status === "failed" || outcome.status === "unconfirmed");
+      if (!named) {
+        setRefused(words);
+        announce("Could not create the bot");
+      }
+    } finally {
+      submitting.current = false;
+      setPreparing(false);
     }
   };
   /**
@@ -319,19 +356,23 @@ export function NewBot({
       announce(`Clawtrate couldn't confirm whether ${creation!.name} was created`);
   }
   // What the gateway's approvals file settles, read when the Approvals step opens on admin.
-  const [approvalsFile, setApprovalsFile] = useState<{ blocks: boolean } | null>(null);
+  const [approvalsRead, setApprovalsFile] = useState<{ blocks: boolean; name: string } | null>(
+    null,
+  );
   const fileName = draft.name.trim();
   useEffect(() => {
     if (step !== "approvals" || !admin) return;
     let live = true;
     bridge.invoke({ type: "readApprovalsFile", name: fileName }).then(
-      (read) => live && setApprovalsFile(read),
+      (read) => live && setApprovalsFile({ blocks: read.blocks, name: fileName }),
       () => live && setApprovalsFile(null),
     );
     return () => {
       live = false;
     };
   }, [bridge, step, admin, fileName]);
+  // Only the read made for the name as it is now: until it answers, the general line.
+  const approvalsFile = approvalsRead?.name === fileName ? approvalsRead : null;
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
     if (!partial?.botId) return;
@@ -754,6 +795,13 @@ export function NewBot({
     // How the Create went stays readable below admin too; only Create and the choices need it.
     const outcomes = (
       <>
+        {refused && (
+          <Note tone="danger" testId="create-refused">
+            <p>
+              <b>Could not create the bot.</b> {refused}
+            </p>
+          </Note>
+        )}
         {creation?.status === "failed" && (
           <Note tone="danger" testId="create-failed">
             <p>
@@ -866,7 +914,7 @@ export function NewBot({
                 choose.
               </p>
             )}
-            {busy && creation.slow && (
+            {busy && creation?.slow && (
               <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
                 Still creating. What you entered is kept.
               </p>

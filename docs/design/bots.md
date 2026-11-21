@@ -170,8 +170,8 @@ Under the group (13, faint): "Commands use the machine and permissions set by th
 | 4. The roster        | `agents.list`, for the rail and the bot's reported default command policy                                                                                                                                                  |                                                                              |
 
 - **A lost or ambiguous reply to step 1** (a timeout, a dropped connection, a reply without an id): the foot's Not confirmed state. No policy or model patch is sent from that attempt. A bot found later in `agents.list` with the same name is not taken to be this one: another client could have made it.
-- **At steps 2 and 3**, the host stops and refreshes when the entry is gone, when the id no longer identifies the bot Create returned, or when the hash has changed. It never writes an entry that is missing. Where the gateway can't tell a replaced bot at a reused id from the one created, the old Create is not retried against it.
-- Clawtrate sends nothing to the bot and starts no task for it until step 2 reads back. What the page says after steps 2 and 3, and their failures, is in `controls.md` §10.
+- **At steps 2 and 3**, the host stops and refreshes when the entry is gone, carries another name or workspace than Create's reply, differs from the entry Clawtrate last read, or the hash has changed. It never writes an entry that is missing, and never sends Create again. One case can't be told apart: a bot deleted and made again with the same id, name and workspace before Clawtrate's first read of the config (`docs/decisions.md`).
+- Clawtrate starts no task for the bot until step 2 reads back, and sends it nothing until a read shows the chosen mode and every tool step 3 denies by name. What the page says after steps 2 and 3, and their failures, is in `controls.md` §10.
 
 ### The first bot (F-005)
 

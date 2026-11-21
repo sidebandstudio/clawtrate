@@ -66,7 +66,12 @@ function removedLists(base: unknown, patch: unknown, path: string[]): string[] {
   }
   const from = base && typeof base === "object" && !Array.isArray(base) ? (base as Json) : {};
   return Object.entries(patch as Json).flatMap(([key, value]) =>
-    value === null ? [] : removedLists(from[key], value, [...path, key]),
+    // Deleting a list is removing its entries too: it needs its path named.
+    value === null
+      ? Array.isArray(from[key]) && (from[key] as unknown[]).length > 0
+        ? [[...path, key].join(".")]
+        : []
+      : removedLists(from[key], value, [...path, key]),
   );
 }
 

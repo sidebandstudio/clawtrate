@@ -428,6 +428,127 @@ test("F-051: a report with no label says the gateway reported none for the bot",
   );
 });
 
+const fixture = (page: Page, method: "hold" | "release") =>
+  page.evaluate(
+    (name) =>
+      (window as unknown as { clawtrateFixture: Record<string, () => void> }).clawtrateFixture[
+        name
+      ]!(),
+    method,
+  );
+
+test("F-034: a bot made and not finished is offered again, with Finish, when New bot opens after Close", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=partial`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("create-partial")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByTestId("create-partial")).toBeVisible();
+  await expect(
+    page.getByTestId("create-partial").getByRole("button", { name: "Finish Viral" }),
+  ).toBeVisible();
+});
+
+test("F-034: a Create that ends after its wizard closed leaves a wizard opened since as it is", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await fixture(page, "hold");
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("create")).toHaveText("Creating…");
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(newBot(page)).toBeVisible();
+  await fixture(page, "release");
+  await expect(
+    page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
+  ).toBeVisible();
+  // The old wizard's success neither closes this one nor opens the bot over it.
+  await page.waitForTimeout(300);
+  await expect(newBot(page)).toBeVisible();
+});
+
+test("F-034: two clicks while the picture is drawn send one Create", async ({ page }) => {
+  await openFixture(page, ADMIN, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect(newBot(page)).toHaveCount(0);
+  const creates = (await sent(page)).filter((each) => each.type === "createBot");
+  expect(creates).toHaveLength(1);
+});
+
+test("F-034: a Create the host refuses before it begins says so", async ({ page }) => {
+  await openFixture(page, `${ADMIN}&create=denied`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("create-refused")).toHaveText(
+    "Could not create the bot. Creating a bot needs admin access.",
+  );
+  await expect(page.getByTestId("create")).toBeEnabled();
+});
+
+test("F-051: the approvals file's line is the read for the name as it is now", async ({ page }) => {
+  await openFixture(page, `${ADMIN}&approvalsfile=viral`, "dark");
+  await approvalsStep(page);
+  const line = page.getByTestId("approvals-file");
+  await expect(line).toHaveText("The gateway's approvals file blocks commands.");
+  // Renamed while the next read waits: the general line until that read answers.
+  await fixture(page, "hold");
+  await page.getByRole("button", { name: "Back to the account" }).click();
+  await page.getByRole("button", { name: "Back to the picture" }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Juniper");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByTestId("account-next").click();
+  await expect(line).toHaveText(
+    "The gateway's approvals file can require approval or block commands.",
+  );
+  await fixture(page, "release");
+  await expect(line).toHaveText(
+    "The gateway's approvals file can require approval or block commands.",
+  );
+});
+
+test("F-051: a Write it again the host refuses says why in the note, and the composer stays closed", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&policy=refused`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  const note = page.getByTestId("policy-note");
+  await note.getByRole("button", { name: "Write it again" }).click();
+  await expect(note.getByTestId("policy-refusal")).toHaveText(
+    "Changing a bot's settings needs admin access.",
+  );
+  await expect(page.getByTestId("composer-input")).toBeDisabled();
+});
+
+test("F-034: Write them again after a step 2 that didn't read back makes the first task that waited", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&policy=restrictive`, "dark");
+  await approvalsStep(page);
+  await page.getByRole("radio", { name: "Ask before acting" }).click();
+  await page.getByTestId("create").click();
+  await expect(newBot(page)).toHaveCount(0);
+  await page.getByTestId("policy-note").getByRole("button", { name: "Write them again" }).click();
+  await expect(page.getByTestId("composer-input")).toBeEnabled();
+  await expect(page.getByTestId("composer-input")).toHaveAttribute("placeholder", "Message Viral");
+});
+
 test("F-005: on a confirmed unused implicit main the rail lists no bot and the app opens on Make your first bot; New bot checks again, then opens the dialog", async ({
   page,
 }) => {

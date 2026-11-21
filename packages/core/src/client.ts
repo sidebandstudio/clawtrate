@@ -2034,6 +2034,9 @@ export class ClawtrateClient {
       // Switching gateways while access settled dropped it: it is never asked of another gateway.
       if (this.creations.get(creation.id)?.status !== "creating")
         throw new Error("Switched to another gateway.");
+      // Checked again as it goes: a new bot's setting may have come into doubt while access settled.
+      const notYet = this.accounts.heldBack(creation.botId);
+      if (notYet) throw new Error(notYet);
       creation.gatewayBootId = this.gatewayBootId;
       this.putCreation(creation);
       sent = true;
@@ -2240,6 +2243,8 @@ export class ClawtrateClient {
       this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
       return;
     }
+    // Not asked again of a new bot whose setting is in doubt: it stays to be checked.
+    if (this.accounts.heldBack(creation.botId)) return;
     try {
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       if (this.creations.get(id)?.status !== "checking") return;
@@ -2318,6 +2323,16 @@ export class ClawtrateClient {
         this.updateActivity(key, (activity) =>
           updateMessage(activity, messageId, { status: "held", runId: currentRun?.id ?? null }),
         );
+        return;
+      }
+    }
+    // A new bot whose command setting hasn't read back as chosen gets nothing, a retry included:
+    // the message stays unsent and can be sent again.
+    {
+      const target = botIdFromSessionKey(key);
+      const notYet = target === null ? null : this.accounts.heldBack(target);
+      if (notYet) {
+        this.failDelivery(key, messageId, new Error(notYet), true);
         return;
       }
     }
@@ -4519,8 +4534,10 @@ export class ClawtrateClient {
     try {
       result = await this.request("agents.list", {});
     } catch (error) {
-      // No first-bot prompt stands on a roster that can't be read now.
-      if (generation === this.generation) this.accounts.firstBotFailed();
+      // No first-bot prompt stands on a roster that can't be read now; a newer read that answered
+      // first stands.
+      if (generation === this.generation && issued >= this.botsShown)
+        this.accounts.firstBotFailed();
       throw error;
     }
     if (generation !== this.generation || !this.newestBots(issued)) return result;
@@ -5624,7 +5641,7 @@ export class ClawtrateClient {
     const failures: string[] = [];
     if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
-      this.accounts.firstBotFailed();
+      if (botsIssued >= this.botsShown) this.accounts.firstBotFailed();
     }
     if (sessions.status === "fulfilled") {
       this.replaceRows(sessions.value.rows);
@@ -5696,6 +5713,9 @@ export class ClawtrateClient {
 
   private publishTasks(): void {
     const tasksByBot = groupTasks(this.rows.values());
+    // A task for `main` shows it is used: the first-bot prompt that read it unused goes.
+    if ((tasksByBot.main?.length ?? 0) > 0 && this.state.accounts.firstBot.status === "prompt")
+      this.accounts.firstBotFailed();
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
     for (const tasks of Object.values(tasksByBot)) {

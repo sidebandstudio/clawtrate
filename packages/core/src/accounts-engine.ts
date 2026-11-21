@@ -166,14 +166,13 @@ type Reservation = Omit<HeldBot, "made">;
 
 /**
  * What a confirmed Create made and what Clawtrate writes for it, on the
- * gateway that confirmed it (`generation`): Finish uses it; it goes with a
- * change of gateway, and once nothing is left to finish.
+ * gateway that confirmed it (its held record names it): Finish uses it; it
+ * goes with a change of gateway, and once nothing is left to finish.
  */
 type CreatePlan = {
   /** The bot's held record: its identity, choice, model and how far its writes got. */
   held: HeldBot;
   intent: BindingIntent;
-  generation: number;
 };
 
 /** The connection a sequence began on. */
@@ -1602,7 +1601,6 @@ export class AccountsEngine {
     const plan: CreatePlan = {
       held,
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
-      generation: binding.generation,
     };
     this.planned.set(made.botId, plan);
     // Held from here: until its setting reads back as chosen, nothing is sent to it, after a
@@ -1807,9 +1805,11 @@ export class AccountsEngine {
   ): Promise<"done" | "lost"> {
     if (!this.isHeld(held)) return "done";
     const { made } = held;
+    // What was read is shown only while its connection is the open one: after a close the note
+    // waits for the next connection's read (`onClose`, `refreshPolicies`).
     const show = (change: Partial<NewBotPolicy>) => {
       this.noteWrites += 1;
-      if (this.shown(binding)) this.setNote(made.botId, change);
+      if (this.live(binding)) this.setNote(made.botId, change);
     };
     // A new write: both facts are cleared until they are read again.
     if (this.shown(binding)) this.putNote(this.unreadNote(held));
@@ -1959,6 +1959,12 @@ export class AccountsEngine {
       if (entryProblem(config, made) !== null)
         return { outcome: "lost" as const, saved: null, missingDeny: [], retryable: false };
       const entry = configEntry(config, made.botId);
+      // No read identified the bot before this one, so nothing was written to it: this read is its
+      // first, as Create's own first read would have been.
+      if (held.seen === null) {
+        held.seen = entryPrint(entry);
+        if (this.isHeld(held)) await this.persist();
+      }
       return {
         outcome,
         saved: savedMode(entry),
@@ -2190,6 +2196,11 @@ export class AccountsEngine {
         continue;
       }
       const entry = configEntry(config, botId);
+      // A held bot no read had identified yet, with nothing written: this read is its first.
+      if (held && held.seen === null && !held.restrictive) {
+        held.seen = entryPrint(entry);
+        save = true;
+      }
       const confirmed = inForce && chosenHolds(entry, chosen);
       // Step 2 as Clawtrate writes it, whose answer was lost: it landed, and step 3 may follow.
       const deny =
@@ -2344,7 +2355,14 @@ export class AccountsEngine {
     const plan = this.planned.get(botId);
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
-    if (!plan || plan.generation !== binding.generation)
+    // The gateway that made it, by its identity, on whichever connection to it is open now.
+    const gateway = this.ctx.connection().gateway;
+    if (
+      !plan ||
+      !gateway ||
+      !sameGateway(plan.held, gateway) ||
+      (plan.held.gatewayId !== null && gateway.id === null)
+    )
       throw new Error("Clawtrate can't finish that bot from here. Review the gateway's bot list.");
     this.ctx.update((a) =>
       a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,

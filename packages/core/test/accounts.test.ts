@@ -1718,6 +1718,122 @@ describe("after Create: who the bot is, what holds it and what a read settles", 
   });
 });
 
+describe("after review: what a later read, a reopen or a retry may do", () => {
+  it("F-034: a first read of the config that fails leaves Write them again on offer once a read identifies the bot", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const get = fake.gateway.handlers["config.get"]!;
+    let failed = false;
+    fake.gateway.handlers["config.get"] = (params) => {
+      // Create's first read of the config, before step 2, doesn't answer.
+      if (fake.gateway.calls("agents.create").length === 1 && !failed) {
+        failed = true;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      }
+      return get(params);
+    };
+    await client.createBot({ ...viral });
+    expect(fake.gateway.calls("config.patch")).toEqual([]);
+    expect(note(accounts())).toMatchObject({ status: "restrictive", retryable: true });
+    await client.retryBotPolicy("viral");
+    expect(note(accounts())).toMatchObject({ status: "confirmed", saved: "ask" });
+    expect(fake.gateway.calls("config.patch")).toHaveLength(2);
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-051: a read-back confirmed on a connection that closed before it was shown is not shown: the note waits for the next connection's read", async () => {
+    const { client, fake, accounts, storage } = await accountsClient();
+    const set = storage.set;
+    const saving = deferred<void>();
+    storage.set = async (key, value) => {
+      // The save that lets the bot go after step 3, while the connection drops.
+      if (key === HELD_KEY && value === "[]" && fake.gateway.calls("config.patch").length === 2) {
+        fake.gateway.dropAll();
+        await saving.promise;
+      }
+      return set(key, value);
+    };
+    const made = client.createBot({ ...viral });
+    await until(() => client.state.connection.status !== "connected");
+    // The next connection's reads of the config don't answer.
+    fake.gateway.handlers["config.get"] = () => new Promise(() => {});
+    saving.resolve();
+    await made.catch(() => undefined);
+    await until(() => client.state.connection.status === "connected");
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+    expect(note(accounts())?.status).toBe("checking");
+    expect(() => client.sendMessage("agent:viral:main", "hello")).toThrow();
+    client.stop();
+  });
+
+  it("F-034: Finish after reopening the same gateway finishes the bot by its id", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const save = fake.gateway.handlers["users.prefs.set"]!;
+    fake.gateway.handlers["users.prefs.set"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "preferences unavailable" });
+    };
+    expect((await client.createBot({ ...viral })).missing).toEqual(["preference"]);
+    await client.connect({ url: URL_A });
+    await until(() => client.state.connection.status === "connected");
+    expect(accounts().creation).toMatchObject({ status: "partial", botId: "viral" });
+    fake.gateway.handlers["users.prefs.set"] = save;
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-051: a failed message sent again to a bot whose setting is being read again is not delivered", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.createBot({ ...viral });
+    const key = "agent:viral:main";
+    client.openSession(key);
+    await until(() => client.state.transcripts[key]?.status === "ready");
+    fake.gateway.handlers["chat.send"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+    };
+    const id = client.sendMessage(key, "hello");
+    await until(() => client.state.transcripts[key]?.outbox[0]?.status === "failed");
+    // The connection drops; the next one can't read the bot's setting.
+    fake.gateway.handlers["config.get"] = () => new Promise(() => {});
+    fake.gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started" });
+    fake.gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    await until(() => client.state.connection.status === "connected");
+    expect(note(accounts())?.status).toBe("checking");
+    const sends = fake.gateway.calls("chat.send").length;
+    client.retryMessage(key, id);
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+    expect(fake.gateway.calls("chat.send")).toHaveLength(sends);
+    expect(client.state.transcripts[key]?.outbox[0]).toMatchObject({ status: "failed" });
+    client.stop();
+  });
+});
+
+describe("after review: a task's first message checked as it goes", () => {
+  it("F-051: a task whose first message's answer was lost isn't asked again while the bot's setting is being read again", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.createBot({ ...viral });
+    const create = fake.gateway.handlers["sessions.create"]!;
+    fake.gateway.handlers["sessions.create"] = (params) => {
+      // The gateway takes the task; the connection goes before its answer arrives.
+      setTimeout(() => fake.gateway.dropAll(), 0);
+      void create(params);
+      return new Promise(() => {});
+    };
+    const made = client.createTask("viral", "hello").catch(() => undefined);
+    await until(() => client.state.connection.status !== "connected");
+    fake.gateway.handlers["config.get"] = () => new Promise(() => {});
+    fake.gateway.handlers["sessions.create"] = create;
+    const sends = fake.gateway.calls("sessions.create").length;
+    await until(() => client.state.connection.status === "connected");
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+    expect(note(accounts())?.status).toBe("checking");
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(sends);
+    client.stop();
+    await made;
+  });
+});
+
 describe("a bot left half-made", () => {
   const input = viral;
 
@@ -1876,13 +1992,13 @@ describe("the first bot (bots.md section 3): only on a confirmed unused implicit
     [
       "the legacy agents.list in the config",
       unnamedMain,
-      { config: { agents: { list: [{ id: "main" }] } } },
+      { config: { agents: { list: [{ id: "main" }] } }, valid: true },
       noTasks,
     ],
     [
       "a main configured in agents.entries",
       unnamedMain,
-      { config: { agents: { entries: { main: {} } } } },
+      { config: { agents: { entries: { main: {} } } }, valid: true },
       noTasks,
     ],
     [
@@ -2079,6 +2195,58 @@ describe("the first bot (bots.md section 3): only on a confirmed unused implicit
     await until(() => blocked);
     expect(second.accounts().firstBot.status).not.toBe("prompt");
     second.client.stop();
+  });
+
+  it("F-005: a task for main that arrives after the prompt takes the prompt away", async () => {
+    const fake = implicitGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().firstBot.status === "prompt");
+    const row = { key: "agent:main:main", sessionId: "s1", agentId: "main", updatedAt: 1 };
+    fake.gateway.handlers["sessions.list"] = () => ({ sessions: [row], hasMore: false });
+    fake.gateway.emit("sessions.changed", { sessionKey: row.key, session: row, ...row });
+    await until(() => (client.state.tasksByBot.main?.length ?? 0) > 0);
+    expect(accounts().firstBot.status).not.toBe("prompt");
+    client.stop();
+  });
+
+  it("F-005: an older roster read that fails after a newer one showed the prompt leaves the prompt", async () => {
+    const fake = implicitGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await until(() => accounts().firstBot.status === "prompt");
+    const list = fake.gateway.handlers["agents.list"]!;
+    const late = deferred<void>();
+    let first = true;
+    fake.gateway.handlers["agents.list"] = async (params) => {
+      if (first) {
+        first = false;
+        await late.promise;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      }
+      return list(params);
+    };
+    const older = client.recheckFirstBot();
+    expect(await client.recheckFirstBot()).toEqual({ status: "prompt", mainPolicy: "read-only" });
+    late.resolve();
+    await older;
+    expect(accounts().firstBot.status).toBe("prompt");
+    client.stop();
+  });
+
+  it("F-005: a saved revision the gateway hasn't applied isn't the roster in force: no prompt", () => {
+    expect(
+      readFirstBot(
+        unnamedMain,
+        { ...noRoster, configRevisionHash: "r2", appliedConfigHash: "r1" },
+        noTasks,
+      ),
+    ).toEqual({ status: "roster", mainPolicy: null });
+    expect(
+      readFirstBot(
+        unnamedMain,
+        { ...noRoster, configRevisionHash: "r2", appliedConfigHash: "r2" },
+        noTasks,
+      ).status,
+    ).toBe("prompt");
   });
 
   it("main with tasks on the gateway is the normal roster, shown as a bot", async () => {

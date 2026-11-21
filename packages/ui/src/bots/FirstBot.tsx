@@ -93,6 +93,7 @@ export function PolicyNote({ policy, canAdmin }: { policy: NewBotPolicy; canAdmi
   const bridge = useBridge();
   const note = policyNote(policy);
   const settled = policy.status === "confirmed" || policy.status === "checking";
+  const [refusal, setRefusal] = useState<string | null>(null);
   useEffect(() => {
     const read = () => void bridge.send({ type: "refreshBotPolicies" }).catch(() => {});
     read();
@@ -114,6 +115,7 @@ export function PolicyNote({ policy, canAdmin }: { policy: NewBotPolicy; canAdmi
         {note.lines.map((line) => (
           <p key={line}>{line}</p>
         ))}
+        {refusal && !settled && <p data-testid="policy-refusal">{refusal}</p>}
         {!settled && policy.retryable && canAdmin && (
           <div className="b-actions">
             <button
@@ -121,9 +123,15 @@ export function PolicyNote({ policy, canAdmin }: { policy: NewBotPolicy; canAdmi
               className="button"
               data-variant="primary"
               data-size="sm"
-              onClick={() =>
-                void bridge.send({ type: "retryBotPolicy", botId: policy.botId }).catch(() => {})
-              }
+              onClick={() => {
+                setRefusal(null);
+                // A refused write changes nothing on the gateway: the note says why.
+                bridge
+                  .send({ type: "retryBotPolicy", botId: policy.botId })
+                  .catch((error: unknown) =>
+                    setRefusal(error instanceof Error ? error.message : String(error)),
+                  );
+              }}
             >
               {policy.restrictive ? "Write it again" : "Write them again"}
             </button>

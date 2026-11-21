@@ -152,7 +152,9 @@ test.beforeAll(async ({ browser }) => {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-new-bot-"));
   const spawned = startHost(INSTANCE, STATIC, data);
   spawned.gated.release();
-  host = { child: spawned.host, url: await spawned.url, data };
+  // Kept before its address is known: a host that never prints one is still stopped and removed.
+  host = { child: spawned.host, url: "", data };
+  host.url = await spawned.url;
   page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   await page.goto(host.url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();
@@ -339,7 +341,8 @@ test("F-034: a second Create while the first bot is unfinished keeps the first h
   await stopChild(host!.child);
   const spawned = startHost(INSTANCE, STATIC, host!.data);
   spawned.gated.release();
-  host = { child: spawned.host, url: await spawned.url, data: host!.data };
+  host = { child: spawned.host, url: "", data: host!.data };
+  host.url = await spawned.url;
   await page.goto(host.url);
   await expect(page.getByTestId("plus")).toBeVisible({ timeout: 60_000 });
   const again = await hostCommand({ type: "newTask", botId: "holder" });

@@ -303,6 +303,8 @@ export function readFirstBot(list: unknown, config: unknown, sessions: unknown):
   const main = implicitMain(list);
   if (!main) return roster;
   if (asRecord(config)?.valid !== true) return roster;
+  // A saved revision the gateway hasn't applied: what it shows isn't the roster in force.
+  if (unapplied(asRecord(config))) return roster;
   const settings = asRecord(asRecord(config)?.config);
   if (!settings) return roster;
   const agents = settings.agents;
