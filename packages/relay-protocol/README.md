@@ -36,7 +36,7 @@ Flat JSON objects with a string type `t`, at most 4,096 bytes. Each direction ha
    - `iat` is within 60 seconds of the relay's wall clock, and the `jti` has not been seen for this relay id. The replay store checks and records in one atomic step and keeps the `jti` until the end of the last second the proof could pass;
    - the relay id is pinned to the full public key that first registered it. The key claim is told whether the attempt is still live and records nothing when it is not.
 
-   A store that fails fails the registration. The relay answers `registered`, or `error` and closes. `MemoryReplayStore` and `MemoryKeyClaims` are reference implementations of the store contracts the relay must meet. The `persist` option stores each state, `verifying` before any store is asked; the relay restores only the latest snapshot it stored, never an older one, and an attempt cut off by hibernation is not resumed.
+   A store that fails fails the registration. The relay answers `registered`, or `error` and closes. `MemoryReplayStore` and `MemoryKeyClaims` are reference implementations of the store contracts the relay must meet. The `persist` option stores each state, `verifying` before any store is asked, and a success while the attempt can still be cancelled (an abort or expiry during that wait stores `failed` after it); the relay restores only the latest snapshot it stored, never an older one, and an attempt cut off by hibernation is not resumed.
 
 4. A phone opens `/v1/dial/<relayId>`. The relay sends the connector `dial` with a 16-byte session id and the address it saw. The connector opens `/v1/session/<relayId>/<session>`. The relay sends `open` to both sockets, and binary frames flow between them.
 

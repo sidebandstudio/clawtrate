@@ -396,7 +396,8 @@ export interface ControlRegistrationOptions extends OriginOptions {
   readonly origin: string;
   /**
    * Elapsed time in whole milliseconds, never set back by wall-clock corrections; on a relay
-   * that hibernates, one that survives hibernation.
+   * that hibernates, one that survives hibernation. A reading below an earlier one ends the
+   * attempt with `bad_clock`.
    */
   readonly clock: () => number;
   /** Wall-clock milliseconds since the epoch, for the proof's `iat`. */
@@ -405,8 +406,10 @@ export interface ControlRegistrationOptions extends OriginOptions {
   readonly claims: KeyClaims;
   /**
    * Stores the snapshot. Called, and awaited, after every change of state: `verifying` before
-   * any store is asked, and the outcome before it is returned. A failure fails the attempt.
-   * The relay restores only the latest snapshot it stored; an older one must never replace it.
+   * any store is asked, and the outcome before it is returned. A success is stored while the
+   * attempt can still be cancelled; if it is cancelled during that wait, `failed` is stored
+   * after it. A failure to store fails the attempt. The relay restores only the latest
+   * snapshot it stored; an older one must never replace it.
    */
   readonly persist?: (snapshot: RegistrationSnapshot) => void | Promise<void>;
   /** A registration restored after hibernation, instead of a fresh challenge. */
@@ -423,7 +426,8 @@ export interface ControlRegistrationOptions extends OriginOptions {
  *   overlaps the first, gets `already_used`.
  * - The attempt is bound to this object's one in-flight token. After every await it checks
  *   that the token is still current and the challenge still in time, before the key claim and
- *   before returning success; the key claim itself is told whether the attempt is live.
+ *   before returning success; the key claim itself is told whether the attempt is live. It
+ *   stays cancellable until its success is stored.
  * - `expire()` ends a challenge that ran out with no proof; the relay calls it from a timer,
  *   since a quiet socket sends nothing. `abort()` ends the registration when the socket goes.
  */
@@ -436,6 +440,8 @@ export class ControlRegistration {
   readonly #issuedAtMs: number;
   #state: RegistrationState;
   #attempt: object | null = null;
+  /** The latest clock reading; a later one may not be lower. */
+  #lastReading: number;
 
   constructor(options: ControlRegistrationOptions) {
     this.#options = options;
@@ -455,6 +461,7 @@ export class ControlRegistration {
       this.#issuedAtMs = checkMillis(options.clock(), "The clock");
       this.#state = "challenged";
     }
+    this.#lastReading = this.#issuedAtMs;
   }
 
   get state(): RegistrationState {
@@ -503,20 +510,31 @@ export class ControlRegistration {
     this.#attempt = token;
     this.#state = "verifying";
     let result: RegisterProofResult;
+    let storedSuccess = false;
     try {
       await this.#options.persist?.(this.snapshot());
       result = await this.#verify(token, proof);
+      if (result.ok) {
+        // Still cancellable while the success is stored: an abort or an expiry during the
+        // wait wins, and the failure is stored after it.
+        storedSuccess = true;
+        await this.#options.persist?.({ ...this.snapshot(), state: "registered" });
+        if (!this.#live(token)) result = this.#lost(token);
+      }
     } catch {
       result = { ok: false, code: "store_failed" };
     }
-    if (result.ok && !this.#live(token)) result = this.#lost(token);
-    if (this.#attempt === token) {
+    if (result.ok) {
       this.#attempt = null;
-      this.#state = result.ok ? "registered" : "failed";
+      this.#state = "registered";
+      return result;
+    }
+    const current = this.#attempt === token;
+    if (current) this.#end();
+    if (current || storedSuccess) {
       try {
         await this.#options.persist?.(this.snapshot());
       } catch {
-        this.#state = "failed";
         return { ok: false, code: "store_failed" };
       }
     }
@@ -566,12 +584,7 @@ export class ControlRegistration {
 
   /** Why a live check failed, ending the registration if it has not ended yet. */
   #lost(token: object): RegisterProofResult {
-    let clockOk = true;
-    try {
-      checkMillis(this.#options.clock(), "The clock");
-    } catch {
-      clockOk = false;
-    }
+    const clockOk = this.#read() !== null;
     const aborted = this.#attempt !== token || this.#state !== "verifying";
     if (!aborted) this.#end();
     if (aborted) return { ok: false, code: "aborted" };
@@ -579,14 +592,23 @@ export class ControlRegistration {
   }
 
   #inTime(): boolean {
+    const now = this.#read();
+    if (now === null) return false;
+    const elapsed = now - this.#issuedAtMs;
+    return elapsed >= 0 && elapsed <= REGISTER_CHALLENGE_MS;
+  }
+
+  /** A checked clock reading, or null for one that is not whole milliseconds or went back. */
+  #read(): number | null {
     let now: number;
     try {
       now = checkMillis(this.#options.clock(), "The clock");
     } catch {
-      return false;
+      return null;
     }
-    const elapsed = now - this.#issuedAtMs;
-    return elapsed >= 0 && elapsed <= REGISTER_CHALLENGE_MS;
+    if (now < this.#lastReading) return null;
+    this.#lastReading = now;
+    return now;
   }
 
   #end(): void {

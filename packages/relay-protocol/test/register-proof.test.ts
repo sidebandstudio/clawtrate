@@ -474,6 +474,47 @@ describe("one control socket's registration", () => {
     expect(pinned.claim(relayId, new Uint8Array(32).fill(3), { live: true })).toBe(true);
   });
 
+  it("stays cancellable while its success is stored, and stores the failure after it", async () => {
+    for (const end of ["abort", "expire"] as const) {
+      let now = 5_000;
+      const seen: string[] = [];
+      let release = (): void => {};
+      const registration = socket({
+        clock: () => now,
+        persist: (snapshot) => {
+          seen.push(snapshot.state);
+          if (snapshot.state !== "registered") return;
+          return new Promise<void>((resolve) => (release = resolve));
+        },
+      });
+      const pending = registration.register(proofFor(registration));
+      for (let i = 0; i < 10 && seen.length < 2; i++) await Promise.resolve();
+      expect(seen, end).toEqual(["verifying", "registered"]);
+      if (end === "abort") {
+        registration.abort();
+      } else {
+        now = 5_000 + 60_001;
+        expect(registration.expire()).toBe(true);
+      }
+      release();
+      // Either way the relay ended it, so the attempt reports it was cut off.
+      expect(await pending, end).toEqual({ ok: false, code: "aborted" });
+      expect(registration.state).toBe("failed");
+      expect(seen, end).toEqual(["verifying", "registered", "failed"]);
+    }
+  });
+
+  it("fails an attempt whose clock goes back between readings", async () => {
+    // Issued at 5,000; in time at 55,000; then 10,000, still inside the window but behind.
+    const readings = [5_000, 55_000, 10_000];
+    const registration = socket({ clock: () => readings.shift() ?? 10_000 });
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "bad_clock",
+    });
+    expect(registration.state).toBe("failed");
+  });
+
   it("stores verifying before any store is asked, and the outcome before it returns", async () => {
     const seen: string[] = [];
     const replay = new MemoryReplayStore();

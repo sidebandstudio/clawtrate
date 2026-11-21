@@ -153,14 +153,10 @@ export interface PhoneGate {
 
 function checkGateResult(check: unknown): GateCheck {
   if (check === "enrolled" || isRefusal(check)) return check;
-  if (
-    typeof check === "object" &&
-    check !== null &&
-    Object.hasOwn(check, "eligible") &&
-    typeof (check as { eligible: unknown }).eligible === "object" &&
-    (check as { eligible: unknown }).eligible !== null
-  ) {
-    return check as { readonly eligible: OfferCandidate };
+  if (typeof check === "object" && check !== null) {
+    // Read once: the candidate checked here is the one the transaction is given.
+    const eligible = (check as { readonly eligible?: unknown }).eligible;
+    if (typeof eligible === "object" && eligible !== null) return { eligible };
   }
   return fail("malformed", "The gate's answer is not one it may give.");
 }
@@ -245,6 +241,7 @@ export interface ChannelOptions {
    * fails the channel, keep-alives included. A peer that goes quiet sends nothing to check, so
    * once a message begins the host arms a timer for just after `partialMessageDeadline` and
    * calls `expirePartialMessage`, and cancels it when the message completes or the channel ends.
+   * It must not call back into the channel.
    */
   readonly clock?: () => number;
 }
@@ -469,6 +466,8 @@ abstract class Channel {
   #sample(): number | null {
     if (this.#clock === null) return null;
     const now = checkMillis(this.#clock(), "The clock");
+    // The clock may not call back into the channel; one that ended it ends this step.
+    this.#checkUsable();
     if (this.#lastSample !== null && now < this.#lastSample) {
       fail("bad_time", "The clock went backwards.");
     }

@@ -94,13 +94,17 @@ describe("tampering", { timeout: 60_000 }, () => {
   });
 
   it("truncated or extended frames fail", () => {
-    const pair = makePair();
-    openPair(pair);
-    const [frame] = pair.phone.sendText("hello");
-    for (const changed of [frame!.subarray(0, frame!.length - 1), Uint8Array.of(...frame!, 0)]) {
-      const other = makePair();
-      openPair(other);
-      expectProtocolError(() => other.connector.receive(changed));
+    const changes = [
+      (frame: Uint8Array) => frame.subarray(0, frame.length - 1),
+      (frame: Uint8Array) => Uint8Array.of(...frame, 0),
+    ];
+    for (const change of changes) {
+      // The session that made the frame, so only the changed length can make it fail.
+      const pair = makePair();
+      openPair(pair);
+      const [frame] = pair.phone.sendText("hello");
+      expectProtocolError(() => pair.connector.receive(change(frame!)));
+      expect(pair.connector.currentState).toBe("failed");
     }
   });
 

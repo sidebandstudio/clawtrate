@@ -296,6 +296,36 @@ describe("the gate", () => {
     }
   });
 
+  it("reads the candidate once, inherited or own, and gives the transaction that one", () => {
+    class Found {
+      readonly offer: EnrollmentOffer;
+      constructor(offer: EnrollmentOffer) {
+        this.offer = offer;
+      }
+      get eligible(): object {
+        return this.offer;
+      }
+    }
+    const inherited = makePair();
+    inherited.gate.check = () => new Found(inherited.gate.offer!) as unknown as GateCheck;
+    const attempt = inherited.connector.beginAdmission(admissionOf(toAdmit(inherited)));
+    expect(attempt.candidate).toBe(inherited.gate.offer);
+
+    const pair = makePair();
+    const seen: object[] = [];
+    pair.gate.check = () =>
+      ({
+        get eligible() {
+          const candidate = { read: seen.length };
+          seen.push(candidate);
+          return candidate;
+        },
+      }) as GateCheck;
+    const changing = pair.connector.beginAdmission(admissionOf(toAdmit(pair)));
+    expect(seen).toHaveLength(1);
+    expect(changing.candidate).toBe(seen[0]);
+  });
+
   it("a transaction's answer must be a commit result; anything else fails before sealing", () => {
     for (const result of ["accepted", "eligible", undefined]) {
       const pair = makePair();

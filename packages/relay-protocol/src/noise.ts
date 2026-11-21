@@ -231,6 +231,8 @@ export class IKHandshake {
   #remoteStatic: Uint8Array | null;
   #remoteEphemeral: Uint8Array | null = null;
   #step: Step;
+  /** True while a step runs, so a callback (the random source) cannot start another. */
+  #busy = false;
   #keys: TransportKeys | null = null;
 
   constructor(options: IKHandshakeOptions) {
@@ -306,11 +308,12 @@ export class IKHandshake {
   }
 
   #run<T>(step: Step, next: Step, body: () => T): T {
-    if (this.#step !== step) {
+    if (this.#step !== step || this.#busy) {
       this.dispose();
       this.#step = "failed";
       return fail("unexpected", `This handshake cannot take step ${step} now.`);
     }
+    this.#busy = true;
     try {
       const result = body();
       this.#step = next;
@@ -318,6 +321,8 @@ export class IKHandshake {
     } catch (error) {
       this.dispose();
       throw error;
+    } finally {
+      this.#busy = false;
     }
   }
 
@@ -330,6 +335,8 @@ export class IKHandshake {
 
   #newEphemeral(): Uint8Array {
     const seed = this.#random(KEY_BYTES);
+    // A random source that disposed of the handshake ended it; install nothing.
+    if (this.#step === "failed") fail("failed", "The handshake ended while its random source ran.");
     this.#ephemeral = keyPairFromSecret(seed);
     if (this.#random === secureRandomBytes) seed.fill(0);
     this.#symmetric.mixHash(this.#ephemeral.publicKey);

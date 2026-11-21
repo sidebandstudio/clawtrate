@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   Admission,
+  channelPrologue,
   decodeFrame,
+  encodeFrame,
+  encodeHello,
+  encodeRecord,
   EnrollmentOffer,
   generateKeyPair,
+  IKHandshake,
   Initiator,
   MAX_FRAME_BYTES,
   MAX_MESSAGE_BYTES,
@@ -151,6 +156,28 @@ describe("the end-to-end channel", () => {
     pair.connector.receive(confirm!);
     expect(() => pair.connector.receive(confirm!)).toThrow(RelayProtocolError);
     expect(pair.connector.currentState).toBe("failed");
+  });
+
+  it("refuses an authenticated first record from the phone that is not confirm", () => {
+    const pair = makePair();
+    // A phone built from the handshake alone, so its first record can be anything.
+    const phone = new IKHandshake({
+      initiator: true,
+      prologue: channelPrologue(RELAY_ID),
+      staticKey: pair.phoneKey,
+      remoteStaticKey: pair.connectorKey.publicKey,
+    });
+    const hs1 = encodeFrame({ type: "handshake1", body: phone.writeMessage1(encodeHello({})) });
+    pair.gate.enrolled.push(Uint8Array.from(pair.phoneKey.publicKey));
+    const [hs2] = sends(pair.connector.receive(hs1));
+    phone.readMessage2(decodeFrame(hs2!).body);
+    const text = encodeRecord({ kind: "text-end", data: Uint8Array.of(104, 105) });
+    const body = phone.transportKeys.send.encrypt(new Uint8Array(0), text);
+    expect(() => pair.connector.receive(encodeFrame({ type: "transport", body }))).toThrow(
+      expect.objectContaining({ code: "unexpected" }),
+    );
+    expect(pair.connector.currentState).toBe("failed");
+    expect(pair.gate.commits).toBe(0);
   });
 
   it("fails the handshake when the phone pinned another connector key", () => {

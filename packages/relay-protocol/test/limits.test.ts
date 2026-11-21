@@ -213,6 +213,27 @@ describe("reassembly bounds", () => {
     expect(() => timer.connector.expirePartialMessage()).toThrow(RelayProtocolError);
     expect(timer.connector.currentState).toBe("failed");
   });
+
+  it("a clock that ends the channel while it is read leaves nothing buffered or charged", () => {
+    const budget = new ReceiveBudget(10 * MAX_RECORD_DATA_BYTES);
+    let abortOnRead = false;
+    let connector: Responder | null = null;
+    const pair = pairWith({
+      budget,
+      clock: () => {
+        if (abortOnRead) connector!.abort();
+        return 1_000;
+      },
+    });
+    connector = pair.connector;
+    abortOnRead = true;
+    expect(() => pair.connector.receive(sealAs(pair.phone, FULL_PART))).toThrow(
+      expect.objectContaining({ code: "failed" }),
+    );
+    expect(pair.connector.currentState).toBe("failed");
+    expect(pair.connector.bufferedBytes).toBe(0);
+    expect(budget.usedBytes).toBe(0);
+  });
 });
 
 describe("handshake state", () => {
@@ -265,6 +286,47 @@ describe("handshake state", () => {
     );
     wiped(pair.phone);
     expect(keysOf(pair.phone)).toBeNull();
+  });
+
+  it("a random source that ends the channel or reenters the handshake leaves it failed", () => {
+    const connectorKey = generateKeyPair();
+    let phone: Initiator | null = null;
+    phone = new Initiator({
+      relayId: RELAY_ID,
+      connectorKey: connectorKey.publicKey,
+      staticKey: generateKeyPair(),
+      random: (length) => {
+        phone!.abort();
+        return new Uint8Array(length).fill(5);
+      },
+    });
+    expect(() => phone.start()).toThrow(expect.objectContaining({ code: "failed" }));
+    expect(phone.currentState).toBe("failed");
+    wiped(phone);
+
+    let inner: unknown = null;
+    const handshake: IKHandshake = new IKHandshake({
+      initiator: true,
+      prologue: channelPrologue(RELAY_ID),
+      staticKey: generateKeyPair(),
+      remoteStaticKey: connectorKey.publicKey,
+      random: (length) => {
+        try {
+          handshake.writeMessage1(new Uint8Array(0));
+        } catch (error) {
+          inner = error;
+        }
+        return new Uint8Array(length).fill(5);
+      },
+    });
+    expect(() => handshake.writeMessage1(new Uint8Array(0))).toThrow(
+      expect.objectContaining({ code: "failed" }),
+    );
+    expect(inner).toMatchObject({ code: "unexpected" });
+    expect(handshake.complete).toBe(false);
+    expect(() => handshake.readMessage2(new Uint8Array(48))).toThrow(
+      expect.objectContaining({ code: "unexpected" }),
+    );
   });
 });
 
