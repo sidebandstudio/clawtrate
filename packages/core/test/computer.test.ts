@@ -1676,6 +1676,36 @@ describe("closing edits: tab choice, competing takes, confirmation in time, hand
     expect(h.pane().control).toMatchObject({ status: "unconfirmed", outcome: "answer-not-sent" });
   });
 
+  it("F-142: a renewal that times out after a later one confirmed the lease changes nothing", async () => {
+    vi.useFakeTimers();
+    let renewals = 0;
+    // A 5 s lease: renewals go 1.25 s apart, so the first one's 5 s deadline passes after the
+    // second and third answered.
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) => {
+        renewals += 1;
+        if (renewals === 1) return new Promise(() => {});
+        return {
+          ok: true,
+          renewWithinMs: 5_000,
+          streamRenewed: p.streamId === "stream-1",
+          leaseRenewed: true,
+        };
+      },
+      "clawtrate-computer.control.take": () => ({
+        state: "granted",
+        generation: GEN,
+        renewWithinMs: 5_000,
+        targetId: TAB,
+        guarantee: [],
+      }),
+    });
+    await granted(h);
+    await vi.advanceTimersByTimeAsync(6_400);
+    expect(renewals).toBeGreaterThanOrEqual(4);
+    expect(h.pane().control.status).toBe("granted");
+  });
+
   it("F-145: a confirmed hand-back whose question can't be read sends no answer and keeps renewing the view", async () => {
     vi.useFakeTimers();
     const h = harness();

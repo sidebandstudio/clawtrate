@@ -1335,8 +1335,10 @@ export class ComputerViews {
         void this.readTabs(live.viewer);
         return;
       }
-      // Refused for another reason, or not answered: nothing confirms the lease now.
-      if (lease && live.lease === lease) this.unverified(live, lease);
+      // Refused for another reason, or not answered: nothing confirms the lease now, unless a
+      // request sent after this one already confirmed it.
+      if (lease && live.lease === lease && sentAt >= lease.confirmedFrom)
+        this.unverified(live, lease);
     }
   }
 
