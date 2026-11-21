@@ -3,6 +3,7 @@
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { ClawtrateState, MessageReaction } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -68,11 +69,32 @@ const unreached = (control: Locator) =>
           box.top + box.height / 2 + dy,
         );
         if (el.contains(hit)) return [];
-        const other = hit?.closest("[aria-label]")?.getAttribute("aria-label") ?? hit?.tagName;
-        return [`${dx},${dy}: ${other ?? "nothing"}`];
+        const other = hit?.closest("button, [aria-label]");
+        const name = other?.getAttribute("aria-label") ?? other?.textContent ?? hit?.tagName;
+        return [`${dx},${dy}: ${name ?? "nothing"}`];
       }),
     );
   });
+
+/** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
+async function react(page: Page, reactions: Record<string, MessageReaction[]>): Promise<void> {
+  await page.evaluate((reactions) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const task = "agent:otto:disk-space";
+      const transcript = state.transcripts[task]!;
+      const all = { ...transcript.reactions, ...reactions };
+      return {
+        ...state,
+        transcripts: { ...state.transcripts, [task]: { ...transcript, reactions: all } },
+      };
+    });
+  }, reactions);
+}
 
 /** Touch and hold a message's last bubble until its actions open, then lift. */
 async function holdOn(message: Locator): Promise<void> {
@@ -714,6 +736,54 @@ for (const width of [320, 390]) {
       await expect(buttons).toHaveCount(3);
       for (const button of await buttons.all())
         await expect.poll(() => unreached(button)).toEqual([]);
+    });
+
+    test("F-283: reaction pills that wrap onto a second row each keep a 44 px hit area of their own", async ({
+      page,
+    }) => {
+      await open(page);
+      // Otto's report takes six reactions with three-digit counts: more than one row holds.
+      await react(page, {
+        "row-9": ["👍", "❤️", "😂", "🎉", "👀", "🙏"].map((emoji, i) => ({
+          emoji,
+          count: 120 + i,
+          mine: i === 0,
+        })),
+      });
+      const message = page.locator('[data-message="row-9"]');
+      const pills = message.getByTestId("reaction");
+      await expect(pills).toHaveCount(6);
+      await message
+        .getByTestId("reactions")
+        .evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      const rows = await pills.evaluateAll(
+        (all) => new Set(all.map((each) => each.getBoundingClientRect().top)).size,
+      );
+      expect(rows).toBe(2);
+      for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+    });
+
+    test("F-283: a reaction pill keeps its 44 px hit area over a replies link or a reply's quote under it", async ({
+      page,
+    }) => {
+      await open(page);
+      // Otto's first answer, which has a reply, takes a reaction too: its replies link is under
+      // the pill. The reply's quote is under the report's pills.
+      await react(page, { "row-2": [{ emoji: "👀", count: 1, mine: false }] });
+      for (const [row, count] of [
+        ["row-2", 1],
+        ["row-9", 2],
+      ] as const) {
+        const message = page.locator(`[data-message="${row}"]`);
+        const pills = message.getByTestId("reaction");
+        await expect(pills).toHaveCount(count);
+        await message
+          .getByTestId("reactions")
+          .evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await settle(page);
+        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+      }
     });
   });
 }

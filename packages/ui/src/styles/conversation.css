@@ -1514,6 +1514,14 @@ button.reaction {
   gap: 18px;
 }
 
+/* A pill's 44 px area reaches 10 px past its top and bottom: a wrapped row starts 2 px past it,
+   and a replies link or a reply's quote under the pills, whose own areas reach 13 px up, past
+   that. */
+[data-input="touch"] .reactions {
+  row-gap: 22px;
+  margin-bottom: 24px;
+}
+
 [data-input="touch"] .msg-actions .icon-button::after,
 [data-input="touch"] .reaction::after,
 [data-input="touch"] .reply-quote::after,
