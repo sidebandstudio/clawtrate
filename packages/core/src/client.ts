@@ -500,6 +500,8 @@ export type ClientOptions = {
   turnLimitMs?: number;
   /** `REQUEST_TIMEOUT_MS` unless a test shortens it. */
   requestTimeoutMs?: number;
+  /** `SETUP_LISTENER_READS_MS` unless a test shortens it. */
+  setupListenerReadsMs?: number;
   /** First wait before a creation without an answer is asked again; `CREATION_CHECK_MS` unless a test shortens it. */
   creationCheckMs?: number;
   /**
@@ -586,9 +588,21 @@ function withinAsked(granted: readonly string[], asked: readonly string[]): stri
  * The host's checks of a setup connection's endpoint. `check`, synchronous, is
  * asked before every socket and around signing; `verify` reads the endpoint's
  * listener again, once each socket opens and again just before the frame that
- * carries its credential. Either failing sends nothing.
+ * carries its credential. Either failing sends nothing. `verify` is given its
+ * socket's signal, which ends when the socket closes or its reads' time is up:
+ * the read stops what it started then.
  */
-export type SetupEndpointCheck = { check?: () => boolean; verify?: () => Promise<boolean> };
+export type SetupEndpointCheck = {
+  check?: () => boolean;
+  verify?: (signal: AbortSignal) => Promise<boolean>;
+};
+
+/**
+ * How long both listener reads of one setup socket may take together, from
+ * the socket's open: within the protocol's 15 s for a handshake, so a read
+ * that runs out ends the connection as a change, never as a timed-out retry.
+ */
+export const SETUP_LISTENER_READS_MS = 10_000;
 
 function setupCheckFor(url: string, setup: SetupEndpointCheck) {
   if (!setup.check && !setup.verify) return null;
@@ -860,7 +874,7 @@ export class ClawtrateClient {
     url: string;
     check: () => boolean;
     /** Reads the endpoint's listener again: once each socket opens, and before its credential. */
-    verify?: () => Promise<boolean>;
+    verify?: (signal: AbortSignal) => Promise<boolean>;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -894,6 +908,8 @@ export class ClawtrateClient {
     lifecycle: GatewayBrowserDeviceAuthLifecycle;
   } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
+  /** Stops the current setup socket's listener reads and the commands they started. */
+  private endSocketReads: () => void = () => {};
   private settings: ConnectionSettings | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
@@ -5303,8 +5319,26 @@ export class ClawtrateClient {
       mode: CLIENT_MODE,
     } as const;
     const reconnect = this.options.reconnect ?? { initialMs: 1000, maxMs: 30_000 };
-    // A setup socket's read of the endpoint's listener, started as it opens; its plan waits for it.
-    let openRead: Promise<boolean> | null = null;
+    // The current socket, with its setup listener reads: the read started as it opened, which its
+    // plan waits for, and the signal both reads share, ended when the socket closes or their time is up.
+    type SocketReads = {
+      check: ClawtrateClient["setupCheck"];
+      reads: AbortController;
+      /** Settles when the reads end: the socket closed or was replaced, or their time is up. */
+      ended: Promise<false>;
+      end: () => void;
+      timer: ReturnType<typeof setTimeout> | null;
+      closed: boolean;
+      ours: () => boolean;
+      openRead: Promise<boolean> | null;
+    };
+    let current: SocketReads | null = null;
+    const endReads = (reads: SocketReads | null) => {
+      if (!reads) return;
+      if (reads.timer) clearTimeout(reads.timer);
+      reads.reads.abort();
+      reads.end();
+    };
 
     this.protocol = new GatewayProtocolClient<Plan>({
       createSocket: (handlers) => {
@@ -5333,7 +5367,8 @@ export class ClawtrateClient {
         if (this.setupEndpointFails(settings.url, generation))
           throw new Error("the setup connection's endpoint changed");
         let socket: WebSocketLike;
-        openRead = null;
+        endReads(current);
+        current = null;
         try {
           socket = this.host.createWebSocket(settings.url);
         } catch (error) {
@@ -5341,14 +5376,57 @@ export class ClawtrateClient {
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
           throw error;
         }
+        const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
+        let end = () => {};
+        const ended = new Promise<false>((resolve) => (end = () => resolve(false)));
+        const mine: SocketReads = {
+          check,
+          reads: new AbortController(),
+          ended,
+          end,
+          timer: null,
+          closed: false,
+          ours: () => false,
+          openRead: null,
+        };
+        current = mine;
+        // Closing or replacing this connection stops its socket's reads too.
+        this.endSocketReads = () => endReads(mine);
+        // Still this socket of this connection, open, with the setup check it opened under.
+        const ours = () =>
+          !mine.closed &&
+          current === mine &&
+          generation === this.generation &&
+          this.setupCheck === check;
+        mine.ours = ours;
         socket.onopen = () => {
-          // A setup socket reads the endpoint's listener again as soon as it is up.
-          if (this.setupCheck?.url === settings.url)
-            openRead = this.setupListenerHolds(settings.url, generation);
+          // A setup socket reads the endpoint's listener again as soon as it is up, within the
+          // time both its reads share.
+          if (check?.verify && ours()) {
+            mine.timer = setTimeout(
+              () => endReads(mine),
+              this.options.setupListenerReadsMs ?? SETUP_LISTENER_READS_MS,
+            );
+            mine.openRead = this.setupListenerHolds(check, mine, ours).then((holds) => {
+              // A read that failed closes its own socket at once, challenge or not; it ends
+              // the connection only while that socket is still the connection's.
+              if (!holds) {
+                const end = ours();
+                socket.close();
+                if (end) this.close();
+              }
+              return holds;
+            });
+          }
           handlers.open();
         };
         socket.onmessage = (event) => handlers.message(String(event.data));
-        socket.onclose = (event) => handlers.close(event.code, event.reason);
+        socket.onclose = (event) => {
+          // A closed socket's reads stop, and whatever they started with them.
+          mine.closed = true;
+          endReads(mine);
+          handlers.close(event.code, event.reason);
+        };
         socket.onerror = () => handlers.error(new Error("WebSocket error"));
         return {
           isOpen: () => socket.readyState === 1,
@@ -5357,22 +5435,29 @@ export class ClawtrateClient {
         };
       },
       createRequestId: () => this.randomId(),
-      buildConnectPlan: async ({ nonce, challengeTs }) => {
+      buildConnectPlan: async ({ nonce, challengeTs, assertCurrent }) => {
+        // The socket this plan is for. After every wait the plan is still that socket's, of this
+        // connection, or it reads, publishes and closes nothing: a replacement is left alone.
+        const mine = current;
+        const stillCurrent = () => {
+          assertCurrent();
+          if (generation !== this.generation || current !== mine)
+            throw new Error("the connection was replaced");
+        };
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
-        // A plan for a connection already replaced reads and changes nothing of the current one.
-        if (generation !== this.generation) throw new Error("the connection was replaced");
+        stillCurrent();
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
         // The listener as this socket opened: the one the look found, or nothing is signed.
-        const opened = openRead;
-        if (opened && !(await opened)) {
-          this.close();
-          throw new Error("the setup connection's endpoint changed");
+        const opened = mine?.openRead;
+        if (opened) {
+          const holds = await opened;
+          stillCurrent();
+          if (!holds) throw new Error("the setup connection's endpoint changed");
         }
-        if (generation !== this.generation) throw new Error("the connection was replaced");
         this.heldToken = token?.token ?? null;
         const setup = this.isSetup(settings.url);
         // A new pairing that finds a saved token for this address sends neither: the person
@@ -5416,7 +5501,7 @@ export class ClawtrateClient {
           nonce,
           challengeTs: challengeTs ?? null,
         });
-        if (generation !== this.generation) throw new Error("the connection was replaced");
+        stillCurrent();
         // After the wait for the signature: the setup endpoint still passes, or nothing is sent.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -5428,17 +5513,21 @@ export class ClawtrateClient {
           this.pairingAppeared();
           throw new Error("a saved pairing appeared");
         }
-        // Just before the frame that carries the credential: the listener read again.
-        if (setup && !(await this.setupListenerHolds(settings.url, generation))) {
-          this.close();
-          throw new Error("the setup connection's endpoint changed");
+        // Just before the frame that carries the credential: the listener read again, within the
+        // time this socket's reads share and stopped with the plan.
+        if (setup) {
+          const holds = mine ? await this.setupListenerHolds(mine.check, mine, mine.ours) : false;
+          stillCurrent();
+          if (!holds) {
+            this.close();
+            throw new Error("the setup connection's endpoint changed");
+          }
         }
-        if (generation !== this.generation) throw new Error("the connection was replaced");
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
         }
-        if (generation === this.generation) this.setConnection({ requestedScopes: [...requested] });
+        this.setConnection({ requestedScopes: [...requested] });
         return plan;
       },
       buildConnectParams: (plan) => ({
@@ -5690,6 +5779,8 @@ export class ClawtrateClient {
 
   private close(): void {
     this.generation += 1;
+    this.endSocketReads();
+    this.endSocketReads = () => {};
     // The replaced or stopped socket's credential is no longer needed to take it out of text.
     this.heldToken = null;
     this.invalidateCheckIns();
@@ -6993,12 +7084,21 @@ export class ClawtrateClient {
    * finds what its look found. A failed or failing read is a change, and it
    * ends the connection as `setupEndpointFails` does.
    */
-  private async setupListenerHolds(url: string, generation: number): Promise<boolean> {
-    const verify = this.setupCheck?.url === url ? this.setupCheck.verify : undefined;
-    if (!verify) return true;
-    const holds = await verify().catch(() => false);
-    if (holds) return true;
-    if (this.setupCheck?.url === url) this.setupEndpointChanged(url, generation);
+  private async setupListenerHolds(
+    check: ClawtrateClient["setupCheck"],
+    reads: { reads: AbortController; ended: Promise<false> },
+    ours: () => boolean,
+  ): Promise<boolean> {
+    if (!check?.verify) return true;
+    const signal = reads.reads.signal;
+    // Never past the reads' end, whether or not the read itself stops then.
+    const holds =
+      !signal.aborted &&
+      (await Promise.race([check.verify(signal).catch(() => false), reads.ended]));
+    if (holds && !signal.aborted) return true;
+    // Only while its socket is still the connection's, open, under the same setup check: a read
+    // of a socket closed or replaced since, or of an earlier check, changes nothing now.
+    if (ours()) this.setupEndpointChanged(check.url, this.generation);
     return false;
   }
 

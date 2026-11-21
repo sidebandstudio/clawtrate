@@ -17,7 +17,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
 import {
   FakeGateway,
   helloOk,
@@ -705,6 +706,50 @@ describe("the programs setup starts", () => {
     });
     expect(stubborn.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
+    expect(runner.running()).toEqual([]);
+  }, 20_000);
+
+  it("F-492: a listener read's signal ends the commands it started, and only those", async () => {
+    const runner = loose();
+    const reads = new AbortController();
+    const started = Date.now();
+    const cancelled = runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+      signal: reads.signal,
+    });
+    const other = runner.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["0.5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    reads.abort();
+    expect(await cancelled).toMatchObject({ timedOut: true });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // The run nobody cancelled finishes as it would have.
+    expect(await other).toMatchObject({ exitCode: 0, timedOut: false });
+    // A signal already ended starts nothing.
+    const spawned = vi.fn(spawn);
+    const counted = new ProgramRunner({
+      check: () => {},
+      spawn: spawned as unknown as typeof spawn,
+    });
+    const late = await counted.run({
+      ...base,
+      program: "/bin/sleep",
+      args: ["5"],
+      timeoutMs: 10_000,
+      maxBytes: 4096,
+      signal: reads.signal,
+    });
+    expect(late.timedOut).toBe(true);
+    expect(spawned).not.toHaveBeenCalled();
     expect(runner.running()).toEqual([]);
   }, 20_000);
 
