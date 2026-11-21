@@ -217,6 +217,20 @@ export function BotSettings({
     );
   }
 
+  // --- What the bot may do (controls.md sections 4 and 5): its own read, whatever the accounts do
+  if (view === "permissions") {
+    return (
+      <Permissions
+        bot={bot}
+        connection={connection}
+        info={info}
+        visible={visible}
+        announce={announce}
+        onBack={() => go("main", "[data-bs='permissions']")}
+      />
+    );
+  }
+
   if (view === "memory") {
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
@@ -276,6 +290,13 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        <h3 className="b-tabgroup">Tools</h3>
+        <PermissionsRow
+          bot={bot}
+          connection={connection}
+          visible={visible}
+          onOpen={() => go("permissions")}
+        />
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
         {runsOnRow}
@@ -424,20 +445,6 @@ export function BotSettings({
         {runsOnRow}
         {foot}
       </div>
-    );
-  }
-
-  // --- What the bot may do (controls.md sections 4 and 5) ----------------------------------------
-  if (view === "permissions") {
-    return (
-      <Permissions
-        bot={bot}
-        connection={connection}
-        info={info}
-        visible={visible}
-        announce={announce}
-        onBack={() => go("main", "[data-bs='permissions']")}
-      />
     );
   }
 

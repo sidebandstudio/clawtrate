@@ -62,43 +62,58 @@ const unstopped = (text: string) => text.replace(/\.+$/, "");
 /** One bot's permissions, read while `shown`: on opening, on each new connection and every 60 s. */
 export function usePermissions(botId: string, shown: boolean, connection: ConnectionState) {
   const bridge = useBridge();
-  const [read, setRead] = useState<Read>({ status: "loading", view: null, error: null });
-  const generation = useRef(0);
   const connected = connection.status === "connected";
+  // A view belongs to the bot and the connection it was read on. Another bot, or a new
+  // connection (a reconnect, another gateway), shows nothing old as current: until its own read
+  // lands it is loading, and answers to reads made before are dropped. While disconnected the
+  // last view stays, said as last read.
+  const key = `${botId}\n${connection.gatewayUrl ?? ""}\n${connection.connectedAt ?? ""}`;
+  const [stored, setRead] = useState<Read & { key: string }>({ ...LOADING, key });
+  const generation = useRef(0);
   const reload = useCallback(() => {
     const mine = (generation.current += 1);
     bridge
       .invoke({ type: "readPermissions", botId })
       .then((view) => {
-        if (mine === generation.current) setRead({ status: "ready", view, error: null });
+        if (mine === generation.current) setRead({ status: "ready", view, error: null, key });
       })
       .catch((error: unknown) => {
         if (mine === generation.current)
-          setRead((was) => ({ status: "error", view: was.view, error: errorText(error) }));
+          setRead((was) => ({
+            status: "error",
+            view: was.key === key ? was.view : null,
+            error: errorText(error),
+            key,
+          }));
       });
-  }, [bridge, botId]);
-  const [forBot, setForBot] = useState(botId);
-  if (forBot !== botId) {
-    setForBot(botId);
-    setRead({ status: "loading", view: null, error: null });
-  }
+  }, [bridge, botId, key]);
   useEffect(() => {
     if (!shown || !connected) return;
     reload();
     const timer = setInterval(reload, PERMISSIONS_READ_MS);
     return () => clearInterval(timer);
-  }, [shown, connected, connection.connectedAt, reload]);
-  const replace = useCallback((view: BotPermissions) => {
-    generation.current += 1;
-    setRead({ status: "ready", view, error: null });
-  }, []);
+  }, [shown, connected, reload]);
+  const replace = useCallback(
+    (view: BotPermissions) => {
+      generation.current += 1;
+      setRead({ status: "ready", view, error: null, key });
+    },
+    [key],
+  );
   // A write with no read-back leaves the last view, said as last read.
-  const lose = useCallback((error: string) => {
-    generation.current += 1;
-    setRead((was) => ({ status: "error", view: was.view, error }));
-  }, []);
+  const lose = useCallback(
+    (error: string) => {
+      generation.current += 1;
+      setRead((was) => ({ status: "error", view: was.key === key ? was.view : null, error, key }));
+    },
+    [key],
+  );
+  const same = stored.key === key || (!connected && stored.key.split("\n")[0] === botId);
+  const read: Read = same ? stored : LOADING;
   return { read, reload, replace, lose };
 }
+
+const LOADING: Read = { status: "loading", view: null, error: null };
 
 // Words -------------------------------------------------------------------------------------
 

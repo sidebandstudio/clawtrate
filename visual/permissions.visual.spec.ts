@@ -251,3 +251,45 @@ test.describe("keyboard and screen reader", () => {
     await expect(page.getByRole("button", { name: "Back to settings" })).not.toBeFocused();
   });
 });
+
+test.describe("the page's own read", () => {
+  test.use(contextFor(SIZES[0]!, "light"));
+  test("F-176: while the account read has failed, Tools is still drawn from its own read and opens", async ({
+    page,
+  }) => {
+    await openFixture(page, q("accounts=error"), "light");
+    await expect(page.getByText("Couldn't load Otto's settings")).toBeVisible();
+    await expect(page.getByTestId("permission-counts")).toBeVisible();
+    await ready(page);
+    await page.locator('[data-c-line="read"]').click();
+    await expect(page.getByRole("radiogroup", { name: "Otto may:" })).toBeVisible();
+  });
+
+  test("F-176: after a reconnect the page shows nothing read on the old connection while it reads again", async ({
+    page,
+  }) => {
+    await openFixture(page, q(""), "light");
+    await line("read")(page);
+    await expect(page.getByRole("radiogroup", { name: "Otto may:" })).toBeVisible();
+    // The read on the new connection doesn't land: nothing from the old one may stand in for it.
+    await page.evaluate(() => {
+      type Fixture = {
+        invoke: (command: { type: string }) => Promise<unknown>;
+        setState: (change: (state: { connection: object }) => { connection: object }) => void;
+      };
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      fixture.invoke = (command) =>
+        command.type === "readPermissions" ? new Promise(() => {}) : original(command);
+      fixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...state.connection,
+          connectedAt: ((state.connection as { connectedAt?: number }).connectedAt ?? 0) + 1,
+        },
+      }));
+    });
+    await expect(page.getByTestId("permissions-loading")).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Otto may:" })).toHaveCount(0);
+  });
+});
