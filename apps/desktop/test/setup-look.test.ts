@@ -60,7 +60,11 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "clawtrate-look-"));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  // The sandbox fixtures' own temporary roots too, passed or failed.
+  fake.removeBases();
+});
 
 function executable(path: string): string {
   mkdirSync(join(path, ".."), { recursive: true });
@@ -372,6 +376,41 @@ describe("the look on this computer", () => {
     expect(report?.found?.profile.args).toEqual(["--profile", "clawtrate"]);
   });
 
+  it("F-516: a gateway Connect can use is chosen over the default profile's untested one; between two it can use, the default", async () => {
+    const world = homeWorld();
+    mkdirSync(join(world.home, ".openclaw-clawtrate"));
+    const clawtrate = {
+      "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19300 }) },
+      "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },
+    };
+    const untested = await look(
+      world,
+      fakeRunner({
+        ...defaultTable(statusJson({ port: 18789, answered: "2026.9.37" })),
+        ...clawtrate,
+      }).run,
+    );
+    expect(untested?.look).toMatchObject({ outcome: "running", profile: "clawtrate", port: 19300 });
+    expect(untested?.found?.port).toBe(19300);
+    const both = await look(world, fakeRunner({ ...defaultTable(), ...clawtrate }).run);
+    expect(both?.look).toMatchObject({ outcome: "running", profile: "default", port: 18789 });
+  });
+
+  it("F-492: a program file replaced while the look asks it is not offered for Connect", async () => {
+    const world = homeWorld();
+    const program = join(world.home, ".local/bin/openclaw");
+    const { run } = fakeRunner({
+      ...defaultTable(),
+      "gateway status --json": () => {
+        writeFileSync(program, "#!/bin/sh\n# another program\nexit 0\n");
+        return { stdout: statusJson({ port: 18789 }) };
+      },
+    });
+    const report = await look(world, run);
+    expect(report?.found).toBeNull();
+    expect(report?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+  });
+
   it("F-516: a found gateway is identified by its profile, config path, service, port and answer", async () => {
     const report = await look(homeWorld(), fakeRunner(defaultTable()).run);
     expect(report?.found).toMatchObject({
@@ -495,6 +534,8 @@ describe("the look on this computer", () => {
     for (const status of cases) {
       const report = await look(homeWorld(), fakeRunner(defaultTable(status)).run);
       expect(report?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+      // Nothing Connect could use either.
+      expect(report?.found).toBeNull();
     }
     const gone = await look(
       homeWorld(),
@@ -505,6 +546,7 @@ describe("the look on this computer", () => {
       }),
     );
     expect(gone?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+    expect(gone?.found).toBeNull();
     // The positive control: one listener, alive, the same config.
     const found = await look(
       homeWorld(),
@@ -736,6 +778,45 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     expect(opened.world.portAllowed(s.mine.port)).toBe(false);
   });
 
+  it("a pairing gateway that failed to start is started again on the next open, and closing after a failed start settles", async () => {
+    const s = setting({
+      description: { instance: "su1-test", run: fake.runId("a"), scenario: "pairing" },
+    });
+    let starts = 0;
+    let closes = 0;
+    const server = {
+      url: "ws://127.0.0.1:19999",
+      port: 19999,
+      mint: () => ({ url: "ws://127.0.0.1:19999", bootstrapToken: "x", expiresAtMs: 0 }),
+      ownsListener: () => true,
+      close: async () => {
+        closes += 1;
+      },
+    };
+    const opener = sandboxOpener({
+      file: s.file,
+      platform: "darwin",
+      context: s.context,
+      startGateway: () => {
+        starts += 1;
+        return starts === 1 ? first.promise : Promise.resolve(server);
+      },
+    });
+    const first = Promise.withResolvers<typeof server>();
+    const opening = opener.open();
+    // Shutdown while the start is under way, which then fails: it settles, with nothing to close.
+    const closing = opener.close();
+    first.reject(new Error("port in use"));
+    await expect(closing).resolves.toBeUndefined();
+    expect(await opening).toBeInstanceOf(SetupRefusedError);
+    const opened = await opener.open();
+    if (opened instanceof SetupRefusedError) throw opened;
+    expect(starts).toBe(2);
+    expect(opened.ownsListener?.(19999)).toBe(true);
+    await opener.close();
+    expect(closes).toBe(1);
+  });
+
   it("takes exactly an instance, its run and a scenario from the closed set, and nothing that names a program, a folder or a port", () => {
     const run = fake.runId("a");
     expect(parseDescription(JSON.stringify({ instance: "su1-test", run }))).toEqual({
@@ -904,7 +985,9 @@ describe("the sandbox: a run's description, its folder and its proven instance",
         join(s.root, "home"),
       );
     } finally {
-      process.env.HOME = saved;
+      // An absent HOME is put back absent, not as the text "undefined".
+      if (saved === undefined) delete process.env.HOME;
+      else process.env.HOME = saved;
     }
   });
 
@@ -1196,14 +1279,33 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     expect(proof).toThrow(SetupRefusedError);
   });
 
+  /** The markers and switches the design names, written out: not read from the code under test. */
+  const MARKERS = [
+    "CLAWTRATE_E2E_RUN",
+    "CLAWTRATE_AUTOMATED",
+    "CLAWTRATE_SCREENSHOT",
+    "CLAWTRATE_SETUP_SANDBOX",
+    "VITEST",
+    "CI",
+  ];
+  const SWITCHES = [
+    "remote-debugging-port",
+    "remote-debugging-pipe",
+    "inspect",
+    "inspect-brk",
+    "clawtrate-setup-sandbox",
+  ];
+
   it("must sandbox a development build, any marker present at all, any switch, and a sandbox named by the environment", () => {
     const none = () => false;
     expect(mustSandbox({ packaged: true, env: {}, switches: none })).toBe(false);
     expect(mustSandbox({ packaged: false, env: {}, switches: none })).toBe(true);
-    for (const key of SANDBOX_MARKERS) {
+    expect([...SANDBOX_MARKERS]).toEqual(MARKERS);
+    expect([...SANDBOX_SWITCHES]).toEqual(SWITCHES);
+    for (const key of MARKERS) {
       expect(mustSandbox({ packaged: true, env: { [key]: "" }, switches: none }), key).toBe(true);
     }
-    for (const name of SANDBOX_SWITCHES) {
+    for (const name of SWITCHES) {
       expect(mustSandbox({ packaged: true, env: {}, switches: (n) => n === name }), name).toBe(
         true,
       );
@@ -1236,7 +1338,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     const refused = (value: ReturnType<typeof launch>) =>
       value.kind === "refused" ? value.error.reason : value.kind;
     // Each marker by itself, no debugging switch, no file: refused, as given none.
-    for (const key of SANDBOX_MARKERS.filter((key) => key !== "CLAWTRATE_SETUP_SANDBOX"))
+    for (const key of MARKERS.filter((key) => key !== "CLAWTRATE_SETUP_SANDBOX"))
       expect(refused(launch({ env: { [key]: "1" } })), key).toBe("missing");
     expect(refused(launch({ packaged: false }))).toBe("missing");
     // The environment's file alone.

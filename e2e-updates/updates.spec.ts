@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   statSync,
   mkdtempSync,
   readdirSync,
@@ -182,6 +183,14 @@ const test = base.extend<{ desktopApp: TestApp }>({
         rendererRequests,
       });
     } finally {
+      // A locked or unreadable diagnostic must not skip the cleanup.
+      try {
+        const failure = join(dir, "profile", "folder-error.txt");
+        if (existsSync(failure))
+          console.error("Update folder:", readFileSync(failure, "utf8").slice(0, 4096));
+      } catch (error) {
+        console.error("Update folder diagnostic unreadable:", error);
+      }
       resume.resolve();
       await cleanup.disposeAsync();
     }

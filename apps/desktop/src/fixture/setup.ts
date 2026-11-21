@@ -295,6 +295,12 @@ export function setupInfo(info: HostInfo, name: string): HostInfo {
 }
 
 /**
+ * Each fixture's setup attempt, by its `set`: every setup command starts a new
+ * one, and a delayed step of an earlier attempt does nothing.
+ */
+const attempts = new WeakMap<object, number>();
+
+/**
  * The setup commands, answered as the host would: the look's steps, then
  * the running card; Connect's steps, then the app. The fixture has no
  * native dialog, so Connect goes straight to its steps.
@@ -310,19 +316,26 @@ export function setupCommand(
 ): boolean {
   const setup = (next: SetupState) => set({ ...get(), setup: next });
   const current = () => get().setup ?? initialSetupState;
+  if (!command.type.startsWith("setup")) return false;
+  const attempt = (attempts.get(set) ?? 0) + 1;
+  attempts.set(set, attempt);
+  const after = (ms: number, run: () => void) =>
+    later(ms, () => {
+      if (attempts.get(set) === attempt) run();
+    });
   switch (command.type) {
     case "setupLook": {
       setup({ ...initialSetupState, phase: "looking", step: 0 });
-      later(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
-      later(600, () => current().phase === "looking" && setup({ ...current(), step: 2 }));
-      later(900, () => current().phase === "looking" && setup(looked({})));
+      after(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
+      after(600, () => current().phase === "looking" && setup({ ...current(), step: 2 }));
+      after(900, () => current().phase === "looking" && setup(looked({})));
       return true;
     }
     case "setupConnect": {
       setup({ ...current(), phase: "connecting", step: 0, failure: null });
-      later(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
-      later(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
-      later(900, () => {
+      after(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
+      after(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
+      after(900, () => {
         if (current().phase !== "connecting") return;
         if (ending === "protocol") {
           // As the client publishes a handshake refused for its protocol.

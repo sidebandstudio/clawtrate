@@ -1,6 +1,9 @@
-import { win32 } from "node:path";
-import { expect, it } from "vitest";
-import { checkWindowsDirectorySpelling } from "../../src/main/private-update-directory.ts";
+import { join, win32 } from "node:path";
+import { expect, it, vi } from "vitest";
+import {
+  checkWindowsDirectorySpelling,
+  runUpdatePowerShell,
+} from "../../src/main/private-update-directory.ts";
 
 it("accepts a Windows short directory name only when every differing entry identifies the same directory", async () => {
   const base = win32.join("C:\\", "Profiles");
@@ -56,4 +59,27 @@ it("checks case-only aliases, parent identity and UNC roots", async () => {
   const unc = "\\\\server\\share\\folder";
   await expect(compare(unc.toUpperCase(), unc)).resolves.toBeDefined();
   await expect(compare("\\\\server\\other\\folder", unc)).rejects.toThrow(/roots/);
+});
+
+const execFile = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile }));
+
+it("starts the Windows folder helper from SystemRoot with the host environment and forwards cancellation", async () => {
+  const root = "C:\\WindowsFixture";
+  const signal = new AbortController().signal;
+  vi.stubEnv("SystemRoot", root);
+  vi.stubEnv("CLAWTRATE_TEST_ENV", "inherited");
+  const values = { CLAWTRATE_PRIVATE_DIRECTORY: "fixture-directory" };
+  execFile.mockImplementation((_file, _args, _options, done) => done(null, ""));
+  try {
+    await runUpdatePowerShell("fixture command", values, 15000, signal);
+    expect(execFile).toHaveBeenCalledExactlyOnceWith(
+      join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "fixture command"],
+      { env: { ...process.env, ...values }, timeout: 15000, windowsHide: true, signal },
+      expect.any(Function),
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

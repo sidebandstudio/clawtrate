@@ -607,7 +607,8 @@ describe("the programs setup starts", () => {
 
   it("F-494: passes only the look's variables, and needs a working folder of its own", () => {
     expect(() => checkRequest({ ...base, args: ["--version"], env: { TOKEN: "x" } })).toThrow();
-    expect(() => checkRequest({ ...base, args: ["--version"], env: { HOME: "a'b" } })).toThrow();
+    for (const value of ["/tmp\nHOME=/x", "/tmp\u0000", "/tmp\u007f"])
+      expect(() => checkRequest({ ...base, args: ["--version"], env: { HOME: value } })).toThrow();
     expect(() => checkRequest({ ...base, args: ["--version"], cwd: "relative" })).toThrow();
     expect(() =>
       checkRequest({ ...base, args: ["--version"], program: "relative/openclaw" }),
@@ -615,6 +616,30 @@ describe("the programs setup starts", () => {
     expect(() =>
       checkRequest({ ...base, args: ["--version"], env: { HOME: "/tmp", OPENCLAW_PROFILE: "x" } }),
     ).not.toThrow();
+  });
+
+  it("F-494: an account home with any name a file can have runs the look, and so does a program under it", () => {
+    for (const home of [
+      "/srv/accounts/José",
+      "/srv/accounts/O'Connor",
+      "/srv/accounts/a&b (work)",
+    ]) {
+      expect(() =>
+        checkRequest({
+          ...base,
+          args: ["--version"],
+          program: `${home}/.local/bin/openclaw`,
+          env: { HOME: home, PATH: `${home}/.local/bin:/usr/bin:/bin` },
+        }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      checkRequest({
+        ...base,
+        args: ["--version"],
+        program: "/srv/accounts/a\nb/.local/bin/openclaw",
+      }),
+    ).toThrow();
   });
 
   /** A runner for real system programs, with the look's own command check set aside. */
@@ -1164,6 +1189,109 @@ describe("Connect goes only to the gateway that answered, and says what is true"
       status: "connected",
       gatewayUrl: "ws://127.0.0.1:19960",
     });
+    h.client.stop();
+  });
+
+  it("Back while the setup connection still waits to open ends it: no socket opens and nothing is saved", async () => {
+    let holding = false;
+    const held: Array<() => void> = [];
+    const h = harness({
+      replies: {
+        [`qr --json --voice-node --url ${URL}`]: () => {
+          // From the code on, the client's read of this device's token waits.
+          holding = true;
+          return { stdout: qrJson(URL, CODE, Date.now() + 600_000) };
+        },
+      },
+    });
+    const get = h.storage.get.bind(h.storage);
+    h.storage.get = async (key: string) => {
+      if (holding && key === tokenKey(URL)) await new Promise<void>((go) => held.push(go));
+      return get(key);
+    };
+    await h.client.start();
+    await h.setup.look();
+    const connecting = h.setup.connect();
+    await until(() => held.length > 0);
+    // Nothing is selected yet: the connection hasn't published its address.
+    expect(h.client.state.connection.gatewayUrl).toBeNull();
+    h.setup.cancel();
+    holding = false;
+    for (const go of held) go();
+    await connecting;
+    await until(() => h.client.state.connection.status === "idle");
+    await sleep(100);
+    expect(h.gateway.sockets).toHaveLength(0);
+    expect(h.client.state.connection.gatewayUrl).toBeNull();
+    expect(h.storage.data.has("connection")).toBe(false);
+    expect(h.setup.current.phase).toBe("found");
+    h.client.stop();
+  });
+
+  it("F-492: a saved pairing gone before Connect checks for it makes no new pairing: the card asks for a new consent", async () => {
+    const h = harness({
+      confirm: async () => {
+        // The person agreed to reuse the pairing; it goes while the dialog is answered.
+        h.storage.data.delete(tokenKey(URL));
+        return true;
+      },
+    });
+    await h.storage.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    );
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current.look?.access).toBe("paired");
+    await h.setup.connect();
+    expect(h.dialogs[0]?.confirm).toBe("Connect read-only");
+    expect(h.setup.current).toMatchObject({ phase: "found", failure: null });
+    expect(h.setup.current.look?.access).toBe("new");
+    expect(minted(h.requests)).toEqual([]);
+    expect(h.gateway.connects).toEqual([]);
+    h.client.stop();
+  });
+
+  it("a saved record that can't be read ends Connect in a failure to try again from, not on its progress", async () => {
+    const h = harness();
+    await h.client.start();
+    await h.setup.look();
+    h.client.hasDeviceToken = () => Promise.reject(new SyntaxError("Unexpected token"));
+    await h.setup.connect();
+    expect(h.setup.current).toMatchObject({ phase: "failed", failure: { kind: "other" } });
+    expect(minted(h.requests)).toEqual([]);
+    expect(h.gateway.connects).toEqual([]);
+    expect(h.everywhere()).not.toContain("Unexpected token");
+    h.client.stop();
+  });
+
+  it("F-492: Use another gateway on the setup's pairing screen ends the setup's attempt and returns to the card", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "device pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "e5eb4aa8", requestedScopes: [] },
+      },
+    });
+    const h = harness({ gateway });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    await until(() => h.client.state.connection.status === "pairing");
+    expect(h.setup.current.phase).toBe("connecting");
+    // As the pairing screen's button sends it.
+    await h.client.disconnect(URL);
+    await until(() => h.setup.current.phase === "found");
+    expect(h.setup.current.look?.outcome).toBe("running");
+    const sockets = h.gateway.sockets.length;
+    await sleep(100);
+    expect(h.gateway.sockets).toHaveLength(sockets);
     h.client.stop();
   });
 

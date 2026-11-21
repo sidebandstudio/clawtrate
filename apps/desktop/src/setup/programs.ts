@@ -54,7 +54,13 @@ const ENV_KEYS = new Set([
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ]);
-const SAFE_ENV_VALUE = /^[A-Za-z0-9._:/@+=, -]*$/;
+/**
+ * No shell reads a request (`shell: false`, the arguments as an array), so a value or a path is
+ * refused only for what a process environment or a file name can't carry well: control
+ * characters, NUL among them. A home whose name has an accent or an apostrophe passes.
+ */
+const hasControl = (text: string) =>
+  [...text].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 
 const profileName = (name: string | undefined) =>
   name === "clawtrate" ||
@@ -78,11 +84,11 @@ export function isLookCommand(args: readonly string[]): boolean {
 /** Throws before anything starts when the program, command, variables or folder are not ones the host may use. */
 export function checkRequest(request: ProgramRequest): void {
   // A fixed path from the look's list, which may hold a space ("Application Support").
-  if (!isAbsolute(request.program) || /[\t\n\r'"`$;&|<>\\*?(){}[\]!#~]/.test(request.program))
+  if (!isAbsolute(request.program) || hasControl(request.program))
     throw new Error("refusing a program that is not a fixed absolute path");
   if (!isLookCommand(request.args)) throw new Error("refusing a command the look doesn't run");
   for (const [key, value] of Object.entries(request.env)) {
-    if (!ENV_KEYS.has(key) || !SAFE_ENV_VALUE.test(value) || value.length > 4096)
+    if (!ENV_KEYS.has(key) || hasControl(value) || value.length > 4096)
       throw new Error("refusing an environment variable the look doesn't pass");
   }
   if (!isAbsolute(request.cwd))
