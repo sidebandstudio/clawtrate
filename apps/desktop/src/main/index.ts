@@ -405,7 +405,7 @@ function privateDataDir(): string | null {
   // it is, and nothing is kept below it (`chooseDataDir`).
   const choice = chooseDataDir(dir);
   if (choice.ok) return choice.dir;
-  console.log(`[setup] The data folder isn't proven private (${choice.reason}).`);
+  console.log(`[setup] The data folder isn't proven private (${choice.reason} at ${choice.at}).`);
   dialog.showErrorBox(
     "Clawtrate can't keep its data private",
     `Clawtrate keeps this device's key and pairings in ${dir}, and another account could change that folder or one above it. Clawtrate didn't change it. Make the folders above it yours alone, then open Clawtrate again.`,

@@ -30,6 +30,7 @@ import { statusJson as statusJsonRecorded } from "./fixtures/openclaw-outputs.ts
 import { approvalInstructionsFor } from "../src/host/runtime.ts";
 import {
   chooseDataDir,
+  readAclWithLs,
   ensurePrivateDir,
   sshTransportFor,
   type AclReading,
@@ -449,6 +450,66 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
       refused: "not-supported",
     });
     expect(made).toBe(1);
+  });
+
+  it("the Linux app's default data folder on a standard Ubuntu home (home 750 or 755, ~/.config 700 or 755, no ACL) is proven and made, and a group-writable ancestor is refused", () => {
+    const linux = { platform: "linux" as const, readAcl: (): AclReading => ({ kind: "none" }) };
+    for (const [homeMode, configMode] of [
+      [0o750, 0o700],
+      [0o755, 0o755],
+      [0o750, 0o755],
+      [0o755, 0o700],
+    ] as const) {
+      // `root` stands for `/`, and `home` for root's 755 `/home`; the user's home and ~/.config below.
+      const root = fresh("clawtrate-ubuntu-");
+      mkdirSync(join(root, "home", "runner", ".config"), { recursive: true });
+      chmodSync(join(root, "home"), 0o755);
+      chmodSync(join(root, "home", "runner"), homeMode);
+      chmodSync(join(root, "home", "runner", ".config"), configMode);
+      const gateway = join(root, "home", "runner", ".config", "Clawtrate", "gateway");
+      const mode = `${homeMode.toString(8)}/${configMode.toString(8)}`;
+      expect(chooseDataDir(gateway, { root, ...linux }), mode).toEqual({
+        ok: true,
+        dir: gateway,
+        verified: "posix",
+      });
+      expect(statSync(join(root, "home", "runner", ".config", "Clawtrate")).mode & 0o777).toBe(
+        0o700,
+      );
+      expect(
+        sshTransportFor(gateway, () => "transport", { root, ...linux }),
+        mode,
+      ).toBe("transport");
+    }
+    // A group-writable ~/.config: another account in the group could replace what is below it.
+    const root = fresh("clawtrate-ubuntu-");
+    mkdirSync(join(root, "home", "runner", ".config"), { recursive: true });
+    chmodSync(join(root, "home", "runner"), 0o750);
+    chmodSync(join(root, "home", "runner", ".config"), 0o775);
+    const gateway = join(root, "home", "runner", ".config", "Clawtrate", "gateway");
+    expect(chooseDataDir(gateway, { root, ...linux })).toMatchObject({
+      ok: false,
+      reason: "writable-by-others",
+      at: join(root, "home", "runner", ".config"),
+    });
+    expect(existsSync(join(root, "home", "runner", ".config", "Clawtrate"))).toBe(false);
+    // And a group-writable home, the same.
+    chmodSync(join(root, "home", "runner", ".config"), 0o755);
+    chmodSync(join(root, "home", "runner"), 0o770);
+    expect(chooseDataDir(gateway, { root, ...linux })).toMatchObject({
+      ok: false,
+      reason: "writable-by-others",
+      at: join(root, "home", "runner"),
+    });
+  });
+
+  it("reads a folder's access control list with the flags of the system actually running, whatever platform a caller simulates", () => {
+    // On Linux, GNU ls has no `-e`: a simulated macOS must not make the real reading fail.
+    const root = fresh("clawtrate-acl-system-");
+    for (const platform of ["darwin", "linux"] as const)
+      expect(readAclWithLs(root, platform), platform).toEqual({ kind: "none" });
+    for (const platform of ["darwin", "linux"] as const)
+      expect(chooseDataDir(join(root, "gateway"), { root, platform }).ok, platform).toBe(true);
   });
 
   it("the launch's data folder: a redirected folder, an ancestor another account can write and a macOS ACL each stop the launch, and nothing is changed or made there", () => {

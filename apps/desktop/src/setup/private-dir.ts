@@ -32,7 +32,7 @@ import {
   realpathSync,
   type Stats,
 } from "node:fs";
-import { userInfo } from "node:os";
+import { type as osType, userInfo } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 export type PrivateDirVerdict =
@@ -94,11 +94,16 @@ const CHANGING_RIGHTS = new Set([
   "chown",
 ]);
 
-/** `ls -lde` on macOS lists ACL entries below the folder's line; on Linux a `+` marks one. */
-export function readAclWithLs(path: string, platform: NodeJS.Platform): AclReading {
+/**
+ * `ls -lde` on macOS lists ACL entries below the folder's line; on Linux a `+`
+ * marks one. The flags and the reading follow the system actually running
+ * (`os.type()`), whose `ls` this is: GNU `ls` has no `-e`.
+ */
+export function readAclWithLs(path: string, _platform?: NodeJS.Platform): AclReading {
+  const darwin = osType() === "Darwin";
   let text: string;
   try {
-    text = execFileSync("/bin/ls", [platform === "darwin" ? "-lde" : "-ld", "--", path], {
+    text = execFileSync("/bin/ls", [darwin ? "-lde" : "-ld", "--", path], {
       encoding: "utf8",
       env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
       stdio: ["ignore", "pipe", "ignore"],
@@ -110,7 +115,7 @@ export function readAclWithLs(path: string, platform: NodeJS.Platform): AclReadi
   const lines = text.split("\n").filter((line) => line !== "");
   const first = lines[0];
   if (!first || !/^[-d][rwxsStT-]{9}[@+.]?\s/.test(first)) return { kind: "unreadable" };
-  if (platform !== "darwin") return first[10] === "+" ? { kind: "present" } : { kind: "none" };
+  if (!darwin) return first[10] === "+" ? { kind: "present" } : { kind: "none" };
   const entries: AclEntry[] = [];
   for (const line of lines.slice(1)) {
     const match = /^\s*\d+: (\S+)(?: inherited)? (allow|deny) (\S+)$/.exec(line);
@@ -352,7 +357,8 @@ export function followSystemLinks(dir: string): string {
 /** The data folder the desktop app keeps its device key, tokens and routes in, or why there is none. */
 export type DataDirChoice =
   | { ok: true; dir: string; verified: "posix" | "windows-unverified" }
-  | { ok: false; dir: string; reason: Fail["reason"] };
+  /** `at`: the folder that failed, for the host's log only. */
+  | { ok: false; dir: string; reason: Fail["reason"]; at: string };
 
 /**
  * The desktop app's data folder, as its main process takes it at launch,
@@ -376,5 +382,5 @@ export function chooseDataDir(
   const verdict = ensurePrivateDir(real, options);
   return verdict.ok
     ? { ok: true, dir: real, verified: "posix" }
-    : { ok: false, dir, reason: verdict.reason };
+    : { ok: false, dir, reason: verdict.reason, at: verdict.at };
 }
