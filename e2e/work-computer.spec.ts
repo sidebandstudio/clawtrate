@@ -363,7 +363,7 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
   }
 });
 
-test("F-144 F-145: a real question while Pip's browser can be taken: the banner's Take control is granted, the bar's answer goes once control is given back, and Pip carries on", async ({
+test("F-144 F-145: a real question while Pip's browser can be taken: its card, Waiting for you and Show the question; giving control back alone leaves it pending; the banner's Take control is granted, the bar's answer goes once control is given back, and Pip carries on", async ({
   browser,
 }) => {
   const label = "Computer question";
@@ -377,10 +377,29 @@ test("F-144 F-145: a real question while Pip's browser can be taken: the banner'
     const banner = panel(page).getByTestId("computer-banner");
     await expect(banner).toContainText("Pip is waiting for you", { timeout: 60_000 });
     await expect(banner).toContainText("Which route should I plan for Saturday?");
+    // The conversation shows the question's card, and the task says it waits for you.
+    const card = page.locator(".transcript [data-testid=question-card]").last();
+    await expect(card).toBeVisible();
+    await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
+    // Show the question goes to its card.
+    await banner.getByRole("button", { name: "Show the question" }).click();
+    await expect(card).toBeInViewport();
+    await showComputer(page);
+    // Giving control back alone leaves the question unanswered.
+    await banner.getByRole("button", { name: "Take control" }).click();
+    await expect(bar(page)).toContainText("You have control", { timeout: 60_000 });
+    await bar(page).getByRole("button", { name: "Give back control" }).click();
+    await expect(full(page).getByText("Watching", { exact: true })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(card).not.toContainText("Answered");
+    await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
+    await page.keyboard.press("Escape");
+    await expect(full(page)).toHaveCount(0);
     await banner.getByRole("button", { name: "Take control" }).click();
     await expect(bar(page)).toContainText("You have control", { timeout: 60_000 });
     // The question is still the gateway's, pending, while control is held.
-    await expect(page.getByTestId("question-card").last()).not.toContainText("Answered");
+    await expect(card).not.toContainText("Answered");
     await bar(page).getByRole("button", { name: "Lake loop" }).click();
     await expect(bar(page)).toContainText("Answer sent. Pip can carry on.", { timeout: 30_000 });
     // Released first, then answered: the run goes on with its browser free.
