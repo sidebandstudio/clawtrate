@@ -412,6 +412,14 @@ describe("a decision record set aside as oversized", () => {
     expect(log.listSetAside()).toEqual([]);
   });
 
+  it("is not said for a folder with a set-aside record's name", () => {
+    const dir = folder();
+    mkdirSync(join(dir, "decisions.jsonl.oversize-1-0123456789ab"), { recursive: true });
+    mkdirSync(join(dir, "decisions.jsonl.oversize"));
+    const log = new DecisionLog(dir, { now: () => 1_000 * day });
+    expect(log.listSetAside()).toEqual([]);
+  });
+
   it("reads one an earlier version set aside, by its last modification", () => {
     const dir = folder();
     mkdirSync(dir, { recursive: true });

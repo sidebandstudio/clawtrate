@@ -776,16 +776,18 @@ export class DecisionLog {
    * it cannot be looked at. Null when the folder cannot be read.
    */
   listSetAside() {
-    let names;
+    let entries;
     try {
-      names = readdirSync(this.dir);
+      entries = readdirSync(this.dir, { withFileTypes: true });
     } catch (error) {
       return error?.code === "ENOENT" ? [] : null;
     }
     const found = [];
-    for (const file of names) {
+    for (const entry of entries) {
+      const file = entry.name;
       const match = SET_ASIDE.exec(file);
-      if (!match) continue;
+      // A folder with such a name is no record, and pruning could not remove it.
+      if (!match || !entry.isFile()) continue;
       let setAsideAt = match[1] === undefined ? null : Number(match[1]);
       if (setAsideAt === null) {
         try {

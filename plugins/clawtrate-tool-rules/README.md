@@ -123,7 +123,7 @@ The gateway enforces each scope when it admits the call: below admin, `set` is r
 - `hook.registered`: a registration of this plugin that had the gateway's hook interface registered the hook, and its service is running. That is what the plugin can verify, not proof that the gateway calls it. `hook.lastCallAt` is when the hook last saw a tool call in this gateway process (`null` until it has); it says nothing about the rules;
 - `matches`, what the enforced rules match (`tools` by entry, `fallback`: the scopes that ask for every tool, `exempt: ["ask_user"]`), or `null` while every call is asked about;
 - `cardDetails`, whether a card names what the call acts on (below, "The card");
-- `decisions`, `{state: "kept", setAside}` or `{state: "failing", reason, setAside}` when the decision record could not be read or written. `setAside` is kept apart from that state: the records set aside as oversized that are still in the folder, oldest first, each `{file, setAsideAt}` (below, "The decision record"), or `null` when the folder cannot be read. A page that lists decisions can say from it that older decisions were set aside, and when.
+- `decisions`, `{state: "kept", setAside}` or `{state: "failing", reason, setAside}` when the decision record could not be read or written. `setAside` is kept apart from that state: the records set aside as oversized that are still in the folder, oldest first, each `{file, setAsideAt}` (below, "The decision record"), or `null` when the folder cannot be read. `setAsideAt` is `null` for a file an earlier version set aside whose time cannot be read. A page that lists decisions can say from it that older decisions were set aside, and when.
 
 **Refusals** carry one of the gateway's codes and a `details.reason`:
 
