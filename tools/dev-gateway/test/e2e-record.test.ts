@@ -10,6 +10,7 @@ import {
   cleanUp,
   readRecord,
   recordPath,
+  recordSuccessor,
   recoverDeadRuns,
   saveRecord,
   TEMP_PREFIX,
@@ -72,6 +73,28 @@ function brokenPs(script: string): Identify {
   return psIdentity([join(dir, "ps")]);
 }
 
+/**
+ * A stand-in process that ignores SIGTERM, returned once its trap is in place:
+ * it says so on its output only after `trap`, since being alive is not that.
+ */
+async function ignoringSigterm() {
+  const stubborn = spawn("/bin/sh", ["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  children.push(stubborn);
+  await new Promise<void>((resolve, reject) => {
+    let said = "";
+    stubborn.stdout!.on("data", (chunk: Buffer) => {
+      said += chunk.toString("utf8");
+      if (said.includes("ready\n")) resolve();
+    });
+    stubborn.once("exit", () => reject(new Error("stand-in exited before its trap")));
+  });
+  const found = processIdentity(stubborn.pid!);
+  if (found.state !== "alive") throw new Error("stand-in did not start");
+  return { stubborn, found };
+}
+
 describe("recovering interrupted end-to-end runs (B2)", () => {
   it("leaves a run whose runner is alive alone, with its record and folders", () => {
     const run = aRun(liveProcess());
@@ -119,17 +142,38 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(run.lines.join("\n")).toMatch(/could not determine whether the preview host/);
   });
 
-  it("keeps the folders and the record while the host has not exited", () => {
-    // A host that ignores SIGTERM.
-    const stubborn = spawn("/bin/sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], {
-      stdio: "ignore",
-    });
-    children.push(stubborn);
-    const found = processIdentity(stubborn.pid!);
-    if (found.state !== "alive") throw new Error("stand-in did not start");
+  it("keeps the folders and the record while the host has not exited", async () => {
+    const { stubborn, found } = await ignoringSigterm();
     const run = aRun(deadProcess(), { pid: stubborn.pid!, identity: found.identity });
     const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
     expect(problems.join("\n")).toMatch(/did not exit after SIGTERM; its folders are kept/);
+    expect(run.kept()).toBe(true);
+    stubborn.kill("SIGKILL");
+  });
+
+  it("stops a newer build a test recorded on the run, before removing its folders", () => {
+    const host = liveProcess();
+    const successor = liveProcess();
+    const run = aRun(deadProcess(), host);
+    recordSuccessor(recordPath(run.records, run.record.run), successor);
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
+    expect(processState(host.pid, host.identity, processIdentity)).toBe("dead");
+    expect(run.gone()).toBe(true);
+  });
+
+  it("keeps the folders while the newer build has not exited, and says which process it is", async () => {
+    const { stubborn, found } = await ignoringSigterm();
+    const run = aRun(deadProcess());
+    run.record.successor = { pid: stubborn.pid!, identity: found.identity };
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))?.successor).toEqual(
+      run.record.successor,
+    );
+    const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
+    expect(problems.join("\n")).toMatch(
+      /the newer build \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
+    );
     expect(run.kept()).toBe(true);
     stubborn.kill("SIGKILL");
   });

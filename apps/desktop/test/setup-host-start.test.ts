@@ -155,38 +155,44 @@ describe("a sandboxed host's start", () => {
     expect(dataDir).not.toHaveBeenCalled();
   });
 
-  it("a refused start keeps the data folder its launch named, and still no gateway", () => {
-    const refused = resolveSetupLaunch({
-      packaged: false,
-      env: {},
-      switches: () => false,
-      switchValue: () => "",
-      context: { platform: process.platform, home: "/nowhere", uid: null },
-    });
-    expect(refused.kind).toBe("refused");
-    const devConnection = vi.fn(() => ({ url: SAVED, token: "dev-token", instance: "su1-test" }));
-    const privateData = vi.fn(() => "/fresh");
-    const startup = (launchData: string | null) =>
-      desktopStartup(refused, {
-        packaged: false,
-        devConnection,
-        autoConnectDev: () => true,
-        launchData: () => launchData,
-        privateData,
+  it.each([
+    ["linux", "refused"],
+    ["win32", "windows"],
+  ] as const)(
+    "an automated %s launch uses its supplied profile or a private one",
+    (platform, kind) => {
+      const launch = resolveSetupLaunch({
+        packaged: true,
+        env: { CLAWTRATE_AUTOMATED: "1" },
+        switches: () => false,
+        switchValue: () => "",
+        context: { platform, home: "/nowhere", uid: null },
       });
-    // A harness's own --user-data-dir stays the data folder, so Chromium's files land where it looks.
-    expect(startup("/harness/profile")).toEqual({
-      userData: "/harness/profile",
-      devGateway: null,
-      autoConnectDev: false,
-      resume: false,
-    });
-    expect(privateData).not.toHaveBeenCalled();
-    expect(startup(null).userData).toBe("/fresh");
-    expect(devConnection).not.toHaveBeenCalled();
-    const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
-    expect(main).toContain('launchData: () => switchValue("user-data-dir") || null,');
-  });
+      expect(launch.kind).toBe(kind);
+      const devConnection = vi.fn(() => ({ url: SAVED, token: "dev-token", instance: "su1-test" }));
+      const privateData = vi.fn(() => "/fresh");
+      const startup = (launchData: string | null) =>
+        desktopStartup(launch, {
+          packaged: true,
+          devConnection,
+          autoConnectDev: () => true,
+          launchData: () => launchData,
+          privateData,
+        });
+      // A harness's own --user-data-dir stays the data folder, so Chromium's files land where it looks.
+      expect(startup("/harness/profile")).toEqual({
+        userData: "/harness/profile",
+        devGateway: null,
+        autoConnectDev: false,
+        resume: false,
+      });
+      expect(privateData).not.toHaveBeenCalled();
+      expect(startup(null).userData).toBe("/fresh");
+      expect(devConnection).not.toHaveBeenCalled();
+      const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+      expect(main).toContain('launchData: () => switchValue("user-data-dir") || null,');
+    },
+  );
 
   it("the desktop host resolves the launch before its lock and its runtime, and resumes only a person's app", () => {
     const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");

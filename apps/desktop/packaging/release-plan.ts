@@ -72,7 +72,7 @@ export function plan(candidate: Candidate) {
     validDate &&
     String(parsed[3]) !== buildDate.slice(0, 10).replaceAll("-", "")
   )
-    issues.push("Nightly version day differs from the UTC build date.");
+    issues.push("Beta version day differs from the UTC build date.");
   if (validTrack && parsed) {
     for (const [name, path, endpoint] of [
       [track, candidate.currentFeed, feedUrl],

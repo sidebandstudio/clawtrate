@@ -14,7 +14,7 @@ The desktop app decides this before anything else starts, before its single-inst
 
 A packaged app started with none of these is a person's app, and it looks at the real computer. Nothing can tell a packaged app driven by other automation from one a person opened. So **nothing may automate a packaged app without the sandbox switch**. `pnpm check:packaged` gives it one on every launch, the second launch included, and `test/sandboxed-launches.test.ts` checks that it does.
 
-A run that must be sandboxed and was given no sandbox, or one that doesn't pass, is refused before anything is opened: its output gets one fixed line, "The look on this computer refused to start: …", and "This computer" shows "Looking on this computer is off here" with the reason, on macOS and Linux. Windows shows Use Advanced.
+A run that must be sandboxed and was given no sandbox, or one that doesn't pass, is refused before anything is opened: its output gets one fixed line, "The look on this computer refused to start: …", and "This computer" shows "Looking on this computer is off here" with the reason, on macOS and Linux. Windows shows Use Advanced. On Windows, an automated launch uses the profile supplied with `--user-data-dir` or creates a fresh temporary profile before taking the single-instance lock.
 
 ## A sandbox
 

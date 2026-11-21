@@ -14,7 +14,8 @@
 //            never answers, or fails
 //   devices=noscope   no device access
 //   override=1        media-box's file has an entry for Otto that asks every time
-//   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
+//   mwrite=refused|conflict|unanswered|unreadable|unconfirmed|pending|notapplied   how a change
+//            goes; unreadable: its answer is lost and the gateway's settings file can't be read
 //   mslow=<bot>       that bot's placement read never answers
 //   plugins=none      the settings hold no plugin entries to inspect
 //   pairing=grant     a request for device access is approved after a moment, or on release if
@@ -191,6 +192,7 @@ export function machineCommands(now: number, params: MachineParams) {
   const admin = (state: ClawtrateState) => state.connection.canAdmin;
   /** The fixture's configuration revision: a save moves it on. */
   let revision = 1;
+  let unreadable = false;
   const pairing = (state: ClawtrateState) =>
     state.connection.scopes.includes("operator.pairing") ||
     (params.devices !== "noscope" && state.connection.canAdmin);
@@ -357,6 +359,12 @@ export function machineCommands(now: number, params: MachineParams) {
       case "readPlacement":
         if (params.machine === "loading" || params.slow === command.botId)
           return new Promise(() => {});
+        if (unreadable)
+          return later(0, () => {
+            throw new Error(
+              "The gateway reports that its settings file isn't valid, so it can't be read.",
+            );
+          });
         if (params.machine === "error")
           return later(300, () => {
             throw new Error("The gateway did not answer.");
@@ -372,17 +380,39 @@ export function machineCommands(now: number, params: MachineParams) {
       case "setCommandMachine":
         return later(300, (): ConfigSave => {
           if (!admin(state)) throw new Error("Changing where a bot runs needs admin access.");
+          if (params.write === "refused")
+            return {
+              status: "refused",
+              message: "invalid config: agents.entries.otto.tools.exec.node",
+            };
+          if (params.write === "conflict" || command.baseHash !== `c${revision}`)
+            return {
+              status: "refused",
+              message: "config changed since last load; re-run config.get and retry",
+            };
           refuse();
-          if (command.baseHash !== `c${revision}`)
-            throw new Error(
-              "Couldn't save where its commands run. The gateway answered: config changed since last load; re-run config.get and retry",
-            );
+          if (params.write === "unreadable") {
+            unreadable = true;
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: null,
+            };
+          }
           revision += 1;
           w.exec[command.botId] =
             command.host === "node"
               ? { host: "node", node: command.nodeId }
               : { host: "gateway", node: null };
+          // The change landed and its answer was lost: what reading it back shows is all there is.
+          if (params.write === "unanswered")
+            return {
+              status: "unknown",
+              message: "gateway request timed out after 30000ms: config.patch",
+              place: place(command.botId),
+            };
           return {
+            status: "saved",
             place: place(command.botId),
             active:
               params.write === "pending"
