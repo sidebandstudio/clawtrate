@@ -529,6 +529,44 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
   await expect(group(page, "messages")).toContainText("Pip · no matches");
 });
 
+test("F-033: past 24 bots, Search the next bots adds the next batch and keeps the earlier one's rows and retries", async ({
+  page,
+}) => {
+  await openFixture(page, `${BASE}&src=truncated,eachfail`, "light");
+  // 25 more bots, 30 in all: none has a task, so each one's own search finds nothing.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      bots: [
+        ...state.bots,
+        ...Array.from({ length: 25 }, (_, i) => ({
+          ...state.bots[0]!,
+          id: `extra-${i + 1}`,
+          name: `Extra ${i + 1}`,
+        })),
+      ],
+    }));
+  });
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.type("backup");
+  await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
+  await expect(group(page, "messages")).toContainText("23 of 24 bots answered.");
+  await expect(group(page, "messages")).toContainText("Not asked: Extra 20, Extra 21");
+  await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
+  await options(page, "messages")
+    .filter({ hasText: /^Search the next 6 bots$/ })
+    .click();
+  await expect(group(page, "messages")).toContainText("29 of 30 bots answered.");
+  await expect(group(page, "messages")).not.toContainText("Not asked");
+  await expect(group(page, "messages")).toContainText("Otto · all 2 matches");
+  await expect(group(page, "messages")).toContainText("Extra 25 · no matches");
+  await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
+  expect((await sent(page, "searchMessages")).filter((each) => each.botId)).toHaveLength(30);
+  await options(page, "messages").filter({ hasText: "Try again for Pip" }).click();
+  await expect(group(page, "messages")).toContainText("30 of 30 bots answered.");
+});
+
 test("F-033: routines load a page at a time, and a list that changed between pages stops paging", async ({
   page,
 }) => {

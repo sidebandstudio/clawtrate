@@ -96,7 +96,8 @@ type MessagesState =
       reply: MessageSearch;
       /** Keys in the task list when the results came. */
       listed: ReadonlySet<string>;
-      each: { bots: EachBot[]; notAsked: string[] } | null;
+      /** Every bot asked so far, batch after batch, in the order asked. */
+      each: { bots: EachBot[] } | null;
     };
 type RoutinesState =
   | Idle
@@ -446,15 +447,16 @@ export function SearchPalette({
   }, [connectionKey, ask, restart]);
 
   const searchEach = useCallback(
-    (gen: number, q: string, botIds: string[]) => {
-      const asked = botIds.slice(0, EACH_BOTS);
+    (gen: number, q: string, asked: string[]) => {
       setMessages((now) =>
         now.status === "done"
           ? {
               ...now,
               each: {
-                bots: asked.map((botId) => ({ botId, state: "queued" })),
-                notAsked: botIds.slice(EACH_BOTS),
+                bots: [
+                  ...(now.each?.bots ?? []),
+                  ...asked.map((botId): EachBot => ({ botId, state: "queued" })),
+                ],
               },
             }
           : now,
@@ -939,12 +941,15 @@ export function SearchPalette({
                 searchEach(
                   gen,
                   query,
-                  state.bots.map((bot) => bot.id),
+                  state.bots.slice(0, EACH_BOTS).map((bot) => bot.id),
                 ),
               ),
             ]
           : [];
       if (each) {
+        const notAsked = state.bots
+          .map((bot) => bot.id)
+          .filter((id) => !each.bots.some((bot) => bot.botId === id));
         const answered = each.bots.filter((bot) => bot.state === "done");
         const failed = each.bots.filter((bot) => bot.state === "failed");
         const pending = each.bots.filter((bot) => bot.state === "pending").length;
@@ -958,7 +963,7 @@ export function SearchPalette({
             )} returned.`;
         const lines = [
           first,
-          ...(each.notAsked.length ? [`Not asked: ${listed(each.notAsked.map(botName))}.`] : []),
+          ...(notAsked.length ? [`Not asked: ${listed(notAsked.map(botName))}.`] : []),
         ];
         if (running)
           return {
@@ -998,17 +1003,12 @@ export function SearchPalette({
               retryEachBot(gen, query, bot.botId),
             ),
           ),
-          ...(each.notAsked.length
+          ...(notAsked.length
             ? [
                 action(
                   "messages:each-next",
-                  `Search the next ${plural(Math.min(EACH_BOTS, each.notAsked.length), "bot")}`,
-                  () =>
-                    searchEach(
-                      gen,
-                      query,
-                      each.notAsked.filter((id) => state.bots.some((bot) => bot.id === id)),
-                    ),
+                  `Search the next ${plural(Math.min(EACH_BOTS, notAsked.length), "bot")}`,
+                  () => searchEach(gen, query, notAsked.slice(0, EACH_BOTS)),
                 ),
               ]
             : []),
