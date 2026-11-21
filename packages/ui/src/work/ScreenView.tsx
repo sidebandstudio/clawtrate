@@ -18,6 +18,15 @@ import { Avatar } from "../Avatar.tsx";
 import { CollapseIcon, HandIcon, KeyboardIcon, MinusIcon, PlusIcon } from "../icons.tsx";
 import { ONE_PANE_BELOW, useElementWidth } from "../layout.ts";
 import { drawnPage, pictureWords, type FrameCanvases, type Picture } from "./frames.ts";
+import {
+  answered,
+  emptyTyping,
+  fieldText,
+  nextCall,
+  sendAgain,
+  typedInto,
+  type Typing,
+} from "./phone-typing.ts";
 
 const glyph = (state: string) => <span className="glyph" data-state={state} aria-hidden="true" />;
 const domainOf = (url: string) => {
@@ -45,7 +54,8 @@ export type ScreenViewProps = {
   onCheck: () => void;
   onChoose: (targetId: string) => void;
   onShowQuestion: () => void;
-  onInput: (input: ComputerInput) => void;
+  /** Sends input for the held tab; resolves true once the host accepted it, false if refused. */
+  onInput: (input: ComputerInput) => Promise<boolean> | void;
 };
 
 /** The app's width decides the layout, as the rest of the shell does. */
@@ -149,8 +159,10 @@ export function ScreenView(props: ScreenViewProps) {
     return { x: Math.round(x), y: Math.round(y) };
   };
 
-  // Input only while this viewer holds the lease and the picture has focus.
-  const inputAllowed = () => granted && document.activeElement === frameRef.current;
+  // Input only while this viewer holds the lease, the current view has a drawn picture, and the
+  // picture has focus: a view that ended leaves the frame focused with no page to see.
+  const inputAllowed = () =>
+    granted && live && props.age.kind !== "none" && document.activeElement === frameRef.current;
   const wheel = useRef<{ dy: number; dx: number; x: number; y: number; timer: number | null }>({
     dy: 0,
     dx: 0,
@@ -554,6 +566,19 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
         "alert",
       );
       break;
+    // A drop left the lease unknown: it is read before anything is offered, Take control too.
+    case "maybe-held":
+      body = bar("unconfirmed", <span>{words.droppedLine}</span>, "alert");
+      break;
+    case "checking":
+      body = bar(
+        undefined,
+        <>
+          {glyph("working")}
+          <span>{words.checkingLine(name)}</span>
+        </>,
+      );
+      break;
     case "unverified":
       body = bar(
         "unconfirmed",
@@ -703,7 +728,40 @@ function PhoneLayout(
   const measured = useElementWidth(zoomRef);
   const [tabsOpen, setTabsOpen] = useState(false);
   const [typing, setTyping] = useState(false);
-  const [typed, setTyped] = useState("");
+  // What the field holds and where each part of it is (`phone-typing.ts`): read in handlers.
+  const [text, setText] = useState<Typing>(emptyTyping);
+  const textRef = useRef<Typing>(emptyTyping);
+  const setTyped = (next: Typing) => {
+    textRef.current = next;
+    setText(next);
+  };
+  // Page input goes only while control is held and the current view has a drawn picture: the
+  // field as much as the picture itself. Kept for handlers that answer later.
+  const pageInput = granted && pane.view?.status === "live" && props.age.kind !== "none";
+  const pageInputRef = useRef(pageInput);
+  useLayoutEffect(() => {
+    pageInputRef.current = pageInput;
+  });
+  /** Send the oldest text not accepted, one call at a time, in order. */
+  const pump = () => {
+    if (!pageInputRef.current) {
+      // Nothing goes to a page that can't be seen: it waits, shown as not sent.
+      if (textRef.current.unsent) setTyped({ ...textRef.current, held: true });
+      return;
+    }
+    const call = nextCall(textRef.current);
+    if (!call) return;
+    setTyped(call.typing);
+    void Promise.resolve(props.onInput({ kind: "text", text: call.text })).then((sent) => {
+      const ok = sent === true;
+      setTyped(answered(textRef.current, ok));
+      if (ok) pump();
+      else {
+        setHint("That wasn't taken: it waits below. Send it again in a moment.");
+        setTimeout(() => setHint(null), 3000);
+      }
+    });
+  };
   const [hint, setHint] = useState<string | null>(null);
   const pageWidth = pane.view?.width ?? 1280;
   const fit = Math.max(200, (measured ?? props.screenWidth) - 16);
@@ -822,7 +880,7 @@ function PhoneLayout(
             aria-expanded={typing}
             onClick={() => {
               setTyping(!typing);
-              setTyped("");
+              setTyped(emptyTyping);
             }}
           >
             <KeyboardIcon />
@@ -854,17 +912,12 @@ function PhoneLayout(
             autoCapitalize="off"
             spellCheck={false}
             placeholder="Type into the page"
-            value={typed}
+            value={fieldText(text)}
             autoFocus
             onChange={(event) => {
-              const value = event.target.value;
-              // Each character typed is sent as text as it is typed; nothing is stored. Only text
-              // can be sent, so a deletion or a replacement is not shown: the field is what was sent.
-              if (!value.startsWith(typed)) return;
-              // At most one input call's text (2000): what isn't sent isn't kept either.
-              const added = value.slice(typed.length, typed.length + 2000);
-              setTyped(typed + added);
-              if (added) props.onInput({ kind: "text", text: added });
+              // Each character typed goes as text, in order, once the host took the one before.
+              setTyped(typedInto(textRef.current, event.target.value));
+              pump();
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -880,11 +933,26 @@ function PhoneLayout(
             data-size="sm"
             onClick={() => {
               setTyping(false);
-              setTyped("");
+              setTyped(emptyTyping);
             }}
           >
             Done
           </button>
+          {text.unsent && text.held && (
+            <p className="type-unsent" role="status" data-testid="type-unsent">
+              Not sent yet: <code>{text.unsent}</code>{" "}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  setTyped(sendAgain(textRef.current));
+                  pump();
+                }}
+              >
+                Send again
+              </button>
+            </p>
+          )}
         </div>
       )}
     </>

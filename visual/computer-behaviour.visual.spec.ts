@@ -252,6 +252,35 @@ test.describe("the full view on the desktop", () => {
     await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
   });
 
+  test("F-145: a refused Give back control and answer is retired: a later, plain hand-back keeps the full view open and focus in it", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=complexreleasefail`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Give back control and answer" }).click();
+    await expect(controlBar(page)).toContainText("Giving control back wasn't confirmed.");
+    await controlBar(page).getByRole("button", { name: "Check" }).click();
+    await expect(fullView(page).getByText("You still have control.")).toBeVisible();
+    await controlBar(page).getByRole("button", { name: "Give back control", exact: true }).click();
+    await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
+    await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(fullView(page)).toBeVisible();
+  });
+
+  test("F-145: Try again straight from a refused Give back control and answer is the same hand-back: confirmed, it opens the question", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=complexreleasefail`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Give back control and answer" }).click();
+    await expect(controlBar(page)).toContainText("Giving control back wasn't confirmed.");
+    await controlBar(page).getByRole("button", { name: "Try again" }).click();
+    await expect(fullView(page)).toHaveCount(0);
+    await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
+    await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
+  });
+
   test("F-145: answering in the chat goes to the question it was offered for, not a later card below it", async ({
     page,
   }) => {
@@ -337,6 +366,62 @@ test.describe("the full view on the desktop", () => {
       "Someone on another device is asking for control of Juniper's browser.",
     );
     await expect(page.getByText(/has control of Juniper's browser/)).toHaveCount(0);
+  });
+
+  for (const [mode, line] of [
+    ["tabslater", "Couldn't check for tabs in Juniper's browser."],
+    ["tabsfail", "Couldn't ask the computer plugin about Juniper."],
+  ] as const)
+    test(`F-141: a tab lookup that fails while watching (${mode}) keeps the full view, the picture and its controls, with the failure beside them`, async ({
+      page,
+    }) => {
+      await openFixture(page, `${COMPUTER}&computer=${mode}`, "light");
+      // Each control event reads the tabs again; those reads fail.
+      await control(page);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const p = (
+              window as unknown as {
+                clawtrateFixture: {
+                  getState(): {
+                    computer?: {
+                      panes: Record<string, { availability: string; browser: string | null }>;
+                    };
+                  };
+                };
+              }
+            ).clawtrateFixture.getState().computer?.panes["fixture-viewer"];
+            return p?.availability === "error" || p?.browser === "unknown";
+          }),
+        )
+        .toBe(true);
+      await expect(fullView(page)).toBeVisible();
+      await expect(fullView(page).locator("canvas")).toHaveCount(1);
+      await fullView(page).getByRole("button", { name: "Close the full view (Esc)" }).click();
+      await expect(computerPanel(page)).toContainText(line);
+      await expect(computerPanel(page).locator(".screen[data-state=live] canvas")).toHaveCount(1);
+      await expect(
+        computerPanel(page).getByRole("button", { name: "Stop watching" }),
+      ).toBeVisible();
+      await expect(computerPanel(page).getByTestId("computer-caption")).toContainText(
+        "Your account",
+      );
+    });
+
+  test("F-142: when the view ends while control is held, the still focused frame sends nothing typed or pasted", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=controlended`, "light");
+    await control(page);
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    await expect(frame.getByRole("button", { name: "Watch again" })).toBeVisible();
+    await expect(controlBar(page)).toContainText("You have control");
+    await frame.focus();
+    await page.keyboard.type("unseen");
+    await page.waitForTimeout(300);
+    expect(await sentOf(page, "computerInput")).toEqual([]);
   });
 
   test("leaving the Computer tab while in control gives control back first, then ends the view", async ({
@@ -658,6 +743,75 @@ test.describe("the computer button, recovery and the machine", () => {
 
 test.describe("the full view on the phone (section 18, On the phone)", () => {
   test.use(contextFor(PHONE, "light"));
+
+  test("F-142: with the input queue full, text the gateway didn't take stays out of the field, shown as not sent; sent again, it goes once and in order", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await openFull(page);
+    await fullView(page)
+      .locator(".control-dock")
+      .getByRole("button", { name: "Take control" })
+      .click();
+    await expect(fullView(page).locator(".control-dock")).toContainText("You have control");
+    await fullView(page).getByRole("button", { name: "Type into the page" }).click();
+    const field = fullView(page).getByRole("textbox", { name: "Type into the page" });
+    // Fill the host's input queue (one call on its way, 32 waiting) with clicks.
+    await page.evaluate(() => {
+      const bridge = (
+        window as unknown as { clawtrateFixture: { invoke(command: unknown): Promise<unknown> } }
+      ).clawtrateFixture;
+      for (let i = 0; i < 40; i++)
+        void bridge.invoke({ type: "computerInput", input: { kind: "click", x: 10, y: 10 } });
+    });
+    await field.pressSequentially("rejected");
+    const unsent = fullView(page).getByTestId("type-unsent");
+    await expect(unsent).toContainText("Not sent yet: rejected");
+    await expect(field).toHaveValue("");
+    // The queue drains; sent again, the text goes once, whole, and the field shows it.
+    await page.waitForTimeout(6_000);
+    await unsent.getByRole("button", { name: "Send again" }).click();
+    await expect(field).toHaveValue("rejected");
+    await expect(unsent).toHaveCount(0);
+    const texts = (await sentOf(page, "computerInput"))
+      .map((each) => (each.input as { text?: string }).text)
+      .filter((text): text is string => text !== undefined);
+    expect(texts.at(-1)).toBe("rejected");
+    expect(texts.filter((text) => text.includes("d"))).toEqual(["rejected"]);
+  });
+
+  test("F-142: the phone field sends nothing once the view has ended, though control is held; Give back control stays", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=controlended`, "light");
+    await openFull(page);
+    await fullView(page)
+      .locator(".control-dock")
+      .getByRole("button", { name: "Take control" })
+      .click();
+    await expect(fullView(page).locator(".control-dock")).toContainText("You have control");
+    await fullView(page).getByRole("button", { name: "Type into the page" }).click();
+    await expect(fullView(page).getByRole("button", { name: "Watch again" })).toBeVisible();
+    const before = (await sentOf(page, "computerInput")).length;
+    await fullView(page)
+      .getByRole("textbox", { name: "Type into the page" })
+      .pressSequentially("unseen");
+    await expect(fullView(page).getByTestId("type-unsent")).toContainText("Not sent yet: unseen");
+    expect(await sentOf(page, "computerInput")).toHaveLength(before);
+    await expect(
+      fullView(page).locator(".control-dock").getByRole("button", { name: "Give back control" }),
+    ).toBeVisible();
+  });
+
+  test("F-150: after a drop the phone's bar says control may still be held, and offers no Take control until it is read", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=controldropped`, "light");
+    await control(page);
+    const dock = fullView(page).locator(".control-dock");
+    await expect(dock).toContainText("The connection dropped. Input has stopped.");
+    await expect(fullView(page).getByRole("button", { name: "Take control" })).toHaveCount(0);
+  });
 
   test("F-142: in control the page opens at its own size; zoom is the device's own; the dock keeps You have control with its second line", async ({
     page,

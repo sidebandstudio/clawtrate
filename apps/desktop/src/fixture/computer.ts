@@ -53,6 +53,11 @@ export const COMPUTER_STATES = [
   "elsewhere",
   "elsewhere-taking",
   "releasefail",
+  "complexreleasefail",
+  "tabslater",
+  "tabsfail",
+  "controlended",
+  "controldropped",
   "releaseunknown",
   "complexquestion",
   "offline",
@@ -220,7 +225,10 @@ export function withComputerRuns(
           ]
         : []),
     ];
-    const complex = params.mode === "complexquestion" || params.mode === "complexlater";
+    const complex =
+      params.mode === "complexquestion" ||
+      params.mode === "complexreleasefail" ||
+      params.mode === "complexlater";
     const asking = active ? [] : [question(now, run.id, complex)];
     // A question asked after the pending one and already answered: its card comes later.
     if (params.mode === "laterquestion" || params.mode === "complexlater")
@@ -394,6 +402,7 @@ export function computerFixture(
   let typed = "";
   let takes = 0;
   let releases = 0;
+  let tabReads = 0;
   let shownTab = 0;
   let prepared = false;
   let machineReads = 0;
@@ -516,8 +525,11 @@ export function computerFixture(
           });
         if (mode === "closed")
           return { agentId: "main", profile: "bot-juniper", browser: "running", tabs: [] };
-        // The plugin's list timed out: it couldn't look.
-        if (mode === "tabsunknown")
+        // The plugin's list timed out: it couldn't look (`tabslater`: every read after the first).
+        tabReads += 1;
+        // `tabsfail`: every read after the first is refused.
+        if (mode === "tabsfail" && tabReads > 1) throw refuse("UNAVAILABLE", "plugin_busy");
+        if (mode === "tabsunknown" || (mode === "tabslater" && tabReads > 1))
           return {
             agentId: "main",
             profile: "bot-juniper",
@@ -600,6 +612,13 @@ export function computerFixture(
           };
         generation.current = gen;
         event("granted", gen);
+        // `controldropped`: the connection drops soon after the grant; the lease is unknown.
+        if (mode === "controldropped") setTimeout(() => engine.connectionLost(), 600);
+        // `controlended`: the stream ends soon after the grant, while control is still held.
+        if (mode === "controlended")
+          setTimeout(() => {
+            for (const socket of [...sockets]) socket.end(4006);
+          }, 600);
         return {
           state: "granted",
           generation: gen,
@@ -614,7 +633,8 @@ export function computerFixture(
       }
       case "clawtrate-computer.control.release": {
         releases += 1;
-        if (mode === "releasefail" && releases === 1) throw refuse("FORBIDDEN", "not_holder");
+        if ((mode === "releasefail" || mode === "complexreleasefail") && releases === 1)
+          throw refuse("FORBIDDEN", "not_holder");
         if (mode === "releaseunknown" && releases === 1) return forever;
         const gen = String(p.generation);
         if (gen === generation.current) generation.current = "";
@@ -661,7 +681,8 @@ export function computerFixture(
       });
       await this.frame();
       if (mode === "ended" || mode === "tabclosed" || mode === "browsergone") {
-        await wait(700);
+        // Long enough for a check to open the full view on its picture first, on a slow machine.
+        await wait(2_500);
         if (this.readyState !== 1) return;
         this.readyState = 3;
         sockets.delete(this);
@@ -670,6 +691,12 @@ export function computerFixture(
           reason: "",
         });
       }
+    }
+    end(code: number): void {
+      if (this.readyState !== 1) return;
+      this.readyState = 3;
+      sockets.delete(this);
+      this.onclose?.({ code, reason: "" });
     }
     async frame(): Promise<void> {
       const bytes = await drawPage(shownTab, typed);

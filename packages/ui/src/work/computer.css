@@ -789,6 +789,7 @@
 
 .type-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px 12px;
   background: var(--bg-raised);
@@ -797,6 +798,20 @@
 .type-bar .input {
   height: 44px;
   font-size: var(--text-lg);
+}
+
+.type-bar .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Text the gateway didn't take: on a line of its own, below the field. */
+.type-unsent {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
 .screen-tabs-sheet {

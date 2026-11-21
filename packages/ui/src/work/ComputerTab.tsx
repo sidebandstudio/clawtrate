@@ -163,7 +163,13 @@ export function ComputerTab(props: ComputerTabProps) {
   const openRef = useRef<HTMLButtonElement | null>(null);
   const control = pane?.control;
   // A read-only connection never opens the full view, whatever it is asked to show.
-  const fullShown = full && interactive && pane !== null && pane.availability === "ready";
+  // A lookup that failed while a view is open leaves the view, and the full view, as they are.
+  const fullShown =
+    full &&
+    interactive &&
+    pane !== null &&
+    (pane.availability === "ready" ||
+      (pane.availability === "error" && pane.view !== null && pane.view.status !== "ended"));
 
   const question: QuestionCard | null =
     transcript?.questions.find((each) => each.status === "pending") ?? null;
@@ -178,11 +184,15 @@ export function ComputerTab(props: ComputerTabProps) {
   useEffect(() => {
     if (!control) return;
     const asked = answerInChat.current;
-    if (control.status === "none" && asked) {
+    // Only its own hand-back, confirmed, opens the question. Try again from a refusal is the same
+    // hand-back; anything else (Check finding control held, an end, a drop) retires it, so a
+    // later, separate hand-back never closes the full view or moves focus.
+    if (asked && control.status === "none" && control.released) {
       answerInChat.current = null;
       setFullFor(null);
       props.onShowQuestion(asked.questionId);
-    }
+    } else if (asked && control.status !== "releasing" && control.status !== "unconfirmed")
+      answerInChat.current = null;
     if (control.status === "granted")
       announce(`You have control of ${name}'s browser. ${words.pausedLine(name)}`);
     if (control.status === "none" && control.released) announce(`Control given back to ${name}`);
@@ -367,7 +377,12 @@ export function ComputerTab(props: ComputerTabProps) {
             setFull(false);
             props.onShowQuestion(question?.id);
           }}
-          onInput={(input) => void bridge.invoke({ type: "computerInput", input }).catch(() => {})}
+          onInput={(input) =>
+            bridge.invoke({ type: "computerInput", input }).then(
+              (answer) => answer.sent,
+              () => false,
+            )
+          }
         />
       )}
     </div>
@@ -659,6 +674,31 @@ function ScreenSection(props: ScreenProps) {
       </div>
     );
   }
+  // A view still open keeps its picture and its controls whatever a tab lookup says: a lookup
+  // that failed, or couldn't see the browser, says so beside it.
+  if (pane?.view && pane.view.status !== "ended")
+    return (
+      <>
+        {pane.availability === "error" ? (
+          <p className="files-alert" role="alert" data-testid="computer-ask-failed">
+            {words.askFailedLine(name)} {pane.error}
+            <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          pane.browser === "unknown" && (
+            <p className="files-alert" role="alert" data-testid="computer-tabs-unknown">
+              {words.tabsUnknownLine(name)}
+              <button type="button" className="button" data-size="sm" onClick={props.onRetry}>
+                Retry
+              </button>
+            </p>
+          )
+        )}
+        <Tile {...props} pane={pane} />
+      </>
+    );
   if (pane?.availability === "error")
     return (
       <p className="files-alert" role="alert" data-testid="computer-ask-failed">
@@ -722,9 +762,10 @@ function Tile({
   onShowLive,
 }: ScreenProps & { pane: ComputerPane }) {
   const view = pane.view;
-  const tab = pane.tabs.find((each) => each.targetId === pane.shown) ?? pane.tabs[0]!;
-  const title = view?.title || tab.title;
-  const url = view?.url || tab.url;
+  // An open view keeps its picture when no listed tab matches it: its own title and address.
+  const tab = pane.tabs.find((each) => each.targetId === pane.shown) ?? pane.tabs[0];
+  const title = view?.title || tab?.title || "";
+  const url = view?.url || tab?.url || "";
   const control = pane.control;
   const elsewhere = elsewhereOf(name, pane, computer, pane.botId);
   const showOn = useCallback(
