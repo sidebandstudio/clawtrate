@@ -35,7 +35,16 @@ import {
   RoutinesEngine,
   type BotRoutines,
   type CalendarRuns,
+  type GatewayHooks,
+  type NewRoutine,
+  type Routine,
+  type RoutineFields,
+  type RoutineRevision,
+  type RoutineRemove,
   type RoutineRun,
+  type RoutineRunNow,
+  type RoutineSaveCheck,
+  type RoutineWrite,
   type RunConversation,
   type RunSelector,
 } from "./routines.ts";
@@ -1045,6 +1054,10 @@ export class ClawtrateClient {
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    identity: () => this.state.connection.gatewayId,
+    withdrawn: (owner) => this.withdrawnOwners.has(owner),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -4351,6 +4364,84 @@ export class ClawtrateClient {
     return this.routines.conversation(id, run);
   }
 
+  // Changing routines (automation.md sections 9 and 10): `operator.admin`, checked by the engine.
+
+  /** A new routine; `key` is its draft's, the same for every try of that draft. */
+  createRoutine(
+    input: NewRoutine,
+    key: string,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    return this.routines.create(input, key, owner, gateway);
+  }
+
+  /** One routine as the gateway has it now. */
+  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
+    return this.routines.readOne(id, gateway);
+  }
+
+  /** What the gateway shows of a create whose answer never came, by its draft's key. */
+  checkRoutineCreate(
+    key: string,
+    input: RoutineFields,
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkCreate(key, input, gateway);
+  }
+
+  /** What the gateway shows of an edit whose answer never came. */
+  checkRoutineUpdate(
+    id: string,
+    sent: { original: RoutineFields; edit: RoutineFields; expected: RoutineFields },
+    gateway: string | null,
+  ): Promise<RoutineSaveCheck> {
+    return this.routines.checkUpdate(id, sent, gateway);
+  }
+
+  updateRoutine(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+    owner: object | null = null,
+    gateway?: string | null,
+  ): Promise<RoutineWrite> {
+    if (jsonTextLength(id) > MAX_ID_CHARS)
+      return Promise.resolve({ status: "refused", error: "That routine id is too long." });
+    return this.routines.update(id, original, edit, expected, owner, gateway);
+  }
+
+  setRoutineEnabled(
+    id: string,
+    enabled: boolean,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineWrite> {
+    return this.routines.setEnabled(id, enabled, owner, listedOn);
+  }
+
+  runRoutineNow(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRunNow> {
+    return this.routines.runNow(id, owner, listedOn);
+  }
+
+  removeRoutine(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRemove> {
+    return this.routines.remove(id, owner, listedOn);
+  }
+
+  /** The gateway's inbound hooks, read with admin; null below it. */
+  readGatewayHooks(): Promise<GatewayHooks | null> {
+    return this.routines.hooks();
+  }
+
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
 
   /** Read the accounts, sign-ins, bindings and catalogue the account screens show. */
@@ -5787,9 +5878,17 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The last gateway's identity goes with the connection it came from, so a
+    // write waits for this one's read (routines.ts `blocked`).
+    this.setConnection({ gatewayId: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
     const gatewayId = this.readGatewayIdentity();
+    // Applied here too, so a bot list that fails or is slow to read does not
+    // keep the identity back.
+    void gatewayId.then((id) => {
+      if (id !== null && generation === this.generation) this.setConnection({ gatewayId: id });
+    });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
@@ -5799,9 +5898,11 @@ export class ClawtrateClient {
         if (generation === this.generation) {
           // A read asked later, after a bot was created, may have answered first.
           const newest = this.newestBots(botsIssued);
+          // Only a read that found the identity writes it: an older refresh whose
+          // read failed must not clear what a newer one on this connection confirmed.
           this.store.update((state) => ({
             ...state,
-            connection: { ...state.connection, gatewayId: id },
+            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }

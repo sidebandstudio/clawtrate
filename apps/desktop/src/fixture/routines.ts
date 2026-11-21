@@ -8,15 +8,26 @@
 //     no routines, a failed read, still loading, Morning digest running now,
 //     the gateway's scheduler off, Morning digest with 27 recorded runs, or
 //     more routines than the client keeps, one of them a bot's it does not hold
-//   routinehold=<id>   a routine's runs and conversations wait for releaseRoutineReads()
-//   routinefail=<id>   a routine's runs and conversations fail
+//   routinehold=<id>   a routine's read, runs and conversations wait for releaseRoutineReads()
+//   routinefail=<id>   a routine's read, runs and conversations fail
+//   botomitted=<n>     a bot's own routine read counts n more it did not list
 //   calendar=fail|partial   the calendar's read fails, or says it is partial
+// With `access=admin` (accounts.ts) the routines can be changed, and:
+//   save=refused|noanswer|conflict|changed   how the next save ends; `noanswer`
+//                                    then finds it saved on "Check now", and
+//                                    `changed` finds a new routine landed and
+//                                    changed elsewhere since
+//   pause=fail, run=already|fail, delete=fail   how those end
+//   hooks=on                         the gateway's inbound hooks are on
 
 import { zonedTime } from "@clawtrate/ui";
+import { savedAs } from "@clawtrate/core";
 import type {
   BridgeCommand,
   ClawtrateState,
+  NewRoutine,
   Routine,
+  RoutineFields,
   RoutineRun,
   RoutineSchedule,
   RoutinesState,
@@ -37,7 +48,16 @@ export type RoutineParams = {
   hold?: string | null;
   fail?: string | null;
   calendar?: "fail" | "partial" | null;
+  save?: "refused" | "noanswer" | "conflict" | "changed" | null;
+  pause?: "fail" | null;
+  run?: "already" | "fail" | "held" | null;
+  remove?: "fail" | null;
+  hooks?: boolean;
+  botOmitted?: number;
 };
+
+const oneOf = <T extends string>(value: string | null, options: readonly T[]): T | null =>
+  options.includes(value as T) ? (value as T) : null;
 
 export function routineParams(params: URLSearchParams): RoutineParams {
   const state = params.get("routines");
@@ -58,6 +78,12 @@ export function routineParams(params: URLSearchParams): RoutineParams {
     hold: params.get("routinehold"),
     fail: params.get("routinefail"),
     calendar: calendar === "fail" || calendar === "partial" ? calendar : null,
+    save: oneOf(params.get("save"), ["refused", "noanswer", "conflict", "changed"] as const),
+    pause: oneOf(params.get("pause"), ["fail"] as const),
+    run: oneOf(params.get("run"), ["already", "fail", "held"] as const),
+    remove: oneOf(params.get("delete"), ["fail"] as const),
+    hooks: params.get("hooks") === "on",
+    botOmitted: Number(params.get("botomitted")) || 0,
   };
 }
 
@@ -88,6 +114,8 @@ const base = (over: Partial<Routine> & Pick<Routine, "id" | "botId" | "name">): 
   schedule: schedule({}),
   payload: "agentTurn",
   text: "",
+  textCut: false,
+  canRecreate: true,
   target: "isolated",
   delivery: "none",
   deliveryChannel: null,
@@ -256,6 +284,7 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
       name: "Stretch break",
       schedule: schedule({ kind: "every", everyMs: 2 * HOUR }),
       payload: "systemEvent",
+      canRecreate: false,
       target: "main",
       text: "Time to stand up and stretch.",
       delivery: "announce",
@@ -276,6 +305,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       omitted: 0,
       revision: 0,
       removed: null,
+      listedOn: 0,
     };
   if (params.state === "error")
     return {
@@ -286,6 +316,7 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
       omitted: 0,
       revision: 0,
       removed: null,
+      listedOn: 0,
     };
   return {
     status: "loaded",
@@ -296,8 +327,12 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
     omitted: params.state === "truncated" ? 12 : 0,
     revision: 0,
     removed: null,
+    listedOn: 0,
   };
 }
+
+/** Routines a create in doubt made, by draft key: "Check now" finds them. */
+const drafts = new Map<string, Routine>();
 
 const run = (routine: Routine, runAt: number, over: Partial<RoutineRun> = {}): RoutineRun => ({
   jobId: routine.id,
@@ -421,12 +456,19 @@ function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunC
   };
 }
 
+const applied = (routine: Routine, fields: RoutineFields): Routine => ({
+  ...routine,
+  ...fields,
+  updatedAt: Date.now(),
+});
+
 /** Answers to the routine commands, or undefined for any other command. */
 export function routineCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   now: number,
   params: RoutineParams,
+  set: (state: ClawtrateState) => void,
 ): Promise<unknown> | undefined {
   const find = (id: string) =>
     [...get().routines.routines, ...fixtureRoutineList(now, params)].find((each) => each.id === id);
@@ -436,13 +478,179 @@ export function routineCommand(
     if (params.hold === id) return new Promise((resolve) => held.push(() => resolve(value())));
     return Promise.resolve(value());
   };
+  // What the gateway keeps now: a deleted routine is not found.
+  const kept = (id: string) => get().routines.routines.find((each) => each.id === id);
+  const put = (change: (routines: Routine[]) => Routine[]) =>
+    set({ ...get(), routines: { ...get().routines, routines: change(get().routines.routines) } });
+  const replace = (next: Routine) =>
+    put((all) =>
+      all.some((each) => each.id === next.id)
+        ? all.map((each) => (each.id === next.id ? next : each))
+        : [...all, next],
+    );
+  const admin = () => get().connection.canAdmin;
+  // A write names the gateway its draft came from, as the engine refuses one
+  // that does not (routines.ts `blocked`): a save before the identity is read,
+  // or after another gateway confirmed, is not sent.
+  const bound = (gateway: string | null) =>
+    gateway !== null && gateway === get().connection.gatewayId;
+  const later = <T>(ms: number, value: () => T) =>
+    new Promise<T>((resolve) => setTimeout(() => resolve(value()), ms));
+  // How the next save ends; a refusal or a conflict once, then saves work.
+  const outcome = () => {
+    const once = params.save ?? null;
+    params.save = null;
+    return once;
+  };
   switch (command.type) {
+    case "createRoutine": {
+      if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (!bound(command.gateway))
+        return Promise.resolve({ status: "not-sent", reason: "gateway" });
+      const input: NewRoutine = command.input;
+      const made = base({
+        ...input,
+        id: `routine-${command.key.slice(0, 8)}`,
+        nextRunAt: now + DAY,
+      });
+      const end = outcome();
+      if (end === "refused")
+        return later(400, () => ({
+          status: "refused",
+          error:
+            "invalid cron.add params: CronPattern: invalid configuration format ('99 * * *'), exactly five, six, or seven space separated parts are required.",
+        }));
+      if (end === "noanswer" || end === "changed") {
+        drafts.set(
+          command.key,
+          end === "changed"
+            ? { ...made, text: `${made.text} Keep it to three lines.`, updatedAt: now + 1 }
+            : made,
+        );
+        return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
+      }
+      return later(400, () => {
+        replace(made);
+        return { status: "saved", routine: made };
+      });
+    }
+    // As the engine does: a check answered on another gateway is refused, and
+    // a found routine is compared with what the save sent by `savedAs`.
+    case "checkRoutineCreate":
+      return later(300, () => null).then(() => {
+        if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+        const made = drafts.get(command.key);
+        if (!made) return { status: "missing" };
+        replace(made);
+        return savedAs(made, made.text, { input: command.input });
+      });
+    case "checkRoutineUpdate":
+      return later(300, () => null).then(() => {
+        if (!bound(command.gateway)) throw new Error("Another gateway is connected now.");
+        const routine = kept(command.id);
+        return routine ? savedAs(routine, routine.text, command) : { status: "missing" };
+      });
+    case "readRoutine":
+      // As the engine does: a read-back answered on another gateway is refused.
+      return answer(command.id, () => null)
+        .then(() => later(300, () => null))
+        .then(() => {
+          if (command.gateway !== undefined && !bound(command.gateway))
+            throw new Error("Another gateway is connected now.");
+          return kept(command.id) ?? null;
+        });
+    case "updateRoutine": {
+      if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (!bound(command.gateway))
+        return Promise.resolve({ status: "not-sent", reason: "gateway" });
+      const routine = kept(command.id);
+      if (!routine) return Promise.resolve({ status: "deleted" });
+      const end = outcome();
+      if (end === "conflict") {
+        const theirs = {
+          ...routine,
+          text: `${routine.text} Keep it to three lines.`,
+          updatedAt: Date.now(),
+        };
+        replace(theirs);
+        return later(300, () => ({ status: "conflict", current: theirs }));
+      }
+      if (end === "refused")
+        return later(400, () => ({
+          status: "refused",
+          error:
+            "invalid cron.update params: CronDate: Failed to convert date to timezone 'Mars/Base'. Please provide a valid IANA timezone.",
+        }));
+      if (end === "noanswer") {
+        replace(applied(routine, command.edit));
+        return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
+      }
+      const next = applied(routine, command.edit);
+      return later(400, () => {
+        replace(next);
+        return { status: "saved", routine: next };
+      });
+    }
+    case "setRoutineEnabled": {
+      const routine = kept(command.id);
+      if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (params.pause === "fail")
+        return later(500, () => ({ status: "refused", error: "missing scope: operator.admin" }));
+      const next = {
+        ...routine,
+        enabled: command.enabled,
+        nextRunAt: command.enabled ? now + DAY : null,
+      };
+      return later(300, () => {
+        replace(next);
+        return { status: "saved", routine: next };
+      });
+    }
+    case "runRoutineNow": {
+      const routine = kept(command.id);
+      if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (params.run === "already") return later(300, () => ({ status: "already-running" }));
+      if (params.run === "fail")
+        return later(300, () => ({
+          status: "refused",
+          error: `Automation not found: ${routine.id}. List automations and retry with a current job id.`,
+        }));
+      if (params.run === "held")
+        return later(300, () => {
+          // The gateway took the request; the run itself starts later, so the
+          // view first says the routine is queued, then running.
+          setTimeout(() => {
+            const held = kept(routine.id);
+            if (held) replace({ ...held, runningAt: Date.now() });
+          }, 800);
+          return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
+        });
+      return later(300, () => {
+        replace({ ...routine, runningAt: Date.now() });
+        setTimeout(() => {
+          const ran = kept(routine.id);
+          if (ran) replace({ ...ran, runningAt: null, lastRunAt: Date.now(), lastStatus: "ok" });
+        }, 2500);
+        return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
+      });
+    }
+    case "removeRoutine": {
+      if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
+      if (params.remove === "fail")
+        return later(400, () => ({ status: "refused", error: "missing scope: operator.admin" }));
+      return later(300, () => {
+        put((all) => all.filter((each) => each.id !== command.id));
+        return { status: "removed" };
+      });
+    }
+    case "readGatewayHooks":
+      return Promise.resolve(admin() ? { enabled: params.hooks === true, path: "/hooks" } : null);
     case "refreshRoutines":
       return Promise.resolve();
     case "readBotRoutines":
       return answer(command.botId, () => ({
         routines: fixtureRoutineList(now, params).filter((each) => each.botId === command.botId),
-        omitted: 0,
+        omitted: params.botOmitted ?? 0,
       }));
     case "readRoutineRuns": {
       const routine = find(command.id);
