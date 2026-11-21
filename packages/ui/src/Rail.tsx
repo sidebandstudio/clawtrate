@@ -48,7 +48,7 @@ import {
   UnreadIcon,
 } from "./icons.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
-import type { BubbleChoice, ThemeChoice } from "./preferences.ts";
+import { DEFAULT_THEME, type BubbleChoice, type ThemeChoice } from "./preferences.ts";
 import {
   ArchivedGroup,
   isActive,
@@ -1172,6 +1172,7 @@ export function Rail({
       kind: "radio",
       label,
       checked: theme === choice,
+      ...(choice === DEFAULT_THEME ? { note: "The default" } : {}),
       onSelect: () => {
         onTheme(choice);
         closeMenu(true);

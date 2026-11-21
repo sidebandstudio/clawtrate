@@ -91,11 +91,11 @@ async function showFiles(page: Page) {
 async function shoot(page: Page, name: string) {
   if (!SHOTS) return;
   for (const theme of ["light", "dark"] as const) {
-    await page.emulateMedia({ colorScheme: theme });
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
     await page.waitForTimeout(150);
     await page.screenshot({ path: join(SHOTS, `${name}-${theme}.png`) });
   }
-  await page.emulateMedia({ colorScheme: null });
+  await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
 }
 
 test.describe.configure({ mode: "serial" });

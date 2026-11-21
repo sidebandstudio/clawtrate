@@ -18,6 +18,8 @@ export default defineConfig({
   use: {
     trace: "retain-on-failure",
     viewport: { width: 1440, height: 900 },
+    // The app's own default, so a check that names no scheme sees what a new user sees.
+    colorScheme: "dark",
   },
   projects: [
     {
