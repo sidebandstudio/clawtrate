@@ -20,13 +20,14 @@ import { artifactName, sha512Base64 } from "./feed.ts";
 import { releaseDate } from "./update-defines.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 import { compiledAddresses } from "./candidate-addresses.ts";
+import { packageOutput } from "./output.ts";
 import { freshReservation } from "./reservation.ts";
 
 const app = fileURLToPath(new URL("../", import.meta.url));
-const dist = join(app, "dist");
-export function macReadback(log: string, key: FileKey) {
+/** build.ts's line for `key`'s app, under the output's label (output.ts). */
+export function macReadback(log: string, key: FileKey, label = "dist") {
   const prefix =
-    "Signature of dist/" + (key === "mac-arm64" ? "mac-arm64" : "mac") + "/Clawtrate.app: ";
+    `Signature of ${label}/` + (key === "mac-arm64" ? "mac-arm64" : "mac") + "/Clawtrate.app: ";
   const lines = log.split(/\r?\n/).filter((line) => line.startsWith(prefix));
   if (lines.length !== 1) return "unknown";
   if (lines[0] === prefix + "ad hoc.") return "ad hoc";
@@ -44,15 +45,18 @@ function build(dir: string, version: string) {
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const manifest = join(app, "package.json");
   const original = readFileSync(manifest, "utf8");
-  // A beta release reserves dist and the folder first (release-beta.ts) and
-  // names its reservation; a build starts from them only while they hold
-  // nothing but that run's marker.
+  // A beta release builds into its own output folder (output.ts) and
+  // reserves the staging folder first (release-beta.ts), naming its
+  // reservation: the build starts from it only while it holds nothing but
+  // that run's marker.
+  const output = packageOutput(process.env, app);
+  const dist = output.path;
   const reservation = process.env.CLAWTRATE_RELEASE_RESERVATION;
   if (
     execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() ||
-    (existsSync(dist) && !freshReservation(dist, reservation))
+    existsSync(dist)
   )
-    throw new Error("Start from a clean checkout and an absent dist folder.");
+    throw new Error(`Start from a clean checkout and an absent ${output.label} folder.`);
   const win = process.platform === "win32";
   if (!win && process.platform !== "darwin") throw new Error("Build on macOS or Windows.");
   if (!freshReservation(dir, reservation)) mkdirSync(dir);
@@ -86,7 +90,7 @@ function build(dir: string, version: string) {
         buildDate,
         name,
         sha512: sha512Base64(path),
-        packagerReadback: win ? null : macReadback(readFileSync(log, "utf8"), key),
+        packagerReadback: win ? null : macReadback(readFileSync(log, "utf8"), key, output.label),
         feedAddresses,
       };
       writeFileSync(join(dir, key + ".json"), JSON.stringify(receipt, null, 2) + "\n");
