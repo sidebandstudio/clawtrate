@@ -384,7 +384,8 @@ export function liveScene(
       return {
         initial: withTranscript(interactive(withMessages(base)), (transcript) => ({
           ...transcript,
-          // After the reply: an answer history does not mark as a reply, then one it does.
+          // After the reply: an answer history does not mark as a reply, then a turn of two rows,
+          // progress and an answer, whose answer row alone history marks as one.
           items: [
             ...transcript.items,
             {
@@ -408,13 +409,18 @@ export function liveScene(
               blocks: [
                 {
                   kind: "text",
+                  text: "Let me see which logs I can reach.",
+                  messageId: "row-progress",
+                },
+                {
+                  kind: "text",
                   text: "I can read it through the journal instead.",
                   messageId: "row-delivered",
+                  replyToId: "row-2",
                 },
               ],
               model: null,
               messageId: "row-delivered",
-              replyTo: { id: "row-2", text: "Nothing alarming that I can see…", sender: "Otto" },
             },
           ],
           outbox: [
