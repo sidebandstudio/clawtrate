@@ -667,6 +667,24 @@ for (const [label, query, words] of [
 p = await open("screen=share-draft&nobot=1&nobots=1", phone);
 check("no selectable bot: the draft is kept and Send stays unavailable", (await text(p)).includes("No bot is listed to send this to.") && (await p.inputValue("[data-draft]")) === "For Saturday's route." && (await p.locator("[data-draft-send][disabled]").count()) === 1 && (await p.locator("[role=radio]").count()) === 0);
 await p.close();
+for (const choice of ["", "&to=marlow"]) {
+  p = await open(`screen=share&nobots=1${choice}`, phone);
+  check("F-245 an empty list leaves To empty and Send disabled", (await p.locator("[data-to-empty]").count()) === 1 && await p.locator("[data-share-send]").isDisabled());
+  await p.locator("[data-to-row]").click();
+  check("F-245 the empty picker offers no recipient", (await p.getByRole("radio").count()) === 0);
+  await p.locator("[data-to-done]").click();
+  check("F-245 returning from the empty picker keeps Send disabled", await p.locator("[data-share-send]").isDisabled());
+  await p.close();
+}
+for (const tier of ["read", "pairing"]) {
+  p = await open(`screen=share&access=${tier}&to=marlow&lost=1`, phone);
+  await p.fill("[data-note]", "Keep the route.");
+  await p.locator("[data-share-send]").click();
+  check(`F-406 ${tier} without write: explain the refusal before sending`, (await at(p, "share-cant")) && !missing(await text(p), ["Sending needs write access", "Nothing was sent."]));
+  await p.locator("[data-open-draft]").click();
+  check(`F-406 ${tier} without write: keep the note, items and recipient in an unsent draft`, (await p.inputValue("[data-draft]")) === "Keep the route." && (await text(p, ".d-chat-head")).includes("Marlow") && (await p.locator(".d-chips li").count()) === 2 && await p.locator("[data-draft-send]").isDisabled());
+  await p.close();
+}
 p = await open("screen=share&nodefault=1", phone);
 check("defaultId not among the listed bots: To starts empty, asks for a listed bot, and Send is unavailable", (await text(p, "[data-to-row]")).includes("Choose a listed bot") && (await p.locator("[data-share-send][disabled]").count()) === 1 && !(await text(p)).includes("The primary bot"));
 await p.close();
@@ -725,6 +743,14 @@ await walk("Send Message, once proven: sent; unreachable: Open in Clawtrate", "s
   [click("[data-siri-send]"), "siri-fail", ["Clawtrate couldn't send this"]],
   [link("Open in Clawtrate"), "share-draft", ["From Send Message. Nothing has been sent."]],
 ], phone);
+p = await open("screen=siri-confirm&access=read", phone);
+await p.locator("[data-siri-send]").click();
+check("F-246 the future Siri send reports missing write access", (await at(p, "siri-fail")) && (await text(p, ".d-sys")).includes("sending needs write access"));
+await p.close();
+p = await open("screen=siri-sent", phone);
+await p.keyboard.press("Escape");
+check("F-246 closing an accepted Siri result preserves its outcome", (await at(p, "siri-closed")) && (await text(p, "[data-closed]")) === "Closed.");
+await p.close();
 p = await open("screen=siri-list", phone);
 check("List Bots: the names, the primary bot first", (await text(p)).includes("You have four bots: Juniper, Marlow, Otto and Pip."));
 await p.close();

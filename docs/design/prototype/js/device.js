@@ -933,8 +933,10 @@
 
   // nodefault=1: agents.list's defaultId isn't among the returned bots, so To starts empty. nobots=1: no bot is
   // selectable. big=1: a shared item over the composer's limit, left out with its reason.
-  const toBot = () => (BOTS[params.get("to")] ? params.get("to") : params.get("nodefault") === "1" ? null : "juniper");
+  const toBot = () => (Object.hasOwn(BOTS, params.get("to")) ? params.get("to") : params.get("nodefault") === "1" ? null : "juniper");
   const noBots = params.get("nobots") === "1";
+  const listedBot = () => (noBots ? null : toBot());
+  const canSend = access === "write" || isAdmin;
   const noteText = () => (params.get("note") !== null ? params.get("note") : "For Saturday's route.");
   const chips = () =>
     `<li>${icon("link")}<span>https://trail-guide.example/saturday</span></li>` +
@@ -969,8 +971,8 @@
   const TASK_ID = "4f2a…";
 
   function shareSheet() {
-    const bot = toBot();
-    const why = params.get("gw") === "none" ? "nogateway" : params.get("gone") === "1" ? "unlisted" : down ? "unreachable" : null;
+    const bot = listedBot();
+    const why = params.get("gw") === "none" ? "nogateway" : params.get("gone") === "1" ? "unlisted" : !canSend ? "no-write" : down ? "unreachable" : null;
     const sendTo = why ? go("share-cant", { why }) : params.get("lost") === "1" ? go("share-unsure") : go("share-sent", { said: `Sent to ${BOTS[bot]}` });
     return (
       other() +
@@ -1015,7 +1017,7 @@
       other() +
       sheet(
         (noBots ? `<p class="d-lead">No bot is listed to send this to.</p>` : "") +
-          picker("share", toBot()) +
+          picker("share", listedBot()) +
           `<div class="d-actions">${act("Done", go("share"), { variant: "primary", size: "md", attrs: "data-to-done" })}</div>`,
         "Send to",
       ),
@@ -1041,7 +1043,7 @@
     "share-cant": () => {
       const why = params.get("why");
       const words =
-        why === "nogateway" ? "No gateway is saved in Clawtrate." : why === "unlisted" ? `${BOTS[toBot()] || "That bot"} is no longer listed.` : "Clawtrate couldn't reach the gateway before sending.";
+        why === "nogateway" ? "No gateway is saved in Clawtrate." : why === "unlisted" ? `${BOTS[toBot()] || "That bot"} is no longer listed.` : why === "no-write" ? "Sending needs write access to the gateway." : "Clawtrate couldn't reach the gateway before sending.";
       // No gateway, or the chosen bot no longer listed: the draft has no bot.
       const extra = why === "nogateway" || why === "unlisted" ? { nobot: "1" } : {};
       return (
@@ -1076,7 +1078,7 @@
     "share-draft": () => {
       const fromSiri = params.get("from") === "siri";
       const nobot = params.get("nobot") === "1";
-      const bot = nobot ? null : toBot();
+      const bot = nobot ? null : listedBot();
       return (
         `<div class="d-chat">` +
         `<header class="d-chat-head">${bot ? `<span class="avatar" data-bot="${bot}"></span><b>${BOTS[bot]}</b>` : ""}<span>New task</span></header>` +
@@ -1091,8 +1093,8 @@
         `<div class="d-composer" aria-label="Composer">` +
         (fromSiri ? "" : `<ul class="d-chips">${chips()}</ul>`) +
         `<textarea aria-label="Message" data-draft>${esc(fromSiri ? params.get("msg") || "Remind me to water the plants tonight." : noteText())}</textarea>` +
-        (bot && !fromSiri ? `<p class="d-lead" data-preview>Send starts a new task with ${BOTS[bot]}, with ${items()}.</p>` : "") +
-        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-draft-send${bot ? "" : " disabled"}>Send</button></div></div></div></div>`
+        (!canSend ? `<p class="d-lead" data-preview>Sending needs write access to the gateway.</p>` : bot && !fromSiri ? `<p class="d-lead" data-preview>Send starts a new task with ${BOTS[bot]}, with ${items()}.</p>` : "") +
+        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-draft-send${bot && canSend ? "" : " disabled"}>Send</button></div></div></div></div>`
       );
     },
     "share-closed": () => {
@@ -1109,7 +1111,7 @@
     `<h2 id="d-sys-title" tabindex="-1" data-d-title>${title}</h2>${body}${actions ? `<div class="d-actions">${actions}</div>` : ""}${after}</div>`;
   const msg = () => params.get("msg") || "Remind me to water the plants tonight.";
   // Every system panel can be dismissed: Close (Escape too), and Tab stays inside.
-  const closeSys = () => link("Close", go("siri-closed"), { size: "md", attrs: "data-cancel data-close" });
+  const closeSys = () => link("Close", go("siri-closed", { closed: screenId === "siri-sent" ? "done" : null }), { size: "md", attrs: "data-cancel data-close" });
   const pendingProof = `<p class="d-proto"><span>Prototype:</span>Not a supported Send Message state until the confirmation is proven on a device.</p>`;
 
   Object.assign(SCREENS, {
@@ -1136,15 +1138,15 @@
         `Send to ${BOTS[toBot()]}?`,
         `<blockquote data-exact>${esc(msg())}</blockquote>`,
         act("Cancel", go("siri-cancelled"), { size: "md", attrs: "data-cancel" }) + act("Open in Clawtrate to send it", go("share-draft", { from: "siri" }), { variant: "primary", size: "md", attrs: "data-siri-handoff" }),
-        proto(link("Once the confirmation is proven on a device: Send", down ? go("siri-fail") : go("siri-sent", { said: `Sent to ${BOTS[toBot()]}` }), { attrs: "data-siri-send" })),
+        proto(link("Once the confirmation is proven on a device: Send", !canSend || down ? go("siri-fail") : go("siri-sent", { said: `Sent to ${BOTS[toBot()]}` }), { attrs: "data-siri-send" })),
       ),
     "siri-handoff": () => SCREENS["share-draft"](),
     // Not supported states until the confirmation is proven on a device: drawn for the build after that proof.
     "siri-sent": () => other() + sys("Clawtrate", `<p>Sent to ${BOTS[toBot()]}.</p>`, closeSys(), pendingProof),
     "siri-fail": () =>
-      other() + sys("Clawtrate", `<p>Clawtrate couldn't send this: it couldn't reach the gateway.</p>`, link("Open in Clawtrate", go("share-draft", { from: "siri" }), { variant: "primary", size: "md" }) + closeSys(), pendingProof),
+      other() + sys("Clawtrate", `<p>Clawtrate couldn't send this: ${canSend ? "it couldn't reach the gateway" : "sending needs write access to the gateway"}.</p>`, link("Open in Clawtrate", go("share-draft", { from: "siri" }), { variant: "primary", size: "md" }) + closeSys(), pendingProof),
     "siri-cancelled": () => other() + sys("Clawtrate", `<p>Nothing was sent.</p>`, closeSys()),
-    "siri-closed": () => other() + `<p class="d-event" role="status" data-closed>Closed. Nothing was sent.</p>`,
+    "siri-closed": () => other() + `<p class="d-event" role="status" data-closed>${params.get("closed") === "done" ? "Closed." : "Closed. Nothing was sent."}</p>`,
   });
 
   // Mount -----------------------------------------------------------------------
