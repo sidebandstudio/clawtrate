@@ -213,7 +213,7 @@ describe("the release keychain", () => {
 
   it("hands each secret to security or notarytool on its input, never in arguments or environment", () => {
     const calls: Call[] = [];
-    const base = { PATH: "/usr/bin", HOME: "/Users/someone", NODE_OPTIONS: "--require x" };
+    const base = { PATH: "/usr/bin", HOME: "/home-of-the-maintainer", NODE_OPTIONS: "--require x" };
     const signing = signingKeychain(keychainTools(calls), SECRETS, dir, base);
     const keychain = join(dir, "release.keychain-db");
     expect(signing).toEqual({ keychain, identity: IDENTITY, teamId: TEAM });
@@ -225,7 +225,7 @@ describe("the release keychain", () => {
     for (const call of calls) {
       const outside = JSON.stringify([call.args, call.env]);
       for (const secret of SECRET_TEXTS) expect(outside).not.toContain(secret);
-      expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/Users/someone" });
+      expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home-of-the-maintainer" });
     }
     // `security -i` reads its own quoting: the password's quote and backslash are escaped.
     const lines = calls[0]!.input!.trimEnd().split("\n");
@@ -301,7 +301,7 @@ describe("the build's environment", () => {
     const env = buildEnvironment(
       {
         PATH: "/usr/bin",
-        HOME: "/Users/someone",
+        HOME: "/home-of-the-maintainer",
         TMPDIR: "/var/folders/x/",
         CSC_LINK: "/elsewhere.p12",
         CSC_KEY_PASSWORD: "inherited",
@@ -318,7 +318,7 @@ describe("the build's environment", () => {
     );
     expect(env).toEqual({
       PATH: "/usr/bin",
-      HOME: "/Users/someone",
+      HOME: "/home-of-the-maintainer",
       TMPDIR: "/var/folders/x/",
       CSC_KEYCHAIN: signing.keychain,
       CSC_NAME: IDENTITY,
