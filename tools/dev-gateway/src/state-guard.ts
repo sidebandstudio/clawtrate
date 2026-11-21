@@ -196,7 +196,8 @@ function utcIdentity(lstart: string): string | null {
  * An identity recorded by earlier versions: the start time in the local time
  * zone of whoever recorded it, which can't be compared with one read now.
  */
-const LOCAL_IDENTITY = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/;
+const LOCAL_IDENTITY =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/;
 
 /** Where the system keeps `ps`, in order; a merged `/usr` has both. */
 const SYSTEM_PS = ["/bin/ps", "/usr/bin/ps"];
