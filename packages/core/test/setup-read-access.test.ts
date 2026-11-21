@@ -139,8 +139,21 @@ describe("a setup reconnect with a saved pairing", () => {
     const client = new ClawtrateClient(testHost(gateway, storage), FAST);
     await client.start();
     let holds = true;
-    await client.connectForSetup(URL, { consent: () => holds });
+    const events: string[] = [];
+    const reply = gateway.connectReply;
+    gateway.connectReply = (params, url) => {
+      events.push("connect");
+      return reply(params, url);
+    };
+    await client.connectForSetup(URL, {
+      consent: () => {
+        events.push("consent");
+        void Promise.resolve().then(() => events.push("next microtask"));
+        return holds;
+      },
+    });
     await until(() => client.state.connection.status === "connected");
+    expect(events).toEqual(["consent", "connect", "next microtask"]);
     holds = false;
     gateway.dropAll();
     await until(

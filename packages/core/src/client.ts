@@ -5604,14 +5604,6 @@ export class ClawtrateClient {
             throw new Error("the saved pairing is gone");
           }
         }
-        // The first frame with a credential, a saved token's included, goes only within the
-        // dialog's consent; past it nothing is sent and the screen says "changed".
-        const consent = this.setupCheck?.url === settings.url ? this.setupCheck.consent : undefined;
-        if (setup && consent && !consent()) {
-          this.setupEndpointChanged(settings.url, generation);
-          this.close();
-          throw new Error("the setup consent ran out");
-        }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
@@ -5631,6 +5623,13 @@ export class ClawtrateClient {
           this.setupEndpointChanged(settings.url, generation);
           this.close();
           throw new Error("the setup code ran out");
+        }
+        // The dialog deadline applies to the first send, including a saved token's.
+        const consent = this.setupCheck?.url === settings.url ? this.setupCheck.consent : undefined;
+        if (consent && this.isSetup(settings.url) && !consent()) {
+          this.setupEndpointChanged(settings.url, generation);
+          this.close();
+          throw new Error("the setup consent ran out");
         }
         return {
           minProtocol: PROTOCOL_VERSION,
