@@ -126,6 +126,15 @@ describe("F-500: the outcomes' actions do what they say", () => {
     }
   });
 
+  it("stale: Check again only where the host can read the list; an address route asks again only", () => {
+    const here = shelf({ status: "stale", place: "here" }, { status: "connected" });
+    expect(here.labels).toEqual(["Check again", "Request again"]);
+    expect(here.press("Check again")).toEqual({ type: "checkAccess" });
+    expect(shelf({ status: "stale", place: "address" }, { status: "connected" }).labels).toEqual([
+      "Request again",
+    ]);
+  });
+
   it("an identity that couldn't be read: Look again looks again, while waiting or after", () => {
     const waiting = shelf({ status: "identity-unread", place: "ssh" }, { status: "connected" });
     expect(waiting.press("Look again")).toEqual({ type: "checkAccess" });
