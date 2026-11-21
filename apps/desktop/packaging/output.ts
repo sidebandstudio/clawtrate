@@ -10,14 +10,14 @@ export const OUTPUT_VARIABLE = "CLAWTRATE_PACKAGE_OUTPUT";
 export interface PackageOutput {
   /** The folder itself. */
   readonly path: string;
-  /** How the build's own lines name it: `dist` for the default. */
+  /** The directory given to electron-builder and named in its signature checks. */
   readonly label: string;
 }
 
 /** The output folder for `appDir` under `env`; a set variable must be an absolute path. */
 export function packageOutput(
   env: Record<string, string | undefined>,
-  appDir: string,
+  appDir = join(import.meta.dirname, ".."),
 ): PackageOutput {
   const given = env[OUTPUT_VARIABLE]?.trim();
   if (!given) return { path: join(appDir, "dist"), label: "dist" };

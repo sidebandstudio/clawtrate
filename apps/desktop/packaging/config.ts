@@ -11,7 +11,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
 import { APP_ID, PRODUCT_NAME } from "../src/main/identity.ts";
-import { OUTPUT_VARIABLE } from "./output.ts";
+import { packageOutput } from "./output.ts";
 import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
 
 export { APP_ID, macSigningRequested, PRODUCT_NAME, type Env };
@@ -84,7 +84,7 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     productName: PRODUCT_NAME,
     electronVersion,
     // apps/desktop/dist, or a beta release's own folder (output.ts).
-    directories: { output: env[OUTPUT_VARIABLE]?.trim() || "dist", buildResources: "resources" },
+    directories: { output: packageOutput(env).label, buildResources: "resources" },
     // The main process, preload and renderer are bundled by electron-vite and
     // need no node_modules. Nothing else is shipped: not the web preview's or
     // the fixture mode's builds, and no source. resources/icon.png, generated

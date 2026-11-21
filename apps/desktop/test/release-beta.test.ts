@@ -660,9 +660,11 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     // The signing folder is gone, and so is dist.
     expect(readdirSync(place.state).filter((name) => name !== LOCKS_FOLDER)).toEqual([]);
     expect(existsSync(join(place.appDir, "dist"))).toBe(false);
-    expect(seen.env!.CSC_KEYCHAIN).toMatch(
-      new RegExp(`^${place.state}/clawtrate-signing-[A-Za-z0-9]{6}/release\\.keychain-db$`),
-    );
+    const keychain = seen.env!.CSC_KEYCHAIN!;
+    const signingDir = dirname(keychain);
+    expect(dirname(signingDir)).toBe(place.state);
+    expect(basename(signingDir)).toMatch(/^clawtrate-signing-[A-Za-z0-9]{6}$/);
+    expect(basename(keychain)).toBe("release.keychain-db");
     expect(seen.env!.CSC_NAME).toBe(IDENTITY);
     // Neither raw credential file exists when the build starts.
     // No credential: the run's pid and the search list it put back afterwards.
@@ -2249,6 +2251,22 @@ describe("only this run's output", () => {
     const { runner } = tools(builds(place.appDir));
     await expect(prepare(runner, NOW, place)).rejects.toThrow("no space left");
     nothingLeft();
+  });
+
+  it("preserves another writer's marker and files if they appear while reserving staging", async () => {
+    const folder = join(place.staging, VERSION);
+    const marker = join(folder, RESERVATION_FILE);
+    vi.mocked(writeFileSync).mockImplementation((path, ...rest) => {
+      if (path === marker) {
+        realFs.writeFileSync(marker, "other owner");
+        realFs.writeFileSync(join(folder, "other.zip"), "other build");
+      }
+      return realFs.writeFileSync(path, ...rest);
+    });
+    const { runner } = tools(builds(place.appDir));
+    expect(await stopped(() => prepare(runner, NOW, place))).toContain("left as it is");
+    expect(readFileSync(marker, "utf8")).toBe("other owner");
+    expect(readFileSync(join(folder, "other.zip"), "utf8")).toBe("other build");
   });
 
   it("releases everything when the signing folder cannot be made", async () => {

@@ -3,7 +3,7 @@
 // release-beta.ts reserves the version's staging folder; candidate-build.ts
 // starts from it only when the reservation it is given is its own.
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const RESERVATION_FILE = ".clawtrate-release-run";
@@ -18,8 +18,11 @@ export function reserve(folder: string, owner: string): void {
   try {
     writeFileSync(join(folder, RESERVATION_FILE), owner, { mode: 0o600, flag: "wx" });
   } catch (error) {
-    // The folder is this call's alone and holds nothing: release it.
-    rmSync(folder, { recursive: true, force: true });
+    try {
+      rmdirSync(folder);
+    } catch {
+      // Another writer may have added files. Leave them in place and report the marker error.
+    }
     throw error;
   }
 }

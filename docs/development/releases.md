@@ -86,26 +86,40 @@ A run whose restore could not be verified keeps its folder and its lock file on 
 To clean up yourself, recover the list before you remove the folder. Once the folder is gone, so is `search-list.json`, the only record of your list from before the build. Check the run first:
 
 ```sh
-S="$HOME/Library/Application Support/clawtrate-release"   # your account's home folder
+S="$(node -p 'require("node:os").userInfo().homedir')/Library/Application Support/clawtrate-release"
 cat "$S"/clawtrate-signing-XXXXXX/pid          # the run's process id
 ps -p <that pid> -o lstart=                    # no row: the run has ended
 ```
 
-Then recover the list by the same rule as the script. This command reads the list, compares it with the record and writes only what the rule allows, with each path as its own argument, so a path with spaces stays whole. It writes nothing when it cannot tell, and says so:
+Keep other releases and tools that edit the keychain search list idle during manual recovery. The read and write are separate operations. Readback can verify the result but cannot detect an edit overwritten between them.
+
+If the run ended before writing `search-list.json`, the command checks whether its keychain is on the current list. If it is absent, the ended run's folder can be removed without changing the list. If it is present, keep the folder for inspection. With a record, the command follows the same recovery rule as the release script.
 
 ```sh
 /usr/bin/python3 -I - "$S"/clawtrate-signing-XXXXXX <<'PY'
 import json, os, subprocess, sys
 folder = sys.argv[1]
-record = json.load(open(os.path.join(folder, "search-list.json")))
 keychain = os.path.join(folder, "release.keychain-db")
 names = {keychain, os.path.join(os.path.realpath(folder), "release.keychain-db")}
 def read():
     out = subprocess.run(["/usr/bin/security", "list-keychains", "-d", "user"], capture_output=True, text=True, check=True).stdout
-    return [line.strip()[1:-1] for line in out.splitlines() if line.strip()]
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    if any(len(line) < 3 or line[0] != '"' or line[-1] != '"' or '"' in line[1:-1] for line in lines):
+        sys.exit("Could not read the search list. Keep the folder.")
+    return [line[1:-1] for line in lines]
 now = read()
-print("Recorded before the build:", record)
 print("The list now:             ", now)
+try:
+    with open(os.path.join(folder, "search-list.json")) as saved:
+        record = json.load(saved)
+except FileNotFoundError:
+    if names & set(now):
+        sys.exit("No recovery record and the release keychain is listed. Keep the folder.")
+    print("No recovery record. The release keychain is absent. No restore is needed.")
+    sys.exit(0)
+if not isinstance(record, list) or not all(isinstance(path, str) for path in record):
+    sys.exit("Invalid recovery record. Keep the folder.")
+print("Recorded before the build:", record)
 if now == record:
     print("The list is already the recorded one: nothing to write.")
     sys.exit(0)
@@ -121,7 +135,7 @@ sys.exit(0 if after == target else "The list does NOT read back as written: remo
 PY
 ```
 
-Compare the lists it prints. If the list already matches the record, or the command verifies the list it wrote, recovery is complete.
+If the command reports that no restore is needed, the list already matches the record, or the readback matches what it wrote, recovery is complete.
 
 If the release preserved your edits but its readback failed, its keychain may already be absent and the list may differ from the original record. Check the current list against the target from the failed run's restore message, path by path and in order. If they match and the release keychain is absent, recovery is complete. If you cannot verify the target, keep the recovery files.
 
