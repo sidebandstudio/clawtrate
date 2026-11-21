@@ -22,9 +22,8 @@
 # An incomplete download that ends before main is called runs nothing and fails.
 trap 'exit 1' EXIT
 
-# The Developer ID team that signs Clawtrate's releases. Set when the first
-# signed beta is cut; until then the installer refuses to run.
-CLAWTRATE_TEAM_ID="APPLE_CLAWTRATE_TEAM_ID"
+# The Developer ID team that signs Clawtrate's releases.
+CLAWTRATE_TEAM_ID="9X79V37Q89"
 
 BUNDLE_ID="dev.clawtrate.desktop"
 APP="Clawtrate.app"
