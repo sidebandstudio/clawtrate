@@ -178,6 +178,42 @@ test.describe("the full view on the desktop", () => {
     expect(attempts.map((cmd) => cmd.input)).toEqual([{ kind: "text", text: "a".repeat(2000) }]);
   });
 
+  test("F-142: a key typed while a paste is still going goes after the paste, never between its calls", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    await frame.evaluate((element) => {
+      type Command = { type: string; input?: { text?: string } };
+      const { clawtrateFixture: bridge } = window as unknown as {
+        clawtrateFixture: { invoke(command: Command): Promise<unknown> };
+      };
+      const invoke = bridge.invoke.bind(bridge);
+      // The paste's first call is answered only on "ack-paste".
+      const ack = new Promise<void>((resolve) =>
+        window.addEventListener("ack-paste", () => resolve(), { once: true }),
+      );
+      bridge.invoke = async (command) => {
+        const result = await invoke(command);
+        if (command.type === "computerInput" && command.input?.text === "a".repeat(2000)) await ack;
+        return result;
+      };
+      const data = new DataTransfer();
+      data.setData("text/plain", "a".repeat(2000) + "b");
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    });
+    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(1);
+    await page.keyboard.type("x");
+    await page.evaluate(() => window.dispatchEvent(new Event("ack-paste")));
+    await expect
+      .poll(async () =>
+        (await sentOf(page, "computerInput")).map((each) => (each.input as { text?: string }).text),
+      )
+      .toEqual(["a".repeat(2000), "b", "x"]);
+  });
+
   test("F-142: typed text, clicks and scrolling reach the page only while this viewer holds control and the picture has focus; Enter is not sent; a paste goes only on a paste", async ({
     page,
   }) => {
@@ -955,6 +991,47 @@ test.describe("the full view on the phone (section 18, On the phone)", () => {
       )
       .toEqual(["你"]);
     await expect(field).toHaveValue("你");
+  });
+
+  test("F-142: a character refused while an input method composes goes once, ahead of the committed text", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    // "a" is answered only on "ack-a", and refused.
+    await page.evaluate(() => {
+      type Command = { type: string; input?: { text?: string } };
+      const bridge = (
+        window as unknown as { clawtrateFixture: { invoke(command: Command): Promise<unknown> } }
+      ).clawtrateFixture;
+      const invoke = bridge.invoke.bind(bridge);
+      const ack = new Promise<void>((resolve) =>
+        window.addEventListener("ack-a", () => resolve(), { once: true }),
+      );
+      bridge.invoke = async (command) => {
+        if (command.type !== "computerInput" || command.input?.text !== "a") return invoke(command);
+        await invoke(command);
+        await ack;
+        return { sent: false };
+      };
+    });
+    await fullView(page).getByRole("button", { name: "Type into the page" }).click();
+    const field = fullView(page).getByRole("textbox", { name: "Type into the page" });
+    await field.pressSequentially("a");
+    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBe(1);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.imeSetComposition", { text: "n", selectionStart: 1, selectionEnd: 1 });
+    await page.evaluate(() => window.dispatchEvent(new Event("ack-a")));
+    const unsent = fullView(page).getByTestId("type-unsent");
+    await expect(unsent).toContainText("Not sent yet: a");
+    await cdp.send("Input.insertText", { text: "你" });
+    await expect(unsent).toContainText("Not sent yet: a你");
+    await unsent.getByRole("button", { name: "Send again" }).click();
+    await expect(field).toHaveValue("a你");
+    const texts = (await sentOf(page, "computerInput")).map(
+      (each) => (each.input as { text?: string }).text,
+    );
+    expect(texts).toEqual(["a", "a你"]);
   });
 
   test("F-142: a late reply from a closed typing field cannot accept text in the reopened field", async ({

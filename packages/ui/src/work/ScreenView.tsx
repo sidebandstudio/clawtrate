@@ -173,6 +173,8 @@ export function ScreenView(props: ScreenViewProps) {
     timer: null,
   });
   const inputSession = useRef(0);
+  /** Typed and pasted text, in the order it came: each goes after the one before it went. */
+  const textOrder = useRef<Promise<void>>(Promise.resolve());
   /** A queued scroll or the rest of a paste belongs to the focused picture that received it. */
   const retireInput = () => {
     inputSession.current++;
@@ -243,7 +245,12 @@ export function ScreenView(props: ScreenViewProps) {
     if (inFrame && inputAllowed()) {
       if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
-        props.onInput({ kind: "text", text: event.key });
+        const session = inputSession.current;
+        const text = event.key;
+        // After any paste still going: a key never lands between its calls.
+        textOrder.current = textOrder.current.then(() => {
+          if (session === inputSession.current) props.onInput({ kind: "text", text });
+        });
         return;
       }
       if (event.key === "Enter" || event.key === "Backspace" || event.key === "Tab") {
@@ -292,9 +299,10 @@ export function ScreenView(props: ScreenViewProps) {
     const text = event.clipboardData.getData("text/plain");
     // In order, one call after another's answer: a refused part stops the rest, so nothing goes
     // after a gap, and what didn't go is said.
+    // Typed keys and a later paste wait until this paste is done or stopped.
     const parts = callParts(text, 4);
     const session = inputSession.current;
-    void (async () => {
+    textOrder.current = textOrder.current.then(async () => {
       let sent = 0;
       for (const part of parts) {
         if (session !== inputSession.current) break;
@@ -308,7 +316,7 @@ export function ScreenView(props: ScreenViewProps) {
             ? "The paste wasn't sent. Try again in a moment."
             : `Only part of the paste was sent: the last ${left} characters weren't.`,
         );
-    })();
+    });
   };
 
   const onClick = (event: React.MouseEvent) => {
@@ -751,6 +759,8 @@ function PhoneLayout(
   const [text, setText] = useState<Typing>(emptyTyping);
   /** The field's text while an input method composes; null otherwise. */
   const [composing, setComposing] = useState<string | null>(null);
+  /** The field's text when the input method started composing. */
+  const composedFrom = useRef<string | null>(null);
   const textRef = useRef<Typing>(emptyTyping);
   useLayoutEffect(() => {
     return () => {
@@ -946,10 +956,16 @@ function PhoneLayout(
             autoFocus
             // An input method's text is the person's only once it is committed: until then the
             // field holds it as it is being composed, and nothing goes.
-            onCompositionStart={(event) => setComposing(event.currentTarget.value)}
+            onCompositionStart={(event) => {
+              composedFrom.current = event.currentTarget.value;
+              setComposing(event.currentTarget.value);
+            }}
             onCompositionEnd={(event) => {
               setComposing(null);
-              setTyped(typedInto(textRef.current, event.currentTarget.value));
+              // Only what the input method added: text refused meanwhile is already held.
+              const from = composedFrom.current ?? fieldText(textRef.current);
+              composedFrom.current = null;
+              setTyped(typedInto(textRef.current, event.currentTarget.value, from));
               pump();
             }}
             onChange={(event) => {

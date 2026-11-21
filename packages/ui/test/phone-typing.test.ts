@@ -68,6 +68,18 @@ describe("the phone's typed field", () => {
     expect(answered(b.typing, true, b.session)).toMatchObject({ accepted: "B", held: false });
   });
 
+  it("an input method's commit adds only its own text: a character refused while it composed goes once", () => {
+    // "a" is on its way when composing starts; the field reads "a".
+    const call = nextCall(typedInto(emptyTyping, "a"))!;
+    const from = fieldText(call.typing);
+    // The host refuses "a" before the person commits "你": "a" is held, the field is empty.
+    let t = answered(call.typing, false, 0);
+    t = typedInto(t, "a你", from);
+    expect(t.unsent).toBe("a你");
+    const again = nextCall(sendAgain(t))!;
+    expect(again.text).toBe("a你");
+  });
+
   it("never keeps or sends half a character at the 2,000-unit limit", () => {
     const text = "a".repeat(1999) + "😀";
     expect(cutWhole(text, 2000)).toBe("a".repeat(1999));

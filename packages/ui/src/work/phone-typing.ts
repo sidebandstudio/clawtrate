@@ -54,9 +54,11 @@ export const restart = (t: Typing): Typing => ({ ...emptyTyping, session: t.sess
 /** What the field shows. */
 export const fieldText = (t: Typing) => t.accepted + t.flight;
 
-/** The field now reads `value`: anything after what it showed is typed, and waits its turn. */
-export function typedInto(t: Typing, value: string): Typing {
-  const shown = fieldText(t);
+/**
+ * The field now reads `value`: anything after what it showed (`shown`; for an input method, the
+ * field when composing started) is typed, and waits its turn.
+ */
+export function typedInto(t: Typing, value: string, shown = fieldText(t)): Typing {
   // Only text can be sent: a deletion or a replacement of what went is not taken back.
   if (!value.startsWith(shown) || value.length === shown.length) return t;
   // One edit (a paste) is at most one call's text: what can't go in one isn't kept either.
