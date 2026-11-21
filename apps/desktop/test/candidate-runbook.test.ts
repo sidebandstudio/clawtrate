@@ -7,7 +7,8 @@ it("documents the install gate, isolated trial, feed comparison and withdrawal o
     "utf8",
   ).replace(/\s+/g, " ");
   const steps = [
-    "In-place installation is not on `main` yet",
+    "In-place installation is on `main` (#202); the Restart screen (#204) is not yet.",
+    "Keep Stable and Windows closed until #204 is on `main` and the signed upgrade trial passes on all three systems.",
     "win-unpacked/Clawtrate.exe",
     '"$CURRENT_FEED" "$OTHER_FEED"',
     "### Trial on an isolated feed",
