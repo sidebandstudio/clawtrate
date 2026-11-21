@@ -20,6 +20,7 @@ import { artifactName, sha512Base64 } from "./feed.ts";
 import { releaseDate } from "./update-defines.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 import { compiledAddresses } from "./candidate-addresses.ts";
+import { freshReservation } from "./reservation.ts";
 
 const app = fileURLToPath(new URL("../", import.meta.url));
 const dist = join(app, "dist");
@@ -43,14 +44,18 @@ function build(dir: string, version: string) {
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const manifest = join(app, "package.json");
   const original = readFileSync(manifest, "utf8");
+  // A beta release reserves dist and the folder first (release-beta.ts) and
+  // names its reservation; a build starts from them only while they hold
+  // nothing but that run's marker.
+  const reservation = process.env.CLAWTRATE_RELEASE_RESERVATION;
   if (
     execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() ||
-    existsSync(dist)
+    (existsSync(dist) && !freshReservation(dist, reservation))
   )
     throw new Error("Start from a clean checkout and an absent dist folder.");
   const win = process.platform === "win32";
   if (!win && process.platform !== "darwin") throw new Error("Build on macOS or Windows.");
-  mkdirSync(dir);
+  if (!freshReservation(dir, reservation)) mkdirSync(dir);
   const temp = mkdtempSync(join(tmpdir(), "clawtrate-pack-"));
   const log = join(temp, "pack.log");
   const fd = openSync(log, "wx", 0o600);

@@ -39,6 +39,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -60,6 +61,7 @@ import {
   type LatestMac,
 } from "./beta-files.ts";
 import { nightlyVersion } from "./candidate-version.ts";
+import { RESERVATION_FILE, reserve, reservedBy } from "./reservation.ts";
 import { APP_ID, PRODUCT_NAME } from "./config.ts";
 import { artifactName, makeFeed } from "./feed.ts";
 import { newestBeta, type ReleaseRow } from "./site-feed.ts";
@@ -328,30 +330,37 @@ export function restoreSearchList(runner: Run, previous: readonly string[]): voi
     );
 }
 
+/** Puts the recorded list back, verified; safe to call again after a failure. */
+export type RestoreList = () => void;
+
 /**
  * Puts the release keychain first on the user's search list for the build,
  * keeping the user's keychains in order and the default keychain as it is:
  * electron-builder 26.18.1 asks codesign for the identity by name with
  * `--keychain`, and codesign finds no identity in a keychain that is not on the
- * search list. The previous list is recorded in `dir` first, so the next run
- * can restore it after a run killed outright (`clearLeftovers`). Returns the
- * one call that restores it, which is safe to make more than once.
+ * search list. The previous list is recorded in `dir` and the restore is handed
+ * to `register` before the list is changed, so every way out, a failed first
+ * change included, puts it back; the next run restores it after a run killed
+ * outright (`clearLeftovers`). The restore counts as done only once the list
+ * reads back as it was, so a failed one can be tried again.
  */
-export function searchListForBuild(runner: Run, keychain: string, dir: string): () => void {
+export function searchListForBuild(
+  runner: Run,
+  keychain: string,
+  dir: string,
+  register: (restore: RestoreList) => void,
+): void {
   const previous = readSearchList(runner);
   writeFileSync(join(dir, SEARCH_LIST_FILE), JSON.stringify(previous), { mode: 0o600, flag: "wx" });
   let restored = false;
-  const restore = () => {
+  register(() => {
     if (restored) return;
-    restored = true;
     restoreSearchList(runner, previous);
+    restored = true;
     console.log("Restored the keychain search list.");
-  };
-  if (!setSearchList(runner, [keychain, ...previous.filter((path) => path !== keychain)])) {
-    restore();
+  });
+  if (!setSearchList(runner, [keychain, ...previous.filter((path) => path !== keychain)]))
     stop("Could not put the release keychain on the keychain search list. Nothing was built.");
-  }
-  return restore;
 }
 
 /**
@@ -363,6 +372,7 @@ export function buildEnvironment(
   base: NodeJS.ProcessEnv,
   signing: Signing,
   epoch: number,
+  reservation?: string,
 ): NodeJS.ProcessEnv {
   return {
     ...kept(base),
@@ -373,6 +383,8 @@ export function buildEnvironment(
     // The Beta track only: a beta build has no Stable feed until Stable opens.
     CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: BETA_FEED_URL,
     SOURCE_DATE_EPOCH: String(epoch),
+    // Which reserved dist and staging folder the build may start from (reservation.ts).
+    ...(reservation ? { CLAWTRATE_RELEASE_RESERVATION: reservation } : {}),
   };
 }
 
@@ -615,6 +627,93 @@ function clearLeftovers(runner: Run, parent: string) {
   }
 }
 
+/** The per-user lock: one release at a time may own the keychain search list, whichever checkout it runs from. */
+export const LOCK_FILE = "clawtrate-release.lock";
+
+/** A process's start time as `ps` reports it, which tells a reused pid apart; null if none. */
+function processStart(pid: number): string | null {
+  const got = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+  const text = got.status === 0 ? got.stdout.trim() : "";
+  return text || null;
+}
+
+/**
+ * Takes the lock in `dir` by creating it exclusively with this run's pid,
+ * start time and a random token. A lock whose run is alive refuses. A lock
+ * whose run has ended is taken over by moving it aside, which only one run can
+ * do; the leftovers of that run are recovered next (`clearLeftovers`).
+ * Returns the call that gives it up, which removes only this run's own lock.
+ */
+export function takeReleaseLock(dir: string): () => void {
+  const path = join(dir, LOCK_FILE);
+  const start = processStart(process.pid);
+  if (!start) stop("Could not read this process's start time to take the release lock.");
+  const mine = JSON.stringify({
+    pid: process.pid,
+    start,
+    token: randomBytes(16).toString("hex"),
+  });
+  const release = () => {
+    try {
+      if (readFileSync(path, "utf8") === mine) rmSync(path);
+    } catch {
+      // Gone already.
+    }
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(path, mine, { mode: 0o600, flag: "wx" });
+      return release;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    let held: string;
+    try {
+      held = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    let holder: { pid?: unknown; start?: unknown } | null = null;
+    try {
+      holder = JSON.parse(held) as { pid?: unknown; start?: unknown };
+    } catch {
+      holder = null;
+    }
+    if (
+      !holder ||
+      typeof holder.pid !== "number" ||
+      !Number.isSafeInteger(holder.pid) ||
+      holder.pid <= 0 ||
+      typeof holder.start !== "string"
+    )
+      stop(
+        `${path} names no release, perhaps one that is just starting. If no release is running, remove it yourself.`,
+      );
+    if (processStart(holder.pid) === holder.start)
+      stop(`Another release (pid ${holder.pid}) holds ${path}. Let it finish first.`);
+    // Its run has ended. Move it aside: if another run took it over first, the
+    // move fails or moves that run's lock, which is put back.
+    const aside = `${path}.${process.pid}`;
+    try {
+      renameSync(path, aside);
+    } catch {
+      continue;
+    }
+    const moved = readFileSync(aside, "utf8");
+    rmSync(aside);
+    if (moved !== held) {
+      try {
+        writeFileSync(path, moved, { mode: 0o600, flag: "wx" });
+      } catch {
+        // Taken again meanwhile; the next attempt reads it.
+      }
+      continue;
+    }
+    console.log(`Took over ${path} from a release (pid ${holder.pid}) that has ended.`);
+  }
+  stop(`Could not take ${path}. Run this again.`);
+}
+
 /** A build that has started: its result, and a way to stop it and everything it started. */
 export interface StartedBuild {
   done: Promise<RunResult>;
@@ -706,6 +805,29 @@ export async function prepare(
   places: Places = PLACES,
   startBuilding: StartBuild = blockingBuild(runner),
 ): Promise<void> {
+  // One release at a time owns the keychain search list, from any checkout.
+  // Kept only while a search list awaits restoring: the next run takes it
+  // over once this run has ended, and restores the list first.
+  const lock = { release: takeReleaseLock(places.temp), keep: false };
+  try {
+    await prepareLocked(runner, now, places, startBuilding, lock);
+  } finally {
+    if (!lock.keep) lock.release();
+  }
+}
+
+/**
+ * The release under the lock. Sets `lock.keep` when it leaves the search list
+ * for the next run to restore (the restore could not be verified), and gives
+ * the lock up itself when it exits from a signal.
+ */
+async function prepareLocked(
+  runner: Run,
+  now: Date,
+  places: Places,
+  startBuilding: StartBuild,
+  lock: { release: () => void; keep: boolean },
+): Promise<void> {
   const { staging, appDir } = places;
   // First, so a retry after any refusal clears what a killed run left.
   clearLeftovers(runner, places.temp);
@@ -740,33 +862,69 @@ export async function prepare(
   console.log(`Building Clawtrate ${version} from ${commit.slice(0, 12)}.`);
   console.log("Notarization sends both apps to Apple's notary service. Nothing is published.");
 
+  // This run's own output: dist and the version's folder, each created
+  // exclusively with this run's marker inside (reservation.ts). After a
+  // failure only folders that still carry it are removed.
+  const owner = JSON.stringify({ pid: process.pid, token: randomBytes(16).toString("hex") });
+  const dist = join(appDir, "dist");
+  for (const folder of [dist, out]) {
+    try {
+      reserve(folder, owner);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (folder === out && reservedBy(dist, owner)) rmSync(dist, { recursive: true });
+      stop(`${folder} appeared before this run could reserve it. It was left as it is.`);
+    }
+  }
+
   // The keychain lives here while the build runs, and the zips are verified
-  // here. A normal exit, an error, Ctrl-C and SIGTERM remove the folder; a run
-  // killed outright leaves it, and the next run removes it
-  // (docs/development/releases.md).
+  // here. Every way out puts the search list back first and removes the folder
+  // once the list reads back as it was; a run killed outright leaves it, and
+  // the next run restores the list and removes it (docs/development/releases.md).
   const temp = mkdtempSync(join(places.temp, "clawtrate-signing-"));
   writeFileSync(join(temp, "pid"), String(process.pid), { mode: 0o600 });
-  let restoreList: (() => void) | null = null;
-  // This run made `out` (its version is one no folder used) and is past the
-  // dist check, so after a failure both are its own: a partial folder and
-  // dist are removed, and a fully staged release (release.json) never is.
-  const madeOut = !existsSync(out);
+  let restoreList: RestoreList | null = null;
   let succeeded = false;
+  /** Puts the list back; on failure prints the command and keeps the folder for the next run. */
   const putBack = () => {
     try {
       restoreList?.();
+      return true;
     } catch (error) {
       console.error((error as Error).message);
+      return false;
     }
   };
+  /** Removes this run's own dist and unfinished folder; names anything it did not make. */
   const clearFailed = () => {
-    rmSync(join(appDir, "dist"), { recursive: true, force: true });
-    if (madeOut && existsSync(out) && !existsSync(join(out, "release.json")))
-      rmSync(out, { recursive: true, force: true });
+    for (const folder of [dist, out]) {
+      if (!existsSync(folder)) continue;
+      if (folder === out && existsSync(join(out, "release.json"))) continue;
+      if (reservedBy(folder, owner)) rmSync(folder, { recursive: true, force: true });
+      else console.log(`Left ${folder} in place: this run cannot tell it made it.`);
+    }
   };
-  const remove = () => {
-    putBack();
-    rmSync(temp, { recursive: true, force: true });
+  /** Restore first; then the artifacts; then the folder, only once the list is back. */
+  const finish = (failed: boolean) => {
+    const restored = putBack();
+    if (failed)
+      try {
+        clearFailed();
+      } catch (error) {
+        console.error(`Could not remove this run's output: ${(error as Error).message}`);
+      }
+    if (restored) rmSync(temp, { recursive: true, force: true });
+    else if (!lock.keep) {
+      lock.keep = true;
+      console.error(
+        `Kept ${temp} with its ${SEARCH_LIST_FILE}: the next pnpm release:beta restores the search list from it.`,
+      );
+    }
+  };
+  // An exit the code did not plan for: put everything back, then give up the lock.
+  const atExit = () => {
+    finish(!succeeded);
+    if (!lock.keep) lock.release();
   };
   let building: StartedBuild | null = null;
   let interrupting = false;
@@ -776,12 +934,12 @@ export async function prepare(
     if (interrupting) return;
     interrupting = true;
     void (building?.stop() ?? Promise.resolve()).finally(() => {
-      clearFailed();
-      remove();
+      process.off("exit", atExit);
+      atExit();
       process.exit(130);
     });
   };
-  process.on("exit", remove);
+  process.on("exit", atExit);
   process.on("SIGINT", interrupted);
   process.on("SIGTERM", interrupted);
   try {
@@ -789,17 +947,17 @@ export async function prepare(
     for (const name of [CERTIFICATE_FILE, KEY_FILE])
       if (existsSync(join(temp, name))) stop(`${name} still exists. Nothing was built.`);
     // For the build only: restored as soon as it ends, and on every way out.
-    restoreList = searchListForBuild(runner, signing.keychain, temp);
+    searchListForBuild(runner, signing.keychain, temp, (restore) => (restoreList = restore));
     building = startBuilding(
       process.execPath,
       [join(APP_DIR, "packaging/candidate-build.ts"), out, version],
-      { env: buildEnvironment(process.env, signing, epoch) },
+      { env: buildEnvironment(process.env, signing, epoch, owner) },
     );
     const build = await building.done;
     building = null;
     // Interrupted while building: the handler exits once the folder is removed.
     if (interrupting) await new Promise(() => undefined);
-    restoreList();
+    restoreList!();
     if (build.status !== 0) {
       // The log is electron-builder's and can name the identity and team; it is not printed.
       const log = buildLog(build.stderr);
@@ -891,8 +1049,10 @@ export async function prepare(
     };
     const record = Buffer.from(`${JSON.stringify(plan, null, 2)}\n`);
     writeFileSync(join(out, "release.json"), record);
+    // Staged: the folder holds exactly the release's files.
+    rmSync(join(out, RESERVATION_FILE));
     const recordSha256 = sha("sha256", record, "hex");
-    rmSync(join(appDir, "dist"), { recursive: true, force: true });
+    if (reservedBy(dist, owner)) rmSync(dist, { recursive: true, force: true });
     succeeded = true;
     console.log(`\nPrepared ${out}`);
     for (const file of plan.files)
@@ -902,11 +1062,12 @@ export async function prepare(
       `\nNothing was published. Keep the release.json digest above: publishing requires it.\nTo publish it: pnpm release:beta --publish ${version} ${recordSha256}`,
     );
   } finally {
-    if (!succeeded && !interrupting) clearFailed();
-    remove();
-    process.off("exit", remove);
-    process.off("SIGINT", interrupted);
-    process.off("SIGTERM", interrupted);
+    if (!interrupting) {
+      finish(!succeeded);
+      process.off("exit", atExit);
+      process.off("SIGINT", interrupted);
+      process.off("SIGTERM", interrupted);
+    }
   }
 }
 

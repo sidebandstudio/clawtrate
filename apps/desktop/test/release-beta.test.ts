@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -18,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { RESERVATION_FILE } from "../packaging/reservation.ts";
 import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,8 +29,10 @@ import {
   NOTARY_PROFILE,
   p12Bytes,
   p8Text,
+  LOCK_FILE,
   prepare,
   publish,
+  takeReleaseLock,
   readSecrets,
   readSignature,
   releaseNotes,
@@ -597,8 +601,9 @@ const builds =
   (appDir: string, signed = "certificate") =>
   (out: string, version: string): RunResult => {
     // candidate-build.ts leaves electron-builder's output in dist.
-    mkdirSync(join(appDir, "dist"));
-    mkdirSync(out);
+    // As candidate-build.ts: it starts from the reserved dist and folder.
+    mkdirSync(join(appDir, "dist"), { recursive: true });
+    mkdirSync(out, { recursive: true });
     for (const key of ["mac-arm64", "mac-x64"]) {
       writeFileSync(join(out, `Clawtrate-${version}-${key}.zip`), `zip of ${key}`);
       writeFileSync(
@@ -741,7 +746,7 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     const { runner, seen, searchList } = tools((out) => {
       // As the real failure left them: dist with the arm64 app, and an empty version folder.
       mkdirSync(join(place.appDir, "dist", "mac-arm64"), { recursive: true });
-      mkdirSync(out);
+      mkdirSync(out, { recursive: true });
       return fail("Error: Packaging failed (exit 1).");
     });
     expect(await stopped(() => prepare(runner, NOW, place))).toContain("The build failed");
@@ -1742,7 +1747,7 @@ describe("stopping a release while it builds", () => {
       "const { spawn } = require('node:child_process');",
       "const fs = require('node:fs');",
       // What a build leaves: dist and the version's folder.
-      "fs.mkdirSync(process.argv[2], { recursive: true }); fs.mkdirSync(process.argv[3]);",
+      "fs.mkdirSync(process.argv[2], { recursive: true }); fs.mkdirSync(process.argv[3], { recursive: true });",
       "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
       "fs.writeFileSync(process.argv[1], process.pid + ' ' + child.pid);",
       "setInterval(() => {}, 1000);",
@@ -1777,8 +1782,11 @@ describe("stopping a release while it builds", () => {
         await sleep(100);
       }
       started = readFileSync(pids, "utf8").split(" ").map(Number);
-      expect(readdirSync(place.temp)).toHaveLength(1);
-      const signing = join(place.temp, readdirSync(place.temp)[0]!);
+      // The run's lock and its signing folder.
+      const held = readdirSync(place.temp).sort();
+      expect(held).toHaveLength(2);
+      expect(held[0]).toBe("clawtrate-release.lock");
+      const signing = join(place.temp, held[1]!);
       // While it builds, the release keychain is first on the list.
       expect(JSON.parse(readFileSync(list, "utf8"))).toEqual([
         join(signing, "release.keychain-db"),
@@ -1812,5 +1820,174 @@ describe("the beta's release notes", () => {
     expect(notes).toContain("running OpenClaw's own program before you agree");
     // Nothing offers a connection without typing on an existing install.
     expect(notes).not.toMatch(/without typing|automatically|one click/i);
+  });
+});
+
+describe("the search list is put back before anything is forgotten", () => {
+  let place: ReturnType<typeof places>;
+  beforeEach(() => {
+    place = places();
+  });
+  afterEach(() => {
+    if (existsSync(place.staging)) chmodSync(place.staging, 0o755);
+    rmSync(place.root, { recursive: true, force: true });
+  });
+
+  /** The run's signing folder, if it kept one. */
+  const signingFolders = () =>
+    readdirSync(place.temp).filter((name) => name.startsWith("clawtrate-signing-"));
+
+  it.each(["the restore", "the readback"])(
+    "keeps the signing folder, its record and the lock, and prints the command, when %s fails",
+    async (failing) => {
+      const { runner } = tools(builds(place.appDir));
+      // Once the release keychain is first, putting the list back fails, or
+      // seems to succeed but reads back as another list.
+      let changed = false;
+      const breaking: Run = (command, args, options) => {
+        if (command === SECURITY && args[0] === "list-keychains") {
+          const setting = args[3] === "-s";
+          if (setting && args[4] !== SEARCH_LIST[0]) changed = true;
+          else if (changed && setting && failing === "the restore") return fail("no write");
+          else if (changed && !setting && failing === "the readback")
+            return ok('    "/Volumes/Keys/other.keychain-db"\n');
+        }
+        return runner(command, args, options);
+      };
+      const text = await stopped(() => prepare(breaking, NOW, place));
+      expect(text).toContain(
+        "The keychain search list could not be restored. Set it back with: /usr/bin/security list-keychains -d user -s '/Volumes/Keys/login.keychain-db' '/Volumes/Keys/Work Keys.keychain-db'",
+      );
+      const [kept] = signingFolders();
+      expect(kept).toBeDefined();
+      expect(JSON.parse(readFileSync(join(place.temp, kept!, "search-list.json"), "utf8"))).toEqual(
+        SEARCH_LIST,
+      );
+      expect(existsSync(join(place.temp, LOCK_FILE))).toBe(true);
+      expect(output.join("\n")).toContain(
+        "search-list.json: the next pnpm release:beta restores the search list from it.",
+      );
+      expect(existsSync(join(place.staging, VERSION, "release.json"))).toBe(false);
+    },
+  );
+
+  it("keeps the folder and the record when the first change fails and so does putting the list back", async () => {
+    const { runner, calls } = tools(builds(place.appDir));
+    const refusing: Run = (command, args, options) =>
+      command === SECURITY && args[0] === "list-keychains" && args[3] === "-s"
+        ? fail("no write")
+        : runner(command, args, options);
+    const text = await stopped(() => prepare(refusing, NOW, place));
+    expect(text).toBe(
+      "Could not put the release keychain on the keychain search list. Nothing was built.",
+    );
+    // The restore was tried, failed, and named its command; the record stays.
+    expect(output.join("\n")).toContain("The keychain search list could not be restored.");
+    expect(calls.some((call) => call.command === process.execPath)).toBe(false);
+    const [kept] = signingFolders();
+    expect(readdirSync(join(place.temp, kept!))).toContain("search-list.json");
+    expect(existsSync(join(place.temp, LOCK_FILE))).toBe(true);
+  });
+
+  it("restores the list first when removing the run's output fails", async () => {
+    const { runner, searchList } = tools((out) => {
+      mkdirSync(join(place.appDir, "dist"), { recursive: true });
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, "partial"), "x");
+      // Removing the folder now fails: its parent cannot be written.
+      chmodSync(place.staging, 0o555);
+      return fail("Error: Packaging failed (exit 1).");
+    });
+    expect(await stopped(() => prepare(runner, NOW, place))).toContain("The build failed");
+    expect(searchList).toEqual(SEARCH_LIST);
+    expect(output.join("\n")).toContain("Could not remove this run's output:");
+    expect(signingFolders()).toEqual([]);
+    expect(existsSync(join(place.temp, LOCK_FILE))).toBe(false);
+  });
+});
+
+describe("one release at a time, and only its own output", () => {
+  let place: ReturnType<typeof places>;
+  beforeEach(() => {
+    place = places();
+  });
+  afterEach(() => rmSync(place.root, { recursive: true, force: true }));
+
+  it("lets one admission hold the lock, refuses the second, and takes over one whose run has ended", () => {
+    const release = takeReleaseLock(place.temp);
+    try {
+      expect(() => takeReleaseLock(place.temp)).toThrow(
+        `Another release (pid ${process.pid}) holds ${join(place.temp, LOCK_FILE)}. Let it finish first.`,
+      );
+    } finally {
+      release();
+    }
+    expect(existsSync(join(place.temp, LOCK_FILE))).toBe(false);
+    writeFileSync(
+      join(place.temp, LOCK_FILE),
+      JSON.stringify({ pid: 99999999, start: "Thu Jan  1 00:00:00 1970", token: "x" }),
+    );
+    const again = takeReleaseLock(place.temp);
+    expect(output.join("\n")).toContain("from a release (pid 99999999) that has ended.");
+    again();
+  });
+
+  it("refuses to prepare while another release holds the lock, before touching anything", async () => {
+    const release = takeReleaseLock(place.temp);
+    try {
+      const { runner, calls } = tools(builds(place.appDir));
+      expect(await stopped(() => prepare(runner, NOW, place))).toContain("Another release");
+      expect(calls).toEqual([]);
+      expect(existsSync(join(place.appDir, "dist"))).toBe(false);
+    } finally {
+      release();
+    }
+  });
+
+  it("leaves output another run made after the preflight, and removes only its own", async () => {
+    // Someone makes the version's folder after this run checked the staging
+    // folder but before it reserved its output.
+    const { runner } = tools(builds(place.appDir));
+    const racing: Run = (command, args, options) => {
+      if (command === "git" && args[0] === "ls-remote") {
+        mkdirSync(join(place.staging, VERSION), { recursive: true });
+        writeFileSync(join(place.staging, VERSION, "theirs"), "another build");
+      }
+      return runner(command, args, options);
+    };
+    expect(await stopped(() => prepare(racing, NOW, place))).toBe(
+      `${join(place.staging, VERSION)} appeared before this run could reserve it. It was left as it is.`,
+    );
+    expect(readFileSync(join(place.staging, VERSION, "theirs"), "utf8")).toBe("another build");
+    // The dist this run had reserved is its own, and is gone.
+    expect(existsSync(join(place.appDir, "dist"))).toBe(false);
+  });
+
+  it("names and leaves a dist that no longer carries this run's marker after a failed build", async () => {
+    const { runner } = tools((out) => {
+      // Replaced while the build ran: the marker is gone.
+      rmSync(join(place.appDir, "dist"), { recursive: true });
+      mkdirSync(join(place.appDir, "dist", "someone-else"), { recursive: true });
+      mkdirSync(out, { recursive: true });
+      return fail("Error: Packaging failed (exit 1).");
+    });
+    expect(await stopped(() => prepare(runner, NOW, place))).toContain("The build failed");
+    expect(existsSync(join(place.appDir, "dist", "someone-else"))).toBe(true);
+    expect(output.join("\n")).toContain(
+      `Left ${join(place.appDir, "dist")} in place: this run cannot tell it made it.`,
+    );
+    // Its own version folder, still marked, is removed.
+    expect(existsSync(join(place.staging, VERSION))).toBe(false);
+  });
+
+  it("reserves dist and the version's folder with its marker before the build, and stages without it", async () => {
+    let seen: string[][] = [];
+    const { runner } = tools((out, version) => {
+      seen = [readdirSync(join(place.appDir, "dist")), readdirSync(out)];
+      return builds(place.appDir)(out, version);
+    });
+    await prepare(runner, NOW, place);
+    expect(seen).toEqual([[RESERVATION_FILE], [RESERVATION_FILE]]);
+    expect(readdirSync(join(place.staging, VERSION))).not.toContain(RESERVATION_FILE);
   });
 });
