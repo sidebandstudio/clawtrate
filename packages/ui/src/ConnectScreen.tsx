@@ -1,4 +1,10 @@
-import type { ConnectionError, ConnectionState, DiscoveryState, HostInfo } from "@clawtrate/core";
+import type {
+  ConnectionError,
+  ConnectionState,
+  DiscoveryState,
+  HostInfo,
+  SetupState,
+} from "@clawtrate/core";
 import {
   useEffect,
   useRef,
@@ -13,7 +19,8 @@ import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
 import { gatewayLabel } from "./format.ts";
-import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
+import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
+import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
 
 export const PRODUCT_NAME = "Clawtrate";
 export const SLOGAN = "Your OpenClaw agents, orchestrated.";
@@ -512,12 +519,15 @@ export function ConnectScreen({
   connection,
   discovery,
   info,
+  setup,
   mismatch = null,
   inert = false,
 }: {
   connection: ConnectionState;
   discovery: DiscoveryState;
   info: HostInfo;
+  /** Setting up on the host's computer, where the host offers it (`info.setup`). */
+  setup?: SetupState | undefined;
   /** The latest protocol mismatch, kept while a retry repeats the handshake. */
   mismatch?: ConnectionError | null;
   /** Set while Settings covers the screen. */
@@ -527,6 +537,27 @@ export function ConnectScreen({
   const host = `${info.kind === "web" ? "Web preview" : "Desktop"} ${info.version}`;
   const loadingBots = connection.status === "connected" && discovery.status === "loading";
   const settingUp = loadingBots || connection.status === "connecting";
+  // The first question, when the host offers setup and no gateway is saved (docs/design/setup.md §3).
+  // A setup the host has under way (another window, or a reload) opens where it stands.
+  const [view, setView] = useState<SetupView>(() =>
+    setup && setup.phase !== "idle" ? "here" : "first",
+  );
+  const setupOwns =
+    setup !== undefined &&
+    (setup.phase === "confirming" ||
+      setup.phase === "connecting" ||
+      setup.phase === "failed" ||
+      setup.phase === "installing" ||
+      setup.phase === "install-failed" ||
+      (setup.phase === "done" && connection.status !== "connected"));
+  const noGateway = connection.status === "idle" && connection.gatewayUrl === null;
+  const showSetup =
+    info.setup !== undefined &&
+    setup !== undefined &&
+    (setupOwns || (noGateway && view !== "advanced"));
+  // Advanced: the address-and-token form as it was, with Back to the first question.
+  const advancedBack =
+    info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
   return (
     <main className="connect" inert={inert}>
       <div className="connect-drag" />
@@ -553,8 +584,30 @@ export function ConnectScreen({
               {(connection.deviceId ?? pairing.deviceId).slice(0, 8)} · {host}
             </p>
           </>
+        ) : showSetup ? (
+          <SetupFlow
+            view={view === "advanced" ? "here" : view}
+            onView={setView}
+            setup={setup!}
+            connection={connection}
+            info={info}
+          />
         ) : (
           <>
+            {advancedBack && (
+              <div className="s-top">
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="quiet"
+                  data-size="sm"
+                  onClick={advancedBack}
+                >
+                  <BackIcon />
+                  Back
+                </button>
+              </div>
+            )}
             <header className="connect-brand">
               <img src={logoUrl} alt="" width={56} height={56} />
               <h1>{PRODUCT_NAME}</h1>
