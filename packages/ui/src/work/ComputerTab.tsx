@@ -169,13 +169,15 @@ export function ComputerTab(props: ComputerTabProps) {
   const picture = pictureAge(drawn, now);
 
   // After a release that was to answer in the chat: the full view closes and focus goes to the card.
-  const answerInChat = useRef(false);
+  // The question it was offered for, kept from the click: a card rendered since is not it.
+  const answerInChat = useRef<{ questionId: string | undefined } | null>(null);
   useEffect(() => {
     if (!control) return;
-    if (control.status === "none" && answerInChat.current) {
-      answerInChat.current = false;
+    const asked = answerInChat.current;
+    if (control.status === "none" && asked) {
+      answerInChat.current = null;
       setFullFor(null);
-      props.onShowQuestion();
+      props.onShowQuestion(asked.questionId);
     }
     if (control.status === "granted")
       announce(`You have control of ${name}'s browser. ${words.pausedLine(name)}`);
@@ -347,7 +349,7 @@ export function ComputerTab(props: ComputerTabProps) {
           onCancel={() => send({ type: "computerCancelTake" })}
           onRelease={(answer) => send({ type: "computerRelease", answer })}
           onAnswerInChat={() => {
-            answerInChat.current = true;
+            answerInChat.current = { questionId: question?.id };
             send({ type: "computerRelease", answer: null });
           }}
           onCheck={() => send({ type: "computerCheck" })}

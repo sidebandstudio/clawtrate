@@ -6,7 +6,8 @@
 //   &computer=noplugin|unconfigured|unused|closed|ended|tabclosed|browsergone|
 //             draining|control|busy|unsettled|conflict|stuck|active|elsewhere|
 //             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching|
-//             conflict-window|conflict-ends|tabsunknown|laterquestion|resized
+//             conflict-window|conflict-ends|tabsunknown|laterquestion|complexlater|resized
+//             (complexlater: complexquestion with laterquestion's later answered card)
 //             (resized: typed text makes the page half as wide, in a frame that can't be decoded)
 //   &firstwatch=1     the one-time note before the first watch
 //   &takerace=grant   a grant that arrives after the take was cancelled
@@ -59,6 +60,7 @@ export const COMPUTER_STATES = [
   "desktop",
   "tabsunknown",
   "laterquestion",
+  "complexlater",
   "resized",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
@@ -216,9 +218,10 @@ export function withComputerRuns(
           ]
         : []),
     ];
-    const asking = active ? [] : [question(now, run.id, params.mode === "complexquestion")];
+    const complex = params.mode === "complexquestion" || params.mode === "complexlater";
+    const asking = active ? [] : [question(now, run.id, complex)];
     // A question asked after the pending one and already answered: its card comes later.
-    if (params.mode === "laterquestion")
+    if (params.mode === "laterquestion" || params.mode === "complexlater")
       asking.push({
         ...question(now, run.id, false),
         id: "ask_holds_checked",

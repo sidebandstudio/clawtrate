@@ -213,6 +213,20 @@ test.describe("the full view on the desktop", () => {
     await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
   });
 
+  test("F-145: answering in the chat goes to the question it was offered for, not a later card below it", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=complexlater`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Give back control and answer" }).click();
+    await expect(fullView(page)).toHaveCount(0);
+    const card = page.locator("#card-question-ask_library_sign_in");
+    await expect(card).toBeInViewport();
+    await expect
+      .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
+  });
+
   test("F-144: the waiting banner's Take control opens the full view and asks for control; Show the question goes to the card", async ({
     page,
   }) => {
