@@ -22,7 +22,8 @@ const snapshot: DesktopUpdateSnapshot = {
   pendingTrack: null,
   preferenceIssue: null,
   state: { kind: "not-checked" },
-  install: { kind: "unavailable-in-this-build" },
+  lastAttempt: null,
+  install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
 };
 function render(
   state: DesktopUpdateState,
@@ -75,6 +76,25 @@ const cases: Array<[DesktopUpdateState, string, string[], boolean]> = [
     "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.",
     [],
     true,
+  ],
+  // A definite refusal leaves nothing pending, so the person can check again.
+  [
+    { kind: "handoff-failed", version: "1.1.0", reason: "mac-updater-refused" },
+    "The macOS updater refused the update before receiving it. Nothing was installed.",
+    ["Check for Updates"],
+    false,
+  ],
+  [
+    { kind: "handoff-failed", version: "1.1.0", reason: "installer-failed" },
+    "Clawtrate couldn’t hand the update to the system updater.",
+    ["Check for Updates"],
+    false,
+  ],
+  [
+    { kind: "handoff-unconfirmed", version: "1.1.0", offerId: "opaque" },
+    "Clawtrate couldn’t confirm that the macOS updater accepted the update.",
+    [],
+    false,
   ],
 ];
 it.each(cases)(
@@ -162,6 +182,7 @@ it("F-231: names the host it checks, but not as where a download comes from", ()
 });
 
 it.each([
+  ["attempt-not-read", "Couldn't read the last update attempt."],
   ["preferences-not-read", "Couldn't read the saved update settings."],
   ["last-check-not-saved", "Couldn't save the time of the last check."],
   ["update-folder-unavailable", "Couldn't prepare update storage on this device."],

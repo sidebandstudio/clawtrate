@@ -6,13 +6,17 @@ import type {
   DesktopUpdateFailure,
   KeyValueStore,
   UpdateTrack,
+  UpdateInstallRefusal,
 } from "@clawtrate/core";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clearUpdateDirectory, prepareUpdateDirectory } from "../private-update-directory.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
+import { watchUpdateFile } from "../update-file-watch.ts";
 import { UpdateEngine } from "./engine.ts";
-import { readCheck } from "./preferences.ts";
+import type { UpdateInstaller } from "./install.ts";
+import { readAttempt, attemptOutcome } from "./attempt.ts";
+import { readCheck, type StoredUpdatePreferences } from "./preferences.ts";
 import { fileKeyFor } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
@@ -25,9 +29,18 @@ export interface UpdateServiceOptions {
   downloadDir: string;
   feeds: Record<UpdateTrack, string | null>;
   releaseDate: string | null;
-  store: Pick<KeyValueStore, "get" | "set">;
+  store: Pick<KeyValueStore, "get" | "set"> & {
+    readPreferences?: () => Promise<StoredUpdatePreferences>;
+  };
   changed: (snapshot: DesktopUpdateSnapshot) => void;
+  installer?: UpdateInstaller;
+  quitAfterLaunch?: () => void;
   loopbackHttpForTests?: LoopbackHttpForTests;
+}
+
+function idleCapability(installer?: UpdateInstaller): DesktopUpdateSnapshot["install"] {
+  const reason = installer ? (installer.unavailable ?? "no-verified-download") : "build-not-signed";
+  return { kind: "unavailable-in-this-build", reason };
 }
 
 function failed(reason: DesktopUpdateFailure): DesktopUpdateState {
@@ -49,8 +62,12 @@ function unavailable(
 export class DesktopUpdateService {
   private engine: UpdateEngine | null = null;
   private work: Promise<void> | null = null;
+  private pendingInstall: DesktopUpdateSnapshot["install"] | null = null;
+  private fileWatch: ReturnType<typeof watchUpdateFile> | null = null;
   private switching = false;
   private closed = false;
+  private nativeSubmitted = false;
+  private readonly shutdownSignal = new AbortController();
   private readonly options: UpdateServiceOptions;
   private snapshot: DesktopUpdateSnapshot;
   private constructor(options: UpdateServiceOptions, snapshot: DesktopUpdateSnapshot) {
@@ -69,18 +86,39 @@ export class DesktopUpdateService {
       tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? null;
     let lastCheck: DesktopUpdateSnapshot["lastCheck"] = null;
     let preferenceIssue: DesktopUpdateSnapshot["preferenceIssue"] = null;
+    let lastAttempt: DesktopUpdateSnapshot["lastAttempt"] = null;
+    try {
+      const stored = await options.store.readPreferences?.();
+      if (stored?.invalid.size)
+        preferenceIssue = stored.invalid.has("attempt")
+          ? "attempt-not-read"
+          : "preferences-not-read";
+      const saved = stored ? stored.prefs.selectedTrack : await options.store.get("selectedTrack");
+      selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
+      if (stored) lastCheck = stored.prefs.lastCheck ?? null;
+      else {
+        // A bad last check must not hide the attempt read below.
+        try {
+          const raw = await options.store.get("lastCheck");
+          if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
+        } catch {
+          preferenceIssue = "preferences-not-read";
+        }
+      }
+      try {
+        const raw = stored ? null : await options.store.get("attempt");
+        const attempt = stored?.prefs.attempt ?? (raw ? readAttempt(JSON.parse(raw)) : null);
+        if (attempt) lastAttempt = attemptOutcome(attempt, version ? formatVersion(version) : null);
+      } catch {
+        preferenceIssue = "attempt-not-read";
+      }
+    } catch {
+      preferenceIssue = "preferences-not-read";
+    }
     try {
       await clearUpdateDirectory(options.downloadDir);
     } catch {
-      preferenceIssue = "update-folder-unavailable";
-    }
-    try {
-      const saved = await options.store.get("selectedTrack");
-      selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
-      const raw = await options.store.get("lastCheck");
-      if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
-    } catch {
-      preferenceIssue = "preferences-not-read";
+      preferenceIssue ??= "update-folder-unavailable";
     }
     return new DesktopUpdateService(options, {
       revision: 0,
@@ -94,21 +132,68 @@ export class DesktopUpdateService {
       state: unavailable(options, version ? options.version : null, selectedTrack) ?? {
         kind: "not-checked",
       },
-      install: { kind: "unavailable-in-this-build" },
+      install: idleCapability(options.installer),
+      lastAttempt,
     });
   }
 
   get(): DesktopUpdateSnapshot {
+    if (this.snapshot.install.kind === "restart-available" && !this.fileWatch?.current())
+      this.changedFile();
     return this.snapshot;
   }
 
+  private changedFile() {
+    if (this.snapshot.install.kind === "restart-available") {
+      this.retireFile();
+      this.publish({
+        kind: "failed",
+        stage: "download",
+        reason: "artifact-changed",
+        retry: "check",
+      });
+    }
+  }
+
+  private retireFile() {
+    this.fileWatch?.close();
+    this.fileWatch = null;
+    this.options.installer?.retire?.();
+  }
+
   private publish(state: DesktopUpdateState) {
-    this.snapshot = { ...this.snapshot, state, revision: this.snapshot.revision + 1 };
+    let install = idleCapability(this.options.installer);
+    if (state.kind === "verified") install = this.pendingInstall ?? install;
+    else if (state.kind === "failed" && state.reason === "artifact-changed")
+      install = { kind: "unavailable-in-this-build", reason: state.reason };
+    else if (
+      state.kind === "handoff-failed" &&
+      state.reason !== "attempt-not-saved" &&
+      state.reason !== "installer-failed" &&
+      state.reason !== "mac-updater-refused"
+    )
+      install = { kind: "unavailable-in-this-build", reason: state.reason };
+    this.pendingInstall = null;
+    if (install.kind === "restart-available" && !this.fileWatch?.current()) {
+      this.retireFile();
+      install = { kind: "unavailable-in-this-build", reason: "artifact-changed" };
+      state = { kind: "failed", stage: "download", reason: "artifact-changed", retry: "check" };
+    }
+    this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
     try {
       this.options.changed(this.snapshot);
     } catch {
       // A closing renderer cannot interrupt hashing or change a transfer result.
     }
+  }
+
+  private get restarting() {
+    return (
+      this.snapshot.state.kind === "preparing" ||
+      this.snapshot.state.kind === "handing-off" ||
+      this.snapshot.state.kind === "handed-to-system" ||
+      this.snapshot.state.kind === "handoff-unconfirmed"
+    );
   }
 
   private reply(outcome: DesktopUpdateOutcome): DesktopUpdateReply {
@@ -117,7 +202,7 @@ export class DesktopUpdateService {
 
   async chooseTrack(track: unknown): Promise<DesktopUpdateReply> {
     if (this.closed) return this.reply("invalid");
-    if (this.switching) return this.reply("busy");
+    if (this.restarting || this.switching) return this.reply("busy");
     if (
       (track !== "stable" && track !== "nightly") ||
       !this.snapshot.tracks.some((t) => t.track === track)
@@ -125,6 +210,7 @@ export class DesktopUpdateService {
       return this.reply("invalid");
     if (track === this.snapshot.selectedTrack) return this.reply("accepted");
     this.switching = true;
+    this.retireFile();
     const previous = this.engine;
     this.engine = null;
     previous?.cancel();
@@ -164,13 +250,22 @@ export class DesktopUpdateService {
   shutdown(): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingInstall = null;
+    this.shutdownSignal.abort();
+    this.retireFile();
     this.engine?.cancel();
     this.engine = null;
     this.snapshot = {
       ...this.snapshot,
       revision: this.snapshot.revision + 1,
+      install: idleCapability(this.options.installer),
       pendingTrack: null,
-      state: { kind: "not-checked" },
+      state:
+        this.snapshot.state.kind === "handing-off" && this.nativeSubmitted
+          ? { ...this.snapshot.state, kind: "handoff-unconfirmed" }
+          : this.restarting
+            ? this.snapshot.state
+            : { kind: "not-checked" },
     };
   }
 
@@ -182,6 +277,7 @@ export class DesktopUpdateService {
     const valid = await engine.recheckFile(offerId, this.snapshot.selectedTrack, state.version);
     if (this.engine !== engine || this.snapshot.state !== state) return false;
     if (!valid) {
+      this.retireFile();
       this.publish({
         kind: "failed",
         stage: "download",
@@ -222,7 +318,7 @@ export class DesktopUpdateService {
 
   async check(expectedTrack: unknown, expectedRevision: unknown): Promise<DesktopUpdateReply> {
     if (this.closed) return this.reply("invalid");
-    if (this.switching || this.work) return this.reply("busy");
+    if (this.restarting || this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     if (
       typeof expectedRevision !== "number" ||
@@ -236,6 +332,7 @@ export class DesktopUpdateService {
       return this.reply("stale");
     if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
+    this.retireFile();
     this.engine?.cancel();
     const offerId = selectedTrack + "-" + randomUUID();
     let checkedAt: string | null = null;
@@ -322,7 +419,7 @@ export class DesktopUpdateService {
     const { state } = this.snapshot;
     const engine = this.engine;
     if (this.closed) return this.reply("invalid");
-    if (this.switching || this.work) return this.reply("busy");
+    if (this.restarting || this.switching || this.work) return this.reply("busy");
     if (typeof id !== "string" || !id) return this.reply("invalid");
     if (!engine || state.kind !== "offered" || state.offerId !== id) return this.reply("stale");
     const expected = engine.offeredBytes;
@@ -348,17 +445,129 @@ export class DesktopUpdateService {
         }
         if (this.engine !== engine) return;
         const result = await engine.download();
-        if (result.kind === "ready")
+        if (this.engine !== engine) return;
+        if (result.kind === "ready") {
+          const installer = this.options.installer;
+          let install = idleCapability(this.options.installer);
+          if (installer && !installer.unavailable) {
+            const file = await engine.verifiedArtifact(
+              id,
+              this.snapshot.selectedTrack,
+              result.version,
+            );
+            if (this.engine !== engine) return;
+            if (!file) return downloadFailure("artifact-changed");
+            try {
+              this.fileWatch = watchUpdateFile(file.path, () => this.changedFile());
+            } catch {
+              return downloadFailure("artifact-changed");
+            }
+            const reason = await installer.inspect(file).catch(() => "inspection-failed" as const);
+            if (this.engine !== engine) return;
+            if (!this.fileWatch?.current() || reason === "artifact-changed") {
+              this.retireFile();
+              return downloadFailure("artifact-changed");
+            }
+            if (reason) this.retireFile();
+            install = reason
+              ? { kind: "unavailable-in-this-build", reason }
+              : {
+                  kind: "restart-available",
+                  offerId: id,
+                  ...(installer.completesOnQuit && { completesOnQuit: true }),
+                };
+          }
+          this.pendingInstall = install;
           return {
             kind: "verified",
             offerId: state.offerId,
             version: result.version,
             size: expected,
           };
+        }
         if (result.kind === "failed") return downloadFailure(result.cause);
       },
       downloadFailure("write-failed"),
     );
     return this.reply(this.engine === engine ? "accepted" : "superseded");
+  }
+
+  async restart(id: unknown): Promise<DesktopUpdateReply> {
+    const { state, selectedTrack, install, runningVersion } = this.get();
+    const engine = this.engine;
+    const installer = this.options.installer;
+    if (this.closed || typeof id !== "string" || !id) return this.reply("invalid");
+    if (this.restarting || this.switching || this.work) return this.reply("busy");
+    if (state.kind !== "verified" || state.offerId !== id) return this.reply("stale");
+    if (
+      !installer ||
+      !engine ||
+      !selectedTrack ||
+      !runningVersion ||
+      install.kind !== "restart-available" ||
+      install.offerId !== id
+    )
+      return this.reply("invalid");
+    const version = state.version;
+    const fail = (
+      reason:
+        UpdateInstallRefusal | "attempt-not-saved" | "installer-failed" | "mac-updater-refused",
+    ) => {
+      this.retireFile();
+      this.publish({ kind: "handoff-failed", version, reason });
+      return this.reply("accepted");
+    };
+    this.publish({ kind: "preparing", version, offerId: id });
+    const file = await engine.verifiedArtifact(id, selectedTrack, version);
+    if (this.closed) return this.reply("superseded");
+    if (!file) return fail("artifact-changed");
+    const refused = await installer.inspect(file).catch(() => "inspection-failed" as const);
+    if (this.closed) return this.reply("superseded");
+    if (refused) return fail(refused);
+    if (!this.fileWatch?.current()) return fail("artifact-changed");
+    try {
+      await this.options.store.set(
+        "attempt",
+        JSON.stringify({
+          target: version,
+          track: selectedTrack,
+          from: runningVersion,
+          time: new Date().toISOString(),
+          phase: "handoff",
+        }),
+      );
+    } catch {
+      return this.closed ? this.reply("superseded") : fail("attempt-not-saved");
+    }
+    if (this.closed) return this.reply("superseded");
+    this.publish({ kind: "handing-off", version, offerId: id });
+    if (this.closed) return this.reply("superseded");
+    if (!this.fileWatch?.current()) return fail("artifact-changed");
+    let handed = false;
+    const reason = await installer
+      .launch(
+        file,
+        this.shutdownSignal.signal,
+        () => {
+          if (!this.closed && !handed && installer.completesOnQuit) {
+            handed = true;
+            this.publish({ kind: "handed-to-system", version, offerId: id });
+          }
+        },
+        () => {
+          this.nativeSubmitted = true;
+        },
+      )
+      .catch(() => "installer-failed" as const);
+    if (this.closed) return this.reply("superseded");
+    this.retireFile();
+    if (handed) return this.reply("accepted");
+    if (this.nativeSubmitted) {
+      this.publish({ kind: "handoff-unconfirmed", version, offerId: id });
+      return this.reply("accepted");
+    }
+    if (reason) return fail(reason);
+    this.options.quitAfterLaunch?.();
+    return this.reply("accepted");
   }
 }

@@ -19,7 +19,8 @@ const base: DesktopUpdateSnapshot = {
   pendingTrack: null,
   preferenceIssue: null,
   lastCheck: null,
-  install: { kind: "unavailable-in-this-build" },
+  lastAttempt: null,
+  install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
   state: { kind: "not-checked" },
 };
 function harness() {

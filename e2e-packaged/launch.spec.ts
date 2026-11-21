@@ -28,6 +28,7 @@ import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
 import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
+import { macSigningRequested, windowsSigningRequested } from "../apps/desktop/packaging/signing.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { recordSuccessor } from "../e2e/run-record.ts";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
@@ -133,6 +134,32 @@ test("opens its window from the packaged app on the connect screen", async () =>
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+  // This checks the packaged build capability before a verified offer exists.
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  // The signing variables that configured the build, as in apps/desktop/packaging/update-defines.ts.
+  const signed = WINDOWS ? windowsSigningRequested(process.env) : macSigningRequested(process.env);
+  expect(updates).toMatchObject({
+    install: {
+      kind: "unavailable-in-this-build",
+      reason: !signed
+        ? "build-not-signed"
+        : WINDOWS
+          ? "windows-install-pending-trial"
+          : "no-verified-download",
+    },
+    lastAttempt: null,
+  });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.restart("absent"),
+    ),
+  ).toMatchObject({ outcome: "stale", snapshot: { lastAttempt: null } });
   // A packaged app does not look for the development gateway.
   await expect(page.getByRole("button", { name: "Use the development gateway" })).toHaveCount(0);
 

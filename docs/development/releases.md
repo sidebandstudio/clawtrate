@@ -16,7 +16,7 @@ The owner has authorized publishing Mac betas. The track reads "Beta" in the app
   - `APPLE_CLAWTRATE_NOTARY_ISSUER_ID`: the issuer ID shown above the keys in App Store Connect.
 - **GitHub**: `gh` signed in as someone who may create releases in `sidebandstudio/clawtrate`. Pages is on, with GitHub Actions as its source and `clawtrate.dev` as its custom domain, so the Site workflow can deploy. That workflow is the site's only deploy. It deploys nothing until `site/index.html` is on `main` and a beta is published, while a `__CLAWTRATE_…__` template token is left, or while `site/install.sh` pins the placeholder `APPLE_CLAWTRATE_TEAM_ID` or another team than the beta's. Before the first beta, put the Developer ID team in `CLAWTRATE_TEAM_ID` in `site/install.sh`.
 - **The Mac**: Xcode's command line tools (`codesign`, `spctl`, `xcrun stapler`, `notarytool`), Node 26 and pnpm, and Apple's Developer ID intermediate certificate (Xcode installs it; otherwise it is at [Apple's certificate authority](https://www.apple.com/certificateauthority/)).
-- **The app**: an update installs in place only from a Developer ID build that has the install step (#202) and Restart (#204). A beta cut before they are on `main` still checks and downloads its successor, but cannot restart into it.
+- **The app**: an update installs in place only from a Developer ID build that has the install step (#202, on `main`) and the Restart screen (#204). A beta cut before #204 is on `main` still checks and downloads its successor, but cannot restart into it.
 
 ### Cut a beta
 
@@ -72,7 +72,7 @@ Use the command preparation printed. It publishes only what was prepared, and:
 5. downloads every file back through its public address and compares its size and SHA-512 with the record;
 6. waits up to 15 minutes for `https://clawtrate.dev/updates/beta/feed.json` to serve the new feed. Publishing the release starts the Site workflow. Pages can cache the old feed for up to ten minutes. If the wait ends, run the Site workflow by hand and check the feed.
 
-A beta on the Beta track then finds it with Check for Updates in Settings → Updates and downloads it when the person chooses. Restart installs it once #202 and #204 are on `main`. New installs come from the site: the download link, or the install script, which reads `latest-mac.json`.
+A beta on the Beta track then finds it with Check for Updates in Settings → Updates and downloads it when the person chooses. Restart installs it once #204 is on `main`; #202, the install step, is. New installs come from the site: the download link, or the install script, which reads `latest-mac.json`.
 
 ### Withdraw a beta
 

@@ -11,7 +11,8 @@ async function unavailable(): Promise<DesktopUpdateSnapshot> {
     lastCheck: null,
     preferenceIssue: null,
     state: { kind: "failed", stage: "check", reason: "no-updater" },
-    install: { kind: "unavailable-in-this-build" },
+    install: { kind: "unavailable-in-this-build", reason: "no-installer-path" },
+    lastAttempt: null,
   };
 }
 
@@ -21,5 +22,6 @@ export const noDesktopUpdates: DesktopUpdates = {
   check: refuse,
   chooseTrack: refuse,
   download: refuse,
+  restart: refuse,
   subscribe: () => () => {},
 };

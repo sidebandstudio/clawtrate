@@ -17,6 +17,7 @@ on:
       - "apps/desktop/packaging/beta-files.ts"
       - "apps/desktop/packaging/feed.ts"
       - "apps/desktop/packaging/update-defines.ts"
+      - "apps/desktop/packaging/signing.ts"
       - "apps/desktop/src/main/identity.ts"
       - "apps/desktop/src/main/update/address.ts"
       - "apps/desktop/src/main/update/feed.ts"

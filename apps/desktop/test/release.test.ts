@@ -212,10 +212,19 @@ describe("the constants the build writes for the update engine", () => {
 
   it("without a feed address the build has none, and its release date is the build's time", () => {
     expect(updateDefines({}, now)).toEqual({
+      __CLAWTRATE_SIGNED_MAC__: "false",
+      __CLAWTRATE_SIGNED_WINDOWS__: "false",
       __CLAWTRATE_UPDATE_FEED__: "null",
       __CLAWTRATE_NIGHTLY_UPDATE_FEED__: "null",
       __CLAWTRATE_RELEASE_DATE__: JSON.stringify("2026-11-19T12:00:00.000Z"),
     });
+  });
+
+  it("records signing requests separately for each platform", () => {
+    expect(updateDefines({ WIN_CSC_LINK: "fixture" }, now).__CLAWTRATE_SIGNED_WINDOWS__).toBe(
+      "true",
+    );
+    expect(updateDefines({ CSC_NAME: "fixture" }, now).__CLAWTRATE_SIGNED_MAC__).toBe("true");
   });
 
   it("fixes the optional nightly address under the same build rules", () => {

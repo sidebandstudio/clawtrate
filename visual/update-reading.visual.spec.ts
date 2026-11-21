@@ -53,7 +53,8 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           ],
           lastCheck: null,
           preferenceIssue: null,
-          install: { kind: "unavailable-in-this-build" },
+          lastAttempt: null,
+          install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
           state: { kind: "not-checked" },
         };
         const probe: Probe = {
@@ -93,6 +94,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
             };
           },
           check: (track) => send("check " + track),
+          restart: (id) => send("restart " + id),
           download: (id) => send("download " + id),
           chooseTrack: (track) => send("choose " + track),
         };

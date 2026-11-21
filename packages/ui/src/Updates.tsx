@@ -78,6 +78,26 @@ function updateRow(
       return {
         line: `Downloading Clawtrate ${state.version}… ${state.received.toLocaleString()} of ${state.expected.toLocaleString()} bytes`,
       };
+    case "preparing":
+      return { line: `Preparing Clawtrate ${state.version} for restart…` };
+    case "handing-off":
+      return { line: `Handing Clawtrate ${state.version} to the system updater…` };
+    case "handed-to-system":
+      return {
+        line: "Clawtrate handed the update to the macOS updater. After restart, Clawtrate reports the version that is running.",
+      };
+    case "handoff-unconfirmed":
+      return {
+        line: "Clawtrate couldn’t confirm that the macOS updater accepted the update. Check the running version after reopening Clawtrate.",
+      };
+    case "handoff-failed":
+      return {
+        line:
+          state.reason === "mac-updater-refused"
+            ? "The macOS updater refused the update before receiving it. Nothing was installed."
+            : "Clawtrate couldn’t hand the update to the system updater.",
+        action: "Check for Updates",
+      };
     case "verified":
       return {
         line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,
@@ -105,6 +125,8 @@ function updateRow(
 
 function preferenceLine(s: DesktopUpdateSnapshot) {
   switch (s.preferenceIssue) {
+    case "attempt-not-read":
+      return "Couldn't read the last update attempt.";
     case "preferences-not-read":
       return "Couldn't read the saved update settings.";
     case "track-not-saved":
