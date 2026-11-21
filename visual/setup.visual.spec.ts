@@ -18,6 +18,7 @@ const STATES = [
   "program-missing",
   "cant-tell",
   "cant-tell-shape",
+  "cant-tell-read-only",
   "not-token",
   "not-found",
   "windows",

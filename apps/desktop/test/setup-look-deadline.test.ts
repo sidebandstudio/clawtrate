@@ -53,6 +53,7 @@ function world(values: Partial<LookWorld>): LookWorld {
     deep: false,
     portAllowed: () => false,
     pairs: false,
+    readOnly: async () => ({ verified: true, version: null }),
     ...values,
   };
 }

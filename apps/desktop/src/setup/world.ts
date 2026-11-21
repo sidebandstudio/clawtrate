@@ -42,6 +42,12 @@ export type LookWorld = {
    * from its scenario: no file is checked for them.
    */
   installed?: { program: string | null; signs: boolean };
+  /**
+   * Whether the program found may run at all, and its version, read without
+   * running it: a version whose commands are verified read-only. Production's
+   * check unless a test runs a fixture program of its own.
+   */
+  readOnly?: (program: string) => Promise<{ verified: boolean; version: string | null }>;
   profiles: LookProfile[];
   /** The whole environment of every program the look starts, before the profile's own. */
   env: Record<string, string>;

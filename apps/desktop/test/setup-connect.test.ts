@@ -72,7 +72,14 @@ function world(): LookWorld {
   chmodSync(program, 0o755);
   mkdirSync(join(dir, "home"), { recursive: true });
   const home = productionWorld({ home: join(dir, "home"), appData: dir, platform: "darwin" });
-  return { ...home, candidates: [program], profiles: [home.profiles[0]!], deep: false };
+  return {
+    ...home,
+    candidates: [program],
+    profiles: [home.profiles[0]!],
+    deep: false,
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
+  };
 }
 
 type Reply =
@@ -1028,7 +1035,12 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     writeFileSync(program, "#!/bin/sh\nexit 1\n");
     chmodSync(program, 0o755);
     const h = harness({
-      world: { ...home, candidates: [program], deep: false },
+      world: {
+        ...home,
+        candidates: [program],
+        deep: false,
+        readOnly: async () => ({ verified: true, version: null }),
+      },
       replies: {
         "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19960 }) },
         "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },

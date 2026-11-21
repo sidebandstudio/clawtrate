@@ -299,6 +299,8 @@ const CANT_TELL: Record<string, string> = {
   "not-set-up": "OpenClaw didn't report a config file for this profile.",
   endpoint:
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
+  "read-only":
+    "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
 };
 
 /** The found card and actions for each result of the look (§6). */

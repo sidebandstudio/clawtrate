@@ -51,6 +51,8 @@ async function withLocalSetup(
   const world = {
     ...productionWorld({ home: dir, appData: dir, platform: "darwin" }),
     candidates: [process.execPath],
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
     deep: false,
   };
   const opened: Opened = {

@@ -5,6 +5,7 @@
 
 import {
   chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -18,7 +19,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseStatus } from "../src/setup/parse.ts";
 import { lookHere } from "../src/setup/look.ts";
-import { checkRequest, type ProgramRequest, type ProgramResult } from "../src/setup/programs.ts";
+import {
+  checkRequest,
+  ProgramRunner,
+  type ProgramRequest,
+  type ProgramResult,
+} from "../src/setup/programs.ts";
 import {
   parseDescription,
   proveRun,
@@ -93,7 +99,12 @@ function homeWorld(options: { program?: boolean; platform?: NodeJS.Platform } = 
   });
   const program = join(home, ".local/bin/openclaw");
   if (options.program !== false) executable(program);
-  return { ...world, candidates: [join(dir, "app/openclaw/bin/openclaw"), program] };
+  return {
+    ...world,
+    candidates: [join(dir, "app/openclaw/bin/openclaw"), program],
+    // A fixture CLI of the test's own, run as a read-only version would be.
+    readOnly: async () => ({ verified: true, version: null }),
+  };
 }
 
 type Reply = Partial<ProgramResult> | ((request: ProgramRequest) => Partial<ProgramResult>);
@@ -125,6 +136,49 @@ const defaultTable = (status = statusJson({ port: 18789 }), auth = authJson()) =
   "gateway status --json": { stdout: status },
   "gateway status --json --deep": { stdout: status },
   "config get gateway.auth.mode --json": { stdout: auth },
+});
+
+describe("what the look runs of an installed OpenClaw", () => {
+  it("F-492 F-515: an OpenClaw whose launcher may repair itself is never run: the look reads its version and declines", async () => {
+    // An installed package as npm leaves it, its launcher a stand-in that leaves a marker if it
+    // runs at all, with the lifecycle work the real launcher would replay still pending.
+    const root = join(dir, "lib/node_modules/openclaw");
+    mkdirSync(root, { recursive: true });
+    const marker = join(dir, "lifecycle-ran");
+    const launcher = join(root, "openclaw.mjs");
+    writeFileSync(launcher, `#!/bin/sh\ntouch '${marker}'\necho 'OpenClaw 2026.10.6 (0123abc)'\n`, {
+      mode: 0o755,
+    });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.10.6" }),
+    );
+    writeFileSync(join(root, ".openclaw-lifecycle-pending"), "");
+    mkdirSync(join(dir, "bin"));
+    symlinkSync(launcher, join(dir, "bin/openclaw"));
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+    const world = {
+      ...productionWorld({ home, appData: dir, platform: "darwin" }),
+      candidates: [join(dir, "bin/openclaw")],
+    };
+    const runs: ProgramRequest[] = [];
+    const runner = new ProgramRunner();
+    const report = await lookHere(world, (request) => (runs.push(request), runner.run(request)));
+    expect(report?.look).toMatchObject({
+      outcome: "cant-tell",
+      reason: "read-only",
+      version: "2026.10.6",
+    });
+    expect(report?.found).toBeNull();
+    expect(runs).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
+    // Something that isn't an OpenClaw package is declined the same way, without a version.
+    const other = await lookHere({ ...world, candidates: [process.execPath] }, async () => {
+      throw new Error("nothing runs");
+    });
+    expect(other?.look).toMatchObject({ outcome: "cant-tell", reason: "read-only", version: null });
+  });
 });
 
 describe("the look on this computer", () => {
