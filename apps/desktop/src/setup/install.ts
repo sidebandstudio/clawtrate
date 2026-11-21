@@ -329,18 +329,29 @@ const CLASSIFICATIONS = new Set<OnboardClassification>([
   "not-listening",
 ]);
 
-/** The last JSON object a program printed, or null. */
+/**
+ * The last JSON object a program printed, or null: one object on its own
+ * line, or one printed over several lines from a line that starts with `{`
+ * to the end of the output, after any lines of text.
+ */
 function lastJson(stdout: string): Record<string, unknown> | null {
-  const whole = stdout.trim();
-  const tries = [whole, ...whole.split("\n").reverse()];
-  for (const text of tries) {
-    if (!text.trim().startsWith("{")) continue;
-    try {
-      const value = JSON.parse(text) as unknown;
-      if (value && typeof value === "object" && !Array.isArray(value))
-        return value as Record<string, unknown>;
-    } catch {
-      // the next candidate
+  const text = stdout.trim();
+  const starts = [0];
+  for (let at = text.indexOf("\n{"); at !== -1; at = text.indexOf("\n{", at + 1))
+    starts.push(at + 1);
+  for (const start of starts.reverse()) {
+    const rest = text.slice(start);
+    const end = rest.indexOf("\n");
+    // From this line to the end, then this line alone.
+    for (const candidate of end === -1 ? [rest] : [rest, rest.slice(0, end)]) {
+      if (!candidate.startsWith("{")) continue;
+      try {
+        const value = JSON.parse(candidate) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value))
+          return value as Record<string, unknown>;
+      } catch {
+        // the next candidate
+      }
     }
   }
   return null;
@@ -375,6 +386,39 @@ export function readOnboarding(
   if (field(field(json, "daemonInstall"), "skippedReason") === "systemd-user-unavailable")
     return { ok: false, classification: "systemd-user-unavailable" };
   return { ok: false, classification: null };
+}
+
+/**
+ * The facts of onboarding's JSON that the install reads, for the host's log
+ * when it isn't accepted: each a boolean, a number or one of a few words,
+ * never a message or a path.
+ */
+export function onboardingFacts(stdout: string): string {
+  const json = lastJson(stdout);
+  if (!json) return "no JSON object";
+  const word = (value: unknown) =>
+    typeof value === "boolean" || typeof value === "number"
+      ? String(value)
+      : typeof value === "string" && /^[a-z-]{1,32}$/.test(value)
+        ? value
+        : value === undefined
+          ? "absent"
+          : typeof value;
+  const gateway = field(json, "gateway");
+  const daemon = field(json, "daemonInstall");
+  return [
+    `ok=${word(json.ok)}`,
+    `port=${word(field(gateway, "port"))}`,
+    `bind=${word(field(gateway, "bind"))}`,
+    `auth=${word(field(gateway, "authMode"))}`,
+    `daemon=${word(field(daemon, "installed"))}`,
+    `skipped=${word(field(daemon, "skippedReason"))}`,
+    `class=${word(json.classification)}`,
+    `keys=${Object.keys(json)
+      .filter((key) => /^[A-Za-z]{1,32}$/.test(key))
+      .slice(0, 24)
+      .join(",")}`,
+  ].join(" ");
 }
 
 /** The status (research §6.4) of a gateway that answers on this port with this version. */
@@ -733,7 +777,10 @@ export class Installer {
       port,
     );
     const onboarded = readOnboarding(onboard.stdout, port);
-    if (onboard.timedOut || !onboarded.ok || onboard.exitCode !== 0)
+    if (onboard.timedOut || !onboarded.ok || onboard.exitCode !== 0) {
+      this.log(
+        `onboarding not accepted: exit=${onboard.exitCode} timedOut=${onboard.timedOut} tooLarge=${onboard.tooLarge} ${onboardingFacts(onboard.stdout)}`,
+      );
       return {
         ok: false,
         failure: failure("onboard", 2, {
@@ -741,6 +788,7 @@ export class Installer {
           classification: onboarded.ok ? null : onboarded.classification,
         }),
       };
+    }
     const state = await lstat(place.stateDir).catch(() => null);
     if (!state?.isDirectory() || state.isSymbolicLink())
       return { ok: false, failure: failure("onboard", 2, { exitCode: onboard.exitCode }) };

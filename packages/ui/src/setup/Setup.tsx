@@ -1070,7 +1070,9 @@ function FirstScreen({
       <Hint>
         {offer.platform === "win32"
           ? "New to OpenClaw? Clawtrate doesn't set it up on Windows. Use Advanced with a gateway on a Mac or a Linux computer."
-          : "New to OpenClaw? Choose where it should run, and Clawtrate says what it finds there."}
+          : offer.install
+            ? "New to OpenClaw? Choose where it should run, and Clawtrate offers to set it up there."
+            : "New to OpenClaw? Choose where it should run, and Clawtrate says what it finds there."}
       </Hint>
     </>
   );

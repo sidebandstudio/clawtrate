@@ -162,15 +162,19 @@ check(
       .trim() === at.nodeDir,
   "tools/node points at the checked Node.js",
 );
-const own = JSON.parse(readFileSync(place.recordFile, "utf8")) as {
-  id: string;
-  port: number;
-  stage: string;
+/** A record as JSON, or an empty object when it isn't there: a failed install is still cleaned up. */
+const record = (file: string): { id?: string; port?: number; stage?: string } => {
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as { id?: string; port?: number; stage?: string };
+  } catch {
+    return {};
+  }
 };
-const there = JSON.parse(readFileSync(at.record, "utf8")) as { id: string };
-const owner = JSON.parse(readFileSync(at.owner, "utf8")) as { id: string };
+const own = record(place.recordFile);
+const there = record(at.record);
+const owner = record(at.owner);
 check(
-  own.id === there.id && own.id === owner.id && own.stage === "installed",
+  own.id !== undefined && own.id === there.id && own.id === owner.id && own.stage === "installed",
   "one id in Clawtrate's record, the program folder's and the profile's owner file",
 );
 check(existsSync(place.serviceFile), `the profile's own service file is there (${place.service})`);
@@ -273,6 +277,7 @@ if (platform === "darwin") {
   check(gateway.status !== 0, "the default profile's openclaw-gateway.service is not active");
 }
 const listening = await new Promise<boolean>((done) => {
+  if (!own.port) return done(false);
   const socket = connect({ host: "127.0.0.1", port: own.port });
   socket.once("connect", () => {
     socket.destroy();

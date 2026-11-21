@@ -495,6 +495,11 @@ describe("F-502 F-503 F-505: reading what the programs print", () => {
     expect(readOnboarding(ok({ ...good, authMode: "none" }), 40001).ok).toBe(false);
     expect(readOnboarding(ok(good, false), 40001).ok).toBe(false);
     expect(readOnboarding("banner\n" + ok(good), 40001)).toEqual({ ok: true });
+    // Printed over several lines, after lines of text.
+    const pretty = JSON.stringify(JSON.parse(ok(good)), null, 2);
+    expect(readOnboarding(`Installed LaunchAgent\n{ not this\n${pretty}\n`, 40001)).toEqual({
+      ok: true,
+    });
     expect(readOnboarding('{"ok":false,"classification":"not-listening"}', 40001)).toEqual({
       ok: false,
       classification: "not-listening",

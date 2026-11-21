@@ -94,3 +94,16 @@ Reset the instance when you are done: `pnpm dev-gateway reset --instance look`.
   - nothing the gateway echoes reaches state or a log.
 - `e2e/setup.spec.ts` starts an instance of its own, `e2e-<run>-setup`, and records it before it starts. It drives the development build of the desktop app through sandboxes of that instance, and pairs in the `pairing` scenario. It needs Electron's binary and a display.
 - `pnpm check:packaged` gives the packaged app a sandbox of the run's instance on every launch, and checks that the look sees that instance only.
+
+## Setting OpenClaw up
+
+"Set up OpenClaw here" downloads and runs OpenClaw's installer, so no checkout, test or automated run ever offers it: only a person's packaged app gets an installer ([`docs/decisions.md`](../decisions.md), "Setting OpenClaw up on this computer"). Never run OpenClaw's installer, onboarding or update on a computer whose OpenClaw you use.
+
+- `apps/desktop/test/setup-install.test.ts` runs the host's installer against stand-ins only ([`apps/desktop/test/fixtures/install-stand-in.ts`](../../apps/desktop/test/fixtures/install-stand-in.ts)):
+  - the two downloads are served from loopback out of a temporary folder;
+  - `install-cli.sh` and `openclaw` are the test's own scripts;
+  - a stand-in service manager records what would be registered;
+  - every folder is under a temporary home. The installer refuses a stand-in home anywhere else.
+- `apps/desktop/test/setup-install-controller.test.ts` covers the host's dialog, its two minutes, and when an install is offered and tried again.
+- The real install runs only on GitHub's hosted runners, in [`.github/workflows/setup-install.yml`](../../.github/workflows/setup-install.yml). Its script, `apps/desktop/test/hosted/real-install.ts`, refuses to start anywhere else.
+- `pnpm fixture` shows the install's screens: `?setup=not-found` then "Set up OpenClaw here", and `?setup=installing`, `installing-node`, `install-installer`, `install-onboard`, `install-exists` and the rest in [`apps/desktop/src/fixture/setup.ts`](../../apps/desktop/src/fixture/setup.ts).

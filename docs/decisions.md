@@ -381,9 +381,38 @@ The first package of `docs/design/setup.md` (§19, "Order", item 1): the first s
   - "Another computer" leads to a screen that says reaching another computer over SSH isn't in this version and offers Advanced (package 2).
   - "Have a setup code?" is not on the first screen until the code entry exists (package 4).
   - The stopped card offers "Look again", not "Start OpenClaw" (F-497).
-  - The not-found card offers "Look again" and OpenClaw's own install instructions, not "Set up OpenClaw here" (package 3).
-  - The first screen's hint says "Clawtrate says what it finds there" until setting up is offered.
+  - Where the host doesn't set OpenClaw up (every development or automated run, Windows, musl Linux, the web preview), the not-found card offers "Look again" and OpenClaw's own install instructions, and the first screen's hint says "Clawtrate says what it finds there". A person's app on macOS or glibc Linux offers "Set up OpenClaw here" (package 3, next section).
   - The Electron checks need Electron's binary and a display. CI's e2e job downloads Electron and runs under `xvfb-run`; on Linux the app starts with `--no-sandbox`.
+
+## Setting OpenClaw up on this computer
+
+Package 3 of `docs/design/setup.md` (§10, §19): "Set up OpenClaw here", on macOS and glibc Linux. The host's part is `apps/desktop/src/setup/install.ts`, `install-pins.ts` and `install-runner.ts`; the screens are in `packages/ui/src/setup/Setup.tsx`.
+
+- **Who gets an installer.** Only a person's packaged app that nothing automates (`SETUP.kind === "production"`), on macOS or on Linux whose Node.js reports a glibc runtime, on arm64 or x64. Every development build and automated run gets none, so it never downloads or runs OpenClaw's installer, and the not-found card stays as before. The installer refuses a real install anywhere else unless it runs on a GitHub-hosted runner (`CI`, `GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT=github-hosted`, with no `VITEST`). A stand-in install runs only under the system's temporary root, outside the account's home, with downloads from loopback.
+- **The pins** are constants of the build: OpenClaw 2026.10.6's npm tarball with its published `sha512` integrity, and Node.js 24.22.1 for each of the four systems with the SHA-256 from nodejs.org's `SHASUMS256.txt`. Both are downloaded into the program folder, each within 512 MiB and a 60 s stall limit, and hashed as they arrive. A mismatch stops the install before anything is extracted.
+- **The exact commands.** The runner starts only the commands `commands()` builds for this place. Any other program or argument is refused before it starts:
+  1. `tar -xzf` of the checked Node.js into `tools/node-v24.22.1`;
+  2. `tar -xzf` of `package/scripts/install-cli.sh` and `install-policy.sh` from the checked tarball;
+  3. the installer's own Node.js check, sourced with `OPENCLAW_INSTALL_CLI_SH_NO_RUN=1`, through `/bin/bash -c <constant>` with the script, folder and version as arguments;
+  4. `install-cli.sh --json --runtime-only --npm --version <checked tarball> --prefix <program folder>`;
+  5. onboarding;
+  6. `gateway status --json`.
+- **What the steps read.** The installer's NDJSON is read line by line. A Node.js step of `start` or `ok` ends the installer at once, because it would delete the checked Node.js and download its own (research §6.8). Only `skip` counts, and `done` must follow. Onboarding counts only when its JSON says `ok`, the chosen port, `loopback`, `token` and the service installed. Its last JSON object is read, even when it is printed over several lines after lines of text. When it isn't accepted, the host's log gets one line of typed facts from it (booleans, numbers and short words, never a message or a path). The status wait is every 2 s for at most 60 s.
+- **The environments.**
+  - The installer gets `HOME`, `LANG`, `NO_COLOR`, a `PATH` of the program folder's `bin` and the system's folders, two separate empty npm configuration files, and the public registry.
+  - Onboarding and the status get the same, without npm's variables.
+  - On Linux they also get `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` when those are present and well-formed. A systemd user service is reached through the session's bus, and without it onboarding can't install the service.
+- **Records and the narrowed retry.**
+  - Clawtrate's own record is `<app data>/openclaw-install.json`. It holds the id, version, profile, folders, service and port, and a stage: `installing`, then `onboarding` just before onboarding starts, then `installed` once the owner file is written.
+  - Only an attempt still `installing` is ever removed. Its folder's record must carry the same id, and neither the state folder nor the service may exist.
+  - A failure before onboarding removes it at once and offers Try again. One left by an earlier run is removed when the next install starts.
+  - From onboarding on, nothing is removed (F-514).
+- **Cancel isn't offered.** While the steps run there is no Back, and the controller ignores Back and the first screen. Quitting the app ends the installer by PID, not its process group.
+- **The real install runs only on hosted runners.** `.github/workflows/setup-install.yml` runs `apps/desktop/test/hosted/real-install.ts` on `macos-15` (arm64) and `ubuntu-24.04`, on pull requests that touch the install or look code.
+  - It drives the host's own controller and installer, answering the host's dialog yes. It checks that the installed `entry.js` has the checked tarball's SHA-256. Then the look runs and Connect pairs read-only, and the script asserts exactly `operator.read`.
+  - Then it uninstalls with OpenClaw's own `--profile clawtrate uninstall`, removes the program folder and checks that nothing of the install is left.
+  - The decoy `~/.openclaw` is made after the first look and before the install. With it there, the look would rightly say "set up, program missing" and offer no install. It must come through unchanged.
+  - On Linux the job enables lingering so that the runner has a user bus.
 
 ## Development gateway
 
