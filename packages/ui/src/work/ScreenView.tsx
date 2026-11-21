@@ -451,7 +451,7 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
       body = bar(
         "refused",
         <>
-          <span>{words.busyLine(name, control.busyReason ?? "bot-still-acting")}</span>
+          <span>{words.busyLine(name, control.busyReason)}</span>
           <span className="spacer" />
           {button("Try again", props.onTake, undefined, "primary")}
         </>,

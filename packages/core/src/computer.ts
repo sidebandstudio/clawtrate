@@ -170,7 +170,19 @@ export type ComputerView = {
 };
 
 export type BusyReason =
-  "bot-still-acting" | "browser-not-quiet" | "download-in-progress" | "browser-not-watched";
+  | "bot-still-acting"
+  | "bot-calls-unconfirmed"
+  | "browser-not-quiet"
+  | "download-in-progress"
+  | "browser-not-watched";
+
+const BUSY_REASONS: readonly BusyReason[] = [
+  "bot-still-acting",
+  "bot-calls-unconfirmed",
+  "browser-not-quiet",
+  "download-in-progress",
+  "browser-not-watched",
+];
 
 /** Why a question closed while an answer or the person's control waited on it. */
 export type ClosedCode = "answered" | "dismissed" | "cancelled" | "expired" | "run-ended";
@@ -202,9 +214,9 @@ export type ControlStatus =
    * known until a renewal or Check reads it.
    */
   | "unverified"
-  /** Refused: the bot is still acting (at the drain deadline). */
+  /** Refused: the bot is still acting (a call of its own was running at the drain deadline). */
   | "busy"
-  /** Refused: something the bot started has not settled. */
+  /** Refused for any other reason: something has not settled, or could not be confirmed. */
   | "unsettled"
   /** Refused: someone has, or is taking, control of the tab. */
   | "conflict"
@@ -1303,13 +1315,10 @@ export class ComputerViews {
       return;
     }
     if (take.abandoned || this.pane(viewer)?.control.status !== "draining") return;
-    const reason = str(answer?.reason) as BusyReason | null;
-    const known: BusyReason =
-      reason === "browser-not-quiet" ||
-      reason === "download-in-progress" ||
-      reason === "browser-not-watched"
-        ? reason
-        : "bot-still-acting";
+    // The plugin's code is `cause`; its `reason` is the sentence. A code this
+    // app does not know is kept as none, never as "still acting".
+    const code = str(answer?.cause) ?? str(answer?.reason);
+    const known = BUSY_REASONS.find((each) => each === code) ?? null;
     const previous = this.pane(viewer)?.control;
     const count = previous?.busyReason === known ? previous.busyCount + 1 : 1;
     this.patchControl(viewer, {

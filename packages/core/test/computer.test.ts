@@ -525,6 +525,52 @@ describe("taking control (F-142, F-144, section 18)", () => {
     }
   });
 
+  it("F-142: a busy take is read by the plugin's code, not its sentence; a reason this app does not know is never still acting", async () => {
+    const answers: Array<[Record<string, unknown>, string | null, string]> = [
+      // The plugin's own answer: `reason` is its sentence, `cause` its code.
+      [
+        { reason: "the bot's browser is still loading a page", cause: "browser-not-quiet" },
+        "browser-not-quiet",
+        "unsettled",
+      ],
+      [
+        { reason: "the bot is still acting in this browser", cause: "bot-still-acting" },
+        "bot-still-acting",
+        "busy",
+      ],
+      [
+        {
+          reason: "a browser call of the bot has not reported that it ended",
+          cause: "bot-calls-unconfirmed",
+        },
+        "bot-calls-unconfirmed",
+        "unsettled",
+      ],
+      // A plugin without `cause` gives only its sentence: not a code, so no reason.
+      [{ reason: "the bot's browser is still loading a page" }, null, "unsettled"],
+    ];
+    for (const [fields, busyReason, status] of answers) {
+      const h = harness({
+        "clawtrate-computer.control.take": () => ({
+          state: "busy",
+          ...fields,
+          runningCalls: 0,
+          generation: GEN,
+        }),
+      });
+      await live(h);
+      await h.views.take(h.viewer);
+      expect(h.pane().control, JSON.stringify(fields)).toMatchObject({ status, busyReason });
+    }
+    expect(words.busyLine("Pip", null)).toBe(
+      "The gateway didn't give control of Pip's browser. Try again in a moment.",
+    );
+    expect(words.busyLine("Pip", "bot-calls-unconfirmed")).toContain(
+      "Can't confirm whether Pip is still acting",
+    );
+    expect(words.busyLine("Pip", "browser-not-watched")).not.toContain("still acting");
+  });
+
   it("F-142: someone else holding the tab is a conflict, not control", async () => {
     const h = harness({
       "clawtrate-computer.control.take": () => {

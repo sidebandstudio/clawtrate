@@ -72,11 +72,21 @@ export const takingOtherWindowLine = (bot: string) =>
 export const waitingLine = (bot: string) =>
   `Waiting for ${bot} to finish what it's doing in the browser…`;
 
-/** A take the plugin answered `busy`, by its reason. */
-export function busyLine(bot: string, reason: BusyReason): string {
-  return reason === "bot-still-acting"
-    ? `${bot} is still acting in this browser. Try again in a moment.`
-    : `Something ${bot} started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.`;
+/** A take the plugin answered `busy`, by its reason; null when it gave none this app knows. */
+export function busyLine(bot: string, reason: BusyReason | null): string {
+  switch (reason) {
+    case "bot-still-acting":
+      return `${bot} is still acting in this browser. Try again in a moment.`;
+    case "bot-calls-unconfirmed":
+      return `Can't confirm whether ${bot} is still acting in this browser: one of its browser calls hasn't reported that it ended. Try again in a moment.`;
+    case "browser-not-watched":
+      return `Can't see whether ${bot}'s browser has settled, so control wasn't given. Try again in a moment.`;
+    case "browser-not-quiet":
+    case "download-in-progress":
+      return `Something ${bot} started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.`;
+    default:
+      return `The gateway didn't give control of ${bot}'s browser. Try again in a moment.`;
+  }
 }
 
 export const stuckLine = (bot: string) =>
