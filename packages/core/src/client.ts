@@ -869,7 +869,12 @@ export class ClawtrateClient {
    * publishes only typed outcomes: fixed codes and words, never the gateway's
    * own codes, text, request fields or version.
    */
-  private setupIntent: { url: string; reuse: boolean } | null = null;
+  private setupIntent: {
+    url: string;
+    reuse: boolean;
+    /** A new pairing the gateway refused its code for: no Retry may go on without a new consent. */
+    refused?: boolean;
+  } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -5377,9 +5382,25 @@ export class ClawtrateClient {
         const setup = this.isSetup(settings.url);
         // A new pairing that finds a saved token for this address sends neither: the person
         // agreed to a new pairing, so the card asks whether to reuse that one.
-        if (setup && token && this.setupCode?.url === settings.url) {
+        // A new pairing's code the gateway refused is used up for good: a Retry after it sends
+        // no pairing saved since, and nothing else, and the card asks for a new consent.
+        const refused = setup && this.setupIntent?.reuse === false && this.setupIntent.refused;
+        if (setup && token && (this.setupCode?.url === settings.url || refused)) {
           this.pairingAppeared();
           throw new Error("a saved pairing appeared");
+        }
+        if (refused) {
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: {
+              code: "AUTH_BOOTSTRAP_TOKEN_INVALID",
+              message: "The one-time code didn't work.",
+              hint: null,
+            },
+          });
+          throw new Error("the setup code was refused");
         }
         // A setup reuse whose token is gone sends nothing: the person consents again.
         if (setup && !token && this.setupIntent?.reuse) {
@@ -5791,6 +5812,10 @@ export class ClawtrateClient {
       : error.message;
     // A setup connection keeps its code only while the gateway waits for its owner's approval.
     if (setup && code !== "PAIRING_REQUIRED") this.dropSetupCredentials();
+    // A refused code ends this new pairing, apart from the code being used: a Retry can't reuse
+    // a pairing saved in the meantime (the plan asks for a new consent instead).
+    if (setup && code === "AUTH_BOOTSTRAP_TOKEN_INVALID" && this.setupIntent?.reuse === false)
+      this.setupIntent = { ...this.setupIntent, refused: true };
 
     const mismatch = protocolMismatch(details);
     if (mismatch) {
