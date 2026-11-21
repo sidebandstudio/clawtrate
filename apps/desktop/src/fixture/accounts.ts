@@ -728,13 +728,15 @@ export function accountCommand(
         approveCommand: null,
         error: null,
       });
-      later(400, () =>
-        upgrade({
-          status: "pending",
-          requestId: REQUEST,
-          approveCommand: `openclaw devices approve ${REQUEST}`,
-        }),
-      );
+      // Only a request still being made goes to pending: an approval released first stands.
+      later(400, () => {
+        if (get().connection.upgrade.status === "requesting")
+          upgrade({
+            status: "pending",
+            requestId: REQUEST,
+            approveCommand: `openclaw devices approve ${REQUEST}`,
+          });
+      });
       // The owner's approval is an answer a test can hold, to look at the pending state first.
       if (params.admin === "grant")
         deferred(() => {

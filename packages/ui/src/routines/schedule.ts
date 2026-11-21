@@ -1,10 +1,9 @@
 // A routine's schedule in words, its times in zones, and the calendar's
 // occurrences (automation.md sections 4 and 5). The gateway gives only a
 // routine's next run, so later occurrences are computed here from the
-// schedule, the way the gateway's scheduler (OpenClaw 2026.10.6) does around
-// daylight saving: a skipped time moves forward by the gap, and a time the
-// clock passes twice runs once, the first time. What cannot be computed
-// is drawn only at its next run.
+// schedule. As the gateway's scheduler (OpenClaw 2026.10.6) does, a time the
+// clocks skip does not run that day, and a time the clock passes twice runs
+// once, the first time. What cannot be computed is drawn only at its next run.
 
 import type { Bot, Routine, RoutineRun, RoutineSchedule } from "@clawtrate/core";
 
@@ -354,6 +353,7 @@ function scheduled(
       for (const minute of [...cron.minute.values].sort((a, b) => a - b)) {
         let at = zonedTime(year, month, day, hour, minute, tz);
         const wall = partsIn(at, tz);
+        if (wall.hour !== hour || wall.minute !== minute) continue;
         // Passed twice (fall back): the gateway runs it once, the first time.
         // shortcut: assumes an hour's shift, as in every zone with daylight saving but Lord Howe's.
         const earlier = partsIn(at - HOUR, tz);
@@ -365,7 +365,6 @@ function scheduled(
         }
       }
   }
-  // A skipped wall time can land on another occurrence after the gap.
   return [...times].sort((a, b) => a - b).slice(0, 2_000);
 }
 
