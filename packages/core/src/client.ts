@@ -2383,13 +2383,19 @@ export class ClawtrateClient {
           this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
         },
       });
-      // The frame has left: from here a Stop no longer parks it.
-      this.updateActivity(key, (activity) =>
-        updateMessage(activity, messageId, { leftAt: this.now() }),
-      );
+      // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
+      // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
+      // withdrawal of it, need not wait for the answer.
+      const joins = starts ? null : message.runId;
+      this.updateActivity(key, (activity) => {
+        const left = updateMessage(activity, messageId, { leftAt: this.now() });
+        return joins ? registerSteerAlias(left, messageId, joins) : left;
+      });
       result = asRecord(await sent);
     } catch (error) {
       this.noteMissingScope(error);
+      // A Stop withdrew it while the answer was on its way: it stays Not sent.
+      if (this.outgoing(key, messageId)?.steer === "withdrawn") return;
       if (
         error instanceof GatewayProtocolRequestError ||
         error instanceof SendTooLargeError ||
@@ -2416,6 +2422,8 @@ export class ClawtrateClient {
       this.scheduleHistory(key);
       return;
     }
+    // A Stop withdrew it while the answer was on its way: it stays Not sent, whatever the answer.
+    if (this.outgoing(key, messageId)?.steer === "withdrawn") return;
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
@@ -2599,11 +2607,12 @@ export class ClawtrateClient {
    * lost stays as it was: the stop note says the gateway may still run it.
    */
   private async withdrawSteers(key: string, runId: string): Promise<void> {
+    // A steer whose frame left counts, answered or not: the gateway may have queued it already.
     const steers = (this.state.transcripts[key]?.outbox ?? []).filter(
       (message) =>
         message.mode === "steer" &&
         message.runId === runId &&
-        message.status === "sent" &&
+        (message.status === "sent" || (message.status === "sending" && message.leftAt !== null)) &&
         message.steer === undefined,
     );
     await Promise.all(

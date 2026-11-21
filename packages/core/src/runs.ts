@@ -3617,7 +3617,7 @@ export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): 
   for (const message of activity.outbox)
     if (
       message.mode === "steer" &&
-      message.status === "sent" &&
+      (message.status === "sent" || message.status === "sending") &&
       ids.includes(message.id) &&
       Object.hasOwn(activity.steerAliases, message.id)
     )

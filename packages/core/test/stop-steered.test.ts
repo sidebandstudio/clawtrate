@@ -56,7 +56,13 @@ function gatewayWithWaitingRun() {
   });
   gateway.handlers["chat.abort"] = (params) => {
     const { runId } = params as { runId: string };
-    if (runId !== RUN) return { ok: true, aborted: true, runIds: [runId] };
+    if (runId !== RUN) {
+      // A steer it still holds is withdrawn, and no longer held; any other id stops nothing.
+      const held = queued.indexOf(runId);
+      if (held < 0) return { ok: true, aborted: false, runIds: [] };
+      queued.splice(held, 1);
+      return { ok: true, aborted: true, runIds: [runId] };
+    }
     // The waiting run is aborted: the gateway settles its approval and ends the run.
     pending = false;
     setTimeout(() => {

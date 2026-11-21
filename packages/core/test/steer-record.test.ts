@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { STEER_WITHDRAWAL_WAIT_MS } from "../src/client.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
-import { sleep, until } from "./fake-gateway.ts";
+import { deferred, sleep, until } from "./fake-gateway.ts";
 
 const RUN = "run-1";
 
@@ -37,6 +37,18 @@ async function steered(withdraws: (id: string) => boolean = () => true) {
   const id = task.client.sendMessage(KEY, "Only the notes folder.");
   await until(() => task.transcript().outbox[0]?.status === "sent");
   return { ...task, id };
+}
+
+/** As `steered`, but the gateway holds its answer to the steer's send until `answer` is called. */
+async function steeredUnanswered(withdraws: (id: string) => boolean = () => true) {
+  const task = await steered(withdraws);
+  const held = deferred<unknown>();
+  task.gateway.handlers["chat.send"] = () => held.promise;
+  const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+  // The gateway has the frame; its answer has not come.
+  await until(() => task.transcript().outbox[1]?.leftAt != null);
+  expect(task.transcript().outbox[1]!.status).toBe("sending");
+  return { ...task, id, answer: (reply: unknown) => held.resolve(reply) };
 }
 
 const run = (task: Awaited<ReturnType<typeof steered>>, id = RUN) =>
@@ -131,6 +143,51 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     await until(() => task.transcript().outbox[1]?.status === "handled");
     expect(task.transcript().outbox[0]).toMatchObject({ status: "sent", runId: RUN });
     expect(task.transcript().outbox[0]!.steer).toBeUndefined();
+    task.client.stop();
+  });
+
+  it("F-097 F-468: Stop before a steer's send is answered withdraws it by its key, and the late answer leaves it Not sent", async () => {
+    const task = await steeredUnanswered();
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    const aborts = task.gateway.calls("chat.abort") as Array<{ runId: string }>;
+    expect(aborts.map((each) => each.runId)).toContain(task.id);
+    expect(aborts.at(-1)!.runId).toBe(RUN);
+    await until(() => task.transcript().outbox[1]?.status === "not-sent");
+    // The gateway answers the send with the stop it keeps for that key.
+    task.answer({ runId: task.id, status: "timeout", summary: "aborted", stopReason: "rpc" });
+    await sleep(50);
+    expect(task.transcript().outbox[1]).toMatchObject({ status: "not-sent", steer: "withdrawn" });
+    expect(run(task, task.id)).toBeUndefined();
+    task.client.stop();
+  });
+
+  it("F-097 F-468: a steer the gateway had already started into the run before its send was answered is not withdrawn", async () => {
+    // The gateway was delivering it into the run: it cannot withdraw it, and says so.
+    const task = await steeredUnanswered(() => false);
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    expect((task.gateway.calls("chat.abort") as Array<{ runId: string }>).at(-1)!.runId).toBe(RUN);
+    expect(task.transcript().outbox[1]!.status).toBe("sending");
+    // Its record arrives: the bare final under its key, then the send's answer.
+    task.gateway.emit("chat", { runId: task.id, sessionKey: KEY, state: "final" });
+    task.answer({ runId: task.id, status: "started" });
+    await until(() => task.transcript().outbox[1]?.status === "sent");
+    expect(task.transcript().outbox[1]!.steer).toBe("joined");
+    expect(run(task, task.id)).toBeUndefined();
+    task.client.stop();
+  });
+
+  it("F-097: a withdrawal the gateway does not answer, of a steer whose send is unanswered too, holds the run's Stop only briefly", async () => {
+    const task = await steeredUnanswered();
+    const abort = task.gateway.handlers["chat.abort"]!;
+    task.gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId: string }).runId === RUN ? abort(params) : new Promise(() => {});
+    const asked = Date.now();
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    expect(Date.now() - asked).toBeLessThan(STEER_WITHDRAWAL_WAIT_MS + 1_000);
+    expect(task.transcript().outbox[1]!.steer).toBeUndefined();
     task.client.stop();
   });
 
