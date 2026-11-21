@@ -120,11 +120,17 @@ export type NodeHostOptions = {
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
   /** Wraps the file store: the desktop host keeps each route's device token in its route store. */
   wrapStorage?: (store: KeyValueStore) => KeyValueStore;
+  /**
+   * The host's own socket for an address it holds (an SSH route's forward), or
+   * null for any other address, which gets the built-in WebSocket.
+   */
+  routeSocket?: (url: string) => WebSocketLike | null;
 };
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
   return {
-    createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
+    createWebSocket: (url) =>
+      options.routeSocket?.(url) ?? (new WebSocket(url) as unknown as WebSocketLike),
     storage: (options.wrapStorage ?? ((store) => store))(
       createFileStore(join(options.dataDir, "state.json")),
     ),

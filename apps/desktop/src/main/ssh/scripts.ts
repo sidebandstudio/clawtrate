@@ -1,20 +1,23 @@
-// The CODE, START and STOP scripts, run on the other computer as `/bin/sh -s`
-// with the script on standard input (docs/design/setup.md, section 19), and the
+// The CODE and START scripts, run on the other computer as `/bin/sh -s` with
+// the script on standard input (docs/design/setup.md, section 19), and the
 // parser for what they print. Like the LOOK, each is a constant; its only
-// values are a request id the host makes, a profile of two fixed names and a
-// gateway port of digits, each assigned in one line the host writes after
+// values are a request id the host makes, a profile of two fixed names, a
+// gateway port of digits, the index of the program place the LOOK found and
+// that file's checksum, each assigned in one line the host writes after
 // validating it, and checked again by the script before anything runs. Each
-// finds OpenClaw's program in the LOOK's fixed places only, runs one fixed
+// clears every OPENCLAW_ variable as the LOOK does, runs the program at that
+// one place only when its checksum is still the LOOK's, runs one fixed
 // OpenClaw command, and prints its answer as base64 between a begin and an end
 // line carrying the request id. What that answer holds (a one-time code, for
 // CODE) is parsed in memory by the caller and never kept or logged here.
+// Stopping a gateway over SSH is not offered in this version.
 
 import { randomUUID } from "node:crypto";
 
-import { PROGRAM_PLACES, type ProgramPlace } from "./look.ts";
+import { CLEAR_OPENCLAW, PROGRAM_PLACES, PROGRAM_SUM, type ProgramPlace } from "./look.ts";
 import { MAX_LOOK_NOISE } from "./look.ts";
 
-export type ScriptKind = "code" | "start" | "stop";
+export type ScriptKind = "code" | "start";
 export type ScriptProfile = "default" | "clawtrate";
 
 /** What each script keeps of OpenClaw's answer, in bytes, before base64. */
@@ -22,14 +25,12 @@ export const SCRIPT_ANSWER_BYTES: Record<ScriptKind, number> = {
   // `qr --json`: a setup code, its URL and a few labels, well under 4 KiB.
   code: 16 * 1024,
   start: 4 * 1024,
-  stop: 4 * 1024,
 };
 
 /** The fixed OpenClaw command of each script, after the profile's options. */
 const COMMANDS: Record<ScriptKind, string> = {
   code: 'qr --json --voice-node --url "ws://127.0.0.1:$port"',
   start: "gateway start",
-  stop: "gateway stop",
 };
 
 /** The part every script shares: the checks of its values, the watchdog, the program's place. */
@@ -45,6 +46,14 @@ case "$port" in
   ''|*[!0-9]*) exit 64 ;;
 esac
 if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then exit 64; fi
+case "$prog_i" in
+  0|1|2|3|4) ;;
+  *) exit 64 ;;
+esac
+case "$prog_sum" in
+  ''|*[!0-9\ ]*) exit 64 ;;
+esac
+${CLEAR_OPENCLAW}
 # Stop after 30 seconds, whatever is still running.
 ( sleep 30 </dev/null >/dev/null 2>&1 & s=$!
   trap 'kill "$s" 2>/dev/null; exit 0' TERM
@@ -57,7 +66,8 @@ line begin ",\"id\":\"$request_id\""
 prog=''
 i=0
 for p in "$HOME/.openclaw/bin/openclaw" /opt/homebrew/bin/openclaw /usr/local/bin/openclaw "$HOME/.local/bin/openclaw" "$HOME/.npm-global/bin/openclaw"; do
-  if [ -z "$prog" ] && [ -f "$p" ] && [ -x "$p" ]; then prog=$p; line program ",\"i\":$i"; fi
+  # The place the LOOK found, and only while it is the same file.
+  if [ "$i" = "$prog_i" ] && [ -f "$p" ] && [ -x "$p" ] && [ "$(cksum < "$p" 2>/dev/null || true)" = "$prog_sum" ]; then prog=$p; line program ",\"i\":$i"; fi
   i=$((i + 1))
 done
 exec 4>&1
@@ -85,7 +95,6 @@ line end ",\"id\":\"$request_id\""
 export const SCRIPT_BODIES: Record<ScriptKind, string> = {
   code: body("code"),
   start: body("start"),
-  stop: body("stop"),
 };
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -93,20 +102,32 @@ const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const isGatewayPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
 
-/** The script as sent: the three assignments the host writes, then the constant body. */
+/** What a script acts on: the profile and port, and the program the LOOK found with its checksum. */
+export type ScriptValues = {
+  profile: ScriptProfile;
+  port: number;
+  program: ProgramPlace;
+  programSum: string;
+};
+
+/** The script as sent: the five assignments the host writes, then the constant body. */
 export function remoteScript(
   kind: ScriptKind,
-  values: { profile: ScriptProfile; port: number },
+  values: ScriptValues,
   requestId: string = randomUUID(),
 ): { requestId: string; text: string } {
   if (!REQUEST_ID.test(requestId)) throw new Error("Not a request id.");
   if (values.profile !== "default" && values.profile !== "clawtrate")
     throw new Error("Not a profile Clawtrate uses.");
   if (!isGatewayPort(values.port)) throw new Error("Not a gateway port.");
+  const place = PROGRAM_PLACES.indexOf(values.program);
+  if (place === -1) throw new Error("Not a program place the LOOK uses.");
+  if (!PROGRAM_SUM.test(values.programSum)) throw new Error("Not a program checksum.");
   return {
     requestId,
     text:
       `request_id='${requestId}'\nprofile='${values.profile}'\nport='${values.port}'\n` +
+      `prog_i='${place}'\nprog_sum='${values.programSum}'\n` +
       SCRIPT_BODIES[kind],
   };
 }

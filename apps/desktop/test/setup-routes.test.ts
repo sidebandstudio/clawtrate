@@ -1,20 +1,38 @@
 // The parts of "Another computer" that run nothing: the route store with one
-// token per route, the app-data privacy check, what the found card says from
-// the LOOK's facts, and the approve command for a route's computer and profile.
+// sealed token per route, the app-data privacy check at the host's own entry
+// point, what the found card says from the LOOK's facts, and the approve
+// command for a route's account, SSH port and profile.
 
 import { approvalForPlace } from "@clawtrate/core";
-import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { memoryStorage } from "../../../packages/core/test/fake-gateway.ts";
 import type { LookFacts } from "../src/main/ssh/look.ts";
 import { approvalInstructionsFor } from "../src/host/runtime.ts";
-import { establishPrivateDir } from "../src/setup/private-dir.ts";
-import { sshRouteKey } from "../src/setup/remote.ts";
-import { RouteStore, routedStorage, type SshRouteRecord } from "../src/setup/routes.ts";
+import { ensurePrivateDir, sshTransportFor, type AclReading } from "../src/setup/private-dir.ts";
+import {
+  NO_SEAL,
+  RouteStore,
+  routedStorage,
+  sshRouteKey,
+  type SshRouteRecord,
+} from "../src/setup/routes.ts";
 import { sshLook } from "../src/setup/ssh-look.ts";
-import { tempDir } from "./ssh/harness.ts";
+import { tempDir, testSeal } from "./ssh/harness.ts";
 
 const dirs: string[] = [];
 const fresh = (prefix: string) => {
@@ -23,17 +41,26 @@ const fresh = (prefix: string) => {
   return dir;
 };
 afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) {
+    // A test may have closed a folder; it is opened again to be removed.
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // already gone
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const FINGERPRINT = `SHA256:${"A".repeat(43)}`;
 const record = (patch: Partial<SshRouteRecord> = {}): SshRouteRecord => {
   const base = {
     kind: "ssh" as const,
-    id: "r1",
+    id: "r0123456789ab",
     destination: "devbox",
     name: "devbox",
     account: "you@devbox.example",
+    sshPort: 22,
     endpoint: "you@[devbox.example]:22",
     fingerprint: FINGERPRINT,
     profile: "default" as const,
@@ -41,7 +68,6 @@ const record = (patch: Partial<SshRouteRecord> = {}): SshRouteRecord => {
     configPath: "~/.openclaw/openclaw.json",
     gatewayPort: 18789,
     identity: null,
-    startedByClawtrate: false,
     lastUsed: 1,
     ...patch,
   };
@@ -58,101 +84,301 @@ const record = (patch: Partial<SshRouteRecord> = {}): SshRouteRecord => {
   };
 };
 
-describe("the route store", () => {
-  const tokenKey = (key: string) => `deviceToken:route:${key}:device-1:operator`;
+/** Every file under `dir` whose bytes hold `secret`. */
+function holding(dir: string, secret: string): string[] {
+  const found: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    try {
+      if (readFileSync(path).includes(Buffer.from(secret))) found.push(path);
+    } catch {
+      // a folder or an unreadable entry holds no token here
+    }
+  }
+  return found;
+}
 
-  it("keeps one token per route, only for a route it has a record of, and in its own file alone", async () => {
+const TOKEN = '{"token":"plain-device-token-1"}';
+const tokenKey = (key: string) => `deviceToken:route:${key}:device-1:operator`;
+
+describe("the route store", () => {
+  it("keeps one sealed token per route, only for a route it has a record of, and in its own file alone", async () => {
     const dir = fresh("clawtrate-routes-");
-    const routes = new RouteStore(dir);
+    const routes = new RouteStore(dir, { seal: testSeal });
     const base = memoryStorage();
     const storage = routedStorage(base, routes);
     const one = record();
-    await expect(storage.set(tokenKey(one.key), '{"token":"t-1"}')).rejects.toThrow();
+    await expect(storage.set(tokenKey(one.key), TOKEN)).rejects.toThrow();
     routes.put(one);
-    await storage.set(tokenKey(one.key), '{"token":"t-1"}');
+    await storage.set(tokenKey(one.key), TOKEN);
     await storage.set("connection", '{"url":"ws://127.0.0.1:5000"}');
-    expect(await storage.get(tokenKey(one.key))).toBe('{"token":"t-1"}');
-    expect(readFileSync(routes.path, "utf8")).toContain("t-1");
+    expect(await storage.get(tokenKey(one.key))).toBe(TOKEN);
+    // On disk only sealed: the plain token is in no file.
+    expect(holding(dir, "plain-device-token-1")).toEqual([]);
+    expect(readFileSync(routes.path, "utf8")).toContain("sealed:");
     expect([...base.data.keys()]).toEqual(["connection"]);
     // A second write replaces the one token; there is never a second.
-    await storage.set(tokenKey(one.key), '{"token":"t-2"}');
-    expect(readFileSync(routes.path, "utf8")).not.toContain("t-1");
+    await storage.set(tokenKey(one.key), '{"token":"plain-device-token-2"}');
+    expect(await storage.get(tokenKey(one.key))).toBe('{"token":"plain-device-token-2"}');
     // Another device's or role's key reads nothing.
     expect(await storage.get(`deviceToken:route:${one.key}:device-2:operator`)).toBeNull();
-    // The routes file is this account's alone.
-    if (process.platform !== "win32") {
-      const { statSync } = await import("node:fs");
-      expect(statSync(routes.path).mode & 0o077).toBe(0);
-    }
+    expect(readFileSync(routes.path).length).toBeGreaterThan(0);
+    const { statSync } = await import("node:fs");
+    expect(statSync(routes.path).mode & 0o077).toBe(0);
   });
 
-  it("a route whose key changed, another pinned key, port or profile, loses its token; removing a route removes its token", async () => {
+  it("keeps no token where the system can't encrypt it, and says so", async () => {
     const dir = fresh("clawtrate-routes-");
-    const routes = new RouteStore(dir);
+    const routes = new RouteStore(dir, { seal: NO_SEAL });
+    routes.put(record());
+    expect(routes.canKeepTokens()).toBe(false);
+    expect(() => routes.setToken(record().key, "device-1", "operator", TOKEN)).toThrow(
+      /can't keep a route's device token encrypted/,
+    );
+    expect(holding(dir, "plain-device-token-1")).toEqual([]);
+  });
+
+  it("a failed write and an update interrupted before its rename leave no file with the plain token", () => {
+    const dir = fresh("clawtrate-routes-");
+    // The rename fails, and the process "dies" before its own clean-up: the sibling stays.
+    let crash = false;
+    const routes = new RouteStore(dir, {
+      seal: testSeal,
+      rename: (from, to) => {
+        if (crash) {
+          // As if the process ended here: the sibling is copied aside before the clean-up.
+          writeFileSync(join(dir, "left-behind"), readFileSync(from));
+          throw new Error("crashed");
+        }
+        renameSync(from, to);
+      },
+    });
+    const one = record();
+    routes.put(one);
+    crash = true;
+    expect(() => routes.setToken(one.key, "device-1", "operator", TOKEN)).toThrow("crashed");
+    // The sibling the write made is gone, and what it held was sealed.
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(existsSync(join(dir, "left-behind"))).toBe(true);
+    expect(holding(dir, "plain-device-token-1")).toEqual([]);
+    expect(readFileSync(join(dir, "left-behind"), "utf8")).toContain("sealed:");
+  });
+
+  it("a route whose key changed loses its token; removing a route removes its token; evicted records are told", async () => {
+    const dir = fresh("clawtrate-routes-");
+    const evicted: string[] = [];
+    const routes = new RouteStore(dir, {
+      seal: testSeal,
+      onEvict: (gone) => evicted.push(gone.id),
+    });
     const storage = routedStorage(memoryStorage(), routes);
     const one = record();
     routes.put(one);
-    await storage.set(tokenKey(one.key), '{"token":"t-1"}');
-    // Kept when the same route is saved again.
+    await storage.set(tokenKey(one.key), TOKEN);
     routes.put({ ...one, lastUsed: 2 });
-    expect(await storage.get(tokenKey(one.key))).toBe('{"token":"t-1"}');
+    expect(await storage.get(tokenKey(one.key))).toBe(TOKEN);
     const replaced = record({ fingerprint: `SHA256:${"B".repeat(43)}` });
     expect(replaced.key).not.toBe(one.key);
     routes.put(replaced);
     expect(await storage.get(tokenKey(one.key))).toBeNull();
     expect(await storage.get(tokenKey(replaced.key))).toBeNull();
-    expect(readFileSync(routes.path, "utf8")).not.toContain("t-1");
-    await storage.set(tokenKey(replaced.key), '{"token":"t-3"}');
     routes.remove(replaced.id);
     expect(routes.list()).toEqual([]);
-    expect(readFileSync(routes.path, "utf8")).not.toContain("t-3");
-    // The key never names a forward's local port: only the pinned key, endpoint, gateway port, profile.
+    // The key never names a forward's local address: only the pinned key, endpoint, gateway port, profile.
     expect(record({ gatewayPort: 18790 }).key).not.toBe(one.key);
     expect(record({ profile: "clawtrate" }).key).not.toBe(one.key);
+    // A ninth route lets the oldest go, and the host is told so it forgets its pin and files.
+    for (let i = 0; i < 9; i += 1)
+      routes.put(
+        record({
+          id: `r${String(i).padStart(12, "0")}`,
+          endpoint: `you@[devbox-${i}.example]:22`,
+          lastUsed: 10 + i,
+        }),
+      );
+    expect(routes.list()).toHaveLength(8);
+    expect(evicted).toEqual(["r000000000000"]);
+    // Another record taking a record's key lets that one go as well.
+    routes.put(
+      record({ id: "rffffffffffff", endpoint: "you@[devbox-8.example]:22", lastUsed: 100 }),
+    );
+    expect(evicted).toContain("r000000000008");
+  });
+
+  it("reads only a plain private file of this account's with one link, and drops records whose key isn't what they name", () => {
+    const dir = fresh("clawtrate-routes-");
+    const writer = new RouteStore(dir, { seal: testSeal });
+    const one = record();
+    writer.put(one);
+    writer.setToken(one.key, "device-1", "operator", TOKEN);
+    const good = readFileSync(writer.path, "utf8");
+    const read = () => new RouteStore(dir, { seal: testSeal });
+    expect(read().getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+    // Readable by others: not read.
+    chmodSync(writer.path, 0o644);
+    expect(read().list()).toEqual([]);
+    chmodSync(writer.path, 0o600);
+    // A second link to it: not read.
+    linkSync(writer.path, join(dir, "other-name"));
+    expect(read().list()).toEqual([]);
+    rmSync(join(dir, "other-name"));
+    expect(read().list()).toHaveLength(1);
+    // A link in its place: not followed.
+    const elsewhere = join(dir, "elsewhere.json");
+    writeFileSync(elsewhere, good, { mode: 0o600 });
+    rmSync(writer.path);
+    symlinkSync(elsewhere, writer.path);
+    expect(read().list()).toEqual([]);
+    rmSync(writer.path);
+    // A record whose key is another route's, or with a value past its bound, is dropped.
+    const shape = JSON.parse(good) as { routes: Array<Record<string, unknown>> };
+    shape.routes[0]!.key = record({ gatewayPort: 18790 }).key;
+    writeFileSync(writer.path, JSON.stringify(shape), { mode: 0o600 });
+    expect(read().list()).toEqual([]);
+    shape.routes[0]!.key = one.key;
+    shape.routes[0]!.account = "x".repeat(400);
+    writeFileSync(writer.path, JSON.stringify(shape), { mode: 0o600 });
+    expect(read().list()).toEqual([]);
+    // A folder that isn't proven private is neither read nor written.
+    shape.routes[0]!.account = one.account;
+    writeFileSync(writer.path, JSON.stringify(shape), { mode: 0o600 });
+    const closed = new RouteStore(dir, { seal: testSeal, folderIsPrivate: () => false });
+    expect(closed.list()).toEqual([]);
+    expect(closed.canKeepTokens()).toBe(false);
+    expect(() => closed.put(one)).toThrow(/isn't proven private/);
   });
 });
 
 describe.skipIf(process.platform === "win32")("the app-data privacy check", () => {
-  it("accepts a private folder below private folders, and refuses a link, a folder others can write and a leaf others can read", () => {
+  it("proves the folders that exist before it makes any, and makes each missing one below a proven parent", () => {
     const root = fresh("clawtrate-private-");
-    mkdirSync(join(root, "a", "ssh"), { recursive: true, mode: 0o700 });
-    expect(establishPrivateDir(join(root, "a", "ssh"), { root })).toEqual({
+    expect(ensurePrivateDir(join(root, "a", "b", "ssh"), { root })).toEqual({
       ok: true,
       verified: "posix",
     });
-    // A link anywhere on the way.
-    symlinkSync(join(root, "a"), join(root, "link"));
-    expect(establishPrivateDir(join(root, "link", "ssh"), { root })).toMatchObject({
-      ok: false,
-      reason: "resolves-elsewhere",
-    });
-    // A folder above it that others can write, without the sticky bit.
-    mkdirSync(join(root, "open", "ssh"), { recursive: true, mode: 0o700 });
+    expect(existsSync(join(root, "a", "b", "ssh"))).toBe(true);
+    // A folder above it that others can write, without the sticky bit: nothing is made below it.
+    mkdirSync(join(root, "open"), { mode: 0o700 });
     chmodSync(join(root, "open"), 0o777);
-    expect(establishPrivateDir(join(root, "open", "ssh"), { root })).toMatchObject({
+    expect(ensurePrivateDir(join(root, "open", "ssh"), { root })).toMatchObject({
       ok: false,
       reason: "writable-by-others",
     });
-    // The sticky bit over a folder of this account's own is accepted, as /tmp is.
-    chmodSync(join(root, "open"), 0o1777);
-    expect(establishPrivateDir(join(root, "open", "ssh"), { root }).ok).toBe(true);
-    // The leaf itself readable by others.
-    mkdirSync(join(root, "loose"), { mode: 0o755 });
-    expect(establishPrivateDir(join(root, "loose"), { root })).toMatchObject({
+    expect(existsSync(join(root, "open", "ssh"))).toBe(false);
+    // Group-writable is writable by another account too.
+    chmodSync(join(root, "open"), 0o770);
+    expect(ensurePrivateDir(join(root, "open", "ssh"), { root })).toMatchObject({
       ok: false,
       reason: "writable-by-others",
     });
     // Another account's folder, as seen by a different uid.
-    expect(establishPrivateDir(join(root, "a", "ssh"), { root, uid: 4242 })).toMatchObject({
+    expect(ensurePrivateDir(join(root, "a", "b", "ssh"), { root, uid: 4242 })).toMatchObject({
       ok: false,
       reason: "another-account",
     });
+    // An access control list that lets another account change it: refused, on Linux any at all.
+    const acl = (path: string): AclReading =>
+      path === join(root, "a")
+        ? {
+            kind: "entries",
+            entries: [{ principal: "group:staff", allow: true, rights: ["add_file"] }],
+          }
+        : { kind: "none" };
+    expect(
+      ensurePrivateDir(join(root, "a", "b", "ssh"), { root, readAcl: acl, platform: "darwin" }),
+    ).toMatchObject({ ok: false, reason: "acl", at: join(root, "a") });
+    expect(
+      ensurePrivateDir(join(root, "a", "b", "ssh"), {
+        root,
+        platform: "linux",
+        readAcl: (path) => (path === join(root, "a") ? { kind: "present" } : { kind: "none" }),
+      }),
+    ).toMatchObject({ ok: false, reason: "acl" });
+    // A deny entry, as macOS puts on a home folder, changes nothing.
+    expect(
+      ensurePrivateDir(join(root, "a", "b", "ssh"), {
+        root,
+        platform: "darwin",
+        readAcl: () => ({
+          kind: "entries",
+          entries: [{ principal: "group:everyone", allow: false, rights: ["delete"] }],
+        }),
+      }).ok,
+    ).toBe(true);
+    // A check that can't be run establishes nothing.
+    expect(
+      ensurePrivateDir(join(root, "a", "b", "ssh"), {
+        root,
+        readAcl: () => ({ kind: "unreadable" }),
+      }),
+    ).toMatchObject({ ok: false, reason: "unverifiable" });
   });
+
+  it("at the host's own entry point: a redirected leaf, an ancestor another account can write, and a macOS ACL each give no transport, and nothing is made through them", () => {
+    const root = fresh("clawtrate-entry-");
+    let made = 0;
+    const make = () => {
+      made += 1;
+      return "transport";
+    };
+    // The data folder's `ssh` is a link elsewhere: refused, and nothing is created there.
+    const outside = fresh("clawtrate-outside-");
+    mkdirSync(join(root, "data"), { mode: 0o700 });
+    symlinkSync(outside, join(root, "data", "ssh"));
+    expect(sshTransportFor(join(root, "data"), make, { root })).toEqual({
+      refused: "app-files-unsafe",
+    });
+    expect(readdirSync(outside)).toEqual([]);
+    // An ancestor another account can write: refused before the data folder is made.
+    mkdirSync(join(root, "shared"), { mode: 0o700 });
+    chmodSync(join(root, "shared"), 0o775);
+    expect(sshTransportFor(join(root, "shared", "data"), make, { root })).toEqual({
+      refused: "app-files-unsafe",
+    });
+    expect(existsSync(join(root, "shared", "data"))).toBe(false);
+    // The same folder, private, gives the transport its `ssh` folder, made here.
+    const ok = sshTransportFor(join(root, "home", "data"), make, { root });
+    expect(ok).toBe("transport");
+    expect(existsSync(join(root, "home", "data", "ssh"))).toBe(true);
+    expect(made).toBe(1);
+    // Windows has no private channel for the forward: no transport at all.
+    expect(sshTransportFor(join(root, "home", "data"), make, { root, platform: "win32" })).toEqual({
+      refused: "not-supported",
+    });
+    expect(made).toBe(1);
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reads a real macOS ACL: an entry that lets everyone add files to an ancestor is refused at the entry point",
+    () => {
+      const root = fresh("clawtrate-acl-");
+      mkdirSync(join(root, "app"), { mode: 0o700 });
+      execFileSync("/bin/chmod", [
+        "+a",
+        "group:everyone allow add_file,delete_child",
+        join(root, "app"),
+      ]);
+      expect(ensurePrivateDir(join(root, "app", "data"), { root })).toMatchObject({
+        ok: false,
+        reason: "acl",
+        at: join(root, "app"),
+      });
+      expect(sshTransportFor(join(root, "app", "data"), () => "transport", { root })).toEqual({
+        refused: "app-files-unsafe",
+      });
+      expect(existsSync(join(root, "app", "data"))).toBe(false);
+      execFileSync("/bin/chmod", ["-N", join(root, "app")]);
+      expect(sshTransportFor(join(root, "app", "data"), () => "transport", { root })).toBe(
+        "transport",
+      );
+    },
+  );
 });
 
 const facts = (patch: Partial<LookFacts> = {}): LookFacts => ({
   system: { os: "Darwin", machine: "arm64", nodeName: "devbox" },
   program: "~/.openclaw/bin/openclaw",
+  programSum: "1234567890 4096",
   version: { year: 2026, month: 10, day: 6, build: "fe06181" },
   gateways: [],
   signs: {
@@ -166,15 +392,24 @@ const facts = (patch: Partial<LookFacts> = {}): LookFacts => ({
 const gateway = (patch: Record<string, unknown> = {}) => ({
   profile: "default" as const,
   exit: 0,
+  portStatus: "busy" as "busy" | "free" | null,
+  rpcUrl: "ws://127.0.0.1:18789" as string | null,
   service: { label: "LaunchAgent" as const, loaded: true, running: true, pid: 7 },
   configPath: "~/.openclaw/openclaw.json",
   port: 18789,
   bindMode: "loopback" as const,
   version: { year: 2026, month: 10, day: 6, build: null },
-  rpcOk: true,
-  listenerPids: [7],
+  rpcOk: true as boolean | null,
+  listenerPids: [7] as number[] | null,
   ...patch,
 });
+const stoppedService = { label: "LaunchAgent", loaded: true, running: false, pid: null };
+const provenStopped = {
+  service: stoppedService,
+  rpcOk: false,
+  portStatus: "free",
+  listenerPids: [],
+};
 
 describe("what the found card says over SSH", () => {
   it("names only what the LOOK established: running, untested, too old, proven stopped, missing, not found", () => {
@@ -198,32 +433,9 @@ describe("what the found card says over SSH", () => {
         facts({ gateways: [gateway({ version: { year: 2026, month: 6, day: 2, build: null } })] }),
       ).look.outcome,
     ).toBe("too-old");
-    const stopped = sshLook(
-      facts({
-        gateways: [
-          gateway({
-            service: { label: "LaunchAgent", loaded: true, running: false, pid: null },
-            rpcOk: false,
-            listenerPids: [],
-          }),
-        ],
-      }),
-    );
+    const stopped = sshLook(facts({ gateways: [gateway(provenStopped)] }));
     expect(stopped.look).toMatchObject({ outcome: "stopped", service: "launchagent-stopped" });
     expect(stopped.stopped).toMatchObject({ profile: "default", port: 18789 });
-    // Stopped, but something else holds the port: not proven stopped, so no Start.
-    const held = sshLook(
-      facts({
-        gateways: [
-          gateway({
-            service: { label: "LaunchAgent", loaded: true, running: false, pid: null },
-            listenerPids: [99],
-          }),
-        ],
-      }),
-    );
-    expect(held.stopped).toBeNull();
-    expect(held.look.outcome).toBe("cant-tell");
     expect(sshLook(facts({ program: null })).look.outcome).toBe("program-missing");
     expect(
       sshLook(
@@ -243,28 +455,66 @@ describe("what the found card says over SSH", () => {
     expect(foreign.found).toBeNull();
     expect(foreign.look.outcome).toBe("cant-tell");
   });
+
+  it("treats an unknown listener state as unknown: stopped only from a free port, a failed RPC, a loaded stopped service and a compatible CLI", () => {
+    const tell = (patch: Record<string, unknown>, more: Partial<LookFacts> = {}) =>
+      sshLook(facts({ gateways: [gateway({ ...provenStopped, ...patch })], ...more }));
+    // The review's case: a stopped service entry with no port data and an RPC that answered.
+    const missing = tell({ portStatus: null, listenerPids: null, rpcOk: true });
+    expect(missing.stopped).toBeNull();
+    expect(missing.look).toMatchObject({ outcome: "cant-tell", reason: "contradictory" });
+    // Each fact alone, missing or disagreeing: never the stopped card.
+    for (const patch of [
+      { portStatus: null },
+      { portStatus: "busy" },
+      { listenerPids: null },
+      { listenerPids: [99] },
+      { rpcOk: null },
+      { rpcOk: true },
+      { exit: 1 },
+      { service: { ...stoppedService, loaded: false } },
+      { service: { ...stoppedService, loaded: null } },
+    ])
+      expect(tell(patch).stopped, JSON.stringify(patch)).toBeNull();
+    // A CLI older than setup supports: not offered Start.
+    expect(tell({}, { version: { year: 2026, month: 6, day: 2, build: null } }).stopped).toBeNull();
+    // Running needs the RPC at exactly the gateway's loopback endpoint, and the gateway's version.
+    expect(
+      sshLook(facts({ gateways: [gateway({ rpcUrl: "ws://127.0.0.1:18790" })] })).found,
+    ).toBeNull();
+    expect(sshLook(facts({ gateways: [gateway({ rpcUrl: null })] })).found).toBeNull();
+    expect(sshLook(facts({ gateways: [gateway({ version: null })] })).found).toBeNull();
+    expect(sshLook(facts({ gateways: [gateway({ portStatus: "free" })] })).found).toBeNull();
+    // A program the LOOK couldn't checksum is one no script will run.
+    expect(sshLook(facts({ gateways: [gateway()], programSum: null })).look.outcome).toBe(
+      "cant-tell",
+    );
+  });
 });
 
-describe("the approve command for a route's computer and profile", () => {
+describe("the approve command for a route's account, SSH port and profile", () => {
+  const ssh = (profile: "default" | "clawtrate") =>
+    ({ route: "ssh", account: "you@127.0.0.1", port: 2222, profile }) as const;
   const instructions = approvalInstructionsFor(null, (url) =>
-    url === "ws://127.0.0.1:50123"
-      ? { route: "ssh", where: "devbox", profile: "default" }
-      : url === "ws://127.0.0.1:50124"
-        ? { route: "ssh", where: "devbox", profile: "clawtrate" }
+    url === "ws://c0000000000000001.ssh.invalid"
+      ? ssh("default")
+      : url === "ws://c0000000000000002.ssh.invalid"
+        ? ssh("clawtrate")
         : url === "ws://127.0.0.1:18789"
-          ? { route: "this-computer", where: "this computer", profile: "default" }
+          ? { route: "this-computer", profile: "default" }
           : null,
   );
   const id = "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942";
 
-  it("names the computer to run it on and the profile, for SSH and this computer; an address route keeps the general line", () => {
-    expect(instructions("ws://127.0.0.1:50123", id)).toEqual({
+  it("names the full account and SSH port to run it on and the profile, with a validated request id only", () => {
+    // An alias ("devbox") resolved elsewhere, on a port other than 22: the account and port as resolved.
+    expect(instructions("ws://c0000000000000001.ssh.invalid", id)).toEqual({
       command: `openclaw devices approve ${id}`,
-      note: "On devbox, approve this request for the default profile:",
+      note: "On you@127.0.0.1 (SSH port 2222), approve this request for the default profile.",
     });
-    expect(instructions("ws://127.0.0.1:50124", id)).toEqual({
+    expect(instructions("ws://c0000000000000002.ssh.invalid", id)).toEqual({
       command: `openclaw --profile clawtrate devices approve ${id}`,
-      note: "On devbox, approve this request for the clawtrate profile:",
+      note: "On you@127.0.0.1 (SSH port 2222), approve this request for the clawtrate profile.",
     });
     expect(instructions("ws://127.0.0.1:18789", id)).toEqual({
       command: `openclaw devices approve ${id}`,
@@ -274,9 +524,13 @@ describe("the approve command for a route's computer and profile", () => {
       command: `openclaw devices approve ${id}`,
       note: "The gateway's owner runs this on the machine where the gateway runs.",
     });
-    expect(approvalForPlace({ route: "ssh", where: "devbox", profile: "default" }, "")).toEqual({
+    // No request id: list them, and match this device before approving.
+    expect(approvalForPlace(ssh("default"), "")).toEqual({
       command: "openclaw devices list",
-      note: "On devbox, approve this device for the default profile from the requests this lists.",
+      note: "On you@127.0.0.1 (SSH port 2222), list pending devices for the default profile and match this device ID before you approve.",
     });
+    // A request id of any other shape is never put into the command the person copies.
+    for (const bad of ["x; rm -rf ~", "$(id)", "e5eb4aa8 175f", "a".repeat(36)])
+      expect(approvalForPlace(ssh("default"), bad).command).toBe("openclaw devices list");
   });
 });

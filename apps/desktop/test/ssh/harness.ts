@@ -36,8 +36,13 @@ export function testEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * A fresh folder of the test's own. On macOS it is made in /tmp, not the
+ * per-user temporary folder, whose long path leaves no room for a forward's
+ * local socket (104 bytes) in the folders below it.
+ */
 export function tempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), prefix)));
 }
 
 export function keygen(path: string, type: "ed25519" | "ecdsa" = "ed25519"): void {
@@ -238,8 +243,15 @@ export function statusJson(options: {
       port: options.port,
       version: "2026.10.6",
     },
-    port: { port: options.port, status: "busy", listeners: [{ pid }] },
-    rpc: { ok: options.rpcOk ?? true, url: `ws://127.0.0.1:${options.port}` },
+    // A stopped service frees its port: nothing listens there, and the RPC fails.
+    port:
+      options.running === false
+        ? { port: options.port, status: "free", listeners: [] }
+        : { port: options.port, status: "busy", listeners: [{ pid }] },
+    rpc: {
+      ok: options.rpcOk ?? options.running !== false,
+      url: `ws://127.0.0.1:${options.port}`,
+    },
     extraServices: [],
   };
 }
@@ -279,6 +291,15 @@ export async function waitFor(check: () => boolean, ms: number, what: string): P
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/** Whether this sshd has `PerSourcePenalties` (OpenSSH 9.8 and later). */
+function penalties(): boolean {
+  const out = spawnSync(SSHD, ["-V"], { encoding: "utf8" });
+  const match = /OpenSSH_(\d+)\.(\d+)/.exec(`${out.stderr}${out.stdout}`);
+  if (!match) return false;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major > 9 || (major === 9 && minor >= 8);
 }
 
 export type TestSshd = {
@@ -332,6 +353,9 @@ export async function startSshd(
       "X11Forwarding no",
       // Sessions see the test's home, not the account's: their start-up files and the LOOK's places.
       `SetEnv HOME=${home} ZDOTDIR=${home}`,
+      // OpenSSH 9.8 and later refuse a source address for a while after refused sign-ins and the
+      // credential-free key probes these tests make by the dozen; this sshd is the test's own.
+      ...(penalties() ? ["PerSourcePenalties no"] : []),
       "LogLevel VERBOSE",
       "",
     ].join("\n");
@@ -479,11 +503,13 @@ export function httpGateway(): Promise<{
   });
 }
 
-/** A GET through a local port: the status code, or null when nothing answered as HTTP. */
-export function httpGet(port: number): Promise<number | null> {
+/** A GET through a local port or socket: the status code, or null when nothing answered as HTTP. */
+export function httpGet(local: number | string): Promise<number | null> {
   return new Promise((resolve) => {
     const request = httpRequest(
-      { host: "127.0.0.1", port, path: "/", timeout: 3000 },
+      typeof local === "number"
+        ? { host: "127.0.0.1", port: local, path: "/", timeout: 3000 }
+        : { socketPath: local, path: "/", timeout: 3000 },
       (response) => {
         response.resume();
         resolve(response.statusCode ?? null);
@@ -497,3 +523,17 @@ export function httpGet(port: number): Promise<number | null> {
     request.end();
   });
 }
+
+/**
+ * A token seal for tests, standing in for Electron's `safeStorage`: what it
+ * seals is the reversed bytes in base64 behind a marker, so a plain token
+ * never appears in what is written.
+ */
+export const testSeal = {
+  available: () => true,
+  seal: (plain: string) => `sealed:${Buffer.from(plain, "utf8").reverse().toString("base64")}`,
+  open: (sealed: string) =>
+    sealed.startsWith("sealed:")
+      ? Buffer.from(sealed.slice("sealed:".length), "base64").reverse().toString("utf8")
+      : null,
+};

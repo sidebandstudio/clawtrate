@@ -117,7 +117,7 @@ export class SetupController implements SetupHost {
     if (!found || found.url !== url) return null;
     const profile = found.profile.name;
     return profile === "default" || profile === "clawtrate"
-      ? { route: "this-computer", where: "this computer", profile }
+      ? { route: "this-computer", profile }
       : null;
   }
 

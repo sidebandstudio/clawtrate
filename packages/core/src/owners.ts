@@ -365,6 +365,23 @@ export const SSH_TRANSPORT_OWNERS: Record<string, Owner> = {
 export const SSH_PROCESS_OWNERS: Record<string, Owner> = {
   running: { max: MAX_SSH_PROCESSES, each: N, row: null },
 };
+/** Channels the setup host keeps: one forward attempt's local socket each, the newest. */
+export const MAX_SSH_CHANNELS = 16;
+/** Destinations whose route id the setup host remembers in one run. */
+export const MAX_SSH_REMEMBERED_IDS = 16;
+/** Route records the desktop's route store keeps, each with at most one sealed token. */
+export const MAX_SSH_ROUTE_RECORDS = 8;
+
+/**
+ * The setup host of "Another computer" (`apps/desktop/src/setup/remote.ts`):
+ * the channels it gave the client, by address, and the route id of each
+ * destination looked at in this run. Neither is shown or sent.
+ */
+export const REMOTE_SETUP_OWNERS: Record<string, Owner> = {
+  channels: { max: MAX_SSH_CHANNELS, each: 2 * ID + SHORT, row: null },
+  ids: { max: MAX_SSH_REMEMBERED_IDS, each: 2 * ID, row: null },
+};
+
 /** A forward's state listeners (`ForwardSupervisor`): functions. */
 export const SSH_FORWARD_OWNERS: Record<string, Owner> = {
   listeners: { max: MAX_FORWARD_LISTENERS, each: N, row: null },
@@ -384,6 +401,7 @@ export function ownerClassFields(): Record<string, string[]> {
     SshTransport: new Set(Object.keys(SSH_TRANSPORT_OWNERS)),
     ProcessTable: new Set(Object.keys(SSH_PROCESS_OWNERS)),
     ForwardSupervisor: new Set(Object.keys(SSH_FORWARD_OWNERS)),
+    RemoteSetup: new Set(Object.keys(REMOTE_SETUP_OWNERS)),
   };
   for (const path of Object.keys(CLIENT_OWNERS)) {
     const parts = path.split(".");

@@ -482,6 +482,12 @@ export type ClientOptions = {
    * a saved one resumed at start and every retry.
    */
   allowGatewayUrl?: (url: string) => boolean;
+  /**
+   * The host's way back to a route after Disconnect (`retryNow`): a routed
+   * connection's address belongs to one forward of its host, so only the host
+   * can open the route again. Without it, Reconnect reopens the saved address.
+   */
+  reopenRoute?: (route: string) => Promise<void>;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
   /** Turn limit for runs this client starts. */
@@ -570,6 +576,10 @@ export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
 export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
 /** A setup reuse found no saved token for its gateway any more: a new consent is needed. */
 export const SETUP_PAIRING_GONE = "SETUP_PAIRING_GONE";
+/** A routed connection's gateway identity couldn't be read after its hello: nothing was used. */
+export const ROUTE_IDENTITY_UNREAD = "ROUTE_IDENTITY_UNREAD";
+/** A routed connection's gateway answered with another identity than the route's: nothing was used. */
+export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
 /** Any refusal of a setup connection but the few the setup screens name. A code of the client's own. */
 export const SETUP_CONNECT_REFUSED = "SETUP_CONNECT_REFUSED";
 /** The gateway codes a setup connection publishes as they are; any other is `SETUP_CONNECT_REFUSED`. */
@@ -1014,6 +1024,8 @@ export class ClawtrateClient {
   private epoch = 0;
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
+  /** The identity a routed connection must find after each hello; null until its first read. */
+  private routeIdentity: { route: string; identity: string | null } | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
   private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
@@ -1242,6 +1254,11 @@ export class ClawtrateClient {
     return this.settings?.route ?? null;
   }
 
+  /** Whether the person chose Disconnect: nothing reconnects until Reconnect. */
+  get suspended(): boolean {
+    return this.settings?.suspended === true;
+  }
+
   /**
    * Connect through a route the host holds open (docs/design/setup.md §7, §8):
    * `url` is where the route answers now, `route` the key its device token is
@@ -1255,12 +1272,19 @@ export class ClawtrateClient {
     route: string;
     code?: { bootstrapToken: string; expiresAtMs: number };
     setup?: { check?: () => boolean };
+    /**
+     * The gateway identity the route recorded, or null before its first. After
+     * every hello on this route the identity is read before anything else is
+     * asked or allowed; one that differs, or none, ends the connection.
+     */
+    identity?: string | null;
   }): Promise<void> {
     const url = validateGatewayUrl(options.url);
     if (!ROUTE_KEY.test(options.route)) throw new Error("Not a route key.");
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     if (this.settings?.route !== options.route)
       this.abandonAccessRequest("Switched to another gateway.");
+    this.routeIdentity = { route: options.route, identity: options.identity ?? null };
     this.settings = { url, token: null, route: options.route };
     this.pairingSeen = null;
     const setup = options.setup ?? (options.code ? {} : null);
@@ -1334,6 +1358,12 @@ export class ClawtrateClient {
       return;
     }
     if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+    // A route's address is its host's forward of the moment: the host opens the route again.
+    const route = this.settings.route;
+    if (route && this.options.reopenRoute) {
+      await this.options.reopenRoute(route);
+      return;
+    }
     await this.open();
   }
 
@@ -5243,10 +5273,18 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
+        // A route's address is allowed only while its channel is the host's current one.
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         this.heldToken = token?.token ?? null;
         const setup = this.isSetup(settings.url);
-        // A setup reuse whose token is gone sends nothing: the person consents again.
-        if (setup && !token && this.setupIntent?.reuse) {
+        const routeCode =
+          this.setupCode?.url === settings.url && this.now() < this.setupCode.expiresAtMs;
+        // A setup reuse whose token is gone sends nothing: the person consents again. So does a
+        // route without its token and without a code: no other credential is ever offered there.
+        if (
+          !token &&
+          ((setup && this.setupIntent?.reuse) || (settings.route !== undefined && !routeCode))
+        ) {
           this.close();
           this.setupIntent = null;
           this.setConnection({
@@ -5285,6 +5323,7 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
@@ -5366,6 +5405,11 @@ export class ClawtrateClient {
               protocol,
             },
           });
+          return;
+        }
+        // A route's gateway says who it is before anything is asked of it or allowed here.
+        if (settings.route) {
+          void this.checkRouteIdentity(hello, generation, settings.route);
           return;
         }
         this.handleHello(hello, generation);
@@ -6780,6 +6824,69 @@ export class ClawtrateClient {
         },
       });
     return true;
+  }
+
+  /** A route's address stopped being its host's current channel: nothing is signed or sent. */
+  private refuseRouteAddress(generation: number): never {
+    const url = this.settings?.url ?? "";
+    const current = generation === this.generation;
+    this.close();
+    this.dropSetupCredentials();
+    if (current)
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        error: {
+          code: "GATEWAY_NOT_ALLOWED",
+          message: new GatewayNotAllowedError(url).message,
+          hint: null,
+        },
+      });
+    throw new GatewayNotAllowedError(url);
+  }
+
+  /**
+   * After a routed connection's hello: the gateway's identity first, while
+   * the connection grants nothing here. The route's recorded identity must
+   * match; before its first, any identity read is the route's from then on.
+   * No identity, or another, closes the connection and nothing else is asked.
+   */
+  private async checkRouteIdentity(hello: HelloOk, generation: number, route: string) {
+    const expected = this.routeIdentity?.route === route ? this.routeIdentity.identity : null;
+    const id = await this.readGatewayIdentity();
+    if (generation !== this.generation || this.settings?.route !== route) return;
+    if (id === null || (expected !== null && id !== expected)) {
+      this.close();
+      this.dropSetupCredentials();
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        canWrite: false,
+        canAnswer: false,
+        canApprove: false,
+        canAdmin: false,
+        error:
+          id === null
+            ? {
+                code: ROUTE_IDENTITY_UNREAD,
+                message:
+                  "Clawtrate couldn't confirm which OpenClaw gateway answered, so it disconnected.",
+                hint: null,
+              }
+            : {
+                code: ROUTE_IDENTITY_CHANGED,
+                message: "A different OpenClaw gateway answered, so Clawtrate disconnected.",
+                hint: null,
+              },
+      });
+      return;
+    }
+    this.routeIdentity = { route, identity: id };
+    this.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: id },
+    }));
+    this.handleHello(hello, generation);
   }
 
   /** Whether the connection to `url` is the host's setup connection. */

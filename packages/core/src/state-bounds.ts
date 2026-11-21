@@ -1047,14 +1047,15 @@ const there = object<SshSetup>()({
     }),
   }),
   failure: object<NonNullable<SshSetup["failure"]>>()({ kind: ENUM, cause: ENUM, exit: NUMBER }),
+  resume: FLAG,
 });
 const route = object<RouteStatus>()({
   name: text(MAX_DESTINATION_CHARS),
   account: text(MAX_DESTINATION_CHARS),
+  port: NUMBER,
   phase: ENUM,
   cause: ENUM,
   profile: ENUM,
-  startedByClawtrate: FLAG,
 });
 const setup = object<SetupState>()({
   phase: ENUM,

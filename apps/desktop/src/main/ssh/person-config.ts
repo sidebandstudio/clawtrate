@@ -3,8 +3,11 @@
 // name: HostName, User, Port, IdentityFile, IdentitiesOnly, CertificateFile,
 // IdentityAgent and PubkeyAuthentication.
 // A setting that could run a command, open a forward, reach the computer
-// through another one or change how its key is checked is refused by name, and
-// so is any setting this file does not know. The file is never given to `ssh`,
+// through another one, choose its address, change how its key is checked or
+// how this account signs in is refused by name, and so is any setting this
+// file does not know. A relative Include is read from the SSH configuration
+// folder, as OpenSSH reads it, and an Include this file can't follow exactly is
+// refused by name. The file is never given to `ssh`,
 // and `ssh -G` is never used: it would evaluate `Match exec`.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -80,11 +83,24 @@ const REFUSED = new Map<string, [string, RefusalCategory]>([
   ["hostkeyalias", ["HostKeyAlias", "host-key"]],
   ["verifyhostkeydns", ["VerifyHostKeyDNS", "host-key"]],
   ["revokedhostkeys", ["RevokedHostKeys", "host-key"]],
+  ["hostkeyalgorithms", ["HostKeyAlgorithms", "host-key"]],
+  ["checkhostip", ["CheckHostIP", "host-key"]],
+  ["casignaturealgorithms", ["CASignatureAlgorithms", "host-key"]],
+  ["addressfamily", ["AddressFamily", "unsupported"]],
+  ["preferredauthentications", ["PreferredAuthentications", "unsupported"]],
+  ["pubkeyacceptedalgorithms", ["PubkeyAcceptedAlgorithms", "unsupported"]],
+  ["pubkeyacceptedkeytypes", ["PubkeyAcceptedKeyTypes", "unsupported"]],
+  ["passwordauthentication", ["PasswordAuthentication", "unsupported"]],
+  ["kbdinteractiveauthentication", ["KbdInteractiveAuthentication", "unsupported"]],
+  ["challengeresponseauthentication", ["ChallengeResponseAuthentication", "unsupported"]],
+  ["gssapiauthentication", ["GSSAPIAuthentication", "unsupported"]],
+  ["numberofpasswordprompts", ["NumberOfPasswordPrompts", "unsupported"]],
 ]);
 
 /**
  * Settings that are left out without a refusal: the host's own file sets them,
- * or `ssh`'s default stands, and neither runs anything nor weakens the key check.
+ * or `ssh`'s default stands. None runs anything, chooses the address, touches
+ * the key check or changes how this account signs in.
  */
 const IGNORED = new Set([
   "addkeystoagent",
@@ -98,23 +114,11 @@ const IGNORED = new Set([
   "loglevel",
   "visualhostkey",
   "hashknownhosts",
-  "checkhostip",
   "batchmode",
   "requesttty",
-  "addressfamily",
   "ciphers",
   "macs",
   "kexalgorithms",
-  "hostkeyalgorithms",
-  "pubkeyacceptedalgorithms",
-  "pubkeyacceptedkeytypes",
-  "casignaturealgorithms",
-  "preferredauthentications",
-  "passwordauthentication",
-  "kbdinteractiveauthentication",
-  "challengeresponseauthentication",
-  "gssapiauthentication",
-  "numberofpasswordprompts",
   "forwardx11trusted",
   "escapechar",
   "ignoreunknown",
@@ -125,32 +129,25 @@ const MAX_FILES = 32;
 const MAX_DEPTH = 8;
 const MAX_LIST = 16;
 
+/** The note for a refused setting: it names the setting, whatever its group. */
 function refusal(category: RefusalCategory, setting: string, name: string): ConfigRefusal {
+  const plain = "Use a plain SSH alias or Advanced.";
   const notes: Record<RefusalCategory, [string, string]> = {
     "jump-host": [
-      `${name} is reached through another computer.`,
-      `Clawtrate doesn't connect through jump hosts yet. Use a setup code made on ${name}, or Advanced.`,
+      `The SSH settings for ${name} include ${setting}.`,
+      `Clawtrate doesn't connect through another computer. ${plain}`,
     ],
     "command-or-forward": [
-      `${name}'s SSH settings run a command or open other forwards.`,
-      `Clawtrate only opens one forward, with no commands of yours. Add a plain alias for ${name} to your SSH configuration and use that.`,
+      `Clawtrate can't use ${setting} in the SSH settings for ${name}.`,
+      plain,
     ],
-    "host-key": [
-      `${name}'s SSH settings change how its key is checked.`,
-      `Clawtrate checks host keys its own way. Add a plain alias for ${name} and use that.`,
-    ],
-    unsupported: [
-      `${name}'s SSH settings use ${setting}.`,
-      `Clawtrate takes only HostName, User, Port, IdentityFile, IdentitiesOnly, CertificateFile, IdentityAgent and PubkeyAuthentication. Add a plain alias for ${name} and use that.`,
-    ],
+    "host-key": [`Clawtrate can't use ${setting} in the SSH settings for ${name}.`, plain],
+    unsupported: [`Clawtrate can't use ${setting} in the SSH settings for ${name}.`, plain],
     "invalid-value": [
-      `${name}'s SSH settings have a ${setting} Clawtrate can't use.`,
-      `Clawtrate takes plain values only: no tokens such as %h, no variables, and files in your home folder. Add a plain alias for ${name} and use that.`,
+      `Clawtrate can't use ${setting} in the SSH settings for ${name}.`,
+      `Clawtrate takes plain values only: no tokens such as %h, no variables, and files in your home folder. ${plain}`,
     ],
-    unreadable: [
-      "Clawtrate couldn't read your SSH configuration.",
-      "Use a setup code, or Advanced.",
-    ],
+    unreadable: ["Clawtrate couldn't read your SSH configuration.", "Use Advanced."],
   };
   const [title, sentence] = notes[category];
   return { ok: false, kind: "refused", category, setting, title, sentence };
@@ -288,19 +285,27 @@ const defaultReader: Reader = (path) => {
   return readFileSync(path, "utf8");
 };
 
-/** The files an `Include` names: one path, or `*` and `?` in its last part only. */
-function includedFiles(raw: string, from: string, world: SshWorld): string[] {
+/** An Include this file can't follow exactly as OpenSSH would: refused by the name Include. */
+class IncludeRefused extends Error {}
+
+/**
+ * The files an `Include` names: one path, or `*` and `?` in its last part
+ * only. A relative path is in the SSH configuration folder, as OpenSSH reads
+ * it from the person's file, never beside the file that included it.
+ */
+function includedFiles(raw: string, world: SshWorld): string[] {
   const value = singleValue(raw);
-  if (value === null || /[%$]/.test(value)) throw new Unreadable();
+  if (value === null || /[%$`~]/.test(value.slice(value.startsWith("~/") ? 2 : 0)))
+    throw new IncludeRefused();
   let path: string;
   // As spelled, as with key paths; each file is guarded before it is opened (`walk`).
   if (value.startsWith("~/")) path = `${world.home}/${value.slice(2)}`;
   else if (isAbsolute(value)) path = value;
-  else path = `${dirname(from)}/${value}`;
+  else path = `${dirname(world.personConfig)}/${value}`;
   guardWorld(world, [path]);
-  if (!insideHome(path, world.home, world.platform)) throw new Unreadable();
+  if (!insideHome(path, world.home, world.platform)) throw new IncludeRefused();
   const last = basename(path);
-  if (/[*?]/.test(dirname(path))) throw new Unreadable();
+  if (/[*?]/.test(dirname(path))) throw new IncludeRefused();
   if (!/[*?]/.test(last)) return [path];
   guardWorld(world, [dirname(path)]);
   let names: string[];
@@ -355,7 +360,15 @@ function walk(
         state.refusal = ["command-or-forward", "Include"];
         return;
       }
-      for (const file of includedFiles(line.value, path, world)) {
+      let files: string[];
+      try {
+        files = includedFiles(line.value, world);
+      } catch (error) {
+        if (!(error instanceof IncludeRefused)) throw error;
+        state.refusal = ["invalid-value", "Include"];
+        return;
+      }
+      for (const file of files) {
         walk(file, name, world, read, found, state, depth + 1);
         if (state.refusal) return;
       }

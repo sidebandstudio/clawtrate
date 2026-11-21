@@ -366,6 +366,9 @@ export function Settings({
             Waiting for the gateway's owner to approve this device's new pairing. It changes by
             itself once they approve or reject it; until then this device keeps its earlier access.
           </p>
+          {upgrade.approveCommand && upgrade.approveNote && (
+            <p className="approve-note">{upgrade.approveNote}</p>
+          )}
           {upgrade.approveCommand && (
             <CommandLine command={upgrade.approveCommand} label="Copy approve command" />
           )}

@@ -73,10 +73,10 @@ const thereFailed = (failure: NonNullable<SshSetup["failure"]>, look: SetupLook 
 const route = (phase: RouteStatus["phase"], patch: Partial<RouteStatus> = {}): RouteStatus => ({
   name: "devbox",
   account: "you@devbox.example",
+  port: 22,
   phase,
   cause: null,
   profile: "default",
-  startedByClawtrate: false,
   ...patch,
 });
 
@@ -149,9 +149,9 @@ export const SETUP_STATES: Record<string, SetupState> = {
       refusal: {
         category: "jump-host",
         setting: "ProxyJump",
-        title: "devbox is reached through another computer.",
+        title: "The SSH settings for devbox include ProxyJump.",
         sentence:
-          "Clawtrate doesn't connect through jump hosts yet. Use a setup code made on devbox, or Advanced.",
+          "Clawtrate doesn't connect through another computer. Use a plain SSH alias or Advanced.",
       },
     },
   ),
@@ -184,6 +184,23 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "there-sign-in": thereFailed({ kind: "sign-in-refused", cause: null, exit: 255 }),
   "there-code-failed": thereFailed({ kind: "code-failed", cause: null, exit: 1 }, running),
   "there-app-files": thereFailed({ kind: "app-files-unsafe", cause: null, exit: null }),
+  "there-contradictory": thereFound({
+    outcome: "cant-tell",
+    reason: "contradictory",
+    version: null,
+    profile: null,
+    listens: null,
+    service: null,
+  }),
+  // At launch: the saved route opened again with its token, and the same route when it couldn't be.
+  "there-resume": {
+    ...there({ phase: "connecting", step: 1 }, { resume: true }),
+    route: route("restoring"),
+  },
+  "there-resume-failed": {
+    ...thereFailed({ kind: "unreachable", cause: "timed out", exit: 255 }),
+    route: route("unreachable"),
+  },
   // The SSH route in the app: the status strip's words, and Settings' Remove (§8).
   "route-restoring": { ...initialSetupState, route: route("restoring") },
   "route-restored": { ...initialSetupState, route: route("restored") },
@@ -192,6 +209,8 @@ export const SETUP_STATES: Record<string, SetupState> = {
     route: route("unreachable", { cause: "timed out" }),
   },
   "route-key-changed": { ...initialSetupState, route: route("key-changed") },
+  "route-failed": { ...initialSetupState, route: route("failed") },
+  "route-different": { ...initialSetupState, route: route("different-gateway") },
   "route-up": { ...initialSetupState, route: route("up") },
 };
 

@@ -1,25 +1,44 @@
 // Routes (docs/decisions.md, "Routes, when the setup flow's SSH package is
 // built"): a routed connection's device token is kept for its route, never for
 // the address it answers on now, so an SSH forward that comes back on another
-// local port reconnects with the same token, keeps what is on screen, and sends
-// nothing while the route is held.
+// channel reconnects with the same token, keeps what is on screen, and sends
+// nothing while the route is held. After every hello the gateway's identity is
+// read before anything else is asked or allowed, and the route's address is
+// asked again before anything is signed or sent.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  ROUTE_IDENTITY_CHANGED,
+  ROUTE_IDENTITY_UNREAD,
+  SETUP_PAIRING_GONE,
+} from "../src/client.ts";
 import { FakeGateway, helloOk, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
 
 const ROUTE = "ssh-0123456789abcdef01234567";
 const ROUTE_TOKEN = `deviceToken:route:${ROUTE}:device-1:operator`;
 
-function setup() {
+function setup(options: { allowed?: () => boolean } = {}) {
   const gateway = new FakeGateway();
   gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], "token-1") });
+  let identity: string | null = "gateway-1";
+  gateway.handlers["gateway.identity.get"] = () => {
+    if (identity === null) throw new Error("no identity");
+    return { deviceId: identity, publicKey: "key" };
+  };
   const storage = memoryStorage();
   const client = new ClawtrateClient(testHost(gateway, storage), {
     reconnect: { initialMs: 20, maxMs: 40 },
+    ...(options.allowed ? { allowGatewayUrl: options.allowed } : {}),
   });
-  return { gateway, storage, client };
+  return { gateway, storage, client, setIdentity: (next: string | null) => (identity = next) };
 }
+
+const SAVED_TOKEN = JSON.stringify({
+  token: "token-1",
+  grantedScopes: ["operator.read"],
+  heldScopes: ["operator.read"],
+});
 
 describe("a routed connection", () => {
   it("keeps its first token for the route, never for the address, and only for exactly read", async () => {
@@ -105,9 +124,100 @@ describe("a routed connection", () => {
       url: "ws://127.0.0.1:50001",
       route: "ssh-ffffffffffffffffffffffff",
     });
-    await until(() => gateway.connects.length > 0);
-    expect(JSON.stringify(gateway.connects[0])).not.toContain("token-1");
+    // A route without its token sends nothing: no other credential is offered there.
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(SETUP_PAIRING_GONE);
+    expect(gateway.connects).toEqual([]);
     expect(() => client.holdRoute("not-a-route")).not.toThrow();
     await expect(client.connectRoute({ url: "ws://127.0.0.1:1", route: "../x" })).rejects.toThrow();
+  });
+});
+
+describe("a routed connection's gateway", () => {
+  it("is asked who it is after every hello, before anything else is read or allowed; another identity ends it", async () => {
+    const { gateway, storage, client, setIdentity } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.gatewayId).toBe("gateway-1");
+    // The identity was the first thing asked on that connection.
+    expect(gateway.requests[0]!.method).toBe("gateway.identity.get");
+    // Another gateway answers after a reconnect: nothing is read from it, nothing is allowed.
+    setIdentity("gateway-2");
+    const asked = gateway.requests.length;
+    const statuses: string[] = [];
+    client.store.subscribe((state) => statuses.push(state.connection.status));
+    await client.connectRoute({
+      url: "ws://c0000000000000002.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_IDENTITY_CHANGED);
+    expect(gateway.requests.slice(asked).map((r) => r.method)).toEqual(["gateway.identity.get"]);
+    expect(statuses).not.toContain("connected");
+    expect(client.state.connection.canWrite).toBe(false);
+    // And it is not retried by the client itself.
+    const sockets = gateway.sockets.length;
+    await sleep(200);
+    expect(gateway.sockets.length).toBe(sockets);
+  });
+
+  it("whose identity can't be read is not used, and a route's first identity is the one read", async () => {
+    const { gateway, storage, client, setIdentity } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    await client.start();
+    setIdentity(null);
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: null,
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_IDENTITY_UNREAD);
+    expect(gateway.calls("agents.list")).toEqual([]);
+    setIdentity("gateway-7");
+    await client.connectRoute({
+      url: "ws://c0000000000000002.ssh.invalid",
+      route: ROUTE,
+      identity: null,
+    });
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.gatewayId).toBe("gateway-7");
+    // From then on the route's identity is that one, through the client's own reconnects too.
+    setIdentity("gateway-8");
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(ROUTE_IDENTITY_CHANGED);
+  });
+
+  it("whose address stops being its host's channel between the socket and the sign-in gets nothing signed or sent", async () => {
+    let allowed = true;
+    const { gateway, storage, client } = setup({ allowed: () => allowed });
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    // The token is read once when the connection is set up and again when the sign-in is built,
+    // after the socket opened: the channel goes in between.
+    let reads = 0;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (key === ROUTE_TOKEN && ++reads === 2) allowed = false;
+      return get(key);
+    };
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(gateway.sockets).toHaveLength(1);
+    expect(client.state.connection.error?.code).toBe("GATEWAY_NOT_ALLOWED");
+    expect(gateway.connects).toEqual([]);
   });
 });

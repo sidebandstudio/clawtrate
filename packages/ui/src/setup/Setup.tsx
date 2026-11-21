@@ -243,8 +243,10 @@ function HowToUpdate() {
 const SERVICE_WORDS: Record<LookService, string> = {
   launchagent: "LaunchAgent",
   "launchagent-stopped": "LaunchAgent, stopped",
-  systemd: "systemd user service",
-  "systemd-stopped": "systemd user service, stopped",
+  systemd: "systemd service",
+  "systemd-stopped": "systemd service, stopped",
+  "systemd-user": "systemd user service",
+  "systemd-user-stopped": "systemd user service, stopped",
   none: "No matching service reported",
 };
 
@@ -253,12 +255,13 @@ const NOT_REPORTED = "Not reported";
 const serviceWords = (service: LookService | null) =>
   service ? SERVICE_WORDS[service] : NOT_REPORTED;
 
-function runningFacts(look: SetupLook): Array<[string, string]> {
+function runningFacts(look: SetupLook, there: boolean): Array<[string, string]> {
   return [
     ["Version", look.version ?? NOT_REPORTED],
     ["Profile", look.profile ?? NOT_REPORTED],
     [
-      "Listens",
+      // Over SSH the status reports the configured bind, not where the gateway listens now.
+      there ? "Configured bind" : "Listens",
       look.listens === "loopback"
         ? "Configured for loopback"
         : look.listens === "lan"
@@ -274,6 +277,15 @@ const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
   new: "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
   paired: "This device has a saved pairing for this address. Clawtrate asks for read access.",
 };
+/** Over SSH, a token is only present here until the gateway accepts it. */
+const SSH_CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
+  new: CONNECT_HINT.new,
+  paired: "This device has a saved token for this route. Clawtrate asks for read access.",
+};
+
+/** An SSH route's account as every prompt and title names it: "you@devbox.example (SSH port 22)". */
+const withPort = (account: string, port: number | null) =>
+  port === null ? account : `${account} (SSH port ${port})`;
 
 /** Other services and profiles the look saw: named, never used. */
 function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
@@ -295,6 +307,7 @@ const CANT_TELL: Record<string, string> = {
   "not-set-up": "OpenClaw didn't report a config file for this profile.",
   endpoint:
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
+  contradictory: "OpenClaw's status results disagree, or say too little to tell.",
 };
 
 /** The found card and actions for each result of the look (§6). */
@@ -327,7 +340,7 @@ function LookResult({
           mark={<CheckIcon />}
           tone="ok"
           heading="OpenClaw is running"
-          facts={runningFacts(look)}
+          facts={runningFacts(look, there !== null)}
         >
           {offer.pair ? (
             <>
@@ -345,7 +358,7 @@ function LookResult({
                   Connect read-only
                 </button>
               </Actions>
-              <Hint>{CONNECT_HINT[look.access ?? "new"]}</Hint>
+              <Hint>{(there ? SSH_CONNECT_HINT : CONNECT_HINT)[look.access ?? "new"]}</Hint>
             </>
           ) : (
             <>
@@ -364,7 +377,7 @@ function LookResult({
           mark={<CheckIcon />}
           tone="ok"
           heading="OpenClaw is running"
-          facts={runningFacts(look)}
+          facts={runningFacts(look, there !== null)}
         >
           <Note tone="warn">
             {`OpenClaw ${look.version} isn't the version this ${PRODUCT_NAME} is tested with (${TESTED_OPENCLAW_VERSION}). Use Advanced to try connecting.`}
@@ -395,7 +408,12 @@ function LookResult({
           facts={[
             ["Installed program", look.version ?? NOT_REPORTED],
             ["Service", serviceWords(look.service)],
-            ["Port", `No gateway answered on port ${look.port}`],
+            [
+              "Port",
+              there
+                ? `Nothing is listening on port ${look.port}`
+                : `No gateway answered on port ${look.port}`,
+            ],
           ]}
         >
           {there ? (
@@ -415,7 +433,7 @@ function LookResult({
                 </button>
                 <Quiet onClick={lookAgain}>Look again</Quiet>
               </Actions>
-              <Hint>{`Clawtrate asks before it starts OpenClaw on ${there.name ?? "that computer"}.`}</Hint>
+              <Hint>{`Clawtrate asks before it starts OpenClaw on ${there.account ?? there.name ?? "that computer"}.`}</Hint>
             </>
           ) : (
             <>
@@ -451,7 +469,11 @@ function LookResult({
         <Found
           mark={<WarnIcon />}
           tone="warn"
-          heading={`Clawtrate couldn't tell what is on ${there ? "that" : "this"} computer`}
+          heading={
+            there && look.reason === "contradictory"
+              ? `Clawtrate couldn't tell whether OpenClaw is running on ${there.account ?? there.destination}.`
+              : `Clawtrate couldn't tell what is on ${there ? "that" : "this"} computer`
+          }
         >
           <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
           <Actions>
@@ -583,6 +605,24 @@ const FAILURES: Record<
     step: 0,
   },
   refused: { lead: "", next: "advanced", step: 0 },
+  identity: {
+    lead: "A different OpenClaw gateway answered, so Clawtrate disconnected.",
+    text: () => "Look again.",
+    next: "look",
+    step: 2,
+  },
+  "identity-unread": {
+    lead: "Clawtrate couldn't confirm which OpenClaw gateway answered, so it disconnected.",
+    text: () => "Look again.",
+    next: "look",
+    step: 2,
+  },
+  "pairing-gone": {
+    lead: "This device has no usable token for this route any more.",
+    text: () => "Look again, then pair again.",
+    next: "look",
+    step: 2,
+  },
   bots: {
     lead: "Connected, but Clawtrate couldn't read your bots.",
     text: () => "Try again, or go back.",
@@ -708,8 +748,9 @@ export function SetupFlow({
         <Mark />
         <Title id="setup-title">Another computer</Title>
         <Lede>
-          Reaching another computer with SSH is off in this run: it would use this account's own SSH
-          settings. Use Advanced with that gateway's address and a token.
+          {offer.platform === "win32"
+            ? "Clawtrate doesn't reach another computer over SSH on Windows in this version: Windows has no local channel for the SSH forward that Clawtrate can keep private. Use Advanced with that gateway's address and a token."
+            : "Reaching another computer with SSH is off in this run: it would use this account's own SSH settings. Use Advanced with that gateway's address and a token."}
         </Lede>
         <Actions>
           <Primary onClick={advanced}>Use Advanced</Primary>
@@ -868,22 +909,23 @@ function sshFailureCopy(
 ): { lead: string; text: string; next: string | null; retry: boolean } {
   const failure = there.failure!;
   const account = there.account ?? there.destination;
-  const name = there.name ?? there.destination;
   const hostName = account.includes("@") ? account.slice(account.indexOf("@") + 1) : account;
+  const port = there.port ?? 22;
   switch (failure.kind) {
     case "unreachable":
       return {
-        lead: `Can't reach ${account}`,
-        text: `Nothing answered at ${hostName}, port ${there.port ?? 22} (${failure.cause ?? "connection refused"}).`,
+        lead: `Can't reach ${withPort(account, there.port)}`,
+        // The cause only as ssh's output classified it.
+        text: `Nothing answered at ${hostName}, port ${port}${failure.cause ? ` (${failure.cause})` : ""}.`,
         next: "Check the name and that the computer is on.",
         retry: true,
       };
     case "sign-in-refused":
       return {
-        lead: `${account} didn't accept your key`,
-        text: `The SSH sign-in for ${account} was refused.`,
+        lead: `SSH sign-in was refused for ${account}, port ${port}.`,
+        text: "Check that the public key is authorized for that account.",
         next:
-          "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first." +
+          "A key with a passphrase has to be in your SSH agent first." +
           (platform === "win32" ? " Key-agent sign-in has not been verified on Windows." : ""),
         retry: true,
       };
@@ -898,8 +940,8 @@ function sshFailureCopy(
       };
     case "not-supported":
       return {
-        lead: "Clawtrate can't use ssh here",
-        text: "This computer's ssh is missing or older than Clawtrate needs.",
+        lead: "Clawtrate couldn't use this computer's SSH client.",
+        text: "Use Advanced with that gateway's address and a token.",
         next: null,
         retry: false,
       };
@@ -910,17 +952,24 @@ function sshFailureCopy(
         next: null,
         retry: false,
       };
+    case "no-token-storage":
+      return {
+        lead: "Clawtrate can't keep a device token encrypted on this computer",
+        text: "So it doesn't pair over SSH here. Use Advanced with that gateway's address and a token.",
+        next: null,
+        retry: false,
+      };
     case "forwarding-refused":
       return {
-        lead: `${name} doesn't allow forwarding`,
-        text: `The SSH server on ${name} refused this forwarded connection. Check whether its SSH configuration and your key allow forwarding to the gateway port.`,
+        lead: `The SSH server refused this forward to OpenClaw on ${withPort(account, there.port)}.`,
+        text: "Check whether its SSH configuration and your key allow forwarding to the gateway port.",
         next: null,
         retry: true,
       };
     case "gateway-not-answering":
       return {
-        lead: `Nothing answered on the gateway port on ${name}`,
-        text: "The SSH server could not connect to the gateway's port.",
+        lead: `Nothing answered through SSH at the gateway port on ${withPort(account, there.port)}.`,
+        text: "OpenClaw did not answer through the SSH forward.",
         next: null,
         retry: true,
       };
@@ -929,7 +978,7 @@ function sshFailureCopy(
         lead: "Couldn't make a one-time code.",
         text:
           failure.exit === null
-            ? `OpenClaw on ${name} didn't return a usable setup code.`
+            ? `OpenClaw on ${account} didn't return a usable setup code.`
             : failure.exit === 0
               ? "OpenClaw didn't return a usable setup code."
               : `OpenClaw exited with code ${failure.exit}.`,
@@ -942,7 +991,7 @@ function sshFailureCopy(
         text:
           failure.exit !== null && failure.exit !== 0
             ? `OpenClaw exited with code ${failure.exit}.`
-            : "Nothing answered on its port after it was started.",
+            : "Nothing answered on its port after the start request.",
         next: null,
         retry: true,
       };
@@ -985,6 +1034,14 @@ function AnotherComputer({
       <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
     </p>
   );
+  // A saved route that couldn't be restored can be removed here, with no connection (§8).
+  const removeSaved = setup.route ? (
+    <p className="s-links">
+      <SmallLink onClick={() => void send({ type: "setupRemoveRoute" })}>
+        {`Remove ${setup.route.account} from Clawtrate…`}
+      </SmallLink>
+    </p>
+  ) : null;
 
   // The field: nothing under way, or the account's dialog open over it.
   if (!there || setup.phase === "idle" || (setup.phase === "confirming" && !setup.look)) {
@@ -1024,7 +1081,7 @@ function AnotherComputer({
           )}
           <Hint>
             <span id="setup-ssh-hint">
-              Clawtrate uses your SSH keys and the host's settings from your SSH configuration, and
+              Clawtrate uses SSH keys and a limited set of settings from your SSH configuration. It
               never asks for a password.
             </span>
           </Hint>
@@ -1055,10 +1112,10 @@ function AnotherComputer({
       <>
         <Back onBack={cancel} />
         <Mark />
-        <Title id="setup-title">{`Looking on ${account}`}</Title>
+        <Title id="setup-title">{`Looking on ${withPort(account, there.port)}`}</Title>
         <Steps
           steps={[
-            `Reaching ${name}`,
+            `Reaching ${account}`,
             "Finding OpenClaw",
             "Checking its version",
             "Asking the gateway",
@@ -1078,7 +1135,7 @@ function AnotherComputer({
           <Mark />
           <Title id="setup-title">{`Is this ${name}?`}</Title>
           <Lede>
-            {`This is the first time Clawtrate connects to ${name}. Its key is below. If you can, compare it with the key ${name} itself shows before you trust it.`}
+            {`Clawtrate has no trusted key for ${account}, SSH port ${there.port ?? 22}. This is the key SSH presented. If you can, compare it with the key ${name} itself shows before you trust it.`}
           </Lede>
           <Fingerprint label={key.presented.label} shown={key.presented} />
           <details className="b-disclosure s-disclosure">
@@ -1107,17 +1164,20 @@ function AnotherComputer({
         <Back onBack={cancel} />
         <Mark />
         <Title id="setup-title">{`On ${account}`}</Title>
-        <Note tone="danger" lead={`${name}'s key has changed`}>
-          {`The key ${name} presented is not the one Clawtrate trusted. This happens when a computer is reinstalled, and it is also what someone between you and ${name} would cause. Clawtrate won't connect until you decide.`}
+        <Note
+          tone="danger"
+          lead={`SSH presented a key that differs from the saved key for ${withPort(account, there.port)}.`}
+        >
+          {`This happens when a computer is reinstalled, and it is also what someone between you and ${account} would cause. Clawtrate won't connect until you decide.`}
         </Note>
         <div className="s-prints">
           {key.trusted && (
             <Fingerprint
-              label={`Trusted, pinned ${key.trusted.pinnedAt.slice(0, 10)}`}
+              label={`Saved ${key.trusted.label} key, pinned ${key.trusted.pinnedAt.slice(0, 10)}`}
               shown={key.trusted}
             />
           )}
-          <Fingerprint label="Presented now" shown={key.presented} />
+          <Fingerprint label={`Presented now: ${key.presented.label} key`} shown={key.presented} />
         </div>
         <Actions>
           <Primary
@@ -1131,7 +1191,7 @@ function AnotherComputer({
         </Actions>
         <p className="s-links">
           <SmallLink onClick={() => void send({ type: "setupReplaceKey" })}>
-            Replace the trusted key…
+            Replace the saved key…
           </SmallLink>
         </p>
       </>
@@ -1147,7 +1207,9 @@ function AnotherComputer({
         <Back onBack={atConnect ? cancel : onFirst} />
         <Mark />
         <Title id="setup-title">
-          {atConnect ? `Connecting to ${account}` : `Looking on ${account}`}
+          {atConnect
+            ? `Connecting to ${withPort(account, there.port)}`
+            : `Looking on ${withPort(account, there.port)}`}
         </Title>
         <Note tone="danger" lead={copy.lead}>
           {copy.text}
@@ -1164,6 +1226,7 @@ function AnotherComputer({
           {!copy.retry && <Primary onClick={onAdvanced}>Use Advanced</Primary>}
         </Actions>
         {copy.retry && advancedLink}
+        {removeSaved}
       </>
     );
   }
@@ -1174,29 +1237,40 @@ function AnotherComputer({
     const copy = failure ? FAILURES[failure.kind] : null;
     const steps = starting
       ? ["Starting the gateway", "Asking the gateway"]
-      : setup.look?.access === "paired"
+      : there.resume
         ? [
-            `Checking ${name}`,
-            `Opening a private connection to ${name}`,
-            "Requesting read access",
+            `Checking ${account}`,
+            "Opening the SSH forward",
+            "Connecting with the saved device token",
             "Loading your bots",
           ]
-        : [
-            `Making a one-time code on ${name}`,
-            `Opening a private connection to ${name}`,
-            "Pairing this computer, read-only",
-            "Loading your bots",
-          ];
+        : setup.look?.access === "paired"
+          ? [
+              `Checking ${account}`,
+              `Opening an SSH forward to ${account}`,
+              "Requesting read access",
+              "Loading your bots",
+            ]
+          : [
+              `Making a one-time code on ${account}`,
+              `Opening an SSH forward to ${account}`,
+              "Requesting read access",
+              "Loading your bots",
+            ];
     const lead =
       failure?.kind === "unreachable"
-        ? "Nothing answered through the private connection."
-        : (copy?.lead ?? "");
+        ? "OpenClaw did not answer through the SSH forward."
+        : failure?.kind === "grant"
+          ? "Clawtrate couldn't confirm a read-only pairing, so it disconnected."
+          : (copy?.lead ?? "");
     return (
       <>
         <Back onBack={setup.look ? cancel : onFirst} />
         <Mark />
         <Title id="setup-title">
-          {starting ? `Starting OpenClaw on ${name}` : `Connecting to ${account}`}
+          {starting
+            ? `Starting OpenClaw on ${withPort(account, there.port)}`
+            : `Connecting to ${withPort(account, there.port)}`}
         </Title>
         <Steps
           steps={steps}
@@ -1228,6 +1302,7 @@ function AnotherComputer({
               )}
               {copy.next === "advanced" && <Primary onClick={onAdvanced}>Use Advanced</Primary>}
             </Actions>
+            {removeSaved}
           </>
         )}
       </>
@@ -1240,7 +1315,7 @@ function AnotherComputer({
     <>
       <Back onBack={onFirst} />
       <Mark />
-      <Title id="setup-title">{`On ${account}`}</Title>
+      <Title id="setup-title">{`On ${withPort(account, there.port)}`}</Title>
       <LookResult
         look={look}
         offer={offer}
@@ -1249,6 +1324,7 @@ function AnotherComputer({
         confirming={setup.phase === "confirming"}
         there={there}
       />
+      {removeSaved}
     </>
   );
 }

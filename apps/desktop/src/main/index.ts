@@ -16,6 +16,7 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
+  safeStorage,
   session,
   shell,
   type WebContents,
@@ -38,9 +39,9 @@ import {
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
 import { SetupRouter, SetupSlice } from "../setup/host.ts";
-import { afterPrivacyCheck } from "../setup/private-dir.ts";
+import { ensurePrivateDir, sshTransportFor } from "../setup/private-dir.ts";
 import { RemoteSetup, type HostAnswer, type HostQuestion } from "../setup/remote.ts";
-import { RouteStore, routedStorage } from "../setup/routes.ts";
+import { RouteStore, routedStorage, type TokenSeal } from "../setup/routes.ts";
 import { productionWorld as sshProductionWorld } from "./ssh/world.ts";
 import { SshTransport } from "./ssh/transport.ts";
 import { ProgramRunner } from "../setup/programs.ts";
@@ -222,20 +223,16 @@ async function confirmNatively(confirmation: {
 }
 
 /**
- * The SSH transport of a person's app, made once, only after its app-data
- * folder and every folder above it are proven private (docs/design/setup.md
- * §2 rule 3). A development build or an automated run never reaches another
+ * The SSH transport of a person's app, made once, only after its data folder,
+ * its `ssh` folder and every folder above them are proven private, and made
+ * only below a proven parent (`sshTransportFor`, docs/design/setup.md §2
+ * rule 3). A development build or an automated run never reaches another
  * computer: its SSH world would be this account's real one.
  */
-function sshTransportFor(dataDir: string): SshTransport | { refused: "app-files-unsafe" } {
-  const dir = join(dataDir, "ssh");
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (process.platform !== "win32") chmodSync(dir, 0o700);
-  } catch {
-    return { refused: "app-files-unsafe" };
-  }
-  return afterPrivacyCheck(dir, () => new SshTransport(sshProductionWorld(dir)), {
+function sshTransport(
+  dataDir: string,
+): SshTransport | { refused: "app-files-unsafe" | "not-supported" } {
+  return sshTransportFor(dataDir, (dir) => new SshTransport(sshProductionWorld(dir)), {
     log: (line) => console.log(line),
   });
 }
@@ -371,11 +368,42 @@ async function saveHeld(
   }
 }
 
+/**
+ * A route's device token, encrypted with Electron's `safeStorage` before it is
+ * written: the system keychain on macOS, the desktop's secret service on
+ * Linux. Linux's plain-text fallback is no encryption, so no token is kept there.
+ */
+function systemSeal(): TokenSeal {
+  return {
+    available: () => {
+      try {
+        if (!safeStorage.isEncryptionAvailable()) return false;
+        return (
+          process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"
+        );
+      } catch {
+        return false;
+      }
+    },
+    seal: (plain) => safeStorage.encryptString(plain).toString("base64"),
+    open: (sealed) => {
+      try {
+        return safeStorage.decryptString(Buffer.from(sealed, "base64"));
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 /** The device key and tokens live here, readable by this user only. */
 function privateDataDir(): string {
   // Only a person's app takes its folder from the environment; every other run keeps its own.
   const chosen = SETUP.kind === "production" ? process.env.CLAWTRATE_DATA_DIR : undefined;
   const dir = chosen ?? join(app.getPath("userData"), "gateway");
+  // Proven first and made only below a proven parent. A folder that can't be proven still holds
+  // the app's other data, as before, and offers no SSH route (`sshTransportFor` asks again).
+  if (process.platform !== "win32" && ensurePrivateDir(dir).ok) return dir;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") chmodSync(dir, 0o700);
   return dir;
@@ -390,7 +418,12 @@ async function main(): Promise<void> {
 
   const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
   const dataDir = privateDataDir();
-  const routes = new RouteStore(dataDir);
+  // A route's device token is encrypted by the system before it is written (Keychain on macOS,
+  // the desktop's secret service on Linux); where it can't be, no token is kept and SSH doesn't pair.
+  const routes = new RouteStore(dataDir, {
+    seal: systemSeal(),
+    onEvict: (record) => remote?.forgetEvicted(record),
+  });
   // Set once the setup host exists: where a request is approved, and a route's word on an address.
   let router: SetupRouter | null = null;
   let remote: RemoteSetup | null = null;
@@ -401,6 +434,9 @@ async function main(): Promise<void> {
     wrapStorage: (store) => routedStorage(store, routes),
     approvalPlace: (url) => router?.placeFor(url) ?? null,
     routeAllows: (url) => remote?.allows(url) ?? null,
+    // A route's channel is reached only on its forward's own local socket.
+    routeSocket: (url) => remote?.socketFor(url) ?? null,
+    reopenRoute: async (route) => remote?.reopen(route),
     // A sandboxed or refused start (every development build and automated run) has no
     // development gateway, doesn't auto-connect and never resumes a saved gateway.
     devGateway: STARTUP.devGateway,
@@ -442,11 +478,13 @@ async function main(): Promise<void> {
     publish: (next) => slice.setMain(next),
   });
   // Another computer only in a person's app: never with this account's real SSH files otherwise.
-  const ssh = SETUP.kind === "production";
+  // Windows has no local socket the host can prove private for the forward: no SSH route there.
+  const ssh =
+    SETUP.kind === "production" && (process.platform === "darwin" || process.platform === "linux");
   remote = ssh
     ? new RemoteSetup({
         client,
-        transport: () => sshTransportFor(dataDir),
+        transport: () => sshTransport(dataDir),
         routes,
         ask: askNatively,
         publish: (next) => slice.setMain(next),
@@ -543,11 +581,27 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
-app.on("before-quit", () => {
+/** How long quitting waits for the SSH forward and every `ssh` the host started to end. */
+const QUIT_WAIT_MS = 5_000;
+let quitting: "no" | "waiting" | "done" = "no";
+
+app.on("before-quit", (event) => {
+  if (quitting === "done") return;
+  if (quitting === "waiting") {
+    event.preventDefault();
+    return;
+  }
+  // The SSH children end first, by PID, within a bound; then the app quits as before.
+  event.preventDefault();
+  quitting = "waiting";
   programs.stopAll();
   void closeSetup();
-  void closeRemote();
   runtime?.client.stop();
+  const bound = new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS));
+  void Promise.race([closeRemote().catch(() => undefined), bound]).finally(() => {
+    quitting = "done";
+    app.quit();
+  });
 });
 
 // One app per data folder: a second launch focuses the running window and exits.

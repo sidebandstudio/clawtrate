@@ -1,12 +1,16 @@
 // The SSH transport of "Another computer" (docs/design/setup.md, sections 5, 8
 // and 19): routes from a validated destination and the person's configuration,
 // host keys captured and pinned as one act, the LOOK over `/bin/sh -s`, the
-// three failures told apart, and the forward. It has no interface: the setup
-// screens and the host's confirmations call it.
+// three failures told apart, and the forward. The setup host
+// (`apps/desktop/src/setup/remote.ts`) and its confirmations call it.
+//
+// The forward listens on a fresh Unix socket of its own in the host's private
+// SSH folder, never on a local TCP port: no other local account or process
+// can be what the client's WebSocket reaches (docs/decisions.md, "SSH to
+// another computer").
 
-import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS, MAX_SSH_ROUTES } from "@clawtrate/core";
@@ -46,7 +50,7 @@ import {
   parseScriptOutput,
   remoteScript,
   type ScriptKind,
-  type ScriptProfile,
+  type ScriptValues,
 } from "./scripts.ts";
 import type { ProgramPlace } from "./look.ts";
 import { routeConfigText } from "./route-config.ts";
@@ -77,7 +81,7 @@ export type Route = {
   target: Target;
   /** The full destination, as text: "you@devbox.example". */
   account: string;
-  /** "you@devbox.example, port 22", for the account's confirmation. */
+  /** "you@devbox.example (SSH port 22)", for the account's confirmation and every prompt. */
   accountWithPort: string;
 };
 
@@ -90,7 +94,8 @@ export type InvalidDestination = {
 export type NotSupportedHere = {
   ok: false;
   kind: "not-supported-here";
-  reason: "ssh-missing" | "ssh-version" | "platform";
+  /** `socket-path`: the private SSH folder's path is too long for a local socket in it. */
+  reason: "ssh-missing" | "ssh-version" | "platform" | "socket-path";
 };
 
 export type Failed = { ok: false; kind: "failed"; failure: SshFailure; note: FailureNote };
@@ -300,13 +305,22 @@ export class SshTransport {
     this.now = options.now ?? Date.now;
     secureDir(world.appDir);
     this.known = new AppKnownHosts(join(world.appDir, "known_hosts"));
+    // A socket left by a run that ended without closing its forward listens on nothing now.
+    for (const name of readdirSync(world.appDir)) {
+      const path = join(world.appDir, name);
+      if (this.socketIsOurs(path)) rmSync(path, { force: true });
+    }
   }
 
   /** Whether this computer's `ssh` is one the module can use; asked once. */
   checkClient(): Promise<{ ok: true } | NotSupportedHere> {
     this.client ??= (async () => {
-      if (!["darwin", "linux", "win32"].includes(this.world.platform)) {
+      // Windows has no local socket this module can prove private: no SSH route there.
+      if (!["darwin", "linux"].includes(this.world.platform)) {
         return { ok: false, kind: "not-supported-here", reason: "platform" } as const;
+      }
+      if (Buffer.byteLength(socketPathIn(this.world.appDir, "0".repeat(12))) > MAX_SOCKET_PATH) {
+        return { ok: false, kind: "not-supported-here", reason: "socket-path" } as const;
       }
       if (!existsSync(this.world.ssh)) {
         return { ok: false, kind: "not-supported-here", reason: "ssh-missing" } as const;
@@ -369,7 +383,7 @@ export class SshTransport {
       generation: randomUUID(),
       target: deepFreeze(target),
       account: accountText(target.user, target.hostName),
-      accountWithPort: `${accountText(target.user, target.hostName)}, port ${target.port}`,
+      accountWithPort: `${accountText(target.user, target.hostName)} (SSH port ${target.port})`,
     };
     // An earlier preparation's objects are stale from here on, and its files for another endpoint go.
     this.routes.delete(routeId);
@@ -725,7 +739,7 @@ export class SshTransport {
   private async scriptInner(
     route: Route,
     kind: ScriptKind,
-    values: { profile: ScriptProfile; port: number },
+    values: ScriptValues,
     options: { signal?: AbortSignal } = {},
   ): Promise<ScriptResult | StaleRoute> {
     const client = await this.checkClient();
@@ -762,7 +776,7 @@ export class SshTransport {
   runScript(
     route: Route,
     kind: ScriptKind,
-    values: { profile: ScriptProfile; port: number },
+    values: ScriptValues,
     options: { signal?: AbortSignal } = {},
   ): Promise<ScriptResult | AppFilesUnsafe | StaleRoute> {
     if (!this.current(route)) return Promise.resolve(STALE);
@@ -802,10 +816,12 @@ export class SshTransport {
     }
     if (this.forwards.size >= MAX_SSH_FORWARDS) return { ok: false, kind: "too-many-forwards" };
     const forward = new ForwardSupervisor({
-      pickPort: freeLoopbackPort,
-      start: (localPort) => this.startForward(route, localPort, gatewayPort),
-      probe: (localPort, process, signal) =>
-        probeHttp(localPort, gatewayPort, () => process.channel(), 5000, signal),
+      pickLocal: async () => this.freshSocket(),
+      start: (local) => this.startForward(route, local, gatewayPort),
+      probe: (local, process, signal) =>
+        this.socketIsOurs(local)
+          ? probeHttp(local, gatewayPort, () => process.channel(), 5000, signal)
+          : Promise.resolve("no-answer"),
       verify: async (signal): Promise<VerifyResult> => {
         const look = await this.look(route, { signal });
         if (look.ok) {
@@ -830,23 +846,52 @@ export class SshTransport {
     return { ok: true, forward };
   }
 
-  private startForward(route: Route, localPort: number, gatewayPort: number): ForwardProcess {
+  /** A local socket path no attempt has had: a fresh name in the private SSH folder, absent now. */
+  private freshSocket(): string {
+    for (let i = 0; i < 8; i += 1) {
+      const path = socketPathIn(this.world.appDir, randomBytes(6).toString("hex"));
+      if (!existsSync(path)) return path;
+    }
+    throw new Error("No fresh local socket name.");
+  }
+
+  /**
+   * Whether `path` is the forward's own socket: in the private SSH folder, a
+   * socket (not a link), this account's, and closed to everyone else.
+   */
+  socketIsOurs(path: string): boolean {
+    if (!isSocketPathIn(this.world.appDir, path)) return false;
+    try {
+      const info = lstatSync(path);
+      const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+      return info.isSocket() && info.uid === uid && (info.mode & 0o077) === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private startForward(route: Route, local: string, gatewayPort: number): ForwardProcess {
     const child = this.processes.start(this.world, [
       "-F",
       this.configPath(route),
       "-v",
       "-o",
       "ClearAllForwardings=no",
+      // The socket is made closed to group and others, and never over a file that is there.
+      "-o",
+      "StreamLocalBindMask=0177",
+      "-o",
+      "StreamLocalBindUnlink=no",
       "-N",
       "-L",
-      `127.0.0.1:${localPort}:127.0.0.1:${gatewayPort}`,
+      `${local}:127.0.0.1:${gatewayPort}`,
       "--",
       route.alias,
     ]);
     // The reader keeps at most 1,024 characters of the current unfinished stderr line so it
     // can classify it across chunks. It discards each complete line after classification
     // and exposes only typed facts.
-    const output = new ForwardOutput(localPort);
+    const output = new ForwardOutput(local);
     const listening: Array<() => void> = [];
     const exits: Array<(failure: SshFailure) => void> = [];
     let heard = false;
@@ -871,13 +916,20 @@ export class SshTransport {
     child.once("error", () => {
       if (child.pid === undefined) exit({ kind: "spawn-failed" });
     });
-    child.once("close", (code) => exit(failureFromFacts(output.facts, code)));
+    // The attempt's socket goes with its process.
+    const unlink = () => {
+      if (this.socketIsOurs(local)) rmSync(local, { force: true });
+    };
+    child.once("close", (code) => {
+      unlink();
+      exit(failureFromFacts(output.facts, code));
+    });
     return {
       pid: child.pid ?? null,
       onListening: (listener) => listening.push(listener),
       onExit: (listener) => exits.push(listener),
       channel: () => ({ refused: output.refused, connectFailed: output.connectFailed }),
-      end: () => endProcess(child),
+      end: () => endProcess(child).then(unlink),
     };
   }
 
@@ -933,6 +985,22 @@ export class SshTransport {
   ): Promise<LookResult | AppFilesUnsafe | StaleRoute> {
     if (!this.current(route)) return Promise.resolve(STALE);
     return this.track(guardedAsync(() => this.lookInner(route, options)));
+  }
+
+  /**
+   * Forgets a route by its id alone, as a saved record names it: its pins and
+   * files, whatever preparation made them. Its forward must be closed first.
+   */
+  forgetId(routeId: string): { ok: true } | AppFilesUnsafe | RouteForwardOpen {
+    if (!isRouteId(routeId)) throw new Error("Not a route id.");
+    if (this.forwards.has(routeId)) return { ok: false, kind: "forward-open" };
+    return guarded(() => {
+      const prefix = `clawtrate-route-${routeId}-`;
+      this.known.removeWhere((alias) => alias.startsWith(prefix));
+      this.removeConfigs(routeId, null);
+      this.routes.delete(routeId);
+      return { ok: true } as const;
+    });
   }
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
@@ -1008,15 +1076,11 @@ function runFailure(run: RunResult): SshFailure {
   return classifySshFailure(run.stderr, run.exit);
 }
 
-/** A loopback port that was free a moment ago; `ExitOnForwardFailure` turns a lost race into a retry. */
-export function freeLoopbackPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolve(port) : reject(new Error("No port."))));
-    });
-  });
-}
+/** The longest local socket path: `sun_path` is 104 bytes on macOS, with its terminating zero. */
+export const MAX_SOCKET_PATH = 103;
+
+/** A forward's local socket in the private SSH folder: `f<12 hex>.s`. */
+export const socketPathIn = (appDir: string, name: string) => join(appDir, `f${name}.s`);
+
+const isSocketPathIn = (appDir: string, path: string) =>
+  path.startsWith(join(appDir, "f")) && /^f[0-9a-f]{12}\.s$/.test(path.slice(appDir.length + 1));

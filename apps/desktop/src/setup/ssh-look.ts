@@ -31,6 +31,8 @@ export type SshLook = {
     label: GatewayStatus["service"];
   } | null;
   program: ProgramPlace | null;
+  /** The program file's checksum, which CODE and START check before they run it. */
+  programSum: string | null;
 };
 
 const versionText = (v: Version) => `${v.year}.${v.month}.${v.day}`;
@@ -43,8 +45,8 @@ function serviceWord(status: GatewayStatus): LookService | null {
   if (!service) return null;
   const stopped = service.running === false;
   if (service.label === "LaunchAgent") return stopped ? "launchagent-stopped" : "launchagent";
-  if (service.label === "systemd user" || service.label === "systemd")
-    return stopped ? "systemd-stopped" : "systemd";
+  if (service.label === "systemd user") return stopped ? "systemd-user-stopped" : "systemd-user";
+  if (service.label === "systemd") return stopped ? "systemd-stopped" : "systemd";
   return null;
 }
 
@@ -61,8 +63,13 @@ const empty = (outcome: SetupLook["outcome"], reason: SetupLook["reason"] = null
   others: [],
 });
 
-/** Proven stopped: a loaded service that reports itself stopped, with nothing listening on its port. */
-function provenStopped(status: GatewayStatus): boolean {
+/**
+ * Proven stopped: the status command succeeded, a loaded service of a known
+ * kind reports itself stopped, the port is reported free with no listener,
+ * the gateway's RPC failed, and the installed CLI is one setup supports.
+ * Anything less, or anything that disagrees, is not proven.
+ */
+function provenStopped(status: GatewayStatus, cli: Version): boolean {
   return (
     status.exit === 0 &&
     status.service !== null &&
@@ -71,21 +78,25 @@ function provenStopped(status: GatewayStatus): boolean {
     status.service.running === false &&
     status.port !== null &&
     status.configPath !== null &&
-    status.listenerPids.length === 0
+    status.portStatus === "free" &&
+    status.listenerPids !== null &&
+    status.listenerPids.length === 0 &&
+    status.rpcOk === false &&
+    compare([cli.year, cli.month, cli.day], parts(OLDEST_OPENCLAW_VERSION)) >= 0
   );
 }
 
 /** The found card's result from the LOOK's facts, and what Connect or Start would act on. */
 export function sshLook(facts: LookFacts): SshLook {
   const program = facts.program;
-  const none = { found: null, stopped: null, program };
+  const none = { found: null, stopped: null, program, programSum: facts.programSum };
   if (!program) {
     const signs = facts.signs;
     const seen =
       signs.defaultState || signs.defaultService || signs.clawtrateState || signs.clawtrateService;
     return { look: empty(seen ? "program-missing" : "not-found"), ...none };
   }
-  if (facts.version === "unreadable" || facts.version === null)
+  if (facts.version === "unreadable" || facts.version === null || facts.programSum === null)
     return { look: empty("cant-tell", "shape"), ...none };
   // The default profile first, then Clawtrate's own: the only two the look covers.
   const statuses = facts.gateways.filter(
@@ -96,10 +107,14 @@ export function sshLook(facts: LookFacts): SshLook {
   const ordered = ["default", "clawtrate"].flatMap((profile) =>
     statuses.filter((status) => status.profile === profile),
   );
+  let unsure = false;
   for (const status of ordered) {
     if (status.port === null) continue;
     const found = serviceOnPort(facts, status.port);
-    if (!found.ok) continue;
+    if (!found.ok) {
+      if (found.reason === "cant-tell") unsure = true;
+      continue;
+    }
     if (found.service.profile !== status.profile) continue;
     const version = status.version ? versionText(status.version) : null;
     if (version === null) return { look: empty("cant-tell", "no-answer"), ...none };
@@ -122,10 +137,13 @@ export function sshLook(facts: LookFacts): SshLook {
       found: outcome === "running" ? found : null,
       stopped: null,
       program,
+      programSum: facts.programSum,
     };
   }
+  // The results disagree, or say too little: running or not can't be told.
+  if (unsure) return { look: empty("cant-tell", "contradictory"), ...none };
   for (const status of ordered) {
-    if (!provenStopped(status)) continue;
+    if (!provenStopped(status, facts.version)) continue;
     return {
       look: {
         ...empty("stopped"),
@@ -137,9 +155,13 @@ export function sshLook(facts: LookFacts): SshLook {
       found: null,
       stopped: { profile: status.profile, port: status.port!, label: status.service },
       program,
+      programSum: facts.programSum,
     };
   }
   // A program and no gateway the look could resolve: its configuration missing, or not answering.
   const configured = ordered.some((status) => status.configPath !== null);
-  return { look: empty("cant-tell", configured ? "no-answer" : "not-set-up"), ...none };
+  return {
+    look: empty("cant-tell", configured ? "contradictory" : "not-set-up"),
+    ...none,
+  };
 }

@@ -11,6 +11,7 @@ import {
   type KeyValueStore,
   type BridgePolicy,
   type HostInfo,
+  type WebSocketLike,
 } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { randomUUID } from "node:crypto";
@@ -155,6 +156,10 @@ export async function startHostRuntime(options: {
    * for any other address, which the rules above decide.
    */
   routeAllows?: (gatewayUrl: string) => boolean | null;
+  /** The host's own socket for a route's address (an SSH forward's channel), or null for any other. */
+  routeSocket?: (gatewayUrl: string) => WebSocketLike | null;
+  /** Reconnect after Disconnect on a routed connection: only the host can open its route again. */
+  reopenRoute?: (route: string) => Promise<void>;
   /** Wraps the host's store: the desktop keeps route tokens in its route store. */
   wrapStorage?: (store: KeyValueStore) => KeyValueStore;
 }): Promise<HostRuntime> {
@@ -185,6 +190,7 @@ export async function startHostRuntime(options: {
         options.approvalPlace ?? (() => null),
       ),
       ...(options.wrapStorage ? { wrapStorage: options.wrapStorage } : {}),
+      ...(options.routeSocket ? { routeSocket: options.routeSocket } : {}),
       log: (level, message) => {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },
@@ -198,6 +204,7 @@ export async function startHostRuntime(options: {
         return !options.devOnly;
       },
       ...(options.readOnly ? { readOnly: true } : {}),
+      ...(options.reopenRoute ? { reopenRoute: options.reopenRoute } : {}),
     },
   );
   const devOnly = options.devOnly ? dev : null;

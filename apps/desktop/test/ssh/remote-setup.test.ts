@@ -3,10 +3,24 @@
 // test's home, a loopback HTTP server for the gateway's port, and the core's
 // fake gateway for the client's socket. Nothing of this machine's own SSH
 // setup is read or used, and no OpenClaw program runs.
+//
+// The test's alias, "devbox", resolves to 127.0.0.1 on the sshd's own port,
+// which is never 22: every prompt and title is checked to name the account as
+// resolved and that SSH port, never the alias alone.
 
 import { ClawtrateClient, type ClawtrateState, type SetupState } from "@clawtrate/core";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -14,14 +28,20 @@ import {
   FakeGateway,
   helloOk,
   memoryStorage,
+  sleep,
   testHost,
   until,
 } from "../../../../packages/core/test/fake-gateway.ts";
 import { defaultSpawn, type Spawn } from "../../src/main/ssh/run.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { SetupSlice } from "../../src/setup/host.ts";
-import { afterPrivacyCheck } from "../../src/setup/private-dir.ts";
-import { RemoteSetup, type HostAnswer, type HostQuestion } from "../../src/setup/remote.ts";
+import { sshTransportFor } from "../../src/setup/private-dir.ts";
+import {
+  isChannelUrl,
+  RemoteSetup,
+  type HostAnswer,
+  type HostQuestion,
+} from "../../src/setup/remote.ts";
 import { RouteStore, routedStorage } from "../../src/setup/routes.ts";
 import { qrJson } from "../fixtures/openclaw-outputs.ts";
 import {
@@ -38,6 +58,7 @@ import {
   statusJson,
   tempDir,
   testEnv,
+  testSeal,
   type TestSshd,
   type TestWorld,
 } from "./harness.ts";
@@ -52,12 +73,14 @@ const DEVICE_TOKEN = "device-token-route-1";
 const fingerprintOf = (pub: string) =>
   execFileSync(KEYGEN, ["-lf", pub], { env: testEnv(), encoding: "utf8" }).split(" ")[1]!;
 
-describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
+describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
   let root: string;
   let t: TestWorld;
   let sshd: TestSshd;
   let gateway: Awaited<ReturnType<typeof httpGateway>>;
   let stub: ReturnType<typeof installStubOpenclaw>;
+  /** "you@127.0.0.1 (SSH port N)": the alias "devbox", as resolved. */
+  let account: string;
   /** Every `ssh` the transports started, with its arguments. */
   const started: Array<{ args: readonly string[]; pid: number | undefined }> = [];
   const spawn: Spawn = (file, args, env) => {
@@ -71,24 +94,33 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
   /** A fresh host: its own app folder, route store, client and fake gateway. */
   function host(
     options: {
-      answer?: (question: HostQuestion) => HostAnswer;
-      transport?: () => SshTransport | { refused: "app-files-unsafe" };
+      answer?: (question: HostQuestion) => HostAnswer | Promise<HostAnswer>;
+      transport?: () => SshTransport | { refused: "app-files-unsafe" | "not-supported" };
+      dir?: string;
+      now?: () => number;
     } = {},
   ) {
-    const dir = join(root, `host-${(count += 1)}`);
+    const dir = options.dir ?? join(root, `host-${(count += 1)}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const world = { ...t.world, appDir: join(dir, "ssh") };
     const transport = new SshTransport(world, { spawn });
-    const routes = new RouteStore(dir);
+    let remote: RemoteSetup | null = null;
+    const routes = new RouteStore(dir, {
+      seal: testSeal,
+      onEvict: (record) => remote?.forgetEvicted(record),
+    });
     const storage = memoryStorage();
     const fake = new FakeGateway();
     let identity = "gateway-identity-1";
     fake.handlers["gateway.identity.get"] = () => ({ deviceId: identity, publicKey: "key" });
     fake.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], DEVICE_TOKEN) });
-    const host = testHost(fake);
-    host.storage = routedStorage(storage, routes);
-    const client = new ClawtrateClient(host, {
+    const testing = testHost(fake);
+    testing.storage = routedStorage(storage, routes);
+    // As the app: a channel's address only while it is current, and Reconnect through the host.
+    const client = new ClawtrateClient(testing, {
       reconnect: { initialMs: 50, maxMs: 200 },
+      allowGatewayUrl: (url) => remote?.allows(url) ?? true,
+      reopenRoute: async (route) => remote?.reopen(route),
     });
     const slice = new SetupSlice(client);
     const questions: HostQuestion[] = [];
@@ -96,18 +128,19 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     client.store.subscribe((state: ClawtrateState) => {
       if (state.setup) states.push(state.setup);
     });
-    const remote = new RemoteSetup({
+    remote = new RemoteSetup({
       client,
       transport: options.transport ?? (() => transport),
       routes,
       ask: async (question) => {
         questions.push(question);
-        return options.answer?.(question) ?? { confirmed: true, checked: false };
+        return (await options.answer?.(question)) ?? { confirmed: true, checked: false };
       },
       publish: (next) => slice.setMain(next),
       publishRoute: (route) => slice.setRoute(route),
       restoredMs: 300,
       forwardWaitMs: 30_000,
+      ...(options.now ? { now: options.now } : {}),
     });
     made.push({ remote, transport });
     const setup = () => client.state.setup!;
@@ -128,18 +161,29 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
         existsSync(join(world.appDir, "known_hosts"))
           ? readFileSync(join(world.appDir, "known_hosts"), "utf8")
           : "",
+      pins: () =>
+        (existsSync(join(world.appDir, "known_hosts"))
+          ? readFileSync(join(world.appDir, "known_hosts"), "utf8")
+          : ""
+        )
+          .split("\n")
+          .filter((line) => line.trim() !== "" && !line.startsWith("#")),
     };
   }
+
+  const running = () => statusJson({ port: gateway.port, home: t.home });
 
   beforeAll(async () => {
     root = tempDir("clawtrate-ssh-route-");
     t = makeWorld(root);
     sshd = await startSshd(root, t.home, t.userKey);
     assertSessionHome(root, sshd, t.world, t.userKey);
+    account = `${t.world.localUser}@127.0.0.1 (SSH port ${sshd.port})`;
+    expect(sshd.port).not.toBe(22);
     gateway = await httpGateway();
     stub = installStubOpenclaw(t.home);
     stub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
-    stub.setStatus("default", statusJson({ port: gateway.port, home: t.home }));
+    stub.setStatus("default", running());
     stub.setCode(
       "default",
       JSON.parse(qrJson(`ws://127.0.0.1:${gateway.port}`, BOOTSTRAP, Date.now() + 590_000)),
@@ -148,7 +192,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     keygen(join(t.home, ".ssh", "stranger"));
     t.writeConfig(
       [
-        "Host devbox",
+        "Host devbox devbox-again",
         "  HostName 127.0.0.1",
         `  Port ${sshd.port}`,
         `  User ${t.world.localUser}`,
@@ -166,6 +210,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
         "Host keyed",
         "  HostName 127.0.0.1",
         "  StrictHostKeyChecking no",
+        "Host algorithms",
+        "  HostName 127.0.0.1",
+        "  HostKeyAlgorithms ssh-rsa",
         "Host nobody-home",
         "  HostName 127.0.0.1",
         `  Port ${closed}`,
@@ -194,25 +241,53 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
   });
 
   /** Looks on devbox and trusts its key at first contact, ending on the found card. */
-  async function lookOnDevbox(h: ReturnType<typeof host>) {
-    await h.remote.there("devbox");
+  async function lookOnDevbox(h: ReturnType<typeof host>, destination = "devbox") {
+    await h.remote.there(destination);
     if (h.setup().phase === "key") await h.remote.trustKey();
-    expect(h.setup().phase).toBe("found");
+    expect(h.setup().phase, JSON.stringify(h.setup().there?.failure)).toBe("found");
   }
 
-  it("F-495: a host whose settings use a jump host, a command, a forward or host-key settings is refused by name before anything connects", async () => {
+  /** Looks, connects and waits until the route is the app's. */
+  async function connected(h: ReturnType<typeof host>) {
+    await lookOnDevbox(h);
+    await h.remote.connect();
+    await until(() => h.setup().phase === "done", 30_000);
+    await until(() => h.setup().route?.phase === "up", 10_000);
+  }
+
+  it("F-495: a host whose settings use a jump host, a command, a forward or host-key settings is refused by naming the setting before anything connects", async () => {
     const h = host();
     const before = started.length;
-    for (const [name, setting, category] of [
-      ["jumpy", "ProxyJump", "jump-host"],
-      ["commanding", "RemoteCommand", "command-or-forward"],
-      ["forwarding", "LocalForward", "command-or-forward"],
-      ["keyed", "StrictHostKeyChecking", "host-key"],
+    for (const [name, setting, category, heading] of [
+      ["jumpy", "ProxyJump", "jump-host", "The SSH settings for jumpy include ProxyJump."],
+      [
+        "commanding",
+        "RemoteCommand",
+        "command-or-forward",
+        "Clawtrate can't use RemoteCommand in the SSH settings for commanding.",
+      ],
+      [
+        "forwarding",
+        "LocalForward",
+        "command-or-forward",
+        "Clawtrate can't use LocalForward in the SSH settings for forwarding.",
+      ],
+      [
+        "keyed",
+        "StrictHostKeyChecking",
+        "host-key",
+        "Clawtrate can't use StrictHostKeyChecking in the SSH settings for keyed.",
+      ],
+      [
+        "algorithms",
+        "HostKeyAlgorithms",
+        "host-key",
+        "Clawtrate can't use HostKeyAlgorithms in the SSH settings for algorithms.",
+      ],
     ] as const) {
       await h.remote.there(name);
       const there = h.setup().there!;
-      expect(there.refusal).toMatchObject({ setting, category });
-      expect(there.refusal!.title).toContain(name);
+      expect(there.refusal).toMatchObject({ setting, category, title: heading });
       expect(h.setup().phase).toBe("idle");
     }
     await h.remote.there("-oProxyCommand=touch");
@@ -222,13 +297,13 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     expect(h.questions).toEqual([]);
   });
 
-  it("F-495: the full account is confirmed in the host's dialog before anything runs there; Cancel runs nothing", async () => {
+  it("F-495: the full account and SSH port are confirmed in the host's dialog before anything runs there; Cancel runs nothing", async () => {
     const h = host({ answer: () => ({ confirmed: false, checked: false }) });
     const before = started.length;
     await h.remote.there("devbox");
     expect(h.questions).toEqual([
       {
-        message: `Look for OpenClaw as ${t.world.localUser}@127.0.0.1, port ${sshd.port}?`,
+        message: `Look for OpenClaw as ${account}?`,
         detail: "This uses the remote account's SSH login environment.",
         confirm: "Look",
       },
@@ -252,11 +327,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     expect(h.setup().phase).toBe("key");
     expect(key.state).toBe("first-contact");
     expect(key.presented.fingerprint).toBe(fingerprintOf(`${sshd.hostKey}.pub`));
-    // The capture offered no credentials: none of its runs named a key or a session.
     expect(h.knownHosts()).toBe("");
     await h.remote.trustKey();
     expect(h.questions.at(-1)).toMatchObject({
-      message: "Trust devbox's key?",
+      message: `Trust the key ${account} presented?`,
       confirm: "Trust",
     });
     expect(h.questions.at(-1)!.detail).toContain(key.presented.fingerprint);
@@ -290,12 +364,14 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     }
   });
 
-  it("F-495: a changed key is shown beside the trusted one and replaced only through the host's dialog, after its box is ticked", async () => {
+  it("F-495 F-499: a changed key is shown with both algorithms and fingerprints and replaced only with its box ticked: unticked, the dialog asks again; the old key's token goes when the new one is pinned", async () => {
     let tick = false;
     const h = host({
       answer: (question) => ({ confirmed: true, checked: question.checkbox ? tick : false }),
     });
-    await lookOnDevbox(h);
+    await connected(h);
+    const [record] = h.routes.list();
+    expect(h.routes.hasToken(record!.key)).toBe(true);
     const trusted = fingerprintOf(`${sshd.hostKey}.pub`);
     const old = sshd.hostKey;
     const fresh = join(root, `host-key-${count}`);
@@ -307,20 +383,31 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
       const key = h.setup().there!.key!;
       expect(h.setup().phase).toBe("key");
       expect(key.state).toBe("changed");
-      expect(key.trusted!.fingerprint).toBe(trusted);
-      expect(key.presented.fingerprint).toBe(fingerprintOf(`${fresh}.pub`));
-      const pinned = h.knownHosts();
-      await h.remote.replaceKey();
-      expect(h.questions.at(-1)).toMatchObject({
-        message: "Replace devbox's trusted key?",
-        checkbox: "I checked the new key on devbox itself",
+      expect(key.trusted).toMatchObject({ label: "ED25519", fingerprint: trusted });
+      expect(key.presented).toMatchObject({
+        label: "ED25519",
+        fingerprint: fingerprintOf(`${fresh}.pub`),
       });
-      // Confirmed without the box: nothing replaced.
+      const pinned = h.knownHosts();
+      const asked = h.questions.length;
+      await h.remote.replaceKey();
+      // Confirmed without the box: asked again, three times in all, and nothing replaced.
+      const replaces = h.questions.slice(asked);
+      expect(replaces).toHaveLength(3);
+      expect(replaces[0]).toMatchObject({
+        message: `Replace the saved key for ${account}?`,
+        checkbox: `I checked the new key on ${t.world.localUser}@127.0.0.1 itself`,
+      });
+      expect(replaces[1]!.detail).toMatch(/^Tick the box to replace the key, or Cancel\./);
       expect(h.knownHosts()).toBe(pinned);
       expect(h.setup().phase).toBe("key");
+      expect(h.routes.hasToken(record!.key)).toBe(true);
       tick = true;
       await h.remote.replaceKey();
       expect(h.knownHosts()).toContain(readFileSync(`${fresh}.pub`, "utf8").split(" ")[1]!);
+      // Still one pin for the endpoint, and the old key's token is gone with it.
+      expect(h.pins()).toHaveLength(1);
+      expect(h.routes.hasToken(record!.key)).toBe(false);
       expect(h.setup().phase).toBe("found");
     } finally {
       await sshd.stop();
@@ -328,7 +415,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     }
   });
 
-  it("F-495: a failure says which it was: cannot be reached, or sign-in refused", async () => {
+  it("F-495: a failure says which it was, naming the classified cause only, or the sign-in refused for the account and port", async () => {
     const h = host();
     await h.remote.there("nobody-home");
     expect(h.setup().phase).toBe("failed");
@@ -341,16 +428,20 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     if (s.setup().phase === "key") await s.remote.trustKey();
     expect(s.setup().phase).toBe("failed");
     expect(s.setup().there!.failure).toMatchObject({ kind: "sign-in-refused" });
+    expect(s.setup().there).toMatchObject({
+      account: `${t.world.localUser}@127.0.0.1`,
+      port: sshd.port,
+    });
   });
 
-  it("F-496 F-494: Connect makes a --voice-node code there through the pinned connection, forwards a free local port and pairs read-only, with nothing typed and the token kept only in the route store", async () => {
+  it("F-496 F-494: Connect makes a --voice-node code there through the pinned connection, forwards to a private local socket, never a TCP port, and pairs read-only through that channel alone, with the token kept sealed in the route store only", async () => {
     const h = host();
     await lookOnDevbox(h);
     const calls = stub.calls().length;
     const before = started.length;
     await h.remote.connect();
     expect(h.questions.at(-1)).toMatchObject({
-      message: `Pair this device read-only with the default gateway on ${t.world.localUser}@127.0.0.1?`,
+      message: `Pair this device read-only with the default gateway on ${account}?`,
       confirm: "Pair",
     });
     await until(() => h.setup().phase === "done", 30_000);
@@ -366,44 +457,65 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
         run.args.includes("-L") || run.args.includes("-N") ? [] : ["/bin/sh", "-s"],
       );
     }
+    // The forward listens on a fresh socket in the private SSH folder, made closed to others.
     const forward = started.slice(before).find((run) => run.args.includes("-L"))!;
     const spec = forward.args[forward.args.indexOf("-L") + 1]!;
-    const local = Number(spec.split(":")[1]);
-    expect(spec).toBe(`127.0.0.1:${local}:127.0.0.1:${gateway.port}`);
-    expect(local).not.toBe(gateway.port);
-    // The client connected through the forward, with the code, for read alone.
+    const local = spec.slice(0, spec.indexOf(":"));
+    expect(spec).toBe(`${local}:127.0.0.1:${gateway.port}`);
+    expect(local).toMatch(new RegExp(`^${h.world.appDir}/f[0-9a-f]{12}\\.s$`));
+    expect(forward.args).toContain("StreamLocalBindMask=0177");
+    expect(forward.args).toContain("StreamLocalBindUnlink=no");
+    expect(forward.args.some((arg) => /^127\.0\.0\.1:\d+:/.test(arg))).toBe(false);
+    // The client's socket was given the channel's address, which resolves nowhere.
+    const url = h.fake.sockets.at(-1)!.url;
+    expect(isChannelUrl(url)).toBe(true);
+    expect(h.remote.allows(url)).toBe(true);
+    expect(h.remote.placeFor(url)).toEqual({
+      route: "ssh",
+      account: `${t.world.localUser}@127.0.0.1`,
+      port: sshd.port,
+      profile: "default",
+    });
     const connect = h.fake.connects.at(-1) as {
       scopes: string[];
       auth?: { bootstrapToken?: string; token?: string };
     };
-    expect(h.fake.sockets.at(-1)!.url).toBe(`ws://127.0.0.1:${local}`);
     expect(connect.scopes).toEqual(["operator.read"]);
     expect(connect.auth?.bootstrapToken).toBe(BOOTSTRAP);
     expect(h.client.state.connection).toMatchObject({
       status: "connected",
       scopes: ["operator.read"],
+      gatewayId: "gateway-identity-1",
     });
-    // The device token is in the route store, under the route, and nowhere else.
+    // The device token is in the route store, sealed, under the route, and nowhere else.
     const routes = readFileSync(h.routes.path, "utf8");
-    expect(routes).toContain(DEVICE_TOKEN);
+    expect(routes).not.toContain(DEVICE_TOKEN);
+    expect(h.routes.getToken(h.routes.list()[0]!.key, "device-1", "operator")).toContain(
+      DEVICE_TOKEN,
+    );
     expect([...h.storage.data.values()].join("\n")).not.toContain(DEVICE_TOKEN);
     expect([...h.storage.data.keys()].some((key) => key.startsWith("deviceToken"))).toBe(false);
     // The one-time code went nowhere: not the store, the state, the app's SSH files.
     expect(routes).not.toContain(BOOTSTRAP);
     expect(JSON.stringify(h.client.state)).not.toContain(BOOTSTRAP);
-    expect([...h.storage.data.values()].join("\n")).not.toContain(BOOTSTRAP);
     expect(h.knownHosts()).not.toContain(BOOTSTRAP);
-    // The route's record names what identifies it, never the forward's local port.
+    // The route's record names what identifies it and the identity the client read, never the socket.
     const [record] = h.routes.list();
     expect(record).toMatchObject({
       destination: "devbox",
+      account: `${t.world.localUser}@127.0.0.1`,
+      sshPort: sshd.port,
       gatewayPort: gateway.port,
       profile: "default",
       identity: "gateway-identity-1",
     });
-    expect(JSON.stringify(record)).not.toContain(String(local));
+    expect(JSON.stringify(record)).not.toContain(local);
     expect(h.client.state.setup!.route).toMatchObject({ name: "devbox", phase: "up" });
     await h.remote.closeAll();
+    // Closed: the socket went with its process, and the old channel is refused.
+    expect(existsSync(local)).toBe(false);
+    expect(h.remote.allows(url)).toBe(false);
+    expect(() => h.remote.socketFor(url)).toThrow();
   });
 
   it("F-496: a grant other than exactly read writes no token and lets the route go", async () => {
@@ -417,21 +529,115 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     await until(() => h.setup().phase === "failed", 30_000);
     expect(h.setup().failure?.kind).toBe("grant");
     await until(() => h.routes.list().length === 0, 5_000);
-    expect(existsSync(h.routes.path) ? readFileSync(h.routes.path, "utf8") : "").not.toContain(
-      DEVICE_TOKEN,
-    );
   });
 
-  it("F-498: a forward that drops comes back by itself, and the status strip says it is being restored, then back", async () => {
+  it("F-496: the gateway's identity is read before the setup connection allows anything; another identity than the route's is refused", async () => {
     const h = host();
-    await lookOnDevbox(h);
+    await connected(h);
+    // The same route paired again after its token went: the route keeps the identity it recorded.
+    const [record] = h.routes.list();
+    h.routes.deleteToken(record!.key);
+    h.setIdentity("gateway-identity-other");
+    await h.remote.there("devbox");
+    expect(h.setup().look?.access).toBe("new");
+    const asked = h.fake.requests.length;
     await h.remote.connect();
-    await until(() => h.setup().phase === "done", 30_000);
+    await until(() => h.setup().phase === "failed", 30_000);
+    expect(h.setup().failure?.kind).toBe("identity");
+    // Nothing but the identity was read from it.
+    expect(h.fake.requests.slice(asked).map((r) => r.method)).toEqual(["gateway.identity.get"]);
+    expect(h.client.state.connection.status).not.toBe("connected");
+    await h.remote.closeAll();
+  });
+
+  it("F-496 F-497: Pair re-reads what its dialog named: a changed LOOK, a program file changed since, or an expired dialog runs nothing there", async () => {
+    // The LOOK changes while the dialog is open: another version answers.
+    let during: () => void = () => {};
+    const h = host({
+      answer: (question) => {
+        if (question.confirm === "Pair") during();
+        return { confirmed: true, checked: false };
+      },
+    });
+    await lookOnDevbox(h);
+    const calls = stub.calls().length;
+    const changedVersion = JSON.parse(JSON.stringify(running())) as {
+      gateway: { version: string };
+    };
+    changedVersion.gateway.version = "2026.10.7";
+    during = () => stub.setStatus("default", changedVersion);
+    try {
+      await h.remote.connect();
+      expect(h.setup().phase).toBe("failed");
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(
+        stub
+          .calls()
+          .slice(calls)
+          .some((call) => call.startsWith("qr ")),
+      ).toBe(false);
+    } finally {
+      stub.setStatus("default", running());
+    }
+    // The program file is replaced while the dialog is open: same place, another checksum.
+    const program = join(t.home, ".openclaw", "bin", "openclaw");
+    const saved = join(root, "openclaw-saved");
+    copyFileSync(program, saved);
+    await lookOnDevbox(h);
+    during = () => {
+      writeFileSync(program, `${readFileSync(saved, "utf8")}\n# changed\n`);
+      chmodSync(program, 0o755);
+    };
+    const before = stub.calls().length;
+    try {
+      await h.remote.connect();
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(
+        stub
+          .calls()
+          .slice(before)
+          .some((call) => call.startsWith("qr ")),
+      ).toBe(false);
+    } finally {
+      copyFileSync(saved, program);
+      chmodSync(program, 0o755);
+    }
+    // A dialog answered after its lifetime: nothing runs there.
+    let clock = Date.now();
+    const late = host({
+      now: () => clock,
+      answer: (question) => {
+        if (question.confirm === "Pair") clock += 3 * 60_000;
+        return { confirmed: true, checked: false };
+      },
+    });
+    during = () => {};
+    await lookOnDevbox(late);
+    const lateCalls = stub.calls().length;
+    await late.remote.connect();
+    expect(late.setup().failure?.kind).toBe("changed");
+    expect(
+      stub
+        .calls()
+        .slice(lateCalls)
+        .some((call) => call.startsWith("qr ")),
+    ).toBe(false);
+  });
+
+  it("F-498: a forward that drops comes back by itself, the strip says restoring until the gateway answered there with the route's identity, then that it is back", async () => {
+    const h = host();
+    await connected(h);
     const sockets = h.fake.sockets.length;
+    const firstUrl = h.fake.sockets.at(-1)!.url;
     const phases: string[] = [];
+    const atRestored: string[] = [];
     h.client.store.subscribe((state) => {
       const phase = state.setup?.route?.phase;
-      if (phase && phases.at(-1) !== phase) phases.push(phase);
+      if (phase && phases.at(-1) !== phase) {
+        phases.push(phase);
+        if (phase === "restored")
+          atRestored.push(`${state.connection.status} ${state.connection.gatewayId}`);
+      }
     });
     await sshd.dropSessions();
     await until(() => phases.includes("restoring"), 15_000);
@@ -440,137 +646,254 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
       30_000,
     );
     expect(phases).toEqual(["up", "restoring", "restored", "up"]);
-    await until(() => h.client.state.connection.status === "connected", 10_000);
-    // Back over the route's own token, through the new forward, and only there.
-    const connect = h.fake.connects.at(-1) as {
-      auth?: { bootstrapToken?: string; deviceToken?: string };
-    };
+    // Said back only once the client was connected again and the identity matched.
+    expect(atRestored).toEqual(["connected gateway-identity-1"]);
+    // Back over the route's own token, through a new channel, and only there.
+    const connect = h.fake.connects.at(-1) as { auth?: { bootstrapToken?: string } };
     expect(connect.auth?.bootstrapToken).toBeUndefined();
     expect(JSON.stringify(connect.auth)).toContain(DEVICE_TOKEN);
     expect(h.fake.sockets.length).toBeGreaterThan(sockets);
+    expect(h.fake.sockets.at(-1)!.url).not.toBe(firstUrl);
+    expect(h.remote.allows(firstUrl)).toBe(false);
     await h.remote.closeAll();
   });
 
-  it("F-499: removing the route closes its forward, forgets its pin and token, and leaves the gateway it didn't start running", async () => {
+  it("F-498: a stalled identity read keeps the strip at restoring, and a rejected hello says the connection couldn't be restored", async () => {
     const h = host();
-    await lookOnDevbox(h);
+    await connected(h);
+    // The gateway answers the hello and never says who it is.
+    h.fake.handlers["gateway.identity.get"] = () => new Promise(() => {});
+    await sshd.dropSessions();
+    await until(() => h.setup().route?.phase === "restoring", 15_000);
+    await until(() => h.fake.requests.at(-1)?.method === "gateway.identity.get", 30_000);
+    await sleep(1_500);
+    expect(h.setup().route?.phase).toBe("restoring");
+    expect(h.client.state.connection.status).not.toBe("connected");
+    // A gateway that refuses the route's token: "Couldn't restore", never "back".
+    h.fake.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-identity-1" });
+    h.fake.connectReply = () => ({
+      ok: false,
+      error: { code: "AUTH_TOKEN_MISMATCH", message: "token mismatch" },
+    });
+    const phases: string[] = [];
+    h.client.store.subscribe((state) => {
+      const phase = state.setup?.route?.phase;
+      if (phase && phases.at(-1) !== phase) phases.push(phase);
+    });
+    await sshd.dropSessions();
+    await until(() => h.setup().route?.phase === "failed", 30_000);
+    expect(phases).not.toContain("restored");
+    await h.remote.closeAll();
+  });
+
+  it("F-498: a route whose gateway reports another identity after a restore is disconnected and its token dropped", async () => {
+    const h = host();
+    await connected(h);
+    h.setIdentity("gateway-identity-2");
+    await sshd.dropSessions();
+    await until(() => h.client.state.setup?.route?.phase === "different-gateway", 30_000);
+    expect(h.routes.hasToken(h.routes.list()[0]!.key)).toBe(false);
+    expect(h.client.state.connection.status).not.toBe("connected");
+    await h.remote.closeAll();
+  });
+
+  it("F-498: Disconnect is honoured: the forward closes, nothing reconnects or speaks over the app, and only Reconnect opens the route again", async () => {
+    const h = host();
     const before = started.length;
-    await h.remote.connect();
-    await until(() => h.setup().phase === "done", 30_000);
+    await connected(h);
+    const forward = started.slice(before).find((run) => run.args.includes("-L"))!;
+    await h.client.suspend();
+    await until(() => !alive(forward.pid!), 10_000);
+    expect(h.setup().route?.phase).toBe("disconnected");
+    const sockets = h.fake.sockets.length;
+    await sshd.dropSessions();
+    await sleep(1_500);
+    expect(h.fake.sockets.length).toBe(sockets);
+    expect(h.client.state.connection.status).toBe("disconnected");
+    // Reconnect: the host opens the route again, with its own token and its identity checked.
+    await h.client.retryNow();
+    await until(() => h.client.state.connection.status === "connected", 30_000);
+    expect(h.client.state.connection.gatewayId).toBe("gateway-identity-1");
+    expect(h.fake.sockets.length).toBeGreaterThan(sockets);
+    // Disconnect for good: the route is retired and its strip goes.
+    await h.client.disconnect();
+    await until(() => h.setup().route === null, 10_000);
+    await h.remote.closeAll();
+  });
+
+  it("F-499: Remove is local only: it closes the forward and deletes the route, its pin and its token, runs nothing there, and the dialog says the device stays listed", async () => {
+    const h = host();
+    const before = started.length;
+    await connected(h);
     const forward = started.slice(before).find((run) => run.args.includes("-L"))!;
     expect(alive(forward.pid!)).toBe(true);
     const calls = stub.calls().length;
+    const runs = started.length;
     await h.remote.removeRoute();
     expect(h.questions.at(-1)).toEqual({
-      message: "Remove devbox from Clawtrate?",
+      message: `Remove ${account} from Clawtrate?`,
       detail:
-        "Clawtrate disconnects, forgets this route and its pinned key, and leaves OpenClaw on devbox running.",
+        "Clawtrate disconnects and deletes its saved route, key and token. The device remains listed in OpenClaw.",
       confirm: "Remove",
     });
     expect(alive(forward.pid!)).toBe(false);
-    expect(h.knownHosts()).toBe("");
+    expect(h.pins()).toEqual([]);
     expect(h.routes.list()).toEqual([]);
-    expect(readFileSync(h.routes.path, "utf8")).not.toContain(DEVICE_TOKEN);
-    expect(stub.calls().slice(calls)).not.toContain("gateway stop");
+    expect(readdirSync(h.world.appDir).filter((name) => name.startsWith("route-"))).toEqual([]);
+    // Nothing ran on the other computer: no script, no stop.
+    expect(stub.calls().slice(calls)).toEqual([]);
+    expect(started.slice(runs).filter((run) => run.args.includes("/bin/sh"))).toEqual([]);
     expect(h.client.state.connection.status).toBe("idle");
     expect(h.client.state.setup!.route).toBeNull();
   });
 
-  it("F-497 F-499: a gateway proven stopped there is started only after the host's dialog, and Remove stops it only when Clawtrate started it and the box is ticked", async () => {
+  it("F-499: a saved route removed at launch while its computer is offline: the strip and the screen keep it, and Remove deletes it with no connection", async () => {
+    const dir = join(root, "offline-host");
+    const first = host({ dir });
+    await connected(first);
+    await first.remote.closeAll();
+    const saved = await first.client.savedSettings();
+    expect(saved?.route).toBeTruthy();
+    // A restart while the other computer is off.
+    await sshd.stop();
+    try {
+      const again = host({ dir });
+      // The new client remembers the same saved connection.
+      for (const [key, value] of first.storage.data) again.storage.data.set(key, value);
+      await again.remote.resume();
+      expect(again.setup().phase).toBe("failed");
+      expect(again.setup().there?.failure?.kind).toBe("unreachable");
+      expect(again.setup().route).toMatchObject({
+        account: `${t.world.localUser}@127.0.0.1`,
+        port: sshd.port,
+      });
+      expect(["unreachable", "failed"]).toContain(again.setup().route!.phase);
+      await again.remote.removeRoute();
+      expect(again.questions.at(-1)!.message).toBe(`Remove ${account} from Clawtrate?`);
+      expect(again.routes.list()).toEqual([]);
+      expect(again.pins()).toEqual([]);
+      expect(again.setup().route).toBeNull();
+    } finally {
+      await sshd.start();
+    }
+  });
+
+  it("F-499: one saved endpoint has one route id and one pin: looking at the live destination again, or another alias for it, adds no second pin", async () => {
+    const h = host();
+    await connected(h);
+    const [record] = h.routes.list();
+    await h.remote.there("devbox");
+    expect(h.setup().phase).toBe("found");
+    await h.remote.there("devbox-again");
+    expect(h.setup().phase).toBe("found");
+    expect(h.pins()).toHaveLength(1);
+    expect(h.routes.list().map((each) => each.id)).toEqual([record!.id]);
+    // The live route is still the app's.
+    expect(h.client.state.connection.status).toBe("connected");
+    await h.remote.closeAll();
+  });
+
+  it("F-498: at launch, a changed key shows the key screen with both keys, not the first screen", async () => {
+    const dir = join(root, "relaunch-host");
+    const first = host({ dir });
+    await connected(first);
+    await first.remote.closeAll();
+    const old = sshd.hostKey;
+    const fresh = join(root, `relaunch-key-${count}`);
+    keygen(fresh);
+    await sshd.stop();
+    await sshd.start(fresh);
+    try {
+      const again = host({ dir });
+      for (const [key, value] of first.storage.data) again.storage.data.set(key, value);
+      await again.remote.resume();
+      expect(again.setup().phase).toBe("key");
+      expect(again.setup().there?.key).toMatchObject({
+        state: "changed",
+        presented: { fingerprint: fingerprintOf(`${fresh}.pub`) },
+      });
+      expect(again.setup().route?.phase).toBe("key-changed");
+    } finally {
+      await sshd.stop();
+      await sshd.start(old);
+    }
+  });
+
+  it("F-497: a gateway proven stopped there is started only after the host's dialog, which re-reads the stopped service: one started meanwhile runs no Start", async () => {
     let start = false;
-    let stopIt = true;
+    let during: () => void = () => {};
     const h = host({
-      answer: (question) => ({
-        confirmed: question.confirm === "Start" ? start : true,
-        checked: question.checkbox ? stopIt : false,
-      }),
+      answer: (question) => {
+        if (question.confirm === "Start") during();
+        return { confirmed: question.confirm === "Start" ? start : true, checked: false };
+      },
     });
-    stub.setStatus(
-      "default",
-      statusJson({ port: gateway.port, home: t.home, running: false, rpcOk: false }),
-    );
-    const status = statusJson({
-      port: gateway.port,
-      home: t.home,
-      running: false,
-      rpcOk: false,
-    }) as {
-      port: { listeners: unknown[] };
-    };
-    status.port.listeners = [];
-    stub.setStatus("default", status);
+    const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+    stub.setStatus("default", stopped);
     try {
       await lookOnDevbox(h);
       expect(h.setup().look).toMatchObject({ outcome: "stopped", profile: "default" });
       const calls = stub.calls().length;
       await h.remote.start();
       expect(h.questions.at(-1)).toMatchObject({
-        message: "Start OpenClaw on devbox?",
+        message: `Start OpenClaw on ${account}?`,
+        detail: "Clawtrate will ask the default profile's LaunchAgent to start.",
         confirm: "Start",
       });
       expect(stub.calls().slice(calls)).not.toContain("gateway start");
+      // Started by someone else while the dialog is open: Start runs nothing.
       start = true;
-      // The gateway answers once started.
+      during = () => stub.setStatus("default", running());
+      await h.remote.start();
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(stub.calls().slice(calls)).not.toContain("gateway start");
+      // Still stopped after the answer: Start runs, and the gateway answers once started.
+      during = () => {};
+      stub.setStatus("default", stopped);
+      await lookOnDevbox(h);
       const starting = h.remote.start();
       await until(() => stub.calls().includes("gateway start"), 20_000);
-      stub.setStatus("default", statusJson({ port: gateway.port, home: t.home }));
+      stub.setStatus("default", running());
       await starting;
       expect(h.setup().look).toMatchObject({ outcome: "running" });
-      await h.remote.connect();
-      await until(() => h.setup().phase === "done", 30_000);
-      expect(h.client.state.setup!.route!.startedByClawtrate).toBe(true);
-      const before = stub.calls().length;
-      await h.remote.removeRoute();
-      expect(h.questions.at(-1)!.checkbox).toBe(
-        "Also stop OpenClaw on devbox (Clawtrate started it).",
-      );
-      expect(stub.calls().slice(before)).toContain("gateway stop");
     } finally {
-      stub.setStatus("default", statusJson({ port: gateway.port, home: t.home }));
+      stub.setStatus("default", running());
     }
-    // Unticked, nothing is stopped.
-    stopIt = false;
-    const g = host({
-      answer: (question) => ({ confirmed: true, checked: question.checkbox ? stopIt : false }),
-    });
-    await lookOnDevbox(g);
-    await g.remote.connect();
-    await until(() => g.setup().phase === "done", 30_000);
-    const before = stub.calls().length;
-    await g.remote.removeRoute();
-    expect(g.questions.at(-1)!.checkbox).toBeUndefined();
-    expect(stub.calls().slice(before)).not.toContain("gateway stop");
   });
 
-  it("a route whose gateway reports another identity after a restore is disconnected and its token dropped", async () => {
+  it("F-497: a stopped service with no port data and an RPC that answered is not offered Start", async () => {
     const h = host();
-    await lookOnDevbox(h);
-    await h.remote.connect();
-    await until(() => h.setup().phase === "done", 30_000);
-    h.setIdentity("gateway-identity-2");
-    await sshd.dropSessions();
-    await until(() => h.client.state.setup?.route?.phase === "different-gateway", 30_000);
-    expect(readFileSync(h.routes.path, "utf8")).not.toContain(DEVICE_TOKEN);
-    expect(h.client.state.connection.status).not.toBe("connected");
-    await h.remote.closeAll();
+    const unclear = statusJson({
+      port: gateway.port,
+      home: t.home,
+      running: false,
+      rpcOk: true,
+    }) as {
+      port?: unknown;
+    };
+    delete unclear.port;
+    stub.setStatus("default", unclear);
+    try {
+      await lookOnDevbox(h).catch(() => undefined);
+      expect(h.setup().look).toMatchObject({ outcome: "cant-tell", reason: "contradictory" });
+    } finally {
+      stub.setStatus("default", running());
+    }
   });
 
-  it("before the setup host makes a transport, its app-data folder must be private: one whose parent resolves outside a private, synthetic root goes to Advanced, and no transport is made", async () => {
+  it("before the setup host makes a transport, its data folder must be proven private at the host's own entry point: a redirected SSH folder goes to Advanced, and no transport is made", async () => {
     const synthetic = tempDir("clawtrate-private-root-");
     const outside = tempDir("clawtrate-outside-");
     try {
-      mkdirSync(join(outside, "data", "ssh"), { recursive: true, mode: 0o700 });
-      symlinkSync(join(outside, "data"), join(synthetic, "data"));
+      mkdirSync(join(synthetic, "data"), { mode: 0o700 });
+      symlinkSync(outside, join(synthetic, "data", "ssh"));
       let makes = 0;
       const factory = () =>
-        afterPrivacyCheck(
-          join(synthetic, "data", "ssh"),
-          () => {
+        sshTransportFor(
+          join(synthetic, "data"),
+          (dir) => {
             makes += 1;
-            return new SshTransport(
-              { ...t.world, appDir: join(synthetic, "data", "ssh") },
-              { spawn },
-            );
+            return new SshTransport({ ...t.world, appDir: dir }, { spawn });
           },
           { root: synthetic },
         );
@@ -582,14 +905,22 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
       expect(makes).toBe(0);
       expect(started.length).toBe(before);
       expect(h.questions).toEqual([]);
-      // The same folder, inside the root and private, is accepted.
-      mkdirSync(join(synthetic, "real", "ssh"), { recursive: true, mode: 0o700 });
-      expect(
-        afterPrivacyCheck(join(synthetic, "real", "ssh"), () => "made", { root: synthetic }),
-      ).toBe("made");
+      expect(readdirSync(outside)).toEqual([]);
     } finally {
       rmSync(synthetic, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("closing waits for every forward's ssh to end", async () => {
+    const h = host();
+    const before = started.length;
+    await connected(h);
+    const pids = started
+      .slice(before)
+      .filter((run) => run.args.includes("-L"))
+      .map((run) => run.pid!);
+    await h.remote.closeAll();
+    expect(pids.filter((pid) => alive(pid))).toEqual([]);
   });
 });

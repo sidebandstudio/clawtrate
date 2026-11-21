@@ -37,11 +37,20 @@ export type CantTellReason =
   | "no-answer"
   | "not-set-up"
   /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
-  | "endpoint";
+  | "endpoint"
+  /** Over SSH: the status results disagree, or say too little to tell running from stopped. */
+  | "contradictory";
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
-  "launchagent" | "launchagent-stopped" | "systemd" | "systemd-stopped" | "none";
+  | "launchagent"
+  | "launchagent-stopped"
+  | "systemd"
+  | "systemd-stopped"
+  /** The status named a systemd user unit. */
+  | "systemd-user"
+  | "systemd-user-stopped"
+  | "none";
 
 export type SetupLook = {
   outcome: LookOutcome;
@@ -78,6 +87,12 @@ export type SetupFailureKind =
   | "no-dialog"
   /** The look refused to run here (`docs/development/setup.md`); `reason` says why. */
   | "refused"
+  /** Over SSH: the gateway answered with another identity than the route's. */
+  | "identity"
+  /** Over SSH: the gateway's identity couldn't be read after its hello. */
+  | "identity-unread"
+  /** Over SSH: the route's saved token is gone or was refused; a new pairing is needed. */
+  | "pairing-gone"
   /** Connected, but the bots couldn't be read. */
   | "bots"
   /** The connection failed in another way; the connection state says how. */
@@ -153,6 +168,8 @@ export type SshFailureKind =
   | "app-files-unsafe"
   | "forwarding-refused"
   | "gateway-not-answering"
+  /** This computer can't keep a route's device token encrypted: no pairing over SSH. */
+  | "no-token-storage"
   /** The one-time code wasn't made on that computer; `exit` is OpenClaw's. */
   | "code-failed"
   /** Start was run and the gateway didn't come up. */
@@ -194,59 +211,90 @@ export type SshSetup = {
     trusted: (ShownHostKey & { pinnedAt: string }) | null;
   } | null;
   failure: { kind: SshFailureKind; cause: UnreachableWords | null; exit: number | null } | null;
+  /** At launch: the saved route is being opened again with its saved token, no new pairing. */
+  resume?: boolean;
 };
 
 /** Where the app's SSH route stands (§8): the status strip's words come from it. */
 export type RouteStatus = {
   /** The name typed for that computer: "devbox". */
   name: string;
+  /** The full account, as resolved: "you@devbox.example". */
   account: string;
+  /** Its SSH port. */
+  port: number;
   phase:
     | "up"
-    /** The forward dropped and is being started again. */
+    /** The forward dropped, or is up again and the gateway hasn't answered as itself yet. */
     | "restoring"
-    /** Back after a drop: said for a moment. */
+    /** Back after a drop, the gateway's identity read again: said for a moment. */
     | "restored"
     /** Two minutes without the forward. */
     | "unreachable"
     | "key-changed"
+    /** The LOOK found another service at the gateway's port, before any identity was read. */
+    | "service-changed"
+    /** The gateway answered with another identity than the route's. */
     | "different-gateway"
     /** The forward stays up and the LOOK reports the service stopped. */
-    | "stopped";
+    | "stopped"
+    /** The route couldn't be restored for a reason other than reaching the computer. */
+    | "failed"
+    /** The person chose Disconnect: the route is kept, and only Reconnect opens it again. */
+    | "disconnected";
   /** For `unreachable`: the cause in brackets, as section 5 words it. */
   cause: UnreachableWords | null;
   profile: "default" | "clawtrate";
-  /** Clawtrate's record says it started that gateway: Remove may also stop it. */
-  startedByClawtrate: boolean;
 };
 
 /**
- * Where the gateway's owner approves a request (§9): the route's computer and
- * the profile, for the approve command. "Approve from here" (F-500) plugs in
- * on the same place: it is offered only where a place is known.
+ * Where the gateway's owner approves a request (§9): this computer, or the
+ * SSH route's account and port, and the profile, for the approve command.
+ * "Approve from here" (F-500) plugs in on the same place: it is offered only
+ * where a place is known.
  */
-export type ApprovalPlace = {
-  route: "this-computer" | "ssh";
-  /** "this computer", or the SSH route's name: "devbox". */
-  where: string;
-  profile: "default" | "clawtrate";
-};
+export type ApprovalPlace =
+  | { route: "this-computer"; profile: "default" | "clawtrate" }
+  | {
+      route: "ssh";
+      /** The route's full account, as resolved: "you@devbox.example". */
+      account: string;
+      /** Its SSH port. */
+      port: number;
+      profile: "default" | "clawtrate";
+    };
 
-/** The approve command and its line for a place (§9): the selected profile, by name. */
+/** A gateway's pairing request id, as OpenClaw makes them: a UUID. Anything else is never put in a command. */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The approve command and its line for a place (§9): the selected profile, by
+ * name. Only a request id of the gateway's shape is put in the command; without
+ * one, the command lists the pending devices and the line says to match this
+ * device's id.
+ */
 export function approvalForPlace(
   place: ApprovalPlace,
   requestId: string,
 ): { command: string; note: string } {
   const profileArgs = place.profile === "clawtrate" ? "--profile clawtrate " : "";
-  const on = place.route === "this-computer" ? "On this computer" : `On ${place.where}`;
-  if (requestId === "")
+  const known = REQUEST_ID.test(requestId);
+  const command = known
+    ? `openclaw ${profileArgs}devices approve ${requestId}`
+    : `openclaw ${profileArgs}devices list`;
+  if (place.route === "this-computer")
     return {
-      command: `openclaw ${profileArgs}devices list`,
-      note: `${on}, approve this device for the ${place.profile} profile from the requests this lists.`,
+      command,
+      note: known
+        ? `On this computer, approve this request for the ${place.profile} profile:`
+        : `On this computer, approve this device for the ${place.profile} profile from the requests this lists.`,
     };
+  const on = `On ${place.account} (SSH port ${place.port})`;
   return {
-    command: `openclaw ${profileArgs}devices approve ${requestId}`,
-    note: `${on}, approve this request for the ${place.profile} profile:`,
+    command,
+    note: known
+      ? `${on}, approve this request for the ${place.profile} profile.`
+      : `${on}, list pending devices for the ${place.profile} profile and match this device ID before you approve.`,
   };
 }
 
@@ -287,7 +335,10 @@ export type SetupHost = {
   start?(): Promise<void>;
   /** The status strip's "Retry now": restore the route's forward at once. */
   retryRoute?(): Promise<void>;
-  /** Settings, Gateway, "Remove this gateway…", after the host's dialog. */
+  /**
+   * Settings, Gateway, "Remove this gateway…", or the same on a route that
+   * couldn't be restored, after the host's dialog: local only.
+   */
   removeRoute?(): Promise<void>;
 };
 

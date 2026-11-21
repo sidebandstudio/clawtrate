@@ -5,7 +5,9 @@
 // the one-time code with the real program, through the development tool's
 // guarded runner, for that instance alone (mint-code.ts). The host's own
 // code does the rest: the account's dialog, first contact, the CODE script,
-// the forward, the pairing, the route store, the restore and Remove.
+// the forward on its private local socket, the client's real WebSocket made
+// on that socket by the host, the identity read after every hello, the
+// sealed route store, the restore and Remove.
 //
 // It needs `sshd`, `ssh-keygen` and OpenClaw 2026.10.6 on PATH, and starts
 // and resets its instance itself, recorded before it starts so that a killed
@@ -29,7 +31,7 @@ import { newRunId, processIdentity } from "../../../../tools/dev-gateway/src/sta
 import { defaultSpawn, type Spawn } from "../../src/main/ssh/run.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { SetupSlice } from "../../src/setup/host.ts";
-import { RemoteSetup } from "../../src/setup/remote.ts";
+import { isChannelUrl, RemoteSetup } from "../../src/setup/remote.ts";
 import { RouteStore, routedStorage } from "../../src/setup/routes.ts";
 import {
   alive,
@@ -40,6 +42,7 @@ import {
   startSshd,
   statusJson,
   tempDir,
+  testSeal,
   type TestSshd,
   type TestWorld,
 } from "./harness.ts";
@@ -178,7 +181,7 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
 
     dataDir = join(root, "data");
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    routes = new RouteStore(dataDir);
+    routes = new RouteStore(dataDir, { seal: testSeal });
     transport = new SshTransport({ ...t.world, appDir: join(dataDir, "ssh") }, { spawn });
     let setupHost: RemoteSetup | null = null;
     client = new ClawtrateClient(
@@ -186,9 +189,14 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
         dataDir,
         client: { displayName: "Clawtrate Desktop", version: "0.1.0", platform: process.platform },
         wrapStorage: (store) => routedStorage(store, routes),
+        // As the app: a channel's socket is the host's own, on the forward's local socket.
+        routeSocket: (url) => setupHost?.socketFor(url) ?? null,
       }),
-      // Only the route's current forward address, while it is up.
-      { allowGatewayUrl: (url) => setupHost?.allows(url) ?? false },
+      // Only the route's current channel, while it is up.
+      {
+        allowGatewayUrl: (url) => setupHost?.allows(url) ?? false,
+        reopenRoute: async (route) => setupHost?.reopen(route),
+      },
     );
     await client.start({ resume: false });
     const slice = new SetupSlice(client);
@@ -221,18 +229,26 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     expect(problems).toEqual([]);
   }, 120_000);
 
-  it("F-496 F-494 F-495: first contact, the CODE script, the forward, and a silent read-only pairing, with the token on disk only in the route store", async () => {
+  it("F-496 F-494 F-495: first contact, the CODE script, the forward on its private socket, and a silent read-only pairing through it, with the token on disk only sealed in the route store", async () => {
     await remote.there("devbox");
     expect(client.state.setup!.phase).toBe("key");
     await remote.trustKey();
     expect(client.state.setup!.look).toMatchObject({ outcome: "running", version: "2026.10.6" });
     await remote.connect();
     await until(() => client.state.setup!.phase === "done", 60_000);
+    const account = `${t.world.localUser}@127.0.0.1 (SSH port ${server.port})`;
     expect(questions).toEqual([
-      `Look for OpenClaw as ${t.world.localUser}@127.0.0.1, port ${server.port}?`,
-      "Trust devbox's key?",
-      `Pair this device read-only with the default gateway on ${t.world.localUser}@127.0.0.1?`,
+      `Look for OpenClaw as ${account}?`,
+      `Trust the key ${account} presented?`,
+      `Pair this device read-only with the default gateway on ${account}?`,
     ]);
+    // The client's address is the channel's, and the forward listens on a socket, no TCP port.
+    expect(isChannelUrl(client.state.connection.gatewayUrl!)).toBe(true);
+    const spec = started.find((run) => run.args.includes("-L"))!.args;
+    expect(spec[spec.indexOf("-L") + 1]).toMatch(
+      new RegExp(`^${join(dataDir, "ssh")}/f[0-9a-f]{12}\\.s:127\\.0\\.0\\.1:${gatewayPort}$`),
+    );
+    expect(client.state.connection.gatewayId).toBeTruthy();
     // Exactly read, approved by the gateway without anyone approving it.
     expect(client.state.connection).toMatchObject({
       status: "connected",
@@ -244,12 +260,13 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     expect(mine[0]!.scopes).toEqual(["operator.read"]);
     expect(mine[0]!.approvedVia).toBe("silent");
     expect(client.state.bots.length).toBeGreaterThan(0);
-    // The device token: in the route store, and in no other file of this run.
-    const stored = JSON.parse(readFileSync(routes.path, "utf8")) as {
-      routes: Array<{ token: { value: string } | null }>;
-    };
-    const token = (JSON.parse(stored.routes[0]!.token!.value) as { token: string }).token;
+    // The device token: sealed in the route store, and in plain text in no file of this run.
+    const [record] = routes.list();
+    const token = (
+      JSON.parse(routes.getToken(record!.key, deviceId, "operator")!) as { token: string }
+    ).token;
     expect(token.length).toBeGreaterThan(16);
+    expect(readFileSync(routes.path, "utf8")).toContain("sealed:");
     const holding: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
@@ -265,15 +282,23 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
       }
     };
     walk(root);
-    expect(holding).toEqual([routes.path]);
+    expect(holding).toEqual([]);
   });
 
-  it("F-498: the forward comes back by itself after the sshd drops, and the route's own token reconnects with no new pairing", async () => {
+  it("F-498: the forward comes back by itself after the sshd drops, and the route's own token reconnects with no new pairing, said back only once the gateway answered as itself", async () => {
     const deviceId = client.state.connection.deviceId!;
+    const identity = client.state.connection.gatewayId;
     phases.length = 0;
+    const atRestored: string[] = [];
+    const stop = client.store.subscribe((state) => {
+      if (state.setup?.route?.phase === "restored" && atRestored.length === 0)
+        atRestored.push(`${state.connection.status} ${state.connection.gatewayId}`);
+    });
     await server.dropSessions();
     await until(() => phases.includes("restoring"), 20_000);
     await until(() => phases.includes("restored"), 60_000);
+    stop();
+    expect(atRestored).toEqual([`connected ${identity}`]);
     await until(() => client.state.connection.status === "connected", 30_000);
     expect(client.state.connection.scopes).toEqual(["operator.read"]);
     const mine = (devices().paired ?? []).filter((device) => device.deviceId === deviceId);
@@ -281,15 +306,18 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     expect(devices().pending ?? []).toEqual([]);
   });
 
-  it("F-499: Remove closes the forward and forgets the route, its pin and its token", async () => {
+  it("F-499: Remove is local only: it closes the forward and forgets the route, its pin and its token", async () => {
     const forwards = started.filter((run) => run.args.includes("-L")).map((run) => run.pid!);
     expect(forwards.some((pid) => alive(pid))).toBe(true);
     await remote.removeRoute();
+    expect(questions.at(-1)).toBe(
+      `Remove ${t.world.localUser}@127.0.0.1 (SSH port ${server.port}) from Clawtrate?`,
+    );
     expect(forwards.filter((pid) => alive(pid))).toEqual([]);
     expect(routes.list()).toEqual([]);
     expect(readFileSync(join(dataDir, "ssh", "known_hosts"), "utf8")).toBe("");
     expect(client.state.connection.status).toBe("idle");
-    // OpenClaw there keeps running: Clawtrate didn't start it.
+    // OpenClaw there keeps running, and still lists this device: Remove ran nothing there.
     expect(openInstance(INSTANCE).runner.refusal()).toBeNull();
   });
 });

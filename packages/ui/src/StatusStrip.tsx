@@ -152,12 +152,12 @@ export function stripFor(
 export function routeStrip(state: ClawtrateState): Strip | null {
   const route = state.setup?.route;
   if (!route) return null;
-  const name = route.name;
+  const account = route.account;
   switch (route.phase) {
     case "restoring":
       return {
         tone: "warn",
-        text: `Restoring the connection to ${name}`,
+        text: `Restoring the connection to ${account}`,
         short: "Restoring the connection",
         more: "showing saved messages",
         action: "route-retry",
@@ -166,7 +166,8 @@ export function routeStrip(state: ClawtrateState): Strip | null {
     case "restored":
       return {
         tone: "ok",
-        text: `Connected to ${name} again`,
+        text: `Connected to OpenClaw on ${account} again`,
+        short: "Connected again",
         more: null,
         action: null,
         countdown: false,
@@ -174,7 +175,7 @@ export function routeStrip(state: ClawtrateState): Strip | null {
     case "unreachable":
       return {
         tone: "danger",
-        text: `Can't reach ${name}`,
+        text: `Can't reach ${account}`,
         short: "Can't reach the computer",
         more: route.cause ?? "showing saved messages",
         action: "route-retry",
@@ -183,7 +184,17 @@ export function routeStrip(state: ClawtrateState): Strip | null {
     case "key-changed":
       return {
         tone: "danger",
-        text: `${name}'s key has changed`,
+        text: `SSH presented a key that differs from the saved key for ${account}`,
+        short: "The SSH key differs",
+        more: null,
+        action: "review",
+        countdown: false,
+      };
+    case "service-changed":
+      return {
+        tone: "danger",
+        text: "The service found at the gateway port changed",
+        short: "The service changed",
         more: null,
         action: "review",
         countdown: false,
@@ -191,7 +202,7 @@ export function routeStrip(state: ClawtrateState): Strip | null {
     case "different-gateway":
       return {
         tone: "danger",
-        text: "This address now leads to a different gateway",
+        text: "A different OpenClaw gateway answered",
         short: "A different gateway",
         more: null,
         action: "review",
@@ -200,7 +211,16 @@ export function routeStrip(state: ClawtrateState): Strip | null {
     case "stopped":
       return {
         tone: "danger",
-        text: `OpenClaw stopped on ${name}`,
+        text: `OpenClaw stopped on ${account}`,
+        more: null,
+        action: "review",
+        countdown: false,
+      };
+    case "failed":
+      return {
+        tone: "danger",
+        text: `Couldn't restore the connection to OpenClaw on ${account}`,
+        short: "Couldn't restore the connection",
         more: null,
         action: "review",
         countdown: false,
