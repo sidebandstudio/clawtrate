@@ -180,44 +180,81 @@ export function MessageActions({
     if (!turn) return;
     const onEnter = () => measure();
     turn.addEventListener("pointerenter", onEnter);
-    // Touch and hold on the message shows its actions; a tap elsewhere hides them.
+    // Touch and hold on the message shows its actions; a tap elsewhere hides them. The finger that
+    // starts it owns the gesture until it lifts or the browser takes it, which is how WebKit on iOS
+    // hands a touch to a long press of its own: it cancels the pointer, with no contextmenu.
+    let owner: number | null = null;
+    let gesture: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let start = { x: 0, y: 0 };
-    const onDown = (event: PointerEvent) => {
-      if (event.pointerType !== "touch") return;
-      // A second finger makes it no touch and hold: the first one's wait ends too.
-      if (timer) return cancel();
-      if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
-      start = { x: event.clientX, y: event.clientY };
-      // Until the finger lifts, so the system's own long press, which can come later than this
-      // one, neither selects the text nor shows its callout. More has Copy text.
-      turn.dataset.touching = "true";
-      timer = setTimeout(() => {
-        measure();
-        setHeld(true);
-      }, LONG_PRESS_MS);
+    let start = { x: 0, y: 0, top: 0 };
+    // Ends the wait, not the gesture: the text stays unselectable until the finger lifts.
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    const open = () => {
+      stop();
+      measure();
+      setHeld(true);
+    };
+    const end = () => {
+      stop();
+      gesture?.abort();
+      gesture = null;
+      owner = null;
+      delete turn.dataset.touching;
+    };
+    // A second finger anywhere ends the wait.
+    const onOther = (event: PointerEvent) => {
+      if (event.pointerType === "touch" && event.pointerId !== owner) stop();
     };
     // A held finger always drifts a little; only a move past the slop ends the wait.
     const onMove = (event: PointerEvent) => {
-      if (timer && Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_SLOP)
-        cancel();
+      if (event.pointerId !== owner) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_SLOP) stop();
     };
-    const cancel = () => {
-      if (timer) clearTimeout(timer);
-      timer = null;
-      delete turn.dataset.touching;
+    const onEnd = (event: PointerEvent) => {
+      if (event.pointerId === owner) end();
+    };
+    // The message moving under the finger, as when the transcript scrolls, ends the wait.
+    const onScroll = () => {
+      if (turn.getBoundingClientRect().top !== start.top) stop();
+    };
+    // Chromium's own long press, its contextmenu, can come while this one waits: it opens the
+    // actions at once, and Chromium's menu, which would cover them, stays shut.
+    const onMenu = (event: MouseEvent) => {
+      if (!turn.contains(event.target as Node)) return;
+      event.preventDefault();
+      if (timer) open();
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      // A second finger is no touch and hold, nor the start of one.
+      if (owner !== null || !event.isPrimary) return;
+      if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
+      owner = event.pointerId;
+      start = { x: event.clientX, y: event.clientY, top: turn.getBoundingClientRect().top };
+      // Until the finger lifts, so the system's own long press, which can come later than this
+      // one, neither selects the text nor shows its callout. More has Copy text.
+      turn.dataset.touching = "true";
+      timer = setTimeout(open, LONG_PRESS_MS);
+      // On the document: the finger's later events can land outside the message, as when the
+      // text it went down on is replaced and the browser lets go of it.
+      gesture = new AbortController();
+      const options = { capture: true, signal: gesture.signal };
+      document.addEventListener("pointerdown", onOther, options);
+      document.addEventListener("pointermove", onMove, options);
+      document.addEventListener("pointerup", onEnd, options);
+      document.addEventListener("pointercancel", onEnd, options);
+      document.addEventListener("lostpointercapture", onEnd, options);
+      document.addEventListener("scroll", onScroll, options);
+      document.addEventListener("contextmenu", onMenu, options);
     };
     turn.addEventListener("pointerdown", onDown);
-    turn.addEventListener("pointerup", cancel);
-    turn.addEventListener("pointercancel", cancel);
-    turn.addEventListener("pointermove", onMove);
     return () => {
-      cancel();
+      end();
       turn.removeEventListener("pointerenter", onEnter);
       turn.removeEventListener("pointerdown", onDown);
-      turn.removeEventListener("pointerup", cancel);
-      turn.removeEventListener("pointercancel", cancel);
-      turn.removeEventListener("pointermove", onMove);
     };
   }, [turnRef, measure]);
 

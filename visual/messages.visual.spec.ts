@@ -53,21 +53,45 @@ const shown = (locator: Locator) =>
   locator.evaluate((el) => Number(getComputedStyle(el).opacity) === 1);
 
 /**
- * A finger down on a message's bubble, through the browser's own touch input, so that it drifts,
- * scrolls and lifts the way a real one does. A pointer event made by hand does none of that.
+ * Fingers on the screen, through the browser's own touch input, so that they drift, scroll and
+ * lift the way real ones do. A pointer event made by hand does none of that. Each one goes down on
+ * a message's bubble and moves by an offset from there.
  */
-async function fingerOn(turn: Locator) {
-  const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
-  const at = (dx: number, dy: number) => [
-    { x: box.x + 30 + dx, y: box.y + 20 + dy, id: 1, radiusX: 10, radiusY: 10, force: 1 },
-  ];
-  const cdp = await turn.page().context().newCDPSession(turn.page());
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(0, 0) });
-  return {
-    move: (dx: number, dy: number) =>
-      cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: at(dx, dy) }),
-    lift: () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }),
+async function touchScreen(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const down = new Map<number, { x: number; y: number }>();
+  const send = (type: "touchStart" | "touchMove" | "touchEnd") =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: [...down].map(([id, at]) => ({ id, ...at, radiusX: 10, radiusY: 10, force: 1 })),
+    });
+  return async (turn: Locator) => {
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const id = down.size + 1;
+    const at = (dx: number, dy: number) => down.set(id, { x: box.x + 30 + dx, y: box.y + 20 + dy });
+    at(0, 0);
+    await send("touchStart");
+    return {
+      move: (dx: number, dy: number) => (at(dx, dy), send("touchMove")),
+      lift: () => (down.delete(id), send("touchEnd")),
+    };
   };
+}
+
+/** One finger down on a message's bubble. */
+const fingerOn = async (turn: Locator) => (await touchScreen(turn.page()))(turn);
+
+/**
+ * Otto's answer, ready to hold. The page's timers stop, so the long press cannot end before the
+ * finger has drifted, however slow the page: the check runs them.
+ */
+async function holdReady(page: Page) {
+  await page.clock.install({ time: NOW });
+  await open(page);
+  const turn = answer(page);
+  await turn.scrollIntoViewIfNeeded();
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  return turn;
 }
 
 test.describe("message actions", () => {
@@ -608,7 +632,12 @@ test.describe("message actions on a phone", () => {
     const box = (await bubble.boundingBox())!;
     const actions = turn.getByTestId("message-actions");
     const at = { clientX: box.x + 30, clientY: box.y + 20 };
-    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, ...at });
+    await bubble.dispatchEvent("pointerdown", {
+      pointerType: "touch",
+      pointerId: 1,
+      isPrimary: true,
+      ...at,
+    });
     await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, ...at });
     await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, ...at });
     await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 1, ...at });
@@ -630,7 +659,12 @@ test.describe("message actions on a phone", () => {
     await page.touchscreen.tap(x, y);
     expect(await shown(actions)).toBe(false);
     // Held: a pointer down that lasts past the long press.
-    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", clientX: x, clientY: y });
+    await bubble.dispatchEvent("pointerdown", {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: x,
+      clientY: y,
+    });
     await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
     await bubble.dispatchEvent("pointerup", { pointerType: "touch", clientX: x, clientY: y });
     await expect.poll(() => shown(actions)).toBe(true);
@@ -651,12 +685,7 @@ test.describe("message actions on a phone", () => {
   test("F-066: touch and hold shows a message's actions though the finger drifts a few px", async ({
     page,
   }) => {
-    await page.clock.install({ time: NOW });
-    await open(page);
-    const turn = answer(page);
-    await turn.scrollIntoViewIfNeeded();
-    // Timers stop here, so the long press cannot end before the finger has drifted, however slow the page.
-    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const turn = await holdReady(page);
     const finger = await fingerOn(turn);
     for (const dx of [3, 0, 3, 1]) await finger.move(dx, 2);
     await page.clock.runFor(600);
@@ -667,11 +696,7 @@ test.describe("message actions on a phone", () => {
   test("F-066: a finger that moves 30 px is a scroll, not a touch and hold: nothing opens", async ({
     page,
   }) => {
-    await page.clock.install({ time: NOW });
-    await open(page);
-    const turn = answer(page);
-    await turn.scrollIntoViewIfNeeded();
-    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+    const turn = await holdReady(page);
     const finger = await fingerOn(turn);
     for (const dy of [10, 20, 30]) await finger.move(0, -dy);
     await page.clock.runFor(600);
@@ -682,20 +707,130 @@ test.describe("message actions on a phone", () => {
   test("F-066: a finger held on a message keeps its text from being selected until it lifts", async ({
     page,
   }) => {
-    await page.clock.install({ time: NOW });
-    await open(page);
-    const turn = answer(page);
-    await turn.scrollIntoViewIfNeeded();
+    const turn = await holdReady(page);
     const text = turn.locator(".msg > .bubble").last();
-    await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
     const finger = await fingerOn(turn);
     await expect(text).toHaveCSS("user-select", "none");
     await page.clock.runFor(600);
     await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
-    // Still, once the actions show: the system's own long press can come a little later.
+    // Still, once the actions show, though the finger drifts past the slop: the system's own long
+    // press can come a little later.
+    await finger.move(11, 0);
     await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
     await finger.lift();
     await expect(text).toHaveCSS("user-select", "auto");
+  });
+
+  test("F-066: a finger that moves 11 px before the long press ends its wait: nothing opens", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const text = turn.locator(".msg > .bubble").last();
+    const finger = await fingerOn(turn);
+    await finger.move(0, 11);
+    await page.clock.runFor(600);
+    // The browser has not taken the finger, so this slop is what ended the wait.
+    await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+    await expect(text).toHaveCSS("user-select", "auto");
+  });
+
+  test("F-066: a second finger down anywhere is no touch and hold, nor the start of one, while both stay down", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await touchScreen(page);
+    const first = await finger(turn);
+    // On another message: outside the first one, and a hold of its own if a second finger could start one.
+    const second = await finger(
+      page.getByTestId("transcript-turn").filter({ hasText: "Keep an eye on it" }),
+    );
+    await page.clock.runFor(600);
+    await expect(turn.locator(".msg > .bubble").last()).toHaveCSS("user-select", "none");
+    await expect(page.locator('[data-testid="message-actions"][data-open="true"]')).toHaveCount(0);
+    await second.lift();
+    await first.lift();
+  });
+
+  test("F-066: a mouse moving over a held message leaves the touch and hold to the finger", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    const finger = await fingerOn(turn);
+    await page.mouse.move(box.x + 120, box.y + 40);
+    await page.mouse.move(box.x + 160, box.y + 60);
+    await page.clock.runFor(600);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: when the text under a held finger goes, the hold ends with it: nothing opens, and the text is selectable", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    // By its id, since the text that finds it goes.
+    const id = await turn.getByTestId("message").last().getAttribute("data-message");
+    const message = page.locator(`[data-testid="message"][data-message="${id}"]`);
+    const text = message.locator(".msg > .bubble");
+    const finger = await fingerOn(turn);
+    // A move: from there the browser holds the finger to the text it went down on.
+    await finger.move(1, 1);
+    await text
+      .locator("p")
+      .first()
+      .evaluate((el) => el.remove());
+    // The browser lets go of the finger before its next event.
+    await finger.move(2, 1);
+    await page.clock.runFor(600);
+    await expect(text).toHaveCSS("user-select", "auto");
+    await expect(message.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: the transcript scrolling under a held finger ends its wait: nothing opens", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const text = turn.locator(".msg > .bubble").last();
+    const finger = await fingerOn(turn);
+    await page.getByTestId("transcript").evaluate(
+      (el) =>
+        new Promise((scrolled) => {
+          el.addEventListener("scroll", scrolled, { once: true });
+          el.scrollTop -= 40;
+        }),
+    );
+    await page.clock.runFor(600);
+    await expect(text).toHaveCSS("user-select", "none");
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
+  test("F-066: the browser's own long press on a held message opens its actions, and not the browser's menu", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const finger = await fingerOn(turn);
+    // As Chromium sends it, before this long press is due: the page's timers stay stopped.
+    const shut = await turn
+      .locator(".msg > .bubble")
+      .last()
+      .evaluate(
+        (el) =>
+          !el.dispatchEvent(
+            new PointerEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              pointerType: "touch",
+            }),
+          ),
+      );
+    expect(shut).toBe(true);
+    await expect(turn.getByTestId("message-actions")).toHaveAttribute("data-open", "true");
+    await finger.lift();
   });
 
   test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
