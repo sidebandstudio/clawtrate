@@ -171,7 +171,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     );
     const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
     expect(problems.join("\n")).toMatch(
-      /the newer build \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
+      /the copy a test started \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
     );
     expect(run.kept()).toBe(true);
     stubborn.kill("SIGKILL");

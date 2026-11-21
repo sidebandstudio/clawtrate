@@ -3,7 +3,7 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import {
   closeSync,
@@ -524,7 +524,25 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
   );
   const args = [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`];
-  const copy = spawn(packagedExecutable(APP), args, { env: appEnv(), stdio: "ignore" });
+  let copy: ChildProcess;
+  if (WINDOWS) {
+    // Windows keeps no run record: the run's teardown ends whatever names the run's folder.
+    copy = spawn(packagedExecutable(APP), args, { env: appEnv(), stdio: "ignore" });
+  } else {
+    // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+    const gated = gatedSpawn(spawn, packagedExecutable(APP), args, {
+      env: appEnv(),
+      stdio: "ignore",
+    });
+    copy = gated.child;
+    const found = processIdentity(copy.pid!);
+    if (found.state !== "alive") {
+      gated.abort();
+      throw new Error("could not record the copy's process");
+    }
+    recordSuccessor(RECORD, { pid: copy.pid!, identity: found.identity });
+    gated.release();
+  }
   // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
   const exited = new Promise((resolve) => {
     copy.once("exit", resolve);
@@ -543,6 +561,7 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     }
   };
   let view: Browser | undefined;
+  let left: number[];
   try {
     await once(pictures.listen(0, "127.0.0.1"), "listening");
     const picturesAt = `https://127.0.0.1:${(pictures.address() as AddressInfo).port}/`;
@@ -598,10 +617,12 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     if (copy.exitCode === null && copy.signalCode === null) {
       if (WINDOWS) forceEnd(copy.pid!);
       else copy.kill("SIGKILL");
-      await exited;
+      // Bounded: a copy that could not be ended never exits. The list below names it.
+      await Promise.race([exited, sleep(10_000)]);
     }
     for (let i = 0; i < 50 && processesUsing(data).length > 0; i += 1) await sleep(200);
-    for (const pid of processesUsing(data)) {
+    left = processesUsing(data);
+    for (const pid of left) {
       if (WINDOWS) forceEnd(pid);
       else {
         try {
@@ -612,6 +633,7 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
       }
     }
   }
+  expect(left, "the copy's processes end within 10 seconds of it").toEqual([]);
   const asked = dictionaryRequests(readFileSync(netLog, "utf8"));
   if (!WINDOWS) {
     expect(asked, "the dictionaries the network log shows requests for").toEqual([]);

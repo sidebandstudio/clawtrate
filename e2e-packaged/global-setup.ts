@@ -284,7 +284,7 @@ export default async function globalSetup() {
   };
   let cleaned: string[] | null = null;
   const cleanUpOnce = () => {
-    // A test may have recorded a newer build it started on the same data folder.
+    // A test may have recorded a copy of the app it started.
     const saved = readRecord(recordPath(RECORDS, record.run));
     if (saved?.successor) record.successor = saved.successor;
     return (cleaned ??= cleanUp(RECORDS, record, reset));
@@ -449,12 +449,16 @@ async function windowsSetup() {
   mkdirSync(userData);
   let appProcess: ChildProcess | null = null;
 
-  /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
+  /**
+   * Ends whatever is left of the app, and of a copy a test started with a data
+   * folder in the run's folder, by PID, and removes the folder. Synchronous,
+   * for the exit handler too.
+   */
   let finished = false;
   const finish = () => {
     if (finished) return;
     finished = true;
-    for (const pid of processesUsing(userData)) forceEnd(pid);
+    for (const pid of processesUsing(dirname(userData))) forceEnd(pid);
     if (appProcess?.pid && appProcess.exitCode === null) forceEnd(appProcess.pid);
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   };

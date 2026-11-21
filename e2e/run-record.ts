@@ -27,7 +27,10 @@ export type RunRecord = {
   /** Written before the preview host is spawned; it is gated until `host` is written. */
   hostPending?: true;
   host: Proc | null;
-  /** A newer build a test starts on the host's data folder, written before it runs. */
+  /**
+   * A copy of the app a test starts, such as a newer build on the host's data
+   * folder, written before it runs.
+   */
   successor?: Proc;
   dirs: string[];
 };
@@ -79,7 +82,7 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/** Records a newer build started on the run's data folder, so the run's cleanup stops it too. */
+/** Records a copy of the app a test started, so the run's cleanup stops it too. */
 export function recordSuccessor(path: string, successor: Proc): void {
   const record = readRecord(path);
   if (!record) throw new Error(`${path} is not a run record`);
@@ -111,7 +114,7 @@ export function cleanUp(
   let hostGone = true;
   const hosts = [
     ...(record.host ? [{ proc: record.host, label: "the preview host" }] : []),
-    ...(record.successor ? [{ proc: record.successor, label: "the newer build" }] : []),
+    ...(record.successor ? [{ proc: record.successor, label: "the copy a test started" }] : []),
   ];
   for (const { proc, label } of hosts) {
     const { pid, identity } = proc;
