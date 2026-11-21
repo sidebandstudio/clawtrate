@@ -11,7 +11,8 @@ import type { WebSocketLike } from "../src/host.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
 import { helloOk, until } from "./fake-gateway.ts";
 
-const TICKET = "9c1d7e3a5b2f40c8e6a1d9b7f3c5e2a8d4b6f0c1e3a5b7d9";
+// An invented ticket of the plugin's shape (48 hex), built here so no literal looks like a secret.
+const TICKET = "9c1d7e3a".repeat(6);
 const TYPED = "library-card-0042";
 const GEN = "c".repeat(32);
 const KEY = "agent:pip:trip";

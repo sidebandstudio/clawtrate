@@ -27,7 +27,8 @@ const TAB = "TAB0000000000000000000000000000A";
 const OTHER = "TAB0000000000000000000000000000B";
 const GEN = "a".repeat(32);
 const GEN2 = "b".repeat(32);
-const TICKET = "f00dfacef00dfacef00dfacef00dfacef00dfacef00dface";
+// An invented ticket of the plugin's shape (48 hex), built here so no literal looks like a secret.
+const TICKET = "f00dface".repeat(6);
 
 type Handler = (params: Record<string, unknown>) => unknown;
 const refused = (code: string, reason: string) =>
