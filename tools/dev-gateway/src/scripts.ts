@@ -220,6 +220,7 @@ export function planReply(
     const ctx: PlanContext = {
       ...facts,
       pagesOrigin: options.pagesOrigin ?? null,
+      prompt,
       results: after
         .filter((m) => m.role === "tool")
         .map((m) => ({ name: names.get(m.tool_call_id ?? "") ?? "", text: messageText(m) })),

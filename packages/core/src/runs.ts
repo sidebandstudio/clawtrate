@@ -3478,7 +3478,10 @@ function rowIdempotencyKey(message: RawRecord): string | null {
  * names another message's row, so a steer is matched by its own key only.
  * The bare key is accepted too.
  */
-function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolean {
+export function namesOutgoing(
+  rowKey: string | null,
+  outgoing: Pick<OutgoingMessage, "id" | "mode" | "runId">,
+): boolean {
   if (rowKey === null) return false;
   if (rowKey === outgoing.id || rowKey === `${outgoing.id}:user`) return true;
   return (

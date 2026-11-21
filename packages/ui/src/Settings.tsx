@@ -187,6 +187,7 @@ export function Settings({
   accounts,
   checkIns,
   bots,
+  waitingMessages,
   initialUpdates,
   updateReading,
   onClose,
@@ -199,6 +200,7 @@ export function Settings({
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
+  waitingMessages: string;
   initialUpdates: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
@@ -309,7 +311,7 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({
-    refreshOnOpen: !initialUpdates || section !== "updates",
+    refreshOnOpen: section !== "updates",
     accounts,
     bots,
     connection,
@@ -503,7 +505,7 @@ export function Settings({
                       title: "Updates",
                       back: toNav,
                       foot: null,
-                      body: <Updates {...updateReading} />,
+                      body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
                     }
                   : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (

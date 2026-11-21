@@ -222,6 +222,11 @@ export type TranscriptBlock =
        * rows shows several bubbles, each with its own.
        */
       messageId?: string;
+      /**
+       * The gateway's id of the message this bubble's row answers (`openclawDelivery.replyToId`):
+       * its thread. OpenClaw 2026.10.6 keeps one only on a row with no tool call.
+       */
+      replyToId?: string;
     }
   | { kind: "reasoning"; text: string }
   | {
@@ -255,9 +260,14 @@ export type TranscriptItem = {
   messageId?: string;
   /**
    * The message this user row replies to, as the gateway's history says (`__openclaw.replyToId`),
-   * with its preview of it. A bot's turn carries none here (see `replyReference` in `mapping.ts`).
+   * with its preview of it. A bot's turn carries none here: each of its bubbles has its own.
    */
   replyTo?: ReplyReference;
+  /**
+   * The key the gateway stored this user row under (`__openclaw.idempotencyKey`): what ties it to a
+   * message this client sent (`namesOutgoing`).
+   */
+  idempotencyKey?: string;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
