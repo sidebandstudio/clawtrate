@@ -833,6 +833,23 @@ test.describe("message actions on a phone", () => {
     await finger.lift();
   });
 
+  test("F-066: on a touch screen, a mouse over a message shows its actions, and a touch hides them", async ({
+    page,
+  }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const actions = turn.getByTestId("message-actions");
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    // This screen reports no hover, as Chromium can for a touch screen in tablet mode with a mouse.
+    expect(await page.evaluate(() => matchMedia("(any-hover: hover)").matches)).toBe(false);
+    await page.mouse.move(box.x + 30, box.y + 20);
+    await expect.poll(() => shown(actions)).toBe(true);
+    await page.touchscreen.tap(box.x + 30, box.y + 20);
+    // pointer-events changes at once, where the opacity fades.
+    await expect(actions).toHaveCSS("pointer-events", "none");
+  });
+
   test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {
     await open(page);
     const turn = answer(page);

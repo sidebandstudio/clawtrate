@@ -1187,18 +1187,12 @@
   transition: opacity var(--dur-quick) linear;
 }
 
+/* data-hover: a mouse, or a pen above the screen, is over the message (Messages.tsx). */
+.msg-unit[data-hover] > .msg-actions,
 .msg-actions:focus-within,
 .msg-actions[data-open="true"] {
   opacity: 1;
   pointer-events: auto;
-}
-
-/* Only where hovering is real: a tap on a touch screen leaves :hover behind until the next tap. */
-@media (hover: hover) {
-  .msg-unit:hover > .msg-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 
 /* A finger held on a message opens its actions, not a text selection or the system's callout. */

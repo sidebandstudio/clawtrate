@@ -178,8 +178,17 @@ export function MessageActions({
   useEffect(() => {
     const turn = turnRef.current;
     if (!turn) return;
-    const onEnter = () => measure();
+    // A mouse, or a pen above the screen, shows the actions while it is over the message: set here,
+    // since a tap leaves :hover behind, and a touch screen in tablet mode can report no hover with
+    // a mouse attached.
+    const onEnter = (event: PointerEvent) => {
+      measure();
+      if (event.pointerType === "mouse" || (event.pointerType === "pen" && event.buttons === 0))
+        turn.dataset.hover = "true";
+    };
+    const onLeave = () => delete turn.dataset.hover;
     turn.addEventListener("pointerenter", onEnter);
+    turn.addEventListener("pointerleave", onLeave);
     // Touch and hold on the message shows its actions; a tap elsewhere hides them. The finger that
     // starts it owns the gesture until it lifts or the browser takes it, which is how WebKit on iOS
     // hands a touch to a long press of its own: it cancels the pointer, with no contextmenu.
@@ -229,6 +238,7 @@ export function MessageActions({
     };
     const onDown = (event: PointerEvent) => {
       if (event.pointerType !== "touch") return;
+      delete turn.dataset.hover;
       // A second finger is no touch and hold, nor the start of one.
       if (owner !== null || !event.isPrimary) return;
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
@@ -254,6 +264,7 @@ export function MessageActions({
     return () => {
       end();
       turn.removeEventListener("pointerenter", onEnter);
+      turn.removeEventListener("pointerleave", onLeave);
       turn.removeEventListener("pointerdown", onDown);
     };
   }, [turnRef, measure]);
