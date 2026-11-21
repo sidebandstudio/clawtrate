@@ -6372,9 +6372,23 @@ export class ClawtrateClient {
       throw new Error("Not connected to the gateway.");
     const botId = botIdFromSessionKey(key);
     if (!botId) throw new Error("This task's bot is not known.");
+    // Read on the gateway it started on, all of it: one chosen since answers nothing for it.
+    const generation = this.generation;
+    const same = () => {
+      if (generation !== this.generation) throw new Error("Switched to another gateway.");
+    };
+    const request = async (method: string, params: unknown) => {
+      same();
+      const result = await this.request(method, params);
+      same();
+      return result;
+    };
     // "Prepare it again" asks the gateway to prepare its own desktop; everything else only reads.
-    if (probe) await this.request("computer.status", { probe: true }).catch(() => null);
-    return readMachine((method, params) => this.request(method, params), botId, nodes, this.now());
+    if (probe) await request("computer.status", { probe: true }).catch(() => null);
+    same();
+    const facts = await readMachine(request, botId, nodes, this.now());
+    same();
+    return facts;
   }
 
   // Managing tasks and the rail's arrangement (`task-actions.ts`, `sidebar.ts`) --------
