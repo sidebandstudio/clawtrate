@@ -20,6 +20,7 @@ const sink = vi.hoisted(() => ({
   corked: undefined as ((stream: WriteStream) => void) | undefined,
   vectoredWrites: 0,
   responseClosed: undefined as (() => void) | undefined,
+  closeError: undefined as string | undefined,
 }));
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -46,6 +47,12 @@ vi.mock(import("node:fs"), async (importOriginal) => {
     write: ((...args: Parameters<typeof fs.write>) => {
       writeWithFault(args[1], args.at(-1), () => fs.write(...args));
     }) as typeof fs.write,
+    close: ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      const code = sink.closeError;
+      if (!code) return fs.close(fd, callback);
+      // The descriptor still closes, so the test leaves none open.
+      fs.close(fd, () => callback(Object.assign(new Error(code), { code })));
+    }) as typeof fs.close,
     writev: ((...args: Parameters<typeof fs.writev>) => {
       sink.vectoredWrites++;
       writeWithFault(args[1], args.at(-1), () => fs.writev(...args));
@@ -76,6 +83,7 @@ beforeEach(async () => {
   sink.corked = undefined;
   sink.vectoredWrites = 0;
   sink.responseClosed = undefined;
+  sink.closeError = undefined;
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -262,6 +270,25 @@ describe("the download file", () => {
     response.end(file.body.subarray(1024));
     expect(await pending).toMatchObject({ kind: "failed", cause: "write-failed" });
     expect(sink.vectoredWrites).toBeGreaterThan(1);
+    expect(downloads()).toEqual([]);
+  });
+
+  it("reports write-failed when closing the finished file fails, and deletes it", async () => {
+    const file = payload();
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 })),
+    );
+    server.route("/files/app.zip", bytes(file.body));
+    const { engine, states } = engineFor(server, dir.path);
+    await engine.check();
+    sink.closeError = "EIO";
+    expect(await engine.download()).toEqual({
+      kind: "failed",
+      stage: "download",
+      cause: "write-failed",
+    });
+    expect(states.some((state) => state.kind === "downloading" && state.step)).toBe(false);
     expect(downloads()).toEqual([]);
   });
 

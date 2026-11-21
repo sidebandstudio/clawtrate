@@ -594,6 +594,41 @@ it("attributes a completed read across a switch while its history write drains",
   expect((await start()).get().lastCheck).toEqual(lastCheck);
 });
 
+const refused = (code: string) => Object.assign(Error(code), { code });
+const steps = () =>
+  snapshots.flatMap((s) => (s.state.kind === "downloading" && s.state.step) || []);
+
+it("verifies a download whose rename a scanner refuses twice", async () => {
+  const service = await start();
+  const id = await offer(service);
+  vi.mocked(rename)
+    .mockClear()
+    .mockRejectedValueOnce(refused("EBUSY"))
+    .mockRejectedValueOnce(refused("EPERM"));
+  expect((await service.download(id)).snapshot.state).toMatchObject({ kind: "verified" });
+  expect(vi.mocked(rename)).toHaveBeenCalledTimes(3);
+  expect(steps()).toEqual(["moving", "verifying"]);
+});
+
+it("fails a download whose rename stays refused, naming the step it stopped in", async () => {
+  const service = await start();
+  const id = await offer(service);
+  const real = vi.mocked(rename).getMockImplementation()!;
+  vi.mocked(rename).mockClear().mockRejectedValue(refused("EACCES"));
+  try {
+    expect((await service.download(id)).snapshot.state).toMatchObject({
+      kind: "failed",
+      stage: "download",
+      reason: "write-failed",
+    });
+    expect(vi.mocked(rename)).toHaveBeenCalledTimes(6);
+  } finally {
+    vi.mocked(rename).mockImplementation(real);
+  }
+  expect(steps()).toEqual(["moving"]);
+  expect(readdirSync(join(updates, id))).toEqual([]);
+});
+
 it("checks the kept bytes after the final download progress event", async () => {
   let id = "";
   const service = await start({
