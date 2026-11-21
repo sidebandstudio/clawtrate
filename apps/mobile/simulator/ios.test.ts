@@ -233,6 +233,7 @@ const browser = createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("Clawtrate link check");
 });
+const switcherProbe = new WebSocketServer({ server: browser });
 const SAFARI = "com.apple.mobilesafari";
 
 beforeAll(async () => {
@@ -256,6 +257,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const socket of switcherProbe.clients) socket.terminate();
+  await new Promise<void>((resolve) => switcherProbe.close(() => resolve()));
   textSize("large");
   await proxy?.stop();
   await five?.close();
@@ -266,7 +269,11 @@ afterAll(async () => {
 
 describe("the iOS app", () => {
   it("F-001 F-009 F-263: on iPhone, the first screen is the welcome with the mark, the tagline and Connect a gateway; an empty address, a gateway nobody answers and one on another protocol each get the desktop's words and a way on, and Retry repeats only the handshake", async () => {
-    launch({ fresh: true, devGateway: gateway });
+    launch({
+      fresh: true,
+      devGateway: gateway,
+      switcherProbePort: Number(new URL(browserUrl).port),
+    });
     await steps("welcome", [
       waitFor({ id: "welcome" }),
       see({ id: "mark" }),
@@ -483,53 +490,40 @@ describe("the iOS app", () => {
   });
 
   it("on iPhone, the app switcher covers Settings while JavaScript is blocked", async () => {
-    const probe = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        probe.once("listening", resolve);
-        probe.once("error", reject);
-      });
-      const address = probe.address();
-      if (!address || typeof address === "string") throw new Error("No switcher probe port");
-      launch({ devGateway: gateway, switcherProbePort: address.port });
-      await steps("settings-before-block", [
-        waitFor({ id: "home" }, 30_000),
-        tap({ id: "settings-button" }),
-        waitFor({ id: "settings" }, 20_000),
-        see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
-      ]);
+    await steps("settings-before-block", [
+      waitFor({ id: "home" }, 30_000),
+      tap({ id: "settings-button" }),
+      waitFor({ id: "settings" }, 20_000),
+      see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
+    ]);
 
-      const js = await until("the Simulator JS probe", async () => [...probe.clients][0]);
-      let blocked: { startedAt: number; unblockAt: number } | undefined;
-      let resumed = false;
-      js.on("message", (message) => {
-        const text = String(message);
-        if (text === "resumed") resumed = true;
-        else blocked = JSON.parse(text) as typeof blocked;
-      });
-      js.send("block");
-      const { startedAt, unblockAt } = await until("the JS callback to block", async () => blocked);
-      const backgroundedAt = Date.now();
-      expect(backgroundedAt).toBeGreaterThanOrEqual(startedAt);
-      await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }], {
-        retryDriverStartup: false,
-      });
-      const snapshot = await switcherSnapshot(backgroundedAt);
-      expect(snapshot.savedAt).toBeLessThan(unblockAt);
-      expectSwitcherCover(snapshot);
+    const js = await until("the Simulator JS probe", async () => [...switcherProbe.clients][0]);
+    let blocked: { startedAt: number; unblockAt: number } | undefined;
+    let resumed = false;
+    js.on("message", (message) => {
+      const text = String(message);
+      if (text === "resumed") resumed = true;
+      else blocked = JSON.parse(text) as typeof blocked;
+    });
+    js.send("block");
+    const { startedAt, unblockAt } = await until("the JS callback to block", async () => blocked);
+    const backgroundedAt = Date.now();
+    expect(backgroundedAt).toBeGreaterThanOrEqual(startedAt);
+    await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }], {
+      retryDriverStartup: false,
+    });
+    const snapshot = await switcherSnapshot(backgroundedAt);
+    expect(snapshot.savedAt).toBeLessThan(unblockAt);
+    expectSwitcherCover(snapshot);
 
-      activate();
-      await until("the blocked JS callback to return", async () => resumed || null);
-      await steps("settings-after-block", [
-        waitFor({ id: "settings" }, 20_000),
-        see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
-        tap({ id: "settings-close" }),
-        waitFor({ id: "home" }, 20_000),
-      ]);
-    } finally {
-      for (const client of probe.clients) client.terminate();
-      await new Promise<void>((resolve) => probe.close(() => resolve()));
-    }
+    activate();
+    await until("the blocked JS callback to return", async () => resumed || null);
+    await steps("settings-after-block", [
+      waitFor({ id: "settings" }, 20_000),
+      see({ id: "gateway-address", text: lit(addressWords(gateway)) }),
+      tap({ id: "settings-close" }),
+      waitFor({ id: "home" }, 20_000),
+    ]);
   });
 
   it("F-015 F-017 F-019: on iPhone, Home lists every bot by its latest activity with its avatar, name, label pill, latest line and time, and the primary bot with its star", async () => {
