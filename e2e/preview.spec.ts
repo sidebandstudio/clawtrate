@@ -733,7 +733,11 @@ test("on one pane a bot unfolds in place, and folding never changes the conversa
 });
 
 test("the gateway menu opens from the keyboard and keeps the theme", async ({ page }) => {
+  // The web host opens dark on a light system when nothing has been chosen.
+  await page.emulateMedia({ colorScheme: "light" });
   await openShell(page);
+  const scheme = () => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+  expect(await scheme()).toBe("dark");
   const trigger = page.getByRole("button", { name: /Open the gateway menu\.$/ });
   for (const key of ["ArrowUp", "ArrowDown"]) {
     await trigger.focus();
@@ -751,7 +755,8 @@ test("the gateway menu opens from the keyboard and keeps the theme", async ({ pa
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await trigger.click();
   await page.getByRole("menuitemradio", { name: "Match the system" }).click();
-  await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+  await expect.poll(scheme).toBe("light");
 });
 
 test("the drawer is modal, and focus follows it across the docking width", async ({ page }) => {

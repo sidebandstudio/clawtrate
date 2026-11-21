@@ -145,7 +145,40 @@ test.describe("the rail", () => {
       .last()
       .click();
     await page.getByRole("menuitemradio", { name: "Match the system" }).click();
-    await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+  });
+
+  test("opens dark with no theme chosen, even on a light system, and says Dark is the default", async ({
+    page,
+    browser,
+  }) => {
+    const scheme = (on: Page) =>
+      on.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+    // Before any script runs, the stylesheet alone draws the dark theme.
+    const noScript = await browser.newContext({
+      ...contextFor(WIDE, "light"),
+      javaScriptEnabled: false,
+    });
+    const bare = await noScript.newPage();
+    await bare.goto(`/?scene=main&${OTTO_DISK}`);
+    expect(await scheme(bare)).toBe("dark");
+    await noScript.close();
+
+    // The system is light here, the address names no theme and nothing is stored.
+    await page.goto(`/?scene=main&${OTTO_DISK}`);
+    await page.locator(".app").waitFor();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect(await scheme(page)).toBe("dark");
+    await page
+      .getByRole("button", { name: /Open the gateway menu\.$/ })
+      .last()
+      .click();
+    const dark = page.getByRole("menuitemradio", { name: "Dark" });
+    await expect(dark).toHaveAttribute("aria-checked", "true");
+    await expect(dark).toHaveAccessibleDescription("The default");
+    // Match the system follows this light system; Light is light anywhere.
+    await page.getByRole("menuitemradio", { name: "Match the system" }).click();
+    await expect.poll(() => scheme(page)).toBe("light");
   });
 
   test("shows nothing that would do nothing on a read-only connection", async ({ page }) => {

@@ -61,12 +61,12 @@ async function shots(page: Page, name: string): Promise<void> {
     [390, 844, "light"],
   ] as const) {
     await page.setViewportSize({ width, height });
-    await page.emulateMedia({ colorScheme: theme });
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
   }
   await page.setViewportSize(size);
-  await page.emulateMedia({ colorScheme: "light" });
+  await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
 }
 
 async function open(browser: Browser, readOnly: boolean): Promise<Host> {
