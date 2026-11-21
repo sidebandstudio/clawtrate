@@ -2139,6 +2139,8 @@ test("F-096 F-468: a steer sent while the run waits on an approval leaves the ap
 test("F-096: a message sent while the run works is steered into it, captioned Steer once the gateway says the run took it in", async ({
   page,
 }) => {
+  // A twenty-second tool, then several reads of the gateway's record, each a command of its own.
+  test.setTimeout(180_000);
   await openShell(page);
   const { key } = await ownTask(page, "Steer");
   const seen = await watchRun(page);
