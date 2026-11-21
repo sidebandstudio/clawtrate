@@ -119,8 +119,12 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   if (!config || typeof config.exists !== "boolean") return null;
   if (typeof config.path !== "string" || config.path.length > 1024) return null;
   const daemon = record(record(root.config)?.daemon);
-  const daemonPath =
-    typeof daemon?.path === "string" && daemon.path.length <= 1024 ? daemon.path : null;
+  const daemonPath = daemon?.path;
+  if (
+    daemonPath !== undefined &&
+    (typeof daemonPath !== "string" || daemonPath.length === 0 || daemonPath.length > 1024)
+  )
+    return null;
   if (!gateway || !service || !port || !rpc || typeof rpc.ok !== "boolean") return null;
   const number = gateway.port;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1024 || number > 65535)
@@ -168,12 +172,12 @@ export function parseStatus(stdout: string): GatewayStatus | null {
     // What tells this service apart: its label, role, process, state and the unit it names.
     serviceKey: JSON.stringify([
       label,
-      typeof service.targetRole === "string" ? service.targetRole.slice(0, 64) : null,
+      typeof service.targetRole === "string" ? service.targetRole : null,
       pid(runtime?.pid),
       service.loaded ?? null,
       status ?? null,
       missing,
-      typeof service.unit === "string" ? service.unit.slice(0, 128) : null,
+      typeof service.unit === "string" ? service.unit : null,
     ]),
     listening: port.status === "busy",
     answered,
@@ -182,7 +186,7 @@ export function parseStatus(stdout: string): GatewayStatus | null {
     endpointConfirmed:
       sameEndpoint(gateway.probeUrl, url) && sameEndpoint(rpc.url, url) && port.port === number,
     listenerPid: listenerOf(port.listeners, number),
-    daemonConfigPath: daemonPath,
+    daemonConfigPath: daemonPath ?? null,
     serviceAssociated:
       typeof service.targetRole === "string" && service.targetRole !== "diagnostic-only",
   };

@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseStatus } from "../src/setup/parse.ts";
 import { lookHere } from "../src/setup/look.ts";
 import { checkRequest, type ProgramRequest, type ProgramResult } from "../src/setup/programs.ts";
 import {
@@ -514,6 +515,32 @@ describe("the look on this computer", () => {
       fakeRunner(defaultTable(at("ws://127.0.0.1:19940/"))).run,
     );
     expect(slash?.found?.url).toBe("ws://127.0.0.1:19940");
+  });
+
+  it("F-516: an omitted daemon config path is allowed, but an invalid one makes status unusable", () => {
+    const status = statusJson();
+    const omitted = withStatus(status, (value) => {
+      delete value.config.daemon.path;
+    });
+    expect(parseStatus(omitted)?.daemonConfigPath).toBeNull();
+    for (const path of [null, 42, "", "x".repeat(1025)]) {
+      const malformed = withStatus(status, (value) => {
+        value.config.daemon.path = path;
+      });
+      expect(parseStatus(malformed)).toBeNull();
+    }
+  });
+
+  it.each(["unit", "targetRole"])("F-516: the whole service %s identifies the service", (field) => {
+    const status = (suffix: string) =>
+      withStatus(statusJson(), (value) => {
+        value.service[field] = "x".repeat(128) + suffix;
+      });
+    const first = parseStatus(status("1"));
+    const second = parseStatus(status("2"));
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first!.serviceKey).not.toBe(second!.serviceKey);
   });
 
   it("F-516: a gateway with no identifiable listener, two listeners, a listener that isn't running, or another config file for its service is not offered", async () => {
