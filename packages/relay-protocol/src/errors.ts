@@ -22,7 +22,11 @@ export type RelayProtocolErrorCode =
   /** The channel's 2^53 message counter is used up. */
   | "nonce_exhausted"
   /** A relay text message is not one this side accepts. */
-  | "bad_message";
+  | "bad_message"
+  /** A time is not a nonnegative safe integer number of milliseconds. */
+  | "bad_time"
+  /** A shared receive budget has no room for more buffered text. */
+  | "over_budget";
 
 export class RelayProtocolError extends Error {
   readonly code: RelayProtocolErrorCode;

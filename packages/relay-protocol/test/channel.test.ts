@@ -117,23 +117,31 @@ describe("the end-to-end channel", () => {
     expect(() => new EnrollmentOffer(new Uint8Array(16), 100)).toThrow(RelayProtocolError);
   });
 
-  it("opens the connector's side only on the phone's confirm record", () => {
+  it("opens only after the confirm record and the host's admission, in that order", () => {
     const pair = makePair();
     const [hs2] = sends(pair.connector.receive(pair.phone.start()));
     expect(pair.connector.currentState).toBe("confirming");
     expect(() => pair.connector.sendText("too early")).toThrow(/not open/);
     const phoneEvents = pair.phone.receive(hs2!);
-    expect(phoneEvents.map((e) => e.type)).toEqual(["send", "open"]);
-    expect(pair.connector.receive(sends(phoneEvents)[0]!)).toEqual([{ type: "open" }]);
+    // Message 2's "accepted" is provisional: the phone sends confirm but does not open.
+    expect(phoneEvents.map((e) => e.type)).toEqual(["send"]);
+    expect(pair.phone.currentState).toBe("confirming");
+    expect(() => pair.phone.sendText("too early")).toThrow(/not open/);
+    const connectorEvents = pair.connector.receive(sends(phoneEvents)[0]!);
+    expect(connectorEvents.map((e) => e.type)).toEqual(["admit"]);
+    expect(pair.connector.currentState).toBe("admitting");
+    const { frame, phoneKey } = pair.connector.admit();
+    expect(phoneKey).toEqual(pair.phoneKey.publicKey);
+    expect(pair.phone.receive(frame)).toEqual([{ type: "open" }]);
   });
 
-  it("fails a connector whose first record from the phone is not confirm", () => {
+  it("refuses frames from the phone while the host decides, and admit or refuse only then", () => {
     const pair = makePair();
+    expect(() => pair.connector.admit()).toThrow(expect.objectContaining({ code: "unexpected" }));
     const [hs2] = sends(pair.connector.receive(pair.phone.start()));
-    pair.phone.receive(hs2!);
-    // Skip the confirm record and send text instead.
-    const [text] = pair.phone.sendText("skipped confirm");
-    expect(() => pair.connector.receive(text!)).toThrow(RelayProtocolError);
+    const [confirm] = sends(pair.phone.receive(hs2!));
+    pair.connector.receive(confirm!);
+    expect(() => pair.connector.receive(confirm!)).toThrow(RelayProtocolError);
     expect(pair.connector.currentState).toBe("failed");
   });
 
@@ -264,7 +272,7 @@ describe("the end-to-end channel", () => {
 
   it("keeps a gate error visible and fails the channel", () => {
     const gate = new TestGate();
-    gate.isEnrolled = () => {
+    gate.check = () => {
       throw new Error("allowlist unreadable");
     };
     const connectorKey = generateKeyPair();

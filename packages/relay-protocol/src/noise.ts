@@ -66,6 +66,7 @@ function hkdf2(chainingKey: Uint8Array, input: Uint8Array): [Uint8Array, Uint8Ar
 export class CipherState {
   #key: Uint8Array | null;
   #nonce = 0;
+  #cleared = false;
 
   constructor(key: Uint8Array | null = null) {
     this.#key = key;
@@ -75,10 +76,27 @@ export class CipherState {
     return this.#key !== null;
   }
 
+  /** How many more messages this key can take before it is used up. */
+  get remaining(): number {
+    return this.#cleared ? 0 : MAX_NONCE - this.#nonce;
+  }
+
+  /** Moves the counter so that `remaining` messages are left. Tests only: it reaches exhaustion fast. */
+  static leaveRemainingForTests(cipher: CipherState, remaining: number): void {
+    cipher.#nonce = MAX_NONCE - remaining;
+  }
+
+  /** Overwrites the key, best effort in JavaScript, and refuses any further use. */
+  clear(): void {
+    this.#key?.fill(0);
+    this.#key = null;
+    this.#cleared = true;
+  }
+
   #nonceBytes(): Uint8Array {
     if (this.#nonce >= MAX_NONCE)
       fail("nonce_exhausted", "This channel has sent its last message.");
-    // 32 bits of zeros, then the 64-bit counter, little-endian (section 12.4).
+    // 32 bits of zeros, then the 64-bit counter, little-endian (section 12.3).
     const out = new Uint8Array(12);
     const view = new DataView(out.buffer);
     view.setUint32(4, this.#nonce % 0x1_0000_0000, true);
@@ -87,6 +105,7 @@ export class CipherState {
   }
 
   encrypt(ad: Uint8Array, plaintext: Uint8Array): Uint8Array {
+    if (this.#cleared) fail("closed", "This key has been cleared.");
     if (this.#key === null) return plaintext;
     const ciphertext = chacha20poly1305(this.#key, this.#nonceBytes(), ad).encrypt(plaintext);
     this.#nonce++;
@@ -95,6 +114,7 @@ export class CipherState {
 
   /** Fails with `decrypt_failed`; the counter only moves on success, as the specification says. */
   decrypt(ad: Uint8Array, ciphertext: Uint8Array): Uint8Array {
+    if (this.#cleared) fail("closed", "This key has been cleared.");
     if (this.#key === null) return ciphertext;
     if (ciphertext.length < TAG_BYTES)
       fail("decrypt_failed", "The message is shorter than its tag.");
@@ -204,9 +224,12 @@ export class IKHandshake {
     this.#symmetric.mixHash(options.initiator ? this.#remoteStatic! : this.#static.publicKey);
   }
 
-  /** The peer's static key: known to the initiator from the start, to the responder after message 1. */
+  /**
+   * A copy of the peer's static key: known to the initiator from the start, to the responder
+   * after message 1. A copy, so no caller can change the key the handshake goes on to use.
+   */
   get remoteStaticKey(): Uint8Array | null {
-    return this.#remoteStatic;
+    return this.#remoteStatic === null ? null : Uint8Array.from(this.#remoteStatic);
   }
 
   get complete(): boolean {
@@ -221,6 +244,9 @@ export class IKHandshake {
 
   #run<T>(step: Step, next: Step, body: () => T): T {
     if (this.#step !== step) {
+      this.#step = "failed";
+      this.#ephemeral?.secretKey.fill(0);
+      this.#ephemeral = null;
       return fail("unexpected", `This handshake cannot take step ${step} now.`);
     }
     try {

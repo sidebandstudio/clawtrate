@@ -32,8 +32,7 @@ describe("tampering", { timeout: 60_000 }, () => {
     const hs1 = pair.phone.start();
     let gateAsked = false;
     const gate = {
-      isEnrolled: () => ((gateAsked = true), false),
-      redeem: () => ((gateAsked = true), true),
+      check: () => ((gateAsked = true), "eligible" as const),
     };
     let count = 0;
     for (const changed of flips(hs1)) {
@@ -63,7 +62,7 @@ describe("tampering", { timeout: 60_000 }, () => {
     // The unchanged message opens a phone, so each failure below is the change's doing.
     const control = phone();
     control.start();
-    expect(control.receive(hs2!).map((e) => e.type)).toEqual(["send", "open"]);
+    expect(control.receive(hs2!).map((e) => e.type)).toEqual(["send"]);
 
     for (const changed of flips(hs2!)) {
       const tampered = phone();
@@ -190,19 +189,21 @@ describe("replay, reordering, dropping and reflection", () => {
     expect(pair.gate.enrolled).toHaveLength(1);
   });
 
-  it("a replayed handshake message 1 with a spent secret enrolls nothing new", () => {
+  it("a handshake message 1, fresh or replayed, enrolls nothing and spends nothing", () => {
     const pair = makePair();
     const hs1 = pair.phone.start();
-    // The first delivery enrolls the phone; the phone never hears back.
-    pair.connector.receive(hs1);
-    expect(pair.gate.enrolled).toHaveLength(1);
-    const again = new Responder({
-      relayId: RELAY_ID,
-      staticKey: pair.connectorKey,
-      gate: pair.gate,
-    });
-    again.receive(hs1);
-    expect(pair.gate.enrolled).toHaveLength(1);
+    // The phone never hears back; the relay replays message 1 to two more sessions.
+    for (let i = 0; i < 3; i++) {
+      const connector = new Responder({
+        relayId: RELAY_ID,
+        staticKey: pair.connectorKey,
+        gate: pair.gate,
+      });
+      expect(connector.receive(hs1).map((e) => e.type)).toEqual(["send"]);
+      connector.abort();
+    }
+    expect(pair.gate.enrolled).toEqual([]);
+    expect(pair.gate.offer!.used).toBe(false);
   });
 
   it("handshake frames after the handshake are refused", () => {

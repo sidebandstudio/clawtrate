@@ -18,6 +18,7 @@ import {
   type RandomBytes,
 } from "./bytes.ts";
 import { fail } from "./errors.ts";
+import { readFlatObject, type FlatValue } from "./json.ts";
 import { MAX_REGISTER_PROOF_CHARS, MAX_RELAY_MESSAGE_BYTES } from "./limits.ts";
 
 /** The exact keep-alive texts, so the relay can answer them without waking (Workers' auto-response). */
@@ -133,70 +134,71 @@ export function decodeEndpointToRelay(text: unknown): EndpointToRelay {
 }
 
 function decodeFor(text: unknown, allowed: readonly RelayMessage["t"][]): RelayMessage {
-  const object = parseObject(text);
-  if (!(allowed as readonly unknown[]).includes(object.t))
-    bad(`"${String(object.t)}" is not accepted here.`);
-  return checkFields(object);
+  const members = parseObject(text);
+  const t = members.get("t");
+  if (typeof t !== "string" || !(allowed as readonly string[]).includes(t)) {
+    bad("The relay message's type is not accepted here.");
+  }
+  return checkFields(members);
 }
 
-function parseObject(text: unknown): Record<string, unknown> {
+function parseObject(text: unknown): Map<string, FlatValue> {
   if (typeof text !== "string") return bad("A relay message is text.");
   // UTF-8 takes at least one byte per UTF-16 unit, so the first test bounds the encoding's cost.
   if (text.length > MAX_RELAY_MESSAGE_BYTES || utf8Encode(text).length > MAX_RELAY_MESSAGE_BYTES) {
     bad("The relay message is over the size cap.");
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return bad("The relay message is not JSON.");
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return bad("A relay message is a JSON object.");
-  }
-  return value as Record<string, unknown>;
+  return readFlatObject(text);
 }
 
-function checkFields(object: Record<string, unknown>): RelayMessage {
-  switch (object.t) {
-    case "challenge":
-      exactKeys(object, ["t", "nonce"]);
-      if (fromBase64UrlOfLength(object.nonce, REGISTER_NONCE_BYTES) === null) bad("Bad nonce.");
-      return { t: "challenge", nonce: object.nonce as string };
-    case "dial":
-      exactKeys(object, ["t", "session", "from"]);
-      if (!isSessionId(object.session)) bad("Bad session id.");
-      if (!isAddressText(object.from)) bad("Bad address.");
-      return { t: "dial", session: object.session as string, from: object.from as string };
-    case "register":
-      exactKeys(object, ["t", "proof"]);
+function checkFields(members: Map<string, FlatValue>): RelayMessage {
+  const t = members.get("t");
+  switch (t) {
+    case "challenge": {
+      exactKeys(members, ["t", "nonce"]);
+      const nonce = members.get("nonce");
+      if (fromBase64UrlOfLength(nonce, REGISTER_NONCE_BYTES) === null) bad("Bad nonce.");
+      return { t, nonce: nonce as string };
+    }
+    case "dial": {
+      exactKeys(members, ["t", "session", "from"]);
+      const session = members.get("session");
+      const from = members.get("from");
+      if (!isSessionId(session)) bad("Bad session id.");
+      if (!isAddressText(from)) bad("Bad address.");
+      return { t, session, from: from as string };
+    }
+    case "register": {
+      exactKeys(members, ["t", "proof"]);
+      const proof = members.get("proof");
       if (
-        typeof object.proof !== "string" ||
-        object.proof.length === 0 ||
-        object.proof.length > MAX_REGISTER_PROOF_CHARS
+        typeof proof !== "string" ||
+        proof.length === 0 ||
+        proof.length > MAX_REGISTER_PROOF_CHARS
       ) {
         bad("Bad proof.");
       }
-      return { t: "register", proof: object.proof as string };
-    case "error":
-      exactKeys(object, ["t", "code"]);
-      if (typeof object.code !== "string" || !/^[a-z][a-z_]{0,31}$/.test(object.code))
-        bad("Bad code.");
-      return { t: "error", code: object.code as string };
+      return { t, proof };
+    }
+    case "error": {
+      exactKeys(members, ["t", "code"]);
+      const code = members.get("code");
+      if (typeof code !== "string" || !/^[a-z][a-z_]{0,31}$/.test(code)) bad("Bad code.");
+      return { t, code };
+    }
     case "registered":
     case "open":
     case "ping":
     case "pong":
-      exactKeys(object, ["t"]);
-      return { t: object.t };
+      exactKeys(members, ["t"]);
+      return { t };
     default:
       return bad("Unknown relay message.");
   }
 }
 
-function exactKeys(object: Record<string, unknown>, keys: readonly string[]): void {
-  const actual = Object.keys(object);
-  if (actual.length !== keys.length || !keys.every((key) => Object.hasOwn(object, key))) {
+function exactKeys(members: Map<string, FlatValue>, keys: readonly string[]): void {
+  if (members.size !== keys.length || !keys.every((key) => members.has(key))) {
     bad("The relay message has missing or extra fields.");
   }
 }

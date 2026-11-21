@@ -8,3 +8,15 @@ declare class TextDecoder {
   constructor(label?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
   decode(input?: Uint8Array): string;
 }
+
+/** For the relay origin. Node, Electron and Workers have a full URL; the phone does not call it. */
+declare class URL {
+  constructor(input: string, base?: string);
+  readonly protocol: string;
+  readonly host: string;
+  readonly username: string;
+  readonly password: string;
+  readonly pathname: string;
+  readonly search: string;
+  readonly hash: string;
+}

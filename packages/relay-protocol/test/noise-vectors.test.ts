@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { IKHandshake, keyPairFromSecret, NOISE_PROTOCOL_NAME } from "../src/index.ts";
+import {
+  IKHandshake,
+  keyPairFromSecret,
+  NOISE_PROTOCOL_NAME,
+  RelayProtocolError,
+} from "../src/index.ts";
 import { hex, toHex } from "./helpers.ts";
 import cacophony from "./vectors/cacophony-ik.json";
 
@@ -56,4 +61,34 @@ describe("Noise IK against the Cacophony test vectors", () => {
       }
     });
   }
+
+  it("hands out copies of the peer's static key, so a caller cannot change the handshake", () => {
+    const vector = cacophony.vectors[0]!;
+    const responder = new IKHandshake({
+      initiator: false,
+      prologue: hex(vector.resp_prologue),
+      staticKey: keyPairFromSecret(hex(vector.resp_static)),
+      random: () => hex(vector.resp_ephemeral),
+    });
+    responder.readMessage1(hex(vector.messages[0]!.ciphertext));
+    responder.remoteStaticKey!.fill(0);
+    expect(toHex(responder.remoteStaticKey!)).toBe(
+      toHex(keyPairFromSecret(hex(vector.init_static)).publicKey),
+    );
+    expect(toHex(responder.writeMessage2(hex(vector.messages[1]!.payload)))).toBe(
+      vector.messages[1]!.ciphertext,
+    );
+  });
+
+  it("ends a handshake that is driven out of order", () => {
+    const vector = cacophony.vectors[0]!;
+    const initiator = new IKHandshake({
+      initiator: true,
+      prologue: hex(vector.init_prologue),
+      staticKey: keyPairFromSecret(hex(vector.init_static)),
+      remoteStaticKey: hex(vector.init_remote_static),
+    });
+    expect(() => initiator.readMessage2(new Uint8Array(48))).toThrow(RelayProtocolError);
+    expect(() => initiator.writeMessage1(new Uint8Array(0))).toThrow(RelayProtocolError);
+  });
 });

@@ -87,7 +87,12 @@ function checkFrameBody(type: FrameType, length: number): void {
 export type ChannelRecord =
   /** The initiator's first record: proves it completed the handshake, so it is not a replay. */
   | { readonly kind: "confirm" }
-  /** Part of a UTF-8 text message; more parts follow. Never empty. */
+  /**
+   * The responder's first record, sent after the confirm record and its own final check: the
+   * phone is admitted, or refused after all. Message 2's "accepted" is provisional until this.
+   */
+  | { readonly kind: "admission"; readonly answer: Answer }
+  /** Part of a UTF-8 text message; more parts follow. Exactly `MAX_RECORD_DATA_BYTES`. */
   | { readonly kind: "text-part"; readonly data: Uint8Array }
   /** The last (or only) part of a UTF-8 text message. */
   | { readonly kind: "text-end"; readonly data: Uint8Array }
@@ -105,6 +110,7 @@ const RECORD_KIND_BYTE: Readonly<Record<RecordKind, number>> = {
   ping: 4,
   pong: 5,
   close: 6,
+  admission: 7,
 };
 
 export function encodeRecord(record: ChannelRecord): Uint8Array {
@@ -112,6 +118,8 @@ export function encodeRecord(record: ChannelRecord): Uint8Array {
   switch (record.kind) {
     case "confirm":
       return kind;
+    case "admission":
+      return concatBytes(kind, Uint8Array.of(ANSWER_BYTE[record.answer]));
     case "text-part":
     case "text-end":
     case "ping":
@@ -158,6 +166,9 @@ export function decodeRecord(bytes: Uint8Array): ChannelRecord {
         fail("malformed", "The close reason is too long.");
       return { kind: "close", code, reason: utf8Decode(reason) };
     }
+    case 7:
+      if (data.length !== 1) fail("malformed", "An admission record carries one status.");
+      return { kind: "admission", answer: answerOf(data[0]!) };
     default:
       return fail("malformed", `Record kind ${bytes[0]} is unknown.`);
   }
@@ -168,7 +179,8 @@ function checkRecordData(kind: RecordKind, length: number): void {
     kind === "ping" || kind === "pong"
       ? [0, MAX_PING_BYTES]
       : kind === "text-part"
-        ? [1, MAX_RECORD_DATA_BYTES]
+        ? // A full record, or a message could take one record per byte.
+          [MAX_RECORD_DATA_BYTES, MAX_RECORD_DATA_BYTES]
         : [0, MAX_RECORD_DATA_BYTES];
   if (length < min || length > max) {
     fail("malformed", `A ${kind} record carries ${min} to ${max} bytes, not ${length}.`);
@@ -226,15 +238,20 @@ export function encodeAnswer(answer: Answer): Uint8Array {
 }
 
 export function decodeAnswer(bytes: Uint8Array): Answer {
-  if (bytes.length === 2 && bytes[0] === PROTOCOL_VERSION) {
-    switch (bytes[1]) {
-      case 0:
-        return "accepted";
-      case 1:
-        return "not_enrolled";
-      case 2:
-        return "enrollment_refused";
-    }
+  if (bytes.length !== 2 || bytes[0] !== PROTOCOL_VERSION)
+    fail("malformed", "The answer is malformed.");
+  return answerOf(bytes[1]!);
+}
+
+function answerOf(byte: number): Answer {
+  switch (byte) {
+    case 0:
+      return "accepted";
+    case 1:
+      return "not_enrolled";
+    case 2:
+      return "enrollment_refused";
+    default:
+      return fail("malformed", "The answer is malformed.");
   }
-  return fail("malformed", "The answer is malformed.");
 }

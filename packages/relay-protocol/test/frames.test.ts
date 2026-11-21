@@ -62,7 +62,9 @@ describe("records", () => {
   it("round-trip every kind", () => {
     const records: ChannelRecord[] = [
       { kind: "confirm" },
-      { kind: "text-part", data: Uint8Array.of(1) },
+      { kind: "text-part", data: new Uint8Array(MAX_RECORD_DATA_BYTES) },
+      { kind: "admission", answer: "accepted" },
+      { kind: "admission", answer: "enrollment_refused" },
       { kind: "text-end", data: new Uint8Array(0) },
       { kind: "text-end", data: new Uint8Array(MAX_RECORD_DATA_BYTES) },
       { kind: "ping", data: new Uint8Array(32) },

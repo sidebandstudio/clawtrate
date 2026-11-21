@@ -82,6 +82,12 @@ describe("relay messages", () => {
       '{"t":"nope"}',
       '{"t":["ping"]}',
       '{"__proto__":{"t":"ping"}}',
+      '{"t":"ping"} x',
+      '{"t":"ping",}',
+      '{"t":"ping"',
+      "{'t':'ping'}",
+      '{"t":"pi\nng"}',
+      '{"t":"ping","x":tru}',
       '["ping"]',
       "null",
       "7",
@@ -123,5 +129,45 @@ describe("relay messages", () => {
     expect(isSessionId(`${session.slice(0, 21)}B`)).toBe(false);
     expect(isSessionId(`${session}A`)).toBe(false);
     expect(createSessionId()).not.toBe(session);
+  });
+});
+
+describe("unambiguous parsing", () => {
+  it("refuses a repeated member name, also when one spelling is escaped", () => {
+    for (const text of [
+      '{"t":"ping","t":"ping"}',
+      '{"t":"ping","\\u0074":"pong"}',
+      '{"t":"error","code":"a","code":"b"}',
+      `{"t":"challenge","nonce":"${nonce}","n\\u006fnce":"${nonce}"}`,
+    ]) {
+      expect(() => decodeRelayToConnector(text), text).toThrow(
+        expect.objectContaining({ code: "bad_message" }),
+      );
+    }
+  });
+
+  it("accepts ordinary whitespace and any member order", () => {
+    expect(decodeRelayToConnector(` {\n "nonce" : "${nonce}" ,\t"t":"challenge" } `)).toEqual({
+      t: "challenge",
+      nonce,
+    });
+    expect(decodeRelayToConnector('{"\\u0074":"ping"}')).toEqual({ t: "ping" });
+  });
+
+  it("keeps a type that is not a string inside the protocol's error", () => {
+    for (const text of [
+      '{"t":{"toString":1,"valueOf":1}}',
+      '{"t":["ping"]}',
+      '{"t":7}',
+      '{"t":null}',
+      "{}",
+    ]) {
+      expect(() => decodeRelayToConnector(text), text).toThrow(
+        expect.objectContaining({
+          code: "bad_message",
+          message: expect.not.stringContaining("[object"),
+        }),
+      );
+    }
   });
 });

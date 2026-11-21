@@ -5,6 +5,8 @@ import {
   relayIdFromKey,
   Responder,
   type ChannelEvent,
+  type GateCheck,
+  type Refusal,
   type KeyPair,
   type PhoneGate,
 } from "../src/index.ts";
@@ -40,21 +42,56 @@ export function seeded(seed: number) {
 
 export const RELAY_ID = relayIdFromKey(new Uint8Array(32).fill(7));
 
-/** An allowlist of phone keys and at most one pending offer, as the connector keeps them. */
+/**
+ * An allowlist of phone keys and at most one pending offer, as a connector keeps them: a
+ * read-only `check` for message 1 and an all-or-nothing `commit` for the admit event.
+ */
 export class TestGate implements PhoneGate {
   readonly enrolled: Uint8Array[] = [];
   offer: EnrollmentOffer | null = null;
   nowMs = 1_000;
+  /** Set to make the next commit fail as a storage error would. */
+  failNextCommit = false;
+  checks = 0;
 
   isEnrolled(phoneKey: Uint8Array): boolean {
     return this.enrolled.some((key) => key.every((byte, i) => byte === phoneKey[i]));
   }
 
-  redeem(secret: Uint8Array, phoneKey: Uint8Array): boolean {
-    if (this.offer === null || !this.offer.redeem(secret, this.nowMs)) return false;
-    this.enrolled.push(Uint8Array.from(phoneKey));
-    return true;
+  check(phoneKey: Uint8Array, enroll: Uint8Array | undefined): GateCheck {
+    this.checks++;
+    if (this.isEnrolled(phoneKey)) return "enrolled";
+    if (enroll === undefined) return "not_enrolled";
+    return this.offer?.matches(enroll, this.nowMs) ? "eligible" : "enrollment_refused";
   }
+
+  /** Rechecks and, in one step, spends the offer and adds the key. */
+  commit(phoneKey: Uint8Array, enroll: Uint8Array | null): "enrolled" | Refusal {
+    if (this.failNextCommit) {
+      this.failNextCommit = false;
+      throw new Error("allowlist write failed");
+    }
+    if (this.isEnrolled(phoneKey)) return "enrolled";
+    if (enroll === null) return "not_enrolled";
+    if (this.offer === null || !this.offer.redeem(enroll, this.nowMs)) return "enrollment_refused";
+    this.enrolled.push(Uint8Array.from(phoneKey));
+    return "enrolled";
+  }
+}
+
+/**
+ * The connector host's part at the admit event: commit, then admit or refuse. Returns the frame
+ * for the phone.
+ */
+export function settle(
+  connector: Responder,
+  gate: TestGate,
+  events: readonly ChannelEvent[],
+): Uint8Array {
+  const admit = events.find((event) => event.type === "admit");
+  if (admit?.type !== "admit") throw new Error("No admit event.");
+  const result = gate.commit(admit.phoneKey, admit.enroll);
+  return result === "enrolled" ? connector.admit().frame : connector.refuse(result);
 }
 
 export interface Pair {
@@ -87,22 +124,24 @@ export function sends(events: readonly ChannelEvent[]): Uint8Array[] {
 }
 
 /**
- * Runs the handshake to open. Returns every frame that crossed, in order, for tests that replay
- * or tamper with them.
+ * Runs the opening to the end. Returns every frame that crossed, in order, for tests that
+ * replay or tamper with them.
  */
-export function openPair(pair: Pair): { hs1: Uint8Array; hs2: Uint8Array; confirm: Uint8Array } {
+export function openPair(pair: Pair): {
+  hs1: Uint8Array;
+  hs2: Uint8Array;
+  confirm: Uint8Array;
+  admission: Uint8Array;
+} {
   const hs1 = pair.phone.start();
   const [hs2] = sends(pair.connector.receive(hs1));
-  const phoneEvents = pair.phone.receive(hs2!);
-  const [confirm] = sends(phoneEvents);
-  const connectorEvents = pair.connector.receive(confirm!);
-  if (
-    !phoneEvents.some((e) => e.type === "open") ||
-    !connectorEvents.some((e) => e.type === "open")
-  ) {
+  const [confirm] = sends(pair.phone.receive(hs2!));
+  const admission = settle(pair.connector, pair.gate, pair.connector.receive(confirm!));
+  const phoneEvents = pair.phone.receive(admission);
+  if (!phoneEvents.some((e) => e.type === "open") || pair.connector.currentState !== "open") {
     throw new Error("The pair did not open.");
   }
-  return { hs1, hs2: hs2!, confirm: confirm! };
+  return { hs1, hs2: hs2!, confirm: confirm!, admission };
 }
 
 /** Delivers frames and returns the receiver's events. */

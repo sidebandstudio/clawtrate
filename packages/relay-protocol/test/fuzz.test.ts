@@ -139,7 +139,7 @@ describe("decoder fuzzing", { timeout: 60_000 }, () => {
     const rng = seeded(0x5eed);
     const valid = [
       encodeRecord({ kind: "confirm" }),
-      encodeRecord({ kind: "text-part", data: rng.bytes(9) }),
+      encodeRecord({ kind: "admission", answer: "accepted" }),
       encodeRecord({ kind: "text-end", data: rng.bytes(3) }),
       encodeRecord({ kind: "ping", data: rng.bytes(8) }),
       encodeRecord({ kind: "close", code: 4001, reason: "é done" }),
@@ -152,7 +152,7 @@ describe("decoder fuzzing", { timeout: 60_000 }, () => {
     let decoded = 0;
     for (let i = 0; i < 30_000; i++) {
       const input = i % 2 === 0 ? randomInput(rng) : mutate(rng, valid[i % valid.length]!);
-      if (rng.next() < 0.5 && input.length > 0) input[0] = 1 + rng.int(6);
+      if (rng.next() < 0.5 && input.length > 0) input[0] = 1 + rng.int(7);
       for (const [name, roundTrip] of decoders) {
         const encoded = attempt(
           () => roundTrip(input),
