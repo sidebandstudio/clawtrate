@@ -16,6 +16,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -138,14 +140,27 @@ describe("reading the vault", () => {
     const calls: string[] = [];
     const partial = { ...SECRETS } as Partial<Secrets>;
     delete partial.APPLE_CLAWTRATE_DEVELOPER_ID_P12_BASE64;
-    const code = await main(
-      [],
-      (command, args) => {
-        calls.push(command);
-        return vault(partial)(command, args);
-      },
-      "darwin",
-    );
+    // The test's own folders: main never looks in this machine's temporary folder for it.
+    const place = places();
+    const dead = join(place.temp, "clawtrate-signing-Ghi789");
+    mkdirSync(dead);
+    writeFileSync(join(dead, "pid"), "99999999");
+    let code: number;
+    try {
+      code = await main(
+        [],
+        (command, args) => {
+          calls.push(command);
+          return vault(partial)(command, args);
+        },
+        "darwin",
+        place,
+      );
+      expect(readdirSync(place.temp)).toEqual([]);
+    } finally {
+      rmSync(place.root, { recursive: true, force: true });
+    }
+    expect(output.join("\n")).toContain(`Removed ${dead}`);
     expect(code).toBe(1);
     expect(calls.every((command) => command === "fleet")).toBe(true);
     expect(output.join("\n")).toContain(
@@ -574,9 +589,9 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
   });
   afterEach(() => rmSync(place.root, { recursive: true, force: true }));
 
-  it("stages the zips, the Beta feed and latest-mac.json, and gives the build no secret", () => {
+  it("stages the zips, the Beta feed and latest-mac.json, and gives the build no secret", async () => {
     const { runner, calls, seen } = tools(builds(place.appDir));
-    prepare(runner, NOW, place);
+    await prepare(runner, NOW, place);
     const out = join(place.staging, VERSION);
     expect(readdirSync(out).sort()).toEqual([
       ...ZIPS,
@@ -636,11 +651,11 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     for (const secret of SECRET_TEXTS) expect(everything).not.toContain(secret);
   });
 
-  it("prepares with the stand-ins whatever system the tests run on", () => {
+  it("prepares with the stand-ins whatever system the tests run on", async () => {
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value: "linux" });
     try {
-      prepare(tools(builds(place.appDir)).runner, NOW, place);
+      await prepare(tools(builds(place.appDir)).runner, NOW, place);
     } finally {
       Object.defineProperty(process, "platform", platform);
     }
@@ -699,18 +714,18 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     expect(readdirSync(place.temp)).toEqual([]);
   });
 
-  it("leaves a signing folder with no pid for the maintainer to inspect", () => {
+  it("leaves a signing folder with no pid for the maintainer to inspect", async () => {
     const starting = join(place.temp, "clawtrate-signing-Ghi789");
     mkdirSync(starting);
     writeFileSync(join(starting, "notary.p8"), "maybe a run that is starting");
-    prepare(tools(builds(place.appDir)).runner, NOW, place);
+    await prepare(tools(builds(place.appDir)).runner, NOW, place);
     expect(readdirSync(place.temp)).toEqual(["clawtrate-signing-Ghi789"]);
     expect(output.join("\n")).toContain(
       `Left ${starting} alone: it records no pid. If no release is running, remove it yourself.`,
     );
   });
 
-  it("stages and records the copy it verified, not the file the build left", () => {
+  it("stages and records the copy it verified, not the file the build left", async () => {
     const { runner } = tools(builds(place.appDir));
     const out = join(place.staging, VERSION);
     // Something rewrites the build's zip while the copy is being checked.
@@ -719,7 +734,7 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
         writeFileSync(join(out, ZIPS[0]!), "a different zip");
       return runner(command, args, options);
     };
-    prepare(swapping, NOW, place);
+    await prepare(swapping, NOW, place);
     expect(readFileSync(join(out, ZIPS[0]!), "utf8")).toBe("zip of mac-arm64");
     const record = sha256(readFileSync(join(out, "release.json")));
     expect(stagedRelease(place.staging, VERSION, record).plan.files[0]!.sha256).toBe(
@@ -759,9 +774,9 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
 });
 
 /** Prepares the beta with the stand-ins and returns its places. */
-function staged() {
+async function staged() {
   const place = places();
-  prepare(tools(builds(place.appDir)).runner, NOW, place);
+  await prepare(tools(builds(place.appDir)).runner, NOW, place);
   output.length = 0;
   return place;
 }
@@ -783,8 +798,8 @@ function edit(dir: string, name: string, change: (text: string) => string) {
 describe("what publishing accepts as the prepared release", () => {
   let place: ReturnType<typeof places>;
   let dir: string;
-  beforeEach(() => {
-    place = staged();
+  beforeEach(async () => {
+    place = await staged();
     dir = join(place.staging, VERSION);
   });
   afterEach(() => rmSync(place.root, { recursive: true, force: true }));
@@ -1004,8 +1019,8 @@ describe("publishing", () => {
   let dir: string;
   let net: Net;
   let record: string;
-  beforeEach(() => {
-    place = staged();
+  beforeEach(async () => {
+    place = await staged();
     dir = join(place.staging, VERSION);
     record = sha256(readFileSync(join(dir, "release.json")));
     const files = Object.fromEntries(
@@ -1376,4 +1391,71 @@ describe("withdrawing", () => {
       ),
     ).toBe(`GitHub still lists ${TAG} as published although it accepted the change.`);
   });
+});
+
+describe("stopping a release while it builds", () => {
+  /** A process's presence, by pid. */
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("stops the build and what it started, then removes the signing folder, on SIGTERM", async () => {
+    // A release script of its own, with stand-ins for every tool but the
+    // build: a process that never ends and has started a child of its own,
+    // as electron-builder waiting on notarytool does.
+    const place = places();
+    const script = join(place.root, "release.ts");
+    const secrets = join(place.root, "secrets.json");
+    const pids = join(place.root, "pids");
+    writeFileSync(secrets, JSON.stringify(SECRETS));
+    const sleeper = [
+      "const { spawn } = require('node:child_process');",
+      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "require('node:fs').writeFileSync(process.argv[1], process.pid + ' ' + child.pid);",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    writeFileSync(
+      script,
+      [
+        `import { readFileSync } from "node:fs";`,
+        `import { prepare, startBuild, SECURITY } from ${JSON.stringify(join(import.meta.dirname, "../packaging/release-beta.ts"))};`,
+        `const secrets = JSON.parse(readFileSync(${JSON.stringify(secrets)}, "utf8"));`,
+        `const ok = (stdout = "", stderr = "") => ({ status: 0, stdout, stderr });`,
+        `const runner = (command, args) => {`,
+        `  if (command === "fleet") return ok(secrets[args[2]] + "\\n");`,
+        `  if (command === SECURITY && args[0] === "show-keychain-info") return ok("", "lock-on-sleep timeout=3600s");`,
+        `  if (command === SECURITY && args[0] === "find-identity") return ok('  1) ${IDENTITY} "Developer ID Application: Example (${TEAM})"\\n');`,
+        `  if (command === "git" && args[0] === "rev-parse") return ok("${COMMIT}\\n");`,
+        `  return ok();`,
+        `};`,
+        `const build = (_command, _args, options) => startBuild(process.execPath, ["-e", ${JSON.stringify(sleeper)}, ${JSON.stringify(pids)}], options);`,
+        `await prepare(runner, new Date(${JSON.stringify(NOW.toISOString())}), ${JSON.stringify({ staging: place.staging, appDir: place.appDir, temp: place.temp })}, build);`,
+      ].join("\n"),
+    );
+    const release = spawn(process.execPath, [script], { stdio: "ignore" });
+    const exited = new Promise<number | null>((resolve) => release.once("exit", resolve));
+    let started: number[] = [];
+    try {
+      for (let waited = 0; !existsSync(pids); waited += 100) {
+        if (waited > 20_000) throw new Error("the build stand-in did not start");
+        await sleep(100);
+      }
+      started = readFileSync(pids, "utf8").split(" ").map(Number);
+      expect(readdirSync(place.temp)).toHaveLength(1);
+      release.kill("SIGTERM");
+      const code = await Promise.race([exited, sleep(20_000).then(() => "running")]);
+      expect(code, "the release script exits once interrupted").toBe(130);
+      for (const pid of started) expect(alive(pid), `pid ${pid}`).toBe(false);
+      expect(readdirSync(place.temp)).toEqual([]);
+    } finally {
+      release.kill("SIGKILL");
+      for (const pid of started) if (alive(pid)) process.kill(pid, "SIGKILL");
+      rmSync(place.root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

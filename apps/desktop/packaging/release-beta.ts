@@ -29,7 +29,7 @@
 // docs/development/releases.md is the runbook, including what a killed run
 // leaves behind and how to remove it.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   copyFileSync,
@@ -517,7 +517,84 @@ function clearLeftovers(parent: string) {
   }
 }
 
-export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
+/** A build that has started: its result, and a way to stop it and everything it started. */
+export interface StartedBuild {
+  done: Promise<RunResult>;
+  /** Stops the build's whole process group and resolves once none of it is left. */
+  stop(): Promise<void>;
+}
+export type StartBuild = (
+  command: string,
+  args: string[],
+  options: { env: NodeJS.ProcessEnv },
+) => StartedBuild;
+
+/** Whether any process of the group led by `pid` is left. */
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * The build in a process group of its own, run without blocking, so that
+ * Ctrl-C or SIGTERM to this script can stop electron-builder, notarytool and
+ * every other process it started (a stalled notarization included) before the
+ * signing folder is removed.
+ */
+export const startBuild: StartBuild = (command, args, { env }) => {
+  const child = spawn(command, args, {
+    cwd: ROOT,
+    env,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (text: string) => (stdout += text));
+  child.stderr.setEncoding("utf8").on("data", (text: string) => (stderr += text));
+  const done = new Promise<RunResult>((resolve) => {
+    child.once("error", (error) => resolve({ status: null, stdout, stderr: `${stderr}${error}` }));
+    child.once("close", (status) => resolve({ status, stdout, stderr }));
+  });
+  const signal = (name: NodeJS.Signals) => {
+    try {
+      if (child.pid) process.kill(-child.pid, name);
+    } catch {
+      // The group is gone.
+    }
+  };
+  const stop = async () => {
+    const pid = child.pid;
+    if (!pid) return;
+    signal("SIGTERM");
+    // Ten seconds to stop cleanly, then the group is killed outright.
+    for (let waited = 0; groupAlive(pid); waited += 100) {
+      if (waited === 10_000) signal("SIGKILL");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await done;
+  };
+  return { done, stop };
+};
+
+/** A build run through `runner`, for the tests' stand-ins: it ends before it can be stopped. */
+export function blockingBuild(runner: Run): StartBuild {
+  return (command, args, options) => ({
+    done: Promise.resolve(runner(command, args, options)),
+    stop: async () => undefined,
+  });
+}
+
+export async function prepare(
+  runner: Run,
+  now: Date,
+  places: Places = PLACES,
+  startBuilding: StartBuild = blockingBuild(runner),
+): Promise<void> {
   const { staging, appDir } = places;
   // First, so a retry after any refusal clears what a killed run left.
   clearLeftovers(places.temp);
@@ -559,9 +636,16 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
   const temp = mkdtempSync(join(places.temp, "clawtrate-signing-"));
   writeFileSync(join(temp, "pid"), String(process.pid), { mode: 0o600 });
   const remove = () => rmSync(temp, { recursive: true, force: true });
+  let building: StartedBuild | null = null;
+  let interrupting = false;
+  // Stops the build and waits for all of it, then removes the folder and exits.
   const interrupted = () => {
-    remove();
-    process.exit(130);
+    if (interrupting) return;
+    interrupting = true;
+    void (building?.stop() ?? Promise.resolve()).finally(() => {
+      remove();
+      process.exit(130);
+    });
   };
   process.on("exit", remove);
   process.on("SIGINT", interrupted);
@@ -570,11 +654,15 @@ export function prepare(runner: Run, now: Date, places: Places = PLACES): void {
     const signing = signingKeychain(runner, secrets, temp);
     for (const name of [CERTIFICATE_FILE, KEY_FILE])
       if (existsSync(join(temp, name))) stop(`${name} still exists. Nothing was built.`);
-    const build = runner(
+    building = startBuilding(
       process.execPath,
       [join(APP_DIR, "packaging/candidate-build.ts"), out, version],
       { env: buildEnvironment(process.env, signing, epoch) },
     );
+    const build = await building.done;
+    building = null;
+    // Interrupted while building: the handler exits once the folder is removed.
+    if (interrupting) await new Promise(() => undefined);
     if (build.status !== 0) {
       // The log is electron-builder's and can name the identity and team; it is not printed.
       const log = /Build log: (\S+)/.exec(build.stderr)?.[1];
@@ -1105,12 +1193,19 @@ export async function main(
   argv: string[],
   runner: Run = run,
   platform: NodeJS.Platform = process.platform,
+  places: Places = PLACES,
 ): Promise<number> {
   const [flag, version, record, extra] = argv;
   try {
     if (flag === undefined) {
       if (platform !== "darwin") stop("A Mac beta is built on macOS.");
-      prepare(runner, new Date());
+      // The real build only with the real tools: stand-ins run their own.
+      await prepare(
+        runner,
+        new Date(),
+        places,
+        runner === run ? startBuild : blockingBuild(runner),
+      );
     } else if (flag === "--publish" && version && record && !extra) {
       if (!parseVersion(version)) stop(`${version} is not a version.`);
       if (!/^[0-9a-f]{64}$/.test(record))
