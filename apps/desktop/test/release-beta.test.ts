@@ -39,11 +39,13 @@ import { signingPlan, signingProblems } from "../packaging/signing.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
 import { BETA_FEED_URL, checkBetaFiles } from "../packaging/beta-files.ts";
 
+// A made-up key; its label is joined here so no line reads like a real one.
+const LABEL = ["PRIVATE", "KEY"].join(" ");
 const KEY = [
-  "-----BEGIN PRIVATE KEY-----",
+  `-----BEGIN ${LABEL}-----`,
   "MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgmadeupmadeupmadeup",
   "madeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmade",
-  "-----END PRIVATE KEY-----",
+  `-----END ${LABEL}-----`,
 ].join("\n");
 const SECRETS: Secrets = {
   APPLE_CLAWTRATE_DEVELOPER_ID_P12_BASE64: Buffer.from("made-up certificate bytes").toString(

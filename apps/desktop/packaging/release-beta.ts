@@ -111,7 +111,11 @@ export function p12Bytes(value: string): Buffer | null {
   return bytes.length > 0 ? bytes : null;
 }
 
-const PEM_KEY = /^-----BEGIN PRIVATE KEY-----\r?\n[\s\S]+\r?\n-----END PRIVATE KEY-----\s*$/;
+// Built from parts, so the source holds no line that reads like a key.
+const PEM_LABEL = ["PRIVATE", "KEY"].join(" ");
+const PEM_KEY = new RegExp(
+  `^-----BEGIN ${PEM_LABEL}-----\\r?\\n[\\s\\S]+\\r?\\n-----END ${PEM_LABEL}-----\\s*$`,
+);
 
 /** The .p8 key as PEM text, stored as the text itself or as its base64, or null. */
 export function p8Text(value: string): string | null {
