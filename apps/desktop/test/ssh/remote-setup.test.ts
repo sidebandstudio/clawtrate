@@ -297,6 +297,107 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     expect(h.questions).toEqual([]);
   });
 
+  it("F-495: every routing, trust and sign-in setting outside the subset is refused by name, directly, in a matched Include, a nested one and in any case, with no ssh started", async () => {
+    // A configuration of its own: a refused global Include refuses every host in its file.
+    const own = makeWorld(join(root, "config-matrix"));
+    const ownTransport = new SshTransport(own.world, { spawn });
+    const h = host({
+      transport: () => ownTransport,
+      answer: () => ({ confirmed: false, checked: false }),
+    });
+    const dotSsh = join(own.home, ".ssh");
+    mkdirSync(join(dotSsh, "conf.d"), { recursive: true });
+    writeFileSync(
+      join(dotSsh, "conf.d", "a.conf"),
+      "Host matched\n  HostName 127.0.0.1\n  HashKnownHosts yes\n",
+    );
+    writeFileSync(join(dotSsh, "conf.d", "b.conf"), "Include ~/.ssh/deeper.conf\n");
+    writeFileSync(
+      join(dotSsh, "deeper.conf"),
+      "Host nested\n  HostName 127.0.0.1\n  Ciphers aes128-ctr\n",
+    );
+    // Matched as spelt: `*.conf` doesn't name this file, so its block doesn't apply.
+    writeFileSync(join(dotSsh, "conf.d", "UPPER.CONF"), "Host upper\n  ProxyJump elsewhere\n");
+    own.writeConfig(
+      [
+        "Include conf.d/*.conf",
+        "Host directed",
+        "  HostName 127.0.0.1",
+        "  kExAlGoRiThMs curve25519-sha256",
+        "Host trusted-x",
+        "  HostName 127.0.0.1",
+        "  ForwardX11Trusted yes",
+        "Host macs",
+        "  HostName 127.0.0.1",
+        "  MACs hmac-sha2-256",
+        "Host keychained",
+        "  HostName 127.0.0.1",
+        "  UseKeychain yes",
+        "  AddKeysToAgent yes",
+        "  BatchMode yes",
+        "",
+      ].join("\n"),
+    );
+    const before = started.length;
+    for (const [name, setting, category] of [
+      ["directed", "KexAlgorithms", "host-key"],
+      ["matched", "HashKnownHosts", "host-key"],
+      ["nested", "Ciphers", "host-key"],
+      ["trusted-x", "ForwardX11Trusted", "command-or-forward"],
+      ["macs", "MACs", "host-key"],
+    ] as const) {
+      await h.remote.there(name);
+      expect(h.setup().there!.refusal, name).toMatchObject({ setting, category });
+      expect(h.setup().there!.refusal!.title).toContain(setting);
+    }
+    // Agent and keychain loading, and BatchMode, choose nothing: no refusal, the account is asked.
+    await h.remote.there("keychained");
+    expect(h.setup().there!.refusal).toBeNull();
+    await h.remote.there("upper");
+    expect(h.setup().there!.refusal).toBeNull();
+    expect(h.questions.map((q) => q.confirm)).toEqual(["Look", "Look"]);
+    // Only the Include grammar Clawtrate follows: a class, an escape or braces are refused as Include.
+    for (const include of [
+      "Include ~/.ssh/odd[ab].conf",
+      "Include ~/.ssh/back\\slash.conf",
+      "Include ~/.ssh/{a,b}.conf",
+    ]) {
+      own.writeConfig(`${include}\nHost devbox\n  HostName 127.0.0.1\n`);
+      await h.remote.there("devbox");
+      expect(h.setup().there!.refusal, include).toMatchObject({ setting: "Include" });
+    }
+    expect(started.length).toBe(before);
+    await ownTransport.closeAll();
+  });
+
+  it("F-495: a fresh Look at the live route's name reads the configuration first, and reuses the live route only while it resolves to the same target", async () => {
+    const h = host();
+    await connected(h);
+    const config = readFileSync(t.world.personConfig, "utf8");
+    try {
+      // The live name now goes through a jump host: refused by name, and nothing started.
+      t.writeConfig(
+        config.replace(
+          "Host devbox devbox-again\n",
+          "Host devbox devbox-again\n  ProxyJump elsewhere\n",
+        ),
+      );
+      const before = started.length;
+      const asked = h.questions.length;
+      await h.remote.there("devbox");
+      expect(h.setup().there!.refusal).toMatchObject({ setting: "ProxyJump" });
+      expect(started.length).toBe(before);
+      expect(h.questions.length).toBe(asked);
+      // Another user for the same name: not the live route; its own account is asked.
+      t.writeConfig(config.replace(`  User ${t.world.localUser}\n`, "  User someone-else\n"));
+      await h.remote.there("devbox");
+      expect(h.questions.at(-1)!.message).toContain("someone-else@127.0.0.1");
+    } finally {
+      t.writeConfig(config);
+      await h.remote.closeAll();
+    }
+  });
+
   it("F-495: the full account and SSH port are confirmed in the host's dialog before anything runs there; Cancel runs nothing", async () => {
     const h = host({ answer: () => ({ confirmed: false, checked: false }) });
     const before = started.length;

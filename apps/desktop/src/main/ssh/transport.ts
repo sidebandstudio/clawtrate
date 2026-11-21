@@ -353,6 +353,37 @@ export class SshTransport {
   }
 
   /** A route from what was typed, or the refusal that names why not. Writes the route's files. */
+  /**
+   * What was typed, resolved from the person's configuration as it is now,
+   * or why not, with no file written and nothing run: what a fresh Look
+   * compares with a route it already holds.
+   */
+  resolve(
+    typed: unknown,
+  ):
+    | { ok: true; target: Target; endpoint: string }
+    | ConfigRefusal
+    | InvalidDestination
+    | AppFilesUnsafe {
+    return guarded(() => {
+      const destination = parseDestination(typed);
+      if (!destination)
+        return {
+          ok: false as const,
+          kind: "invalid-destination" as const,
+          message: "That isn't an SSH host or alias Clawtrate can use." as const,
+        };
+      const target = resolveTarget(this.world, destination);
+      if (!target.ok) return target;
+      guardWorld(this.world, [...target.identityFiles, ...target.certificateFiles]);
+      return {
+        ok: true as const,
+        target,
+        endpoint: endpointText(target.user, target.hostName, target.port),
+      };
+    });
+  }
+
   private prepareRouteInner(
     routeId: string,
     typed: unknown,

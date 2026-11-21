@@ -86,6 +86,11 @@ const REFUSED = new Map<string, [string, RefusalCategory]>([
   ["hostkeyalgorithms", ["HostKeyAlgorithms", "host-key"]],
   ["checkhostip", ["CheckHostIP", "host-key"]],
   ["casignaturealgorithms", ["CASignatureAlgorithms", "host-key"]],
+  ["hashknownhosts", ["HashKnownHosts", "host-key"]],
+  ["ciphers", ["Ciphers", "host-key"]],
+  ["macs", ["MACs", "host-key"]],
+  ["kexalgorithms", ["KexAlgorithms", "host-key"]],
+  ["forwardx11trusted", ["ForwardX11Trusted", "command-or-forward"]],
   ["addressfamily", ["AddressFamily", "unsupported"]],
   ["preferredauthentications", ["PreferredAuthentications", "unsupported"]],
   ["pubkeyacceptedalgorithms", ["PubkeyAcceptedAlgorithms", "unsupported"]],
@@ -100,7 +105,9 @@ const REFUSED = new Map<string, [string, RefusalCategory]>([
 /**
  * Settings that are left out without a refusal: the host's own file sets them,
  * or `ssh`'s default stands. None runs anything, chooses the address, touches
- * the key check or changes how this account signs in.
+ * the key check or the connection's algorithms, or chooses which identity
+ * signs in: `AddKeysToAgent` and `UseKeychain` only load keys into the agent,
+ * and `BatchMode` is the host's own.
  */
 const IGNORED = new Set([
   "addkeystoagent",
@@ -113,13 +120,8 @@ const IGNORED = new Set([
   "compression",
   "loglevel",
   "visualhostkey",
-  "hashknownhosts",
   "batchmode",
   "requesttty",
-  "ciphers",
-  "macs",
-  "kexalgorithms",
-  "forwardx11trusted",
   "escapechar",
   "ignoreunknown",
 ]);
@@ -158,9 +160,9 @@ function refusal(category: RefusalCategory, setting: string, name: string): Conf
  * name once, going back only to just after the last `*` it passed, so its work
  * is at most the pattern's length times the name's, whatever the wildcards.
  */
-function globMatch(pattern: string, value: string): boolean {
-  const p = pattern.toLowerCase();
-  const v = value.toLowerCase();
+function globMatch(pattern: string, value: string, caseSensitive = false): boolean {
+  const p = caseSensitive ? pattern : pattern.toLowerCase();
+  const v = caseSensitive ? value : value.toLowerCase();
   let i = 0;
   let j = 0;
   let star = -1;
@@ -295,7 +297,8 @@ class IncludeRefused extends Error {}
  */
 function includedFiles(raw: string, world: SshWorld): string[] {
   const value = singleValue(raw);
-  if (value === null || /[%$`~]/.test(value.slice(value.startsWith("~/") ? 2 : 0)))
+  // Only one path, with `*` and `?` in its last part: no escapes, classes, braces or tokens.
+  if (value === null || /[%$`~\\[\]{}!]/.test(value.slice(value.startsWith("~/") ? 2 : 0)))
     throw new IncludeRefused();
   let path: string;
   // As spelled, as with key paths; each file is guarded before it is opened (`walk`).
@@ -316,7 +319,8 @@ function includedFiles(raw: string, world: SshWorld): string[] {
     throw new Unreadable();
   }
   return names
-    .filter((name) => globMatch(last, name) && !name.startsWith("."))
+    // File names match as they are spelt, and a pattern matches no dotfile, as glob(3) does.
+    .filter((name) => globMatch(last, name, true) && !name.startsWith("."))
     .sort()
     .map((name) => `${dirname(path)}/${name}`);
 }

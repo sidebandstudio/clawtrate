@@ -423,12 +423,21 @@ export class RemoteSetup {
     destination: string,
   ): ReturnType<SshTransport["prepareRoute"]> {
     const live = this.live;
-    if (live && live.record.destination === destination) return live.route as Route & { ok: true };
+    // The configuration as it is now, before any route held for that name is used.
+    const resolved = transport.resolve(destination);
+    if (!resolved.ok) return resolved;
+    if (live && live.record.destination === destination) {
+      // The live route only while the person's settings still resolve to exactly its target.
+      if (sameTarget(resolved.target, live.route.target)) return live.route as Route & { ok: true };
+      return transport.prepareRoute(newRouteId(), destination);
+    }
     const saved = this.options.routes.list().find((each) => each.destination === destination);
     let prepared = transport.prepareRoute(
       saved?.id ?? this.ids.get(destination) ?? newRouteId(),
       destination,
     );
+    if (!prepared.ok && prepared.kind === "forward-open")
+      prepared = transport.prepareRoute(newRouteId(), destination);
     if (prepared.ok) {
       const first = prepared;
       const same = this.options.routes
@@ -1547,3 +1556,19 @@ function emptyFacts() {
     },
   };
 }
+
+/** Whether two resolved targets name the same endpoint, keys, agent and sign-in. */
+function sameTarget(a: Route["target"], b: Route["target"]): boolean {
+  return JSON.stringify(targetFacts(a)) === JSON.stringify(targetFacts(b));
+}
+
+const targetFacts = (target: Route["target"]) => ({
+  hostName: target.hostName,
+  user: target.user,
+  port: target.port,
+  identityFiles: target.identityFiles,
+  identitiesOnly: target.identitiesOnly,
+  certificateFiles: target.certificateFiles,
+  identityAgent: target.identityAgent,
+  pubkeyAuthentication: target.pubkeyAuthentication,
+});
