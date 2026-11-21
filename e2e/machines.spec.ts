@@ -210,6 +210,18 @@ test.afterAll(async () => {
 
 test("F-046 F-047: below admin every place shows, nothing can change, and the bar asks for admin only when the person asks", async () => {
   const page = writer.page;
+  const pending = async () =>
+    (await admin.request<{ pending: Json[] }>("device.pair.list", {})).pending;
+  const before = await pending();
+  // The web host may already have a read-only repair pending from pairing in setup.
+  for (const request of before) {
+    expect(request).toMatchObject({
+      displayName: "Clawtrate Web",
+      isRepair: true,
+      role: "operator",
+      scopes: ["operator.read"],
+    });
+  }
   await runsOn(page);
   await expect(page.getByTestId("runs-on-machine")).toBeDisabled();
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
@@ -221,9 +233,12 @@ test("F-046 F-047: below admin every place shows, nothing can change, and the ba
   await expect(page.getByTestId("admin-bar")).toContainText(
     `Changing where ${OTTO} runs needs admin access.`,
   );
-  // Nothing was asked for by reading.
-  const devices = await admin.request<{ pending: unknown[] }>("device.pair.list", {});
-  expect(devices.pending).toEqual([]);
+  // An earlier request may have cleared. Reading must not create or change one.
+  for (const request of await pending()) {
+    expect(before, "reading machine settings created or changed a pairing request").toContainEqual(
+      request,
+    );
+  }
   await shots(page, "runs-on-below-admin");
 });
 
