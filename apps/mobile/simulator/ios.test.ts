@@ -22,10 +22,11 @@ import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
+import { decodePng } from "../../../tools/brand/src/png.ts";
 import { REDACTED } from "../src/host/secrets.ts";
 import { TASKS_FAILED } from "../src/lists.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
-import { LIGHT } from "../src/theme/tokens.ts";
+import { DARK, LIGHT } from "../src/theme/tokens.ts";
 import {
   activate,
   appLog,
@@ -158,22 +159,33 @@ function expectSwitcherCover({
   width,
   height,
 }: Awaited<ReturnType<typeof switcherSnapshot>>) {
-  const bg = rgb(LIGHT.bg);
-  const mark = rgb("#3decc7");
-  let plain = 0;
-  let markPixels = 0;
+  // SplashBoard can save either appearance's snapshot.
+  const corner = [data[0]!, data[1]!, data[2]!];
+  const bg = [rgb(LIGHT.bg), rgb(DARK.bg)].find((color) => near(corner, color, 4));
+  if (!bg) throw new Error("The snapshot corner does not match either cover background.");
+  const mark = decodePng(readFileSync(join(import.meta.dirname, "../assets/logo-mark.png")));
+  const left = Math.floor((width - mark.width) / 2);
+  const top = Math.floor((height - mark.height) / 2);
+  let backgroundMismatch = 0;
+  let markMismatch = 0;
   for (let i = 0; i < data.length; i += 4) {
     const color = [data[i]!, data[i + 1]!, data[i + 2]!];
-    if (near(color, bg, 4)) plain += 1;
-    else if (near(color, mark, 12)) {
-      const x = (i / 4) % width;
-      const y = Math.floor(i / 4 / width);
-      if (Math.abs(x - width / 2) < width / 10 && Math.abs(y - height / 2) < width / 10)
-        markPixels += 1;
+    const x = ((i / 4) % width) - left;
+    const y = Math.floor(i / 4 / width) - top;
+    if (x < 0 || y < 0 || x >= mark.width || y >= mark.height) {
+      if (data[i + 3] !== 255 || !near(color, bg, 4)) backgroundMismatch += 1;
+      continue;
     }
+    const offset = (y * mark.width + x) * 4;
+    const alpha = mark.data[offset + 3]! / 255;
+    const blended = bg.map(
+      (background, channel) => mark.data[offset + channel]! * alpha + background * (1 - alpha),
+    );
+    if (data[i + 3] !== 255 || !near(color, blended, 16)) markMismatch += 1;
   }
-  expect(plain / (data.length / 4)).toBeGreaterThan(0.95);
-  expect(markPixels).toBeGreaterThan(20);
+  expect(backgroundMismatch).toBe(0);
+  // UIKit and the PNG decoder can round a few edge pixels differently.
+  expect(markMismatch).toBeLessThan(mark.width * mark.height * 0.002);
 }
 
 let proxy: Proxy;
@@ -494,7 +506,9 @@ describe("the iOS app", () => {
       const { startedAt, unblockAt } = await until("the JS callback to block", async () => blocked);
       const backgroundedAt = Date.now();
       expect(backgroundedAt).toBeGreaterThanOrEqual(startedAt);
-      await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }]);
+      await steps("to-home-screen-with-js-blocked", [{ pressKey: "home" }], {
+        retryDriverStartup: false,
+      });
       const snapshot = await switcherSnapshot(backgroundedAt);
       expect(snapshot.savedAt).toBeLessThan(unblockAt);
       expectSwitcherCover(snapshot);
@@ -943,10 +957,12 @@ describe("the iOS app", () => {
       see({ id: "settings-button", text: "Settings. Gateway (connecting|offline)\\." }),
     ]);
     await shoot("reconnecting");
-    // Retry now while the gateway is still out of reach: it tries, and the strip stays.
+    // A long backoff cannot reach a new attempt within this wait on its own.
+    // Retry now resets the backoff even though the gateway stays out of reach.
     await steps("retry-while-cut", [
+      waitFor({ id: "status-strip-text", text: "Reconnecting in (?:1[2-9]|[2-9][0-9])s.*" }),
       tap({ id: "status-strip-action", text: "Retry now" }),
-      waitFor({ id: "status-strip-text", text: "(Reconnecting.*|Can't reach the gateway.*)" }),
+      waitFor({ id: "status-strip-text", text: "Reconnecting(?:…| in [12]s).*" }, 4_000),
       see({ id: "bot-otto" }),
     ]);
     await proxy.restore();

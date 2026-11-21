@@ -303,15 +303,13 @@ export function Chat({
   };
 
   const items = transcript?.items.length ?? 0;
-  const rows =
-    transcript &&
-    !(transcript.status === "loading" && items === 0) &&
-    !(transcript.status === "error" && items === 0)
-      ? chatRows(task, transcript, bot.name, now, link).map((row) => redactRow(row, redact))
-      : [];
+  const rows = transcript
+    ? chatRows(task, transcript, bot.name, now, link).map((row) => redactRow(row, redact))
+    : [];
+  const hasConversation = items > 0 || rows.some((row) => row.kind === "bot");
   const running = rows.find((row) => row.kind === "running");
   let body: ReactNode;
-  if (!online && (!transcript || items === 0)) {
+  if (!online && !hasConversation) {
     // Nothing loaded to show; what the task was last seen doing is still said.
     const last = runningWords(task, transcript, bot.name, link);
     body = (
@@ -320,7 +318,7 @@ export function Chat({
         {last && <RowView row={redactRow({ kind: "running", id: "running", ...last }, redact)} />}
       </View>
     );
-  } else if (!transcript || (transcript.status === "loading" && items === 0)) {
+  } else if (!transcript || (transcript.status === "loading" && !hasConversation)) {
     body = (
       <View
         accessibilityLabel={W.loading}
@@ -354,7 +352,7 @@ export function Chat({
         />
       </View>
     );
-  } else if (transcript.status === "error" && items === 0) {
+  } else if (transcript.status === "error" && !hasConversation) {
     body = (
       <Empty
         title={W.loadFailed}

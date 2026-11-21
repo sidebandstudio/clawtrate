@@ -14,6 +14,7 @@ import {
   type TranscriptItem,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
+import { addressAttemptInProgress, addressSubmission } from "../src/address.ts";
 import { homeModel, taskRows } from "../src/lists.ts";
 import { back, connectView, current, HOME, inShell, keptMismatch } from "../src/navigation.ts";
 import { chatRows, runningWords } from "../src/transcript.ts";
@@ -22,6 +23,36 @@ const LIVE = { connected: true, closed: false };
 const KEY = "agent:otto:disk";
 
 const NOW = new Date(2026, 10, 18, 9, 30).getTime();
+
+describe("submitting the iPhone gateway address", () => {
+  const saved = "wss://gateway.example/route?tenant=demo";
+  const shown = "wss://gateway.example/route";
+
+  it("keeps the saved endpoint and credential when the form is unchanged", () => {
+    expect(addressSubmission(saved, shown, "")).toEqual({ type: "retry" });
+    expect(addressSubmission(saved, shown, "replacement")).toEqual({
+      type: "connect",
+      url: saved,
+      token: "replacement",
+    });
+  });
+
+  it("uses the current form values after an edit", () => {
+    expect(addressSubmission(saved, " wss://other.example ", "replacement")).toEqual({
+      type: "connect",
+      url: "wss://other.example",
+      token: "replacement",
+    });
+    expect(addressSubmission(saved, " ", "replacement")).toBeNull();
+  });
+
+  it("blocks submissions during an attempt and allows them while waiting to retry", () => {
+    const connection = { ...initialState.connection, status: "connecting" as const };
+    expect(addressAttemptInProgress(connection)).toBe(true);
+    expect(addressAttemptInProgress({ ...connection, retryAt: NOW })).toBe(false);
+    expect(addressAttemptInProgress({ ...connection, status: "error" })).toBe(false);
+  });
+});
 
 function bot(id: string, extra: Partial<Bot> = {}): Bot {
   return {
@@ -422,6 +453,29 @@ describe("the iPhone chat's rows", () => {
     expect(rows.slice(-2)).toEqual([
       { kind: "bot", id: "live:run-1", text: "Half a reply" },
       { kind: "running", id: "running", text: "Writing", tone: "live" },
+    ]);
+  });
+
+  it("keeps cut live text and its shortening note when history is unavailable offline", () => {
+    const run = {
+      ...newRun("run-1", { state: "running", origin: "local", bound: true }, 1),
+      text: "Part of a reply",
+      cut: ["text"],
+    };
+    const rows = chatRows(
+      task(KEY, at, { status: "running" }),
+      { ...transcript([]), status: "error", runs: [run] },
+      "Otto",
+      NOW,
+      { connected: false, closed: false },
+    );
+    expect(rows.slice(0, 2)).toEqual([
+      { kind: "bot", id: "live:run-1", text: "Part of a reply" },
+      {
+        kind: "note",
+        id: "shortened:live:run-1",
+        text: "Shortened here. Some of this message is missing from this view.",
+      },
     ]);
   });
 

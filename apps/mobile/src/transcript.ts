@@ -203,8 +203,15 @@ export function chatRows(
   }
   const active = activeRun(transcript);
   // What the run has written so far, before it lands in history.
-  if (active && active.text.trim() !== "")
+  if (active && active.text.trim() !== "") {
     rows.push({ kind: "bot", id: `live:${active.id}`, text: active.text });
+    if (active.cut?.includes("text"))
+      rows.push({
+        kind: "note",
+        id: `shortened:live:${active.id}`,
+        text: CONVERSATION_WORDS.shortened,
+      });
+  }
   const running = runningWords(task, transcript, botName, link);
   if (running) rows.push({ kind: "running", id: "running", ...running });
   return rows;

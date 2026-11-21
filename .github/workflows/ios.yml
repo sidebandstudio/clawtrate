@@ -9,6 +9,7 @@ on:
       - "packages/core/**"
       - "packages/ui/src/**"
       - "plugins/**"
+      - "tools/brand/src/png.ts"
       - "tools/dev-gateway/**"
       - "package.json"
       - "pnpm-lock.yaml"

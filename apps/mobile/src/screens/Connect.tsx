@@ -28,7 +28,7 @@ import {
 import { gatewayLabel } from "../../../../packages/ui/src/format.ts";
 import { addressWords } from "../presentation/gateway-state.ts";
 import * as Clipboard from "expo-clipboard";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Image,
   KeyboardAvoidingView,
@@ -39,6 +39,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import MARK from "../../assets/logo-mark.png";
+import { addressAttemptInProgress, addressSubmission } from "../address.ts";
 import { Character } from "../components/Avatar.tsx";
 import { EyeIcon } from "../components/icons.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
@@ -325,40 +326,41 @@ export function Address({
   connection: ConnectionState;
   onBack: () => void;
 }) {
-  const { send, redact } = useRuntime();
-  const [url, setUrl] = useState(() =>
-    connection.gatewayUrl ? addressWords(connection.gatewayUrl) : "",
-  );
+  const { client, send, redact } = useRuntime();
+  const [editedUrl, setEditedUrl] = useState<string | null>(null);
+  const url = editedUrl ?? (connection.gatewayUrl ? addressWords(connection.gatewayUrl) : "");
   const [token, setToken] = useState("");
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
-  const busy = connection.status === "connecting";
-  const submit = () => {
-    if (!url.trim()) {
+  const submitting = useRef(false);
+  const busy = addressAttemptInProgress(connection);
+  const submit = async () => {
+    if (submitting.current || addressAttemptInProgress(client.state.connection)) return;
+    const command = addressSubmission(connection.gatewayUrl, url, token);
+    if (!command) {
       setSubmitError(W.missingAddress);
       return;
     }
+    submitting.current = true;
     setSubmitError(null);
     // The field is emptied before the screen changes: iOS offers to save what a
     // secure field holds when it goes, and this token is not one to keep there.
-    const typed = token;
     setToken("");
-    send({ type: "connect", url: url.trim(), token: typed || null }).catch((error: unknown) =>
+    try {
+      await send(command);
+    } catch (error) {
       setSubmitError({
         title: failureTitle(null),
         message: redact(error instanceof Error ? error.message : String(error)),
-      }),
-    );
+      });
+    } finally {
+      submitting.current = false;
+    }
   };
   const error = submitError
     ? { ...submitError, code: null }
     : connection.error
       ? errorFor(connection.error, connection.gatewayUrl, redact)
       : null;
-  // Try again repeats what failed: the saved gateway's connection, or this form.
-  const tryAgain = () => {
-    if (!submitError && connection.error && connection.gatewayUrl) void send({ type: "retry" });
-    else submit();
-  };
   return (
     <Column testID="address">
       <Brand />
@@ -368,7 +370,7 @@ export function Address({
       <Field
         testID="address-field"
         value={url}
-        onChange={setUrl}
+        onChange={setEditedUrl}
         placeholder={W.address}
         label={W.address}
         onSubmit={submit}
@@ -388,7 +390,7 @@ export function Address({
           title={error.title}
           message={error.message}
           code={error.code}
-          onTryAgain={tryAgain}
+          onTryAgain={submit}
         />
       )}
       <Button
