@@ -1102,6 +1102,33 @@ describe("the tab shown and the tab watched", () => {
     });
   });
 
+  it("F-142: a watched tab that moves past the tabs kept stays the one shown, and Take asks for it", async () => {
+    const other = { targetId: OTHER, url: "http://127.0.0.1:1/other", title: "Other", lease: null };
+    let answer: unknown = tabsAnswer(null, [other]);
+    const h = harness({ "clawtrate-computer.tabs": () => answer });
+    await ready(h);
+    h.views.choose(h.viewer, OTHER);
+    await h.views.watch(h.viewer);
+    h.streams.at(-1)!.frame();
+    // Sixteen tabs opened before it: the watched one is the seventeenth, past the list kept.
+    const filler = Array.from({ length: 15 }, (_, i) => ({
+      targetId: `TAB${String(i).padStart(29, "0")}C`,
+      url: `http://127.0.0.1:1/${i}`,
+      title: `Tab ${i}`,
+      lease: null,
+    }));
+    answer = tabsAnswer(null, [...filler, other]);
+    await h.views.readTabs(h.viewer);
+    expect(h.pane().tabs.some((tab) => tab.targetId === OTHER)).toBe(false);
+    expect(h.pane().view).toMatchObject({ targetId: OTHER, status: "live" });
+    expect(h.pane().shown).toBe(OTHER);
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take").at(-1)).toEqual({
+      sessionKey: KEY,
+      targetId: OTHER,
+    });
+  });
+
   it("F-142: input goes nowhere while the picture shows another tab than the one held", async () => {
     const h = harness();
     await granted(h);
