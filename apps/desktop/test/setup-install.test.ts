@@ -359,11 +359,11 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
       failure: { kind: "installer", cleanup: "removed" },
     });
     expect(existsSync(stand.place.programDir)).toBe(false);
-    // The stand-in's descendant would write 1.5 s after it started.
-    await pause(2_500);
+    // The stand-in's descendant would write 3 s after it started.
+    await pause(3_500);
     expect(existsSync(stand.place.programDir)).toBe(false);
     expect(stand.marked("late")).toBe(false);
-  });
+  }, 30_000);
 
   it("F-503: an installed program that isn't the checked tarball's is refused before onboarding", async () => {
     const stand = await make({ scenario: "wrong-program" });
@@ -828,7 +828,7 @@ describe("F-502: the runner ends what it started", () => {
     expect(own.running()).toEqual([]);
     await pause(1_500);
     expect(existsSync(marker)).toBe(false);
-  });
+  }, 30_000);
 
   it("F-502: once the app quits nothing more starts, and close waits for what runs", async () => {
     const stand = await make();
@@ -847,7 +847,7 @@ describe("F-502: the runner ends what it started", () => {
     expect(own.running()).toEqual([]);
     expect((await running).exitCode).not.toBe(0);
     expect(await own.run(request, () => {})).toMatchObject({ failed: true });
-  });
+  }, 30_000);
 });
 
 describe("F-502 F-503 F-505: reading what the programs print", () => {

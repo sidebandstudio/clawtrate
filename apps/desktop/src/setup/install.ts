@@ -648,7 +648,9 @@ export function runsCheckedInstall(
   port: number,
 ): boolean {
   const at = layout(place, pins);
-  const entry = argv.indexOf(at.installedEntry);
+  // Both compared through links: OpenClaw may write either path resolved.
+  const checkedEntry = real(at.installedEntry);
+  const entry = checkedEntry === null ? -1 : argv.findIndex((arg) => real(arg) === checkedEntry);
   if (entry < 1) return false;
   const rest = argv.slice(entry + 1);
   if (

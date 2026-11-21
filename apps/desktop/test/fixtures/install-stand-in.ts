@@ -98,7 +98,7 @@ main() {
   emit_json step name openclaw status start version "$tgz"
   printf 'added 345 packages\\n'
   if [[ "$SCENARIO" == "descendant" ]]; then
-    ( sleep 1.5; mkdir -p "$PREFIX/late"; : > "$HOME/stand-in-late" ) &
+    ( sleep 3; mkdir -p "$PREFIX/late"; : > "$HOME/stand-in-late" ) &
   fi
   if [[ "$SCENARIO" == "installer-fails" || "$SCENARIO" == "descendant" ]]; then
     emit_json error message "npm install did not produce a usable OpenClaw package"
