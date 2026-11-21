@@ -19,4 +19,21 @@ describe("which end-to-end runs start the computer instance", () => {
     expect(runIncludes(argv("e2e/work-computer.spec.ts"), FILE)).toBe(true);
     expect(runIncludes(argv("work-computer"), FILE)).toBe(true);
   });
+
+  it("an option's separate value is not read as a file filter", () => {
+    expect(runIncludes(argv("--global-timeout", "900000"), FILE)).toBe(true);
+    expect(runIncludes(argv("-G", "F-027", "work-computer"), FILE)).toBe(true);
+    expect(runIncludes(argv("-G", "work-computer", "e2e/preview.spec.ts"), FILE)).toBe(false);
+    expect(runIncludes(argv("--tsconfig", "tsconfig.json", "--browser", "chromium"), FILE)).toBe(
+      true,
+    );
+    expect(runIncludes(argv("--project", "a", "b", "-g", "x"), FILE)).toBe(true);
+    expect(runIncludes(argv("--shuffle", "--project", "a", "work-computer"), FILE)).toBe(true);
+  });
+
+  it("a file filter with a line, or a line and column, still names its file", () => {
+    expect(runIncludes(argv("e2e/work-computer.spec.ts:42"), FILE)).toBe(true);
+    expect(runIncludes(argv("work-computer.spec.ts:42:7"), FILE)).toBe(true);
+    expect(runIncludes(argv("e2e/preview.spec.ts:42"), FILE)).toBe(false);
+  });
 });
