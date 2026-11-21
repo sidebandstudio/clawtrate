@@ -1330,6 +1330,23 @@ export class ClawtrateClient {
   }
 
   /**
+   * The route was removed: the saved connection that names it is forgotten,
+   * whether the route is the current connection or only the one kept across a
+   * restart or Disconnect. A connection to anything else is left alone.
+   */
+  async forgetRoute(route: string): Promise<void> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    if (this.settings?.route === route) {
+      await this.disconnect();
+      return;
+    }
+    await this.changeConnection(async () => {
+      const saved = await this.savedSettings();
+      if (saved?.route === route) await this.host.storage.delete(SETTINGS_KEY);
+    });
+  }
+
+  /**
    * The route's way to the gateway is down (its forward is being restored):
    * the socket closes and nothing is retried until the host connects the route
    * again, so nothing is sent to an address the route no longer holds. What is

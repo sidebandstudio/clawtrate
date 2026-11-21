@@ -186,6 +186,7 @@ const statusOf = (record: SshRouteRecord, phase: RouteStatus["phase"]): RouteSta
   phase,
   cause: null,
   profile: record.profile,
+  retry: false,
 });
 
 export class RemoteSetup {
@@ -1008,8 +1009,16 @@ export class RemoteSetup {
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
-        void this.letGoPending();
-        if (this.saved) this.options.publishRoute(statusOf(this.saved, "failed"));
+        const identity = code === ROUTE_IDENTITY_CHANGED || code === ROUTE_IDENTITY_UNREAD;
+        const pending = this.pending;
+        // Not the route's gateway, or no saying: the same cleanup as on a restore (retireIdentity).
+        if (identity && pending?.record)
+          void this.retireIdentity(pending.record, pending.forward).then(() => this.letGoPending());
+        else void this.letGoPending();
+        if (this.saved)
+          this.options.publishRoute(
+            statusOf(this.saved, identity ? "different-gateway" : "failed"),
+          );
         this.publish({
           ...this.state,
           phase: "failed",
@@ -1113,12 +1122,13 @@ export class RemoteSetup {
           const channel = this.channelFor(live.forward, state.local, live.record.gatewayPort);
           live.channel = channel;
           live.awaiting = true;
-          status({ phase: "restoring", cause: null });
+          // Waiting for the gateway to say who it is: nothing for Retry to do.
+          status({ phase: "restoring", cause: null, retry: false });
           // The route's own token, by itself, to the gateway's port on the pinned computer.
           void client
             .connectRoute({ url: channel.url, route: key, identity: live.record.identity })
             .catch(() => {
-              if (this.live === live) status({ phase: "failed", cause: null });
+              if (this.live === live) status({ phase: "failed", cause: null, retry: false });
             });
           return;
         }
@@ -1128,8 +1138,8 @@ export class RemoteSetup {
           live.awaiting = false;
           client.holdRoute(key);
           if (state.reason === "different-gateway")
-            status({ phase: "service-changed", cause: null });
-          else status({ phase: "key-changed", cause: null });
+            status({ phase: "service-changed", cause: null, retry: false });
+          else status({ phase: "key-changed", cause: null, retry: false });
           return;
         }
         if (!down) {
@@ -1139,7 +1149,8 @@ export class RemoteSetup {
         }
         if (state.phase === "waiting") {
           const cause = state.cause;
-          if (cause.kind === "gateway-not-running") status({ phase: "stopped", cause: null });
+          if (cause.kind === "gateway-not-running")
+            status({ phase: "stopped", cause: null, retry: false });
           else if (state.longOutage)
             status({
               phase:
@@ -1147,9 +1158,12 @@ export class RemoteSetup {
                   ? "unreachable"
                   : "failed",
               cause: cause.kind === "unreachable" ? cause.cause : null,
+              retry: cause.kind === "unreachable" || cause.kind === "timed-out",
             });
-          else status({ phase: "restoring", cause: null });
-        } else if (live.status.phase !== "unreachable") status({ phase: "restoring", cause: null });
+          // The forward waits for its next try: Retry starts it now.
+          else status({ phase: "restoring", cause: null, retry: true });
+        } else if (live.status.phase !== "unreachable")
+          status({ phase: "restoring", cause: null, retry: false });
       }),
     );
     live.stop.push(
@@ -1173,13 +1187,11 @@ export class RemoteSetup {
         }
         if (connection.status === "error" || connection.status === "pairing") {
           live.awaiting = false;
-          if (connection.error?.code === ROUTE_IDENTITY_CHANGED) {
-            // Not that gateway any more: disconnected, its token dropped, nothing sent again by itself.
-            client.holdRoute(key);
-            void client.dropRouteToken(key);
-            void live.forward.close();
-            status({ phase: "different-gateway", cause: null });
-          } else status({ phase: "failed", cause: null });
+          const code = connection.error?.code;
+          if (code === ROUTE_IDENTITY_CHANGED || code === ROUTE_IDENTITY_UNREAD) {
+            void this.retireIdentity(live.record, live.forward);
+            status({ phase: "different-gateway", cause: null, retry: false });
+          } else status({ phase: "failed", cause: null, retry: false });
         }
       }),
     );
@@ -1327,20 +1339,60 @@ export class RemoteSetup {
     this.attempt += 1;
     this.stopWatching();
     await this.letGoPending();
-    if (live) await this.closeLive(live, { forget: true });
-    else await this.forgetRecord(target);
+    if (live) await this.closeLive(live, { forget: false });
+    if (!(await this.forgetRecord(target))) {
+      // The pinned key is still in Clawtrate's file: Remove didn't finish, and says so.
+      this.saved = target;
+      this.options.publishRoute(statusOf(target, "failed"));
+      this.publish({
+        ...initialSetupState,
+        phase: "failed",
+        there: {
+          ...emptyThere(target.destination),
+          account: target.account,
+          name: target.name,
+          port: target.sshPort,
+          failure: { kind: "remove-failed", cause: null, exit: null },
+        },
+      });
+      return;
+    }
     this.saved = null;
     this.publish(initialSetupState);
   }
 
-  /** A saved route that isn't live, deleted by its id: its pin and files, record and token. */
-  private async forgetRecord(record: SshRouteRecord): Promise<void> {
+  /**
+   * The one cleanup after a gateway that isn't the route's, or one that
+   * wouldn't say who it is, on Pair, at launch and on a restore: the
+   * connection is held, the forward closed and the route's token dropped; the
+   * record stays, for Review, and only a fresh Pair, with its own dialog,
+   * keeps a token for it again.
+   */
+  private async retireIdentity(
+    record: SshRouteRecord,
+    forward: ForwardSupervisor | null,
+  ): Promise<void> {
     const client = this.options.client;
-    if (client.route === record.key) await client.disconnect();
+    client.holdRoute(record.key);
+    await client.dropRouteToken(record.key).catch(() => undefined);
+    this.options.routes.deleteToken(record.key);
+    if (forward) await forward.close();
+  }
+
+  /**
+   * A saved route that isn't live, deleted by its id: its pin and files
+   * first, then its record, token and the saved connection that names it.
+   * A pin that couldn't be deleted is a failed Remove, and the rest stays.
+   */
+  private async forgetRecord(record: SshRouteRecord): Promise<boolean> {
     const transport = this.transport();
-    if (!("refused" in transport)) transport.forgetId(record.id);
+    if (!("refused" in transport) && !transport.forgetId(record.id).ok) return false;
+    const client = this.options.client;
+    await client.forgetRoute(record.key);
     this.options.routes.remove(record.id);
+    await client.dropRouteToken(record.key).catch(() => undefined);
     this.options.publishRoute(null);
+    return true;
   }
 
   /** A record the store let go (too many, or its key taken): its pin and files go too. */

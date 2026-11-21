@@ -172,6 +172,8 @@ export type SshFailureKind =
   | "no-token-storage"
   /** The one-time code wasn't made on that computer; `exit` is OpenClaw's. */
   | "code-failed"
+  /** Remove couldn't delete the route's pinned key: nothing else was forgotten. */
+  | "remove-failed"
   /** Start was run and the gateway didn't come up. */
   | "start-failed";
 
@@ -245,6 +247,8 @@ export type RouteStatus = {
   /** For `unreachable`: the cause in brackets, as section 5 words it. */
   cause: UnreachableWords | null;
   profile: "default" | "clawtrate";
+  /** Whether "Retry now" does something now: only while the forward waits for its next try. */
+  retry: boolean;
 };
 
 /**

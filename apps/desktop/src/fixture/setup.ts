@@ -77,6 +77,8 @@ const route = (phase: RouteStatus["phase"], patch: Partial<RouteStatus> = {}): R
   phase,
   cause: null,
   profile: "default",
+  // A forward waiting for its next try: Retry acts.
+  retry: phase === "restoring" || phase === "unreachable",
   ...patch,
 });
 

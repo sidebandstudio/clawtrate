@@ -1057,6 +1057,7 @@ const route = object<RouteStatus>()({
   phase: ENUM,
   cause: ENUM,
   profile: ENUM,
+  retry: FLAG,
 });
 const setup = object<SetupState>()({
   phase: ENUM,

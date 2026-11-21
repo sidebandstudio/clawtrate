@@ -101,6 +101,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       transport?: () => SshTransport | { refused: "app-files-unsafe" | "not-supported" };
       dir?: string;
       now?: () => number;
+      /** The client's store, kept across a restart of the same host folder. */
+      storage?: ReturnType<typeof memoryStorage>;
+      identity?: string;
     } = {},
   ) {
     const dir = options.dir ?? join(root, `host-${(count += 1)}`);
@@ -112,9 +115,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       seal: testSeal,
       onEvict: (record) => remote?.forgetEvicted(record),
     });
-    const storage = memoryStorage();
+    const storage = options.storage ?? memoryStorage();
     const fake = new FakeGateway();
-    let identity = "gateway-identity-1";
+    let identity = options.identity ?? "gateway-identity-1";
     fake.handlers["gateway.identity.get"] = () => ({ deviceId: identity, publicKey: "key" });
     fake.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], DEVICE_TOKEN) });
     const testing = testHost(fake);
@@ -797,6 +800,73 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     }
   });
 
+  it("F-498 F-499: Disconnect kept across a restart stays disconnected and Reconnect opens the route through the host; Remove offline also forgets the saved connection", async () => {
+    const h = host();
+    await connected(h);
+    await h.client.suspend();
+    await until(() => h.setup().route?.phase === "disconnected", 10_000);
+    await h.remote.closeAll();
+    // The app opens again on the same folder and store.
+    const again = host({ dir: h.dir, storage: h.storage });
+    await again.client.start();
+    await again.remote.resume();
+    expect(again.setup().route?.phase).toBe("disconnected");
+    expect(again.client.state.connection.status).toBe("disconnected");
+    expect(again.fake.sockets).toEqual([]);
+    await again.client.retryNow();
+    await until(() => again.client.state.connection.status === "connected", 30_000);
+    expect(again.fake.sockets.length).toBeGreaterThan(0);
+    await again.remote.closeAll();
+    // Offline: the computer can't be reached at launch, and Remove still forgets everything.
+    const offline = host({ dir: h.dir, storage: h.storage });
+    await sshd.stop();
+    try {
+      await offline.client.start();
+      await offline.remote.resume();
+      expect(offline.client.state.connection.status).not.toBe("connected");
+      expect(h.storage.data.has("connection")).toBe(true);
+      await offline.remote.removeRoute();
+      expect(h.storage.data.has("connection")).toBe(false);
+      expect(offline.routes.list()).toEqual([]);
+      expect(offline.knownHosts()).toBe("");
+    } finally {
+      await sshd.start();
+      await offline.remote.closeAll();
+    }
+  });
+
+  it("F-498: a gateway that isn't the route's at launch gets the same cleanup as on a restore: forward closed, token dropped, record kept for Review", async () => {
+    const h = host();
+    const before = started.length;
+    await connected(h);
+    await h.remote.closeAll();
+    const other = host({ dir: h.dir, storage: h.storage, identity: "gateway-identity-2" });
+    await other.client.start();
+    await other.remote.resume();
+    await until(() => other.setup().route?.phase === "different-gateway", 30_000);
+    const key = other.routes.list()[0]!.key;
+    expect(other.routes.list()).toHaveLength(1);
+    await until(() => !other.routes.hasToken(key), 5_000);
+    const forwards = started.slice(before).filter((run) => run.args.includes("-L"));
+    await until(() => forwards.every((run) => !alive(run.pid!)), 10_000);
+    await other.remote.closeAll();
+  });
+
+  it("F-499: a pinned key Remove can't delete is a failed Remove: it says so and keeps the route", async () => {
+    const h = host();
+    await connected(h);
+    const knownHosts = join(h.world.appDir, "known_hosts");
+    const elsewhere = join(h.dir, "elsewhere");
+    writeFileSync(elsewhere, readFileSync(knownHosts, "utf8"));
+    rmSync(knownHosts);
+    symlinkSync(elsewhere, knownHosts);
+    await h.remote.removeRoute();
+    expect(h.setup().there?.failure?.kind).toBe("remove-failed");
+    expect(h.routes.list()).toHaveLength(1);
+    expect(h.setup().route?.phase).toBe("failed");
+    await h.remote.closeAll();
+  });
+
   it("F-498: a forward that drops comes back by itself, the strip says restoring until the gateway answered there with the route's identity, then that it is back", async () => {
     const h = host();
     await connected(h);
@@ -841,6 +911,8 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     await until(() => h.fake.requests.at(-1)?.method === "gateway.identity.get", 30_000);
     await sleep(1_500);
     expect(h.setup().route?.phase).toBe("restoring");
+    // Waiting for the gateway to say who it is: the host has nothing for Retry to do, so it isn't offered.
+    expect(h.setup().route?.retry).toBe(false);
     expect(h.client.state.connection.status).not.toBe("connected");
     // A gateway that refuses the route's token: "Couldn't restore", never "back".
     h.fake.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-identity-1" });

@@ -160,7 +160,8 @@ export function routeStrip(state: ClawtrateState): Strip | null {
         text: `Restoring the connection to ${account}`,
         short: "Restoring the connection",
         more: "showing saved messages",
-        action: "route-retry",
+        // Retry is offered only while the host can act on it: the forward waiting for its next try.
+        action: route.retry ? "route-retry" : null,
         countdown: false,
       };
     case "restored":
