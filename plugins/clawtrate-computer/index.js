@@ -116,6 +116,11 @@ const UNRESOLVED = {
   loading: ["browser-not-quiet", "the bot's browser is still loading a page"],
   download: ["download-in-progress", "a download in the bot's browser is still in progress"],
   closed: ["browser-not-watched", "the plugin cannot see what the bot's browser is doing"],
+  // The proof failed with no load or download reported: nothing says the browser is busy.
+  unproved: [
+    "browser-not-watched",
+    "the plugin could not confirm that the bot's browser has settled",
+  ],
   unwatched: [
     "browser-not-watched",
     "a tab of the bot's browser does not answer the plugin, so whether it has settled cannot be seen",
@@ -473,7 +478,8 @@ export function createComputer(api, options = {}) {
       }
     } catch (error) {
       if (error === STALE) return "stale";
-      return cdp.closed ? "lost" : false;
+      // A command not answered, with no load or download seen: the proof failed, nothing more.
+      return cdp.closed ? "lost" : "unproved";
     }
   }
 
@@ -1007,7 +1013,10 @@ export function createComputer(api, options = {}) {
     // The grant is the last thing that happens: anything seen up to this
     // instant refuses it (nothing has awaited since the quiet step's last look).
     if (!stillQuiet(lease, watch, seen)) {
-      const why = watch.closed ? "closed" : (watch.unresolved() ?? "loading");
+      // A navigation seen in the tab is loading; a connection gone since is no proof at all.
+      const why = watch.closed
+        ? "closed"
+        : (watch.unresolved() ?? (lease.cdp.closed ? "unproved" : "loading"));
       return busy(...(UNRESOLVED[why] ?? UNRESOLVED.loading));
     }
     lease.state = "granted";

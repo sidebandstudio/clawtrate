@@ -172,6 +172,18 @@ describe("a grant hands over a live connection", () => {
     await h.stop();
   });
 
+  it("a proof command that isn't answered, with nothing seen loading, says the plugin couldn't confirm the browser settled, never that a page is loading", async () => {
+    const h = load({ timeouts: { discoveryMs: 300, connectMs: 300, commandMs: 200 } });
+    h.browser.stalledMethods.add("Page.getFrameTree");
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload).toMatchObject({
+      state: "busy",
+      cause: "browser-not-watched",
+      reason: "the plugin could not confirm that the bot's browser has settled",
+    });
+    await h.stop();
+  });
+
   it("follows a command answered on its connection after the last stop", async () => {
     const h = load();
     const answer = await h.call("control.take", tab);
