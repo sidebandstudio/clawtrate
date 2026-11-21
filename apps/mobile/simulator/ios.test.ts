@@ -166,6 +166,8 @@ function expectSwitcherCover({
   const mark = decodePng(readFileSync(join(import.meta.dirname, "../assets/logo-mark.png")));
   const left = Math.floor((width - mark.width) / 2);
   const top = Math.floor((height - mark.height) / 2);
+  // UIKit rounds the 56-point mark with a 16-point corner radius.
+  const radius = (16 / 56) * mark.width;
   let backgroundMismatch = 0;
   let markMismatch = 0;
   for (let i = 0; i < data.length; i += 4) {
@@ -177,7 +179,10 @@ function expectSwitcherCover({
       continue;
     }
     const offset = (y * mark.width + x) * 4;
-    const alpha = mark.data[offset + 3]! / 255;
+    const cornerX = Math.max(radius - x - 0.5, x + 0.5 - (mark.width - radius), 0);
+    const cornerY = Math.max(radius - y - 0.5, y + 0.5 - (mark.height - radius), 0);
+    const coverage = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(cornerX, cornerY)));
+    const alpha = (mark.data[offset + 3]! / 255) * coverage;
     const blended = bg.map(
       (background, channel) => mark.data[offset + channel]! * alpha + background * (1 - alpha),
     );
