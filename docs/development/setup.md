@@ -1,6 +1,10 @@
 # The first screen and the look on this computer
 
-The desktop app's first screen asks "Where does OpenClaw run?" ([`docs/design/setup.md`](../design/setup.md)). "This computer" looks for OpenClaw's gateway on the computer the app runs on and pairs with it read-only after the app's own dialog. On a developer's computer that would find, and could pair with, the OpenClaw you use every day. So the look never sees the real computer from a checkout, and no development, test, screenshot or preview run starts a program of OpenClaw's to look.
+The desktop app's first screen asks "Where does OpenClaw run?" ([`docs/design/setup.md`](../design/setup.md)). "This computer" looks for OpenClaw's gateway on the computer the app runs on and, where it may, pairs with it read-only after the app's own dialog; on a real computer it doesn't yet (below). On a developer's computer that would find, and could pair with, the OpenClaw you use every day. So the look never sees the real computer from a checkout, and no development, test, screenshot or preview run starts a program of OpenClaw's to look.
+
+## On a real computer today: Advanced
+
+No installed OpenClaw version is on the list of versions whose commands Clawtrate has verified as read-only (`READ_ONLY_VERSIONS` in [`apps/desktop/src/setup/look.ts`](../../apps/desktop/src/setup/look.ts)), and the list is empty. OpenClaw's launcher can repair its own installation before it handles any command, `--version` included: in 2026.10.6 it replays pending package-lifecycle work first. So on a real computer "This computer" runs nothing. It reads the version from the installed package's `package.json`, says Clawtrate doesn't run that version to look, and offers Advanced, where you enter the gateway's address and token. Connect without typing is reached only in a sandbox, where the host's own stand-in answers instead of OpenClaw ([`docs/decisions.md`](../decisions.md), "What the look runs, and when it runs nothing").
 
 ## What must be sandboxed
 
