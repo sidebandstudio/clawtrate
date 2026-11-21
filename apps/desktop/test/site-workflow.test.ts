@@ -4,12 +4,39 @@
 // push paths and none of them loads a package at run time.
 
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const ASSEMBLER = "apps/desktop/packaging/site-feed.ts";
 const WORKFLOW = readFileSync(join(ROOT, ".github/workflows/site.yml"), "utf8");
+const yaml = createRequire(import.meta.url)("js-yaml") as { load: (text: string) => unknown };
+
+interface Workflow {
+  on: Record<string, { branches?: string[]; tags?: string[]; "branches-ignore"?: string[] } | null>;
+  jobs: Record<string, { if?: string; needs?: string; environment?: { name?: string } }>;
+}
+
+/**
+ * Whether the workflow can deploy from a ref other than main: a trigger that
+ * runs on a tag or another branch, or a job that is not limited to main.
+ * The github-pages environment allows main only; the workflow keeps to it.
+ */
+function deploysOffMain(text: string): string[] {
+  const flow = yaml.load(text) as Workflow;
+  const problems: string[] = [];
+  for (const [event, config] of Object.entries(flow.on)) {
+    if (event === "workflow_dispatch") continue;
+    if (event !== "push") problems.push(`runs on ${event}`);
+    else if (config?.tags || config?.["branches-ignore"] || config?.branches?.join() !== "main")
+      problems.push("runs on a push to another ref than main");
+  }
+  for (const [name, job] of Object.entries(flow.jobs))
+    if (job.if !== "github.ref == 'refs/heads/main'")
+      problems.push(`job ${name} is not limited to main`);
+  return problems;
+}
 
 /** The specifiers a file loads when it runs: `import type` and `export type` load nothing. */
 function runtimeImports(path: string): string[] {
@@ -69,5 +96,39 @@ describe("the Site workflow and the feed assembler", () => {
       (file) => !paths.some((path) => covered(file, path)),
     );
     expect(missing).toEqual([]);
+  });
+
+  it("deploys only from main, the one ref the github-pages environment allows", () => {
+    expect(deploysOffMain(WORKFLOW)).toEqual([]);
+    expect((yaml.load(WORKFLOW) as Workflow).jobs.deploy!.environment?.name).toBe("github-pages");
+  });
+
+  it.each([
+    [
+      "a release trigger",
+      (text: string) =>
+        text.replace(
+          "  workflow_dispatch:",
+          "  release:\n    types: [published]\n  workflow_dispatch:",
+        ),
+    ],
+    [
+      "a tag push",
+      (text: string) =>
+        text.replace("    branches: [main]", '    branches: [main]\n    tags: ["v*"]'),
+    ],
+    [
+      "another branch",
+      (text: string) => text.replace("    branches: [main]", "    branches: [main, site]"),
+    ],
+    [
+      "a deploy job open to any ref",
+      (text: string) =>
+        text.replace(/(name: Deploy to GitHub Pages\n {4}needs: build\n) {4}if: .*\n/, "$1"),
+    ],
+  ])("refuses %s", (_name, change) => {
+    const changed = change(WORKFLOW);
+    expect(changed).not.toBe(WORKFLOW);
+    expect(deploysOffMain(changed)).not.toEqual([]);
   });
 });

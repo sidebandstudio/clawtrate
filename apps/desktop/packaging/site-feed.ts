@@ -13,8 +13,8 @@
 // (download/mac/index.html, a template) and requires install.sh to pin that
 // beta's team. With no published beta, a template token left or another
 // team pinned, it fails, so the workflow deploys nothing and the last
-// deployment stays. The Site workflow runs it on every deploy and every
-// release event; docs/development/releases.md has the flow.
+// deployment stays. The Site workflow runs it on every deploy, from main
+// only; docs/development/releases.md has the flow.
 
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

@@ -993,6 +993,7 @@ function github(
       if (row) row.draft = args.includes("--draft=true");
       return ok();
     }
+    if (line === "gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main") return ok();
     return fail(`unexpected ${line}`);
   };
   return { runner, calls, releases, answers, digests };
@@ -1085,6 +1086,46 @@ describe("publishing", () => {
       "The draft's notes are not the checked notes. It was left a draft: delete it and publish again.",
     );
     expect(published(hub.calls)).toBe(false);
+  });
+
+  const DISPATCH = "gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main";
+  const dispatched = (calls: string[][]) => calls.filter((call) => call.join(" ") === DISPATCH);
+
+  it("starts the Site workflow on main once GitHub lists the release public, never before", async () => {
+    const hub = github(dir);
+    await publish(hub.runner, VERSION, record, net, place.staging);
+    const lines = hub.calls.map((call) => call.join(" "));
+    const flip = lines.findIndex((line) => line.includes("--draft=false"));
+    const readBack = lines.findIndex(
+      (line, index) =>
+        index > flip && line.startsWith("gh api repos/sidebandstudio/clawtrate/releases"),
+    );
+    expect(dispatched(hub.calls)).toHaveLength(1);
+    expect(flip).toBeGreaterThan(-1);
+    expect(readBack).toBeGreaterThan(flip);
+    expect(lines.indexOf(DISPATCH)).toBeGreaterThan(readBack);
+    expect(output).toContain("Started the Site workflow on main.");
+
+    // GitHub still lists it as a draft: nothing is dispatched.
+    const ignored = github(dir);
+    const stays: Run = (command, args, options) =>
+      args.includes("--draft=false") ? ok() : ignored.runner(command, args, options);
+    await stopped(() => publish(stays, VERSION, record, net, place.staging));
+    expect(dispatched(ignored.calls)).toEqual([]);
+
+    // A draft left unpublished, by a digest that does not match: nothing is dispatched.
+    const mismatch = github(dir);
+    mismatch.digests[ZIPS[0]!] = `sha256:${sha256("other bytes")}`;
+    await stopped(() => publish(mismatch.runner, VERSION, record, net, place.staging));
+    expect(dispatched(mismatch.calls)).toEqual([]);
+  });
+
+  it("stops, naming the command to run by hand, when the Site workflow cannot be started", async () => {
+    const hub = github(dir);
+    hub.answers[DISPATCH] = fail("HTTP 403");
+    expect(await stopped(() => publish(hub.runner, VERSION, record, net, place.staging))).toBe(
+      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main), then check ${BETA_FEED_URL}.`,
+    );
   });
 
   it("reads the release back after making it public, whatever the command answered", async () => {
@@ -1303,9 +1344,42 @@ describe("withdrawing", () => {
     );
     expect(output).toEqual([
       `GitHub lists ${TAG} as a draft. Its download addresses can still answer from caches for a while.`,
+      "Started the Site workflow on main.",
       `Waiting for ${BETA_FEED_URL} to offer ${older}…`,
       `The Beta feed offers ${older}.`,
     ]);
+  });
+
+  it("starts the Site workflow on main only once GitHub lists the release as a draft", async () => {
+    const made = hub(true);
+    await withdraw(
+      made.runner,
+      VERSION,
+      serving(() => new Response(feed(older))),
+    );
+    const lines = made.calls.map((call) => call.join(" "));
+    const edit = lines.findIndex((line) => line.startsWith("gh release edit"));
+    const readBack = lines.findIndex(
+      (line, index) =>
+        index > edit && line.startsWith("gh api repos/sidebandstudio/clawtrate/releases"),
+    );
+    const dispatch = lines.indexOf(
+      "gh workflow run site.yml --repo sidebandstudio/clawtrate --ref main",
+    );
+    expect(readBack).toBeGreaterThan(edit);
+    expect(dispatch).toBeGreaterThan(readBack);
+
+    // Still public after the edit: nothing is dispatched.
+    const stays = hub(true);
+    stays.answers["gh release edit"] = ok();
+    await stopped(() =>
+      withdraw(
+        stays.runner,
+        VERSION,
+        serving(() => new Response(feed(older))),
+      ),
+    );
+    expect(stays.calls.some((call) => call[1] === "workflow")).toBe(false);
   });
 
   it("reports no beta only when the site has no feed and GitHub lists no published beta", async () => {
@@ -1324,7 +1398,7 @@ describe("withdrawing", () => {
         ),
       ),
     ).toBe(
-      `The site serves no Beta feed, though GitHub lists v${older} as published. Run the Site workflow.`,
+      `The site serves no Beta feed, though GitHub lists v${older} as published. Run the Site workflow on main.`,
     );
   });
 
@@ -1362,7 +1436,7 @@ describe("withdrawing", () => {
           serving(() => new Response(feed(VERSION))),
         ),
       ),
-    ).toBe(`The site still offers ${VERSION}. Run the Site workflow and run this again.`);
+    ).toBe(`The site still offers ${VERSION}. Run the Site workflow on main and run this again.`);
   });
 
   it("refuses a feed of another version than the beta GitHub still lists", async () => {
@@ -1375,7 +1449,7 @@ describe("withdrawing", () => {
         ),
       ),
     ).toBe(
-      `The site offers 0.1.1-beta.20261118.1, not ${older}. Run the Site workflow and run this again.`,
+      `The site offers 0.1.1-beta.20261118.1, not ${older}. Run the Site workflow on main and run this again.`,
     );
     expect(
       await stopped(() =>
@@ -1401,7 +1475,7 @@ describe("withdrawing", () => {
         ),
       ),
     ).toBe(
-      `The site offers ${older}, but not the feed.json of its release. Run the Site workflow and run this again.`,
+      `The site offers ${older}, but not the feed.json of its release. Run the Site workflow on main and run this again.`,
     );
   });
 

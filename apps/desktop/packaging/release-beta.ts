@@ -1126,6 +1126,8 @@ export async function publish(
       );
     console.log(`  ${file.name}: the public file matches.`);
   }
+  // Only now, with GitHub listing it public and every file as prepared.
+  dispatchSite(runner);
   // The feed as recorded and published, not the staging file read again.
   const feed = plan.files.find((file) => file.name === FEED_NAME)!;
   console.log(`Waiting for ${BETA_FEED_URL} to offer ${version}…`);
@@ -1138,9 +1140,32 @@ export async function publish(
   );
   if (!seen.done)
     stop(
-      `The site does not serve the new feed yet (${describe(seen.reading)}). Run the Site workflow, then check ${BETA_FEED_URL}.`,
+      `The site does not serve the new feed yet (${describe(seen.reading)}). Look at the Site workflow's run on main, then check ${BETA_FEED_URL}.`,
     );
   console.log(`The Beta feed offers ${version}.`);
+}
+
+/**
+ * Starts the Site workflow on main, the only ref its github-pages environment
+ * deploys from (.github/workflows/site.yml says why). Release events do not
+ * start it, so the commands that change a release do, once GitHub lists the
+ * release's new state.
+ */
+export function dispatchSite(runner: Run): void {
+  const started = runner("gh", [
+    "workflow",
+    "run",
+    "site.yml",
+    "--repo",
+    REPOSITORY,
+    "--ref",
+    "main",
+  ]);
+  if (started.status !== 0)
+    stop(
+      `Could not start the Site workflow. Start it on main (gh workflow run site.yml --repo ${REPOSITORY} --ref main), then check ${BETA_FEED_URL}.`,
+    );
+  console.log("Started the Site workflow on main.");
 }
 
 function describe(reading: SiteReading): string {
@@ -1173,6 +1198,7 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
   console.log(
     `GitHub lists ${tag} as a draft. Its download addresses can still answer from caches for a while.`,
   );
+  dispatchSite(runner);
   // What the site should serve now, by the rule the Site workflow uses.
   const next = newestBeta(releases);
   console.log(
@@ -1208,14 +1234,14 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
   if (reading.kind === "feed")
     stop(
       reading.version === version
-        ? `The site still offers ${version}. Run the Site workflow and run this again.`
+        ? `The site still offers ${version}. Run the Site workflow on main and run this again.`
         : reading.version === expected
-          ? `The site offers ${expected}, but not the ${FEED_NAME} of its release. Run the Site workflow and run this again.`
-          : `The site offers ${reading.version}, not ${expected}. Run the Site workflow and run this again.`,
+          ? `The site offers ${expected}, but not the ${FEED_NAME} of its release. Run the Site workflow on main and run this again.`
+          : `The site offers ${reading.version}, not ${expected}. Run the Site workflow on main and run this again.`,
     );
   if (reading.kind === "absent")
     stop(
-      `The site serves no Beta feed, though GitHub lists ${next!.tag_name} as published. Run the Site workflow.`,
+      `The site serves no Beta feed, though GitHub lists ${next!.tag_name} as published. Run the Site workflow on main.`,
     );
   stop(`Could not tell what the site serves (${reading.reason}). Check ${BETA_FEED_URL} yourself.`);
 }
