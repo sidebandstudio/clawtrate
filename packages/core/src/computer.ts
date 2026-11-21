@@ -905,9 +905,14 @@ export class ComputerViews {
       for (const tab of kept) if (tab.targetId === before.targetId) tab.lease = null;
     }
     this.patch(viewer, (p) => {
-      const shown =
-        p.shown && kept.some((tab) => tab.targetId === p.shown)
-          ? p.shown
+      const listed = (targetId: string | null | undefined) =>
+        !!targetId && kept.some((tab) => tab.targetId === targetId);
+      const watched = p.view && p.view.status !== "ended" ? p.view.targetId : null;
+      // The tab Take asks for is the one in the picture: an open view's tab is shown again first.
+      const shown = listed(p.shown)
+        ? p.shown
+        : listed(watched)
+          ? watched
           : (kept.find((tab) => !tab.url.startsWith("chrome://"))?.targetId ??
             kept[0]?.targetId ??
             null);

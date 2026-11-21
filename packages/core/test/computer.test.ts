@@ -1076,6 +1076,31 @@ describe("handing back (F-145, section 18)", () => {
   });
 });
 
+describe("the tab shown and the tab watched", () => {
+  it("F-142: a lookup that lists nothing while a tab is watched leaves Take on the watched tab once the list is back", async () => {
+    let answer: unknown = tabsAnswer(null, [
+      { targetId: OTHER, url: "http://127.0.0.1:1/other", title: "Other", lease: null },
+    ]);
+    const h = harness({ "clawtrate-computer.tabs": () => answer });
+    await ready(h);
+    h.views.choose(h.viewer, OTHER);
+    await h.views.watch(h.viewer);
+    h.streams.at(-1)!.frame();
+    expect(h.pane().view).toMatchObject({ targetId: OTHER, status: "live" });
+    const listed = answer;
+    answer = { ...tabsAnswer(), browser: "not-running", reason: "discovery_timeout", tabs: [] };
+    await h.views.readTabs(h.viewer);
+    answer = listed;
+    await h.views.readTabs(h.viewer);
+    expect(h.pane().shown).toBe(OTHER);
+    await h.views.take(h.viewer);
+    expect(h.calls("clawtrate-computer.control.take").at(-1)).toEqual({
+      sessionKey: KEY,
+      targetId: OTHER,
+    });
+  });
+});
+
 describe("leaving (section 17, How a view ends; section 18, Leaving while in control)", () => {
   it("leaving gives control back first, then ends the view at once", async () => {
     const h = harness();

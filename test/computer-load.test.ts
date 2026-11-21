@@ -19,6 +19,6 @@ const load = (file: string) =>
 
 describe("the Computer engine loads on its own", () => {
   it("computer.ts first, before the state's schema", () => {
-    expect(() => load("../src/computer.ts")).not.toThrow();
+    expect(() => load("../packages/core/src/computer.ts")).not.toThrow();
   });
 });
