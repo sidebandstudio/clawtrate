@@ -2,6 +2,7 @@
 // implements the same ClawtrateBridge the desktop and web hosts do, holds
 // everything in memory, and never opens a socket or makes a request.
 
+import { holdableTimers } from "./timers.ts";
 import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
@@ -557,12 +558,8 @@ export function createFixtureBridge(
   const sent: BridgeCommand[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
-  let held: Array<() => void> | null = null;
-  /** A delayed answer, run after `ms`, or once released if a test holds answers then. */
-  const deferred = (run: () => void, ms: number) => {
-    if (held) held.push(run);
-    else setTimeout(() => (held ? held.push(run) : run()), ms);
-  };
+  const timers = holdableTimers();
+  const { deferred } = timers;
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
     deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
@@ -909,13 +906,7 @@ export function createFixtureBridge(
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
     raceArchive: () => void (railRace.archive = true),
-    hold() {
-      held ??= [];
-    },
-    release() {
-      const waiting = held ?? [];
-      held = null;
-      for (const apply of waiting) apply();
-    },
+    hold: timers.hold,
+    release: timers.release,
   };
 }

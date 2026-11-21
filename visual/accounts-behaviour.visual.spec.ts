@@ -2,6 +2,7 @@
 // 19): the "+" menu and ⌘N, focus in and out of the dialogs, the radio groups'
 // one tab stop and arrows, the selects, Escape that belongs to the innermost
 // thing, the access bar for admin, and what a read-only connection shows.
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
@@ -178,6 +179,42 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
+});
+
+test("F-472: an approval released before the request turns pending stays approved", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&admin=grant`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  const bar = page.getByTestId("admin-bar");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
+  await bar.getByRole("button", { name: "Request admin access" }).click();
+  // Released before the fixture's 400 ms pending step: the approval comes first.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
+  await expect(bar).toContainText("Admin access granted.");
+  // The pending step's timer then fires, and must not take the approval back.
+  await page.clock.runFor(1_500);
+  const status = await page.evaluate(() => {
+    let value = "";
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(f: (s: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      value = state.connection.upgrade.status;
+      return state;
+    });
+    return value;
+  });
+  expect(status).toBe("approved");
+  await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();
 });
 
 test("F-472: below admin the rows show but cannot be chosen, and the access bar takes Create's place; what was chosen survives the request", async ({
