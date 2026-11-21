@@ -606,7 +606,8 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     );
     expect(updates.runningVersion).toBe(newer);
 
-    // The same device key, saved connection and device token.
+    // The same device key and saved connection, and a device token still saved for each
+    // gateway: the gateway may reissue the token on connect, so its value is not compared.
     expect(readFileSync(join(gateway, "device-key.pem")).equals(key)).toBe(true);
     const after = state();
     expect(after.connection).toBe(before.connection);
