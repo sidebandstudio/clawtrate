@@ -1097,7 +1097,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     h.ctx.stopTask = vi.fn(async () => ({ runIds: ["run-1"], aborted: null }));
     await ready(h);
     await h.views.stopTask(h.viewer);
-    expect(h.ctx.stopTask).toHaveBeenCalledWith(KEY);
+    expect(h.ctx.stopTask).toHaveBeenCalledWith(KEY, null);
     expect(h.pane().stop).toEqual({
       sending: false,
       runIds: ["run-1"],

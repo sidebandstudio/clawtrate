@@ -485,8 +485,11 @@ export type ComputerContext = {
   /** How a question of the task ended, if it did. */
   questionStatus(key: string, questionId: string): QuestionCard["status"] | null;
   answer(key: string, questionId: string, answers: Record<string, QuestionAnswer[]>): Promise<void>;
-  /** The conversation's Stop for the task's runs; which runs it asked to stop, or the abort's answer. */
-  stopTask(key: string): Promise<StopAnswer>;
+  /**
+   * The conversation's Stop for the task's runs; which runs it asked to stop, or the abort's
+   * answer. Asked for `owner`: withdrawn with it while it waits for write access.
+   */
+  stopTask(key: string, owner: object | null): Promise<StopAnswer>;
   log(level: "debug" | "info" | "warn" | "error", message: string): void;
 };
 
@@ -1870,7 +1873,7 @@ export class ComputerViews {
    * "Stop <Bot> in this task", after its confirmation: the conversation's Stop. Only what the
    * gateway answers is kept; whether the runs stopped is read from the runs themselves.
    */
-  async stopTask(viewer: string): Promise<void> {
+  async stopTask(viewer: string, owner: object | null = null): Promise<void> {
     const pane = this.pane(viewer);
     if (!pane) return;
     const key = pane.key;
@@ -1878,7 +1881,7 @@ export class ComputerViews {
     this.patch(viewer, (p) => ({ ...p, stop: sent }));
     let stop: ComputerStop;
     try {
-      const answer = await this.ctx.stopTask(key);
+      const answer = await this.ctx.stopTask(key, owner);
       stop = {
         sending: false,
         runIds: answer.runIds.slice(0, MAX_STOPPED_RUNS),

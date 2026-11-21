@@ -1041,7 +1041,7 @@ export class ClawtrateClient {
     questionStatus: (key, id) =>
       this.state.transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
     answer: (key, id, answers) => this.answerQuestion(key, id, answers),
-    stopTask: (key) => this.stopTask(key),
+    stopTask: (key, owner) => this.stopTask(key, owner),
     log: (level, message) => this.log(level, message),
   });
 
@@ -6290,20 +6290,26 @@ export class ClawtrateClient {
     }
   }
 
-  /** "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going. */
-  private async stopTask(key: string): Promise<StopAnswer> {
+  /**
+   * "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going,
+   * each by its own id as archive and delete stop them, even when none is established as the
+   * current one. Asked for `owner`, it is withdrawn with it while it waits for write access.
+   */
+  private async stopTask(key: string, owner: object | null): Promise<StopAnswer> {
     const runs = (this.state.transcripts[key]?.runs ?? []).filter(
       (run) => run.state === "running" || run.state === "waiting",
     );
     if (runs.length === 0) {
-      await this.ensureScope(WRITE_SCOPE, null);
+      await this.ensureScope(WRITE_SCOPE, owner);
+      this.checkNotWithdrawn(owner);
       const result = asRecord(await this.request("chat.abort", { sessionKey: key }));
       // As the gateway said it: `aborted` true or false, or null when its answer didn't say.
       return { runIds: [], aborted: typeof result?.aborted === "boolean" ? result.aborted : null };
     }
     // Each as the conversation's Stop: stopping until the run's end, back to running with the
     // gateway's refusal (`revertStop`).
-    for (const run of runs) await this.stopRun(key, run.id);
+    for (const run of runs)
+      await this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true });
     return { runIds: runs.map((run) => run.id), aborted: null };
   }
 
@@ -6356,8 +6362,8 @@ export class ClawtrateClient {
   computerDismiss(viewer: string): void {
     this.computer.dismiss(viewer);
   }
-  computerStopTask(viewer: string): Promise<void> {
-    return this.computer.stopTask(viewer);
+  computerStopTask(viewer: string, options: { owner?: object } = {}): Promise<void> {
+    return this.computer.stopTask(viewer, options.owner ?? null);
   }
 
   /** Where the task's bot runs its commands, and the named nodes' records, read now. */

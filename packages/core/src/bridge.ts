@@ -1918,7 +1918,7 @@ class ViewerSession implements BridgeSession {
       case "computerDismiss":
         return client.computerDismiss(this.viewer);
       case "computerStopTask":
-        return client.computerStopTask(this.viewer);
+        return client.computerStopTask(this.viewer, { owner });
       case "readMachine":
         return client.readMachine(this.mine(command.key), command.nodes, command.probe);
       case "readUsage":
