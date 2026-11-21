@@ -6,14 +6,22 @@
 // running; Connect pairs read-only through the setup controller and the
 // gateway grants exactly `operator.read`; then OpenClaw's own uninstall and
 // the program folder's removal, and nothing of the install is left. A decoy
-// default OpenClaw home, made by the workflow before this runs, must come
-// through unchanged.
+// default OpenClaw home, made after the first look and before the install,
+// must come through unchanged.
 //
 // Run: node apps/desktop/test/hosted/real-install.ts
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { connect } from "node:net";
 import { userInfo } from "node:os";
@@ -69,11 +77,6 @@ function tree(dir: string): string {
   return lines.join("\n");
 }
 const decoy = join(home, ".openclaw");
-const decoyBefore = tree(decoy);
-check(
-  existsSync(join(decoy, "keep-me")),
-  "the workflow's decoy default OpenClaw home is there before",
-);
 
 const place = computerPlace({ home, appData, platform, target, env: process.env });
 const at = layout(place, PINS);
@@ -128,6 +131,11 @@ check(
   setup.current.look?.outcome === "not-found",
   `the look finds nothing first (${setup.current.look?.outcome})`,
 );
+// The decoy stands for a person's own default OpenClaw, made after the look (with it, the look
+// rightly says "set up, program missing" and offers no install) and before the install.
+mkdirSync(decoy);
+writeFileSync(join(decoy, "keep-me"), "the person's own\n");
+const decoyBefore = tree(decoy);
 await setup.install();
 say(`install and look took ${Math.round((Date.now() - started) / 1000)} s`);
 const failure = steps.length ? setup.current.install?.failure : null;

@@ -45,12 +45,10 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: A decoy default OpenClaw home
+      - name: Nothing of OpenClaw's is there before
         run: |
           test ! -e "$HOME/.openclaw"
           test ! -e "$HOME/.openclaw-clawtrate"
-          mkdir -p "$HOME/.openclaw"
-          printf 'the person'"'"'s own\n' > "$HOME/.openclaw/keep-me"
       - name: User services on Linux
         if: runner.os == 'Linux'
         run: |
