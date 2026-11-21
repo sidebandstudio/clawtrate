@@ -918,6 +918,15 @@ h3 {
 .faq-a:not([hidden]) p {
   animation: arrive 260ms var(--ease) both;
 }
+/* Without the script, each answer shows under its question. */
+:root:not(.js) .faq-q,
+:root:not(.js) .faq-q li {
+  display: block;
+}
+:root:not(.js) .faq-a {
+  display: block;
+  margin: 4px 0 12px;
+}
 
 /* The close: the brand's deep green, with the bots along its foot. */
 .close {
