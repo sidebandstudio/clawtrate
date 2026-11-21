@@ -1024,37 +1024,45 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
   await service.download(id);
   expect(installer.launch).not.toHaveBeenCalled();
   const pending = service.restart(id);
-  expect(service.get().state.kind).toBe("preparing");
-  expect((await service.restart(id)).outcome).toBe("busy");
-  await Promise.race([entered.promise, pending]);
-  expect(launched?.file).toMatchObject({
-    track: "stable",
-    version: "1.1.0",
-    sha512: fixture.sha512,
-    size: fixture.body.length,
-  });
-  expect(JSON.parse(launched!.attempt!)).toMatchObject({
-    target: "1.1.0",
-    from: "1.0.0",
-    track: "stable",
-    phase: "handoff",
-    time: expect.stringMatching(/Z$/),
-  });
-  expect(service.get().state.kind).toBe("handing-off");
-  for (const command of [
-    service.check("stable", service.get().revision),
-    service.chooseTrack("nightly"),
-    service.download(id),
-    service.restart(id),
-  ])
-    expect((await command).outcome).toBe("busy");
-  expect(quitAfterLaunch).not.toHaveBeenCalled();
-  resume.resolve();
-  expect((await pending).snapshot.lastAttempt).toBeNull();
-  expect(quitAfterLaunch).toHaveBeenCalledTimes(1);
-  expect(installer.launch).toHaveBeenCalledTimes(1);
-  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
-  service.shutdown();
+  try {
+    expect(service.get().state.kind).toBe("preparing");
+    expect((await service.restart(id)).outcome).toBe("busy");
+    await Promise.race([entered.promise, pending]);
+    expect(launched?.file).toMatchObject({
+      track: "stable",
+      version: "1.1.0",
+      sha512: fixture.sha512,
+      size: fixture.body.length,
+    });
+    expect(JSON.parse(launched!.attempt!)).toMatchObject({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      phase: "handoff",
+      time: expect.stringMatching(/Z$/),
+    });
+    expect(service.get().state.kind).toBe("handing-off");
+    for (const command of [
+      service.check("stable", service.get().revision),
+      service.chooseTrack("nightly"),
+      service.download(id),
+      service.restart(id),
+    ])
+      expect((await command).outcome).toBe("busy");
+    expect(quitAfterLaunch).not.toHaveBeenCalled();
+    resume.resolve();
+    expect((await pending).snapshot.lastAttempt).toBeNull();
+    expect(quitAfterLaunch).toHaveBeenCalledTimes(1);
+    expect(installer.launch).toHaveBeenCalledTimes(1);
+    expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+  } finally {
+    resume.resolve();
+    try {
+      await pending;
+    } finally {
+      service.shutdown();
+    }
+  }
   for (const [version, kind] of [
     ["1.1.0", "target-running"],
     ["1.0.0", "old-version-running"],
