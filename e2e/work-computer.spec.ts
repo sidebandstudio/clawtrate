@@ -311,11 +311,9 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
     await expect(page.getByRole("tab", { name: "Computer, in use" })).toBeVisible();
     await panel(page).getByRole("button", { name: "Open Pip's browser full window" }).click();
     await full(page).getByRole("button", { name: "Take control" }).click();
+    await expect(bar(page)).toContainText("Waiting for the gateway to confirm control…");
     await expect(bar(page)).toContainText(
-      "Waiting for Pip to finish what it's doing in the browser…",
-    );
-    await expect(bar(page)).toContainText(
-      /Pip is still acting in this browser\. Try again in a moment\.|Something Pip started in this browser hasn't finished yet/,
+      /Pip is still acting in this browser\. Try again in a moment\.|A page in Pip's browser is still loading\.|Can't see whether Pip's browser has settled/,
       { timeout: 30_000 },
     );
     await expect(bar(page)).not.toContainText("You have control");
@@ -363,7 +361,7 @@ test("F-142 F-145: a take is refused while the bot acts and granted once its wor
   }
 });
 
-test("F-144 F-145: a real question while Pip's browser can be taken: its card, Waiting for you and Show the question; giving control back alone leaves it pending; the banner's Take control is granted, the bar's answer goes once control is given back, and Pip carries on", async ({
+test("F-144 F-145: a real question while Pip's browser can be taken: its card, Waiting for you in the conversation and both rows, and Show the question on its own card; giving control back alone leaves it pending; the banner's Take control is granted, the bar's answer goes once control is given back, and Pip carries on", async ({
   browser,
 }) => {
   const label = "Computer question";
@@ -377,13 +375,37 @@ test("F-144 F-145: a real question while Pip's browser can be taken: its card, W
     const banner = panel(page).getByTestId("computer-banner");
     await expect(banner).toContainText("Pip is waiting for you", { timeout: 60_000 });
     await expect(banner).toContainText("Which route should I plan for Saturday?");
-    // The conversation shows the question's card, and the task says it waits for you.
-    const card = page.locator(".transcript [data-testid=question-card]").last();
+    // The conversation shows the question's card; Pip's row and the task's row say it waits.
+    const card = page
+      .locator(".transcript [data-testid=question-card]")
+      .filter({ hasText: "Which route should I plan for Saturday?" });
     await expect(card).toBeVisible();
     await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
-    // Show the question goes to its card.
+    await expect(botRow(page, "Pip").first().locator(".bot-preview")).toHaveText(
+      "Waiting for you: a question",
+      { timeout: 30_000 },
+    );
+    await expect(page.getByTestId("task").filter({ hasText: label }).first()).toHaveAccessibleName(
+      /, needs you$/,
+    );
+    // Show the question brings that question's card into view and focuses it, scrolled away or not.
+    await page.locator(".transcript").evaluate((element: HTMLElement) => {
+      let node: HTMLElement | null = element;
+      while (
+        node &&
+        !(
+          node.scrollHeight > node.clientHeight &&
+          /auto|scroll/.test(getComputedStyle(node).overflowY)
+        )
+      )
+        node = node.parentElement;
+      if (node) node.scrollTop = 0;
+    });
     await banner.getByRole("button", { name: "Show the question" }).click();
     await expect(card).toBeInViewport();
+    await expect
+      .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
     await showComputer(page);
     // Giving control back alone leaves the question unanswered.
     await banner.getByRole("button", { name: "Take control" }).click();
@@ -580,7 +602,7 @@ test("F-141: without the computer plugin the screen section says watching isn't 
       "Watching isn't set up on this gateway",
     );
     await expect(panel(page).getByTestId("computer-noplugin")).toContainText(
-      "Without it, nothing here gives Otto a browser of its own. By default, bots that use the browser share one profile, with its sign-ins.",
+      "On a gateway without it, bots that use the browser may share one default profile, with its sign-ins.",
     );
     await expect(panel(page).getByTestId("computer-machine")).toContainText(
       "Command approval target",
