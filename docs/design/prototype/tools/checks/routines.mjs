@@ -22,18 +22,19 @@ const check = (name, ok, extra = "") => {
 // Every request a page put on the wire, answered or not, collected as it closes, for the schema check at the end.
 const requests = [];
 const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
-  const p = await b.newPage({ viewport });
-  p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  const context = await b.newContext({ viewport });
   // The page's timers run on a paused clock that each step moves on by the time it names, so a
-  // check sees the state that time leads to however slowly the machine runs.
-  await p.clock.install();
-  await p.clock.pauseAt(Date.now() + 1000);
+  // check sees the state that time leads to however slowly the machine runs. The pause is set
+  // before the context has a page, so it has no deadline to miss.
+  await context.clock.install();
+  await context.clock.pauseAt(Date.now());
+  const p = await context.newPage();
+  p.on("pageerror", (e) => out.push("PAGEERROR " + e));
   await p.goto(base + (query ? "&" + query : ""));
   await p.clock.runFor(150);
-  const close = p.close.bind(p);
   p.close = async () => {
     for (const r of await p.evaluate(() => window.routines?.dispatched ?? [])) requests.push({ query, ...r });
-    return close();
+    await context.close();
   };
   return p;
 };
@@ -42,11 +43,6 @@ const has = (p, sel) => p.evaluate((s) => !!document.querySelector(s), sel);
 const count = (p, sel) => p.evaluate((s) => document.querySelectorAll(s).length, sel);
 const label = (p, sel) => p.evaluate((s) => document.querySelector(s)?.getAttribute("aria-label") || "", sel);
 const live = (p) => p.clock.runFor(80).then(() => text(p, "#r-announce"));
-// What the live region says once a promise the page awaits in real time, such as the clipboard's, has settled.
-const settled = async (p) => {
-  for (let i = 0; i < 100 && !(await text(p, "#r-announce")); i++) await p.clock.runFor(80);
-  return text(p, "#r-announce");
-};
 
 process.on("uncaughtException", (e) => {
   console.log(out.join("\n"));
@@ -393,8 +389,17 @@ await p.close();
 p = await open("view=routine&routine=digest&hooks=on");
 check("F-349 gateway hooks on: POST to with copy, key kept on the gateway", (await text(p, '[data-testid="hooks"] summary')) === "Gateway webhooks" && (await text(p, '[data-testid="hooks"]')).includes("/hooks/agent") && (await text(p, '[data-testid="hooks"]')).includes("Kept on the gateway") && (await has(p, '[data-testid="hooks"] .copy')));
 await p.click('[data-testid="hooks"] summary');
+// The clipboard answers in real time: wait for its answer, then give the page its usual 80 ms.
+await p.evaluate(() => {
+  const clipboard = navigator.clipboard;
+  window.hookCopySettled = !clipboard;
+  if (!clipboard) return;
+  const writeText = clipboard.writeText.bind(clipboard);
+  clipboard.writeText = (value) => writeText(value).finally(() => { window.hookCopySettled = true; });
+});
 await p.click('[data-testid="hooks"] .copy');
-check("F-349 copy: copied, or selected and said so when the clipboard refuses", /^(Copied hook address|Selected\. Press ⌘C to copy the hook address\.)$/.test(await settled(p)));
+await p.waitForFunction(() => window.hookCopySettled, undefined, { polling: 25, timeout: 5000 });
+check("F-349 copy: copied, or selected and said so when the clipboard refuses", /^(Copied hook address|Selected\. Press ⌘C to copy the hook address\.)$/.test(await live(p)));
 await p.close();
 
 // Delete

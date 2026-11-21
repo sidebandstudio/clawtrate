@@ -8,15 +8,18 @@ const b = await chromium.launch();
 const out = [];
 const check = (name, ok, extra = "") => out.push(`${ok ? "ok  " : "FAIL"} ${name}${extra ? ` ${extra}` : ""}`);
 // Part 3 sets this: its pages' timers run on a paused clock that each step moves on by the time it
-// names, so a check sees the state that time leads to however slowly the machine runs.
+// names, so a check sees the state that time leads to however slowly the machine runs. The pause
+// is set before the context has a page, so it has no deadline to miss.
 let paused = false;
 const open = async (query = "", viewport = { width: 1440, height: 900 }, options = {}) => {
-  const p = await b.newPage({ viewport, acceptDownloads: true, ...options });
-  p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  const context = await b.newContext({ viewport, acceptDownloads: true, ...options });
   if (paused) {
-    await p.clock.install();
-    await p.clock.pauseAt(Date.now() + 1000);
+    await context.clock.install();
+    await context.clock.pauseAt(Date.now());
   }
+  const p = await context.newPage();
+  p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  p.close = () => context.close();
   await p.goto(base + query);
   await (paused ? p.clock.runFor(120) : p.waitForTimeout(120));
   return p;
@@ -551,8 +554,9 @@ check("M7 until the release is confirmed, the bar neither says Watching nor offe
 await p.clock.runFor(500);
 check("M7 once the release is confirmed, the answer is sent", await q(p, () => document.querySelector(".control-bar").textContent === "Sending your answer…" && window.CT.work.computer.control === "answering"));
 await p.clock.runFor(500);
-check("F-145 then the question is answered and control is back with the bot", await q(p, () =>
-  window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state !== "pending" &&
+check("F-145 then the question is answered with the answer chosen, I'm done, and control is back with the bot", await q(p, () =>
+  window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state === "answered" &&
+  [...document.querySelectorAll("#q-library .answer > span:nth-child(2)")].map((x) => x.textContent).join() === "I'm done" &&
   document.querySelector(".control-bar").textContent === "Answer sent. Juniper can carry on." &&
   [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
 await p.close();
