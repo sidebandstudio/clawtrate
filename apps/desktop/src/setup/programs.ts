@@ -55,6 +55,15 @@ const ENV_KEYS = new Set([
   "OPENCLAW_CONFIG_PATH",
 ]);
 const SAFE_ENV_VALUE = /^[A-Za-z0-9._:/@+=, -]*$/;
+/**
+ * On Linux, a user service is reached through the session's bus, and the look
+ * that follows an install asks the profile's systemd unit through it: only
+ * these two, each of the one shape a session gives it.
+ */
+const SESSION_ENV: Record<string, RegExp> = {
+  XDG_RUNTIME_DIR: /^\/[A-Za-z0-9._/-]+$/,
+  DBUS_SESSION_BUS_ADDRESS: /^unix:path=\/[A-Za-z0-9._/-]+(,guid=[0-9a-f]{32})?$/,
+};
 
 const profileName = (name: string | undefined) =>
   name === "clawtrate" ||
@@ -82,7 +91,10 @@ export function checkRequest(request: ProgramRequest): void {
     throw new Error("refusing a program that is not a fixed absolute path");
   if (!isLookCommand(request.args)) throw new Error("refusing a command the look doesn't run");
   for (const [key, value] of Object.entries(request.env)) {
-    if (!ENV_KEYS.has(key) || !SAFE_ENV_VALUE.test(value) || value.length > 4096)
+    const allowed = Object.hasOwn(SESSION_ENV, key)
+      ? SESSION_ENV[key]!.test(value)
+      : ENV_KEYS.has(key) && SAFE_ENV_VALUE.test(value);
+    if (!allowed || value.length > 4096)
       throw new Error("refusing an environment variable the look doesn't pass");
   }
   if (!isAbsolute(request.cwd))

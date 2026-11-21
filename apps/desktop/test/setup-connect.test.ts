@@ -605,6 +605,29 @@ describe("the programs setup starts", () => {
     }
   });
 
+  it("F-505: on Linux the session's bus passes, each in the one shape a session gives it, and nothing else of the session", () => {
+    const at = (env: Record<string, string>) => () =>
+      checkRequest({ ...base, args: ["--profile", "clawtrate", "--version"], env });
+    expect(
+      at({
+        XDG_RUNTIME_DIR: "/run/user/1001",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus",
+      }),
+    ).not.toThrow();
+    expect(
+      at({ DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/1001/bus,guid=${"0a".repeat(16)}` }),
+    ).not.toThrow();
+    for (const env of [
+      { XDG_RUNTIME_DIR: "run/user/1001" },
+      { XDG_RUNTIME_DIR: "/run/user/1001:/tmp" },
+      { DBUS_SESSION_BUS_ADDRESS: "tcp:host=192.0.2.1,port=1" },
+      { DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus,unix:abstract=x" },
+      { DISPLAY: ":0" },
+      { toString: "/run/user/1001" },
+    ])
+      expect(at(env), JSON.stringify(env)).toThrow(/environment variable/);
+  });
+
   it("F-494: passes only the look's variables, and needs a working folder of its own", () => {
     expect(() => checkRequest({ ...base, args: ["--version"], env: { TOKEN: "x" } })).toThrow();
     expect(() => checkRequest({ ...base, args: ["--version"], env: { HOME: "a'b" } })).toThrow();

@@ -19,7 +19,7 @@ import {
   type Confirmation,
 } from "../src/setup/controller.ts";
 import type { InstallOutcome, Installer } from "../src/setup/install.ts";
-import type { ProgramRequest } from "../src/setup/programs.ts";
+import { checkRequest, type ProgramRequest } from "../src/setup/programs.ts";
 import { productionWorld } from "../src/setup/world.ts";
 import { authJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 
@@ -65,6 +65,9 @@ function harness(
     owned?: boolean;
     /** A proven early leftover's program, which the look is also given as its first place. */
     leftover?: string | null;
+    /** The host's own check of every program the look starts, as the real runner makes it. */
+    checked?: boolean;
+    platform?: "darwin" | "linux";
   } = {},
 ): Fake {
   const client = new ClawtrateClient(testHost(new FakeGateway(), memoryStorage()));
@@ -85,7 +88,7 @@ function harness(
   const home = join(dir, "home");
   const program = join(dir, "openclaw", "bin", "openclaw");
   const world = {
-    ...productionWorld({ home, appData: dir, platform: "darwin" }),
+    ...productionWorld({ home, appData: dir, platform: options.platform ?? "darwin" }),
     candidates: [
       ...(options.leftover ? [options.leftover] : []),
       join(home, ".openclaw/bin/openclaw"),
@@ -98,6 +101,7 @@ function harness(
       world,
       run: async (request) => {
         asked.push(request);
+        if (options.checked) checkRequest(request);
         const args = request.args.join(" ");
         const stdout = args.endsWith("--version")
           ? VERSION_LINE
@@ -269,6 +273,33 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
       expect(request.args.slice(0, 2)).toEqual(["--profile", "clawtrate"]);
       expect(request.args).not.toContain("--deep");
     }
+  });
+
+  it("F-505: on Linux the look of the gateway just set up passes the host's own program check with the session's bus, and finds it running", async () => {
+    const session = {
+      XDG_RUNTIME_DIR: "/run/user/1001",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus",
+    };
+    const fake = harness({
+      checked: true,
+      platform: "linux",
+      outcome: {
+        ok: true,
+        port: PORT,
+        program: join(dir, "openclaw", "bin", "openclaw"),
+        env: session,
+      },
+    });
+    await notFound(fake);
+    await fake.setup.install();
+    expect(fake.setup.current.look).toMatchObject({
+      outcome: "running",
+      profile: "clawtrate",
+      port: PORT,
+      managed: true,
+    });
+    // The session's bus reached every command of that look.
+    for (const request of fake.asked) expect(request.env).toMatchObject(session);
   });
 
   it("F-505: a gateway that answers on another port than the install's is not offered, and a clawtrate profile the records don't prove isn't said to be Clawtrate's", async () => {

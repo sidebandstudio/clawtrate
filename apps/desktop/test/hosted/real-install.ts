@@ -135,6 +135,15 @@ const makeInstaller = () =>
 // The host's own controller, its look's runner recorded.
 const programs = new ProgramRunner();
 const asked: ProgramRequest[] = [];
+/** What each look command was asked and gave, for the log when the look after the install can't tell. */
+type Seen = { args: string; env: string; exit?: number | null; stdout?: string; refused?: string };
+const ran: Seen[] = [];
+/** A program's output for the log: bounded, with anything shaped like a token or a code blanked. */
+const bounded = (text: string) =>
+  text
+    .replace(/"(token|password|bootstrapToken|secret|key)"\s*:\s*"[^"]*"/gi, '"$1":"<blanked>"')
+    .replace(/[A-Za-z0-9_-]{32,}/g, "<long value>")
+    .slice(0, 4000);
 const runtime = await startHostRuntime({
   kind: "desktop",
   displayName: "Clawtrate hosted install check",
@@ -147,9 +156,23 @@ const setup = new SetupController({
   client: runtime.client,
   open: async () => ({
     world: productionWorld({ home, appData, platform, lang: "C" }),
-    run: (request) => {
+    run: async (request) => {
       asked.push(request);
-      return programs.run(request);
+      const seen: Seen = {
+        args: request.args.join(" "),
+        env: Object.keys(request.env).sort().join(","),
+      };
+      ran.push(seen);
+      try {
+        const result = await programs.run(request);
+        seen.exit = result.exitCode;
+        seen.stdout = result.stdout;
+        return result;
+      } catch (error) {
+        // The host's own check refused it: its words are fixed.
+        seen.refused = error instanceof Error ? error.message : "refused";
+        throw error;
+      }
     },
     identify: processIdentity,
   }),
@@ -197,6 +220,7 @@ check(
   `the look finds nothing first (${setup.current.look?.outcome})`,
 );
 const fromInstall = asked.length;
+const ranFromInstall = ran.length;
 await setup.install();
 say(`install and look took ${Math.round((Date.now() - started) / 1000)} s`);
 const failure = steps.length ? setup.current.install?.failure : null;
@@ -351,6 +375,13 @@ check(
   `the look shows the clawtrate gateway running on its port (${JSON.stringify(look)})`,
 );
 check(look?.managed === true, "the running card says Clawtrate installed it");
+if (look?.outcome !== "running") {
+  // Exactly what the look after the install ran and what each command gave.
+  for (const seen of ran.slice(ranFromInstall))
+    say(
+      `look command: openclaw ${seen.args} (env ${seen.env}) ${seen.refused ? `refused: ${seen.refused}` : `exit ${seen.exit}\n${bounded(seen.stdout ?? "")}`}`,
+    );
+}
 if (look?.outcome === "running") {
   await setup.connect();
   const deadline = Date.now() + 60_000;
