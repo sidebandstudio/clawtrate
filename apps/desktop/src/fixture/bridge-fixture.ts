@@ -495,8 +495,10 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered; admin access granted) until `release`: a test that must see a state
-   * lasting only until the answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin or device access granted) until `release`: a test that must
+   * see a state lasting only until the answer comes holds it, looks, then lets the answer through.
+   * An answer asked for while held comes on release without waiting for a page timer, which a
+   * loaded machine can leave unfired for longer than a check waits.
    */
   hold(): void;
   release(): void;
@@ -557,11 +559,10 @@ export function createFixtureBridge(
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   let held: Array<() => void> | null = null;
   /** A delayed answer, run after `ms`, or once released if a test holds answers then. */
-  const deferred = (run: () => void, ms: number) =>
-    void setTimeout(() => {
-      if (held) held.push(run);
-      else run();
-    }, ms);
+  const deferred = (run: () => void, ms: number) => {
+    if (held) held.push(run);
+    else setTimeout(() => (held ? held.push(run) : run()), ms);
+  };
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
     deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
@@ -601,7 +602,7 @@ export function createFixtureBridge(
       sent.push(command);
       return usage;
     }
-    const machine = machineCommand(command, () => state, set);
+    const machine = machineCommand(command, () => state, set, deferred);
     if (machine) {
       sent.push(command);
       return machine;
