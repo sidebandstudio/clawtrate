@@ -2,22 +2,25 @@
 // panes: the list of sections, and the chosen one. Its Gateway pane shows the
 // connection as it is (address, state, this device, the scopes the gateway
 // granted) and offers Reconnect and Disconnect; Accounts lists the gateway's
-// accounts. A modal dialog: focus stays inside it, Escape closes it, and
-// focus returns to where it was.
+// accounts; Check-ins shows each bot's check-ins. A modal dialog: focus stays
+// inside it, Escape closes it, and focus returns to where it was.
 
 import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
   type Bot,
+  type CheckInsState,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
@@ -27,6 +30,7 @@ import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
+import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 
 /** The connection's state, as the Gateway pane names it. */
@@ -69,13 +73,15 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "updates";
+type Section =
+  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["checkins", "Check-ins"],
   ["updates", "Updates"],
 ];
 
@@ -142,10 +148,43 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
 
+function GatewayConnectionButton({ action }: { action: "retry" | "suspend" }) {
+  const send = useCommand();
+  const [failed, setFailed] = useState(false);
+  const reconnect = action === "retry";
+  const apply = () => {
+    setFailed(false);
+    void send({ type: action }).then(
+      () => setFailed(false),
+      () => setFailed(true),
+    );
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="button"
+        data-variant={reconnect ? "primary" : undefined}
+        onClick={apply}
+      >
+        {reconnect ? "Reconnect" : "Disconnect"}
+      </button>
+      {failed && (
+        <div className="form-error" role="alert">
+          {reconnect
+            ? "Could not reconnect to this gateway."
+            : "Could not disconnect from this gateway."}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function Settings({
   connection,
   info,
   accounts,
+  checkIns,
   bots,
   waitingMessages,
   initialUpdates,
@@ -155,6 +194,7 @@ export function Settings({
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
+  checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
   waitingMessages: string;
   initialUpdates: boolean;
@@ -171,12 +211,15 @@ export function Settings({
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
-    setSectionState(next);
-    setPane("section");
-    requestAnimationFrame(() =>
-      dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus(),
-    );
+    // Focus the mounted heading during navigation, before the next key can reach a control.
+    flushSync(() => {
+      setSectionState(next);
+      setPane("section");
+    });
+    dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
+  const { forget, failure: forgetProblem } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
   const canReconnect = state === "Offline" || state === "Disconnected";
@@ -281,6 +324,15 @@ export function Settings({
     announce,
     toNav,
   });
+  const checkInsSection = useCheckInsSection({
+    active: section === "checkins",
+    checkIns,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
@@ -350,35 +402,31 @@ export function Settings({
         </div>
       )}
       <div className="settings-actions">
-        {canReconnect && (
-          <button
-            type="button"
-            className="button"
-            data-variant="primary"
-            onClick={() => void send({ type: "retry" })}
-          >
-            Reconnect
-          </button>
-        )}
+        {canReconnect && <GatewayConnectionButton key={`retry:${gatewayUrl}`} action="retry" />}
         {canDisconnect && (
-          <button type="button" className="button" onClick={() => void send({ type: "suspend" })}>
-            Disconnect
-          </button>
+          <GatewayConnectionButton key={`suspend:${gatewayUrl}`} action="suspend" />
         )}
-        {connection.gatewayUrl && (
+        {gatewayUrl && (
           <button
             type="button"
             className="button"
             data-variant="quiet"
             onClick={() => {
-              onClose();
-              void send({ type: "disconnect" });
+              // Settings stays open until the gateway is forgotten, to say if it was not.
+              void forget(gatewayUrl).then((forgotten) => {
+                if (forgotten) onClose();
+              });
             }}
           >
             Use another gateway
           </button>
         )}
       </div>
+      {forgetProblem && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {forgetProblem}
+        </div>
+      )}
       {canRePair && (
         <div className="settings-repair-actions">
           <button
@@ -413,25 +461,27 @@ export function Settings({
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : section === "conversation"
-          ? {
-              title: "Conversation",
-              back: toNav,
-              body: <ConversationPane announce={announce} />,
-              foot: null,
-            }
-          : section === "usage"
-            ? usageSection
-            : section === "machines"
-              ? machinesSection
-              : section === "updates"
-                ? {
-                    title: "Updates",
-                    back: toNav,
-                    foot: null,
-                    body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
-                  }
-                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : section === "checkins"
+          ? checkInsSection
+          : section === "conversation"
+            ? {
+                title: "Conversation",
+                back: toNav,
+                body: <ConversationPane announce={announce} />,
+                foot: null,
+              }
+            : section === "usage"
+              ? usageSection
+              : section === "machines"
+                ? machinesSection
+                : section === "updates"
+                  ? {
+                      title: "Updates",
+                      back: toNav,
+                      foot: null,
+                      body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
+                    }
+                  : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

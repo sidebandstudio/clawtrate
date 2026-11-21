@@ -258,8 +258,10 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(page.locator(".updates-section").getByRole("status")).toHaveText(checking);
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
   rmSync(hold);
+  // Windows reads the file back in PowerShell, which first compiles its C# helper.
   await expect(line).toHaveText(
     "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Ready to install.",
+    { timeout: 30_000 },
   );
   await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   const nightly = page.getByRole("radio", { name: "Nightly" });

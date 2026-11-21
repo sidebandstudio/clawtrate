@@ -2,9 +2,11 @@
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
+import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
@@ -361,6 +363,11 @@ export type ClawtrateState = {
    */
   accounts: AccountsState;
   /**
+   * The gateway's scheduled jobs, check-in jobs left out (`routines.ts`): read
+   * on every connect from `cron.list` and kept current by the `cron` event.
+   */
+  routines: RoutinesState;
+  /**
    * A secondary alarm: roughly what the state takes, against the arithmetic
    * bound of `state-bounds.ts`. The bound holds by construction; `near` only
    * says it is being approached.
@@ -377,6 +384,12 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
+   * their own settings and the save under way. Absent until a screen reads them
+   * (`refreshCheckIns`).
+   */
+  checkIns?: CheckInsState;
   /**
    * Warning budgets as the gateway keeps them for this person, each one's count
    * for its current period, and the limits providers report (`usage.ts`).
@@ -468,6 +481,7 @@ export const initialState: ClawtrateState = {
   unroutedApprovalsOmitted: 0,
   creations: [],
   accounts: initialAccountsState,
+  routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
   usage: initialUsage,

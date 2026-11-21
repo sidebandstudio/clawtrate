@@ -68,7 +68,14 @@ export type DesktopUpdateState =
   | { kind: "checking" }
   | { kind: "nothing-newer" }
   | { kind: "offered"; version: string; releaseDate: string; offerId: string }
-  | { kind: "downloading"; version: string; received: number; expected: number }
+  | {
+      kind: "downloading";
+      version: string;
+      received: number;
+      expected: number;
+      /** After the last byte: moving the file into place, then reading it back to check it. */
+      step?: "moving" | "verifying";
+    }
   /** After writing, this file matched the feed’s size and SHA-512. Installing must check the exact bytes again. */
   | { kind: "verified"; offerId: string; version: string; size: number }
   | {
