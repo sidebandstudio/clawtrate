@@ -20,6 +20,17 @@ const sent = (page: Page) =>
       window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
   );
+// The fixture's answers are held and then let through by the check, not left to a page timer:
+// on a loaded machine the check can look too late, or the timer can stay unfired for longer than
+// the check waits (#248, #252).
+const hold = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
+const release = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
 /** The Work pane's live region, or Settings' when Settings is open. */
 const announcer = (page: Page) => page.getByTestId("work-announcer");
 const settingsAnnouncer = (page: Page) =>
@@ -55,9 +66,11 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
     "Choosing or creating a browser profile isn't offered here.",
   );
   await select.click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
-  // The fixture answers after 300 ms; nothing is announced before.
+  // Nothing is announced before the answer.
   await expect(announcer(page)).not.toHaveText(/Saved/);
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved and applied. Otto's command machine setting: the gateway's machine",
   );
@@ -81,9 +94,11 @@ test("F-046: a save that completes after Back still brings the Runs on row up to
   await openFixture(page, `${PANE}&access=admin`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
-  // Back before the fixture answers (300 ms).
+  // Back before the fixture answers.
   await page.getByRole("button", { name: "Back to settings" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-value")).toHaveText(
     "Command setting: the gateway's machine",
   );
@@ -95,7 +110,9 @@ test("F-046: a save the gateway hasn't applied is said as saved, not applied, an
   await openFixture(page, `${PANE}&access=admin&mwrite=pending`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved. The gateway doesn't report it applied yet. Otto's command machine setting: the gateway's machine",
   );
@@ -103,7 +120,9 @@ test("F-046: a save the gateway hasn't applied is said as saved, not applied, an
   await openFixture(page, `${PANE}&access=admin&mwrite=notapplied`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
     "Saved, but not applied. The gateway answered: config.patch persisted but was not applied to the active Gateway (failed)",
   );
@@ -164,11 +183,13 @@ test("F-274: a workspace form stays while its save is pending", async ({ page })
   await page.getByRole("button", { name: "Change…" }).click();
   const field = page.getByRole("textbox", { name: /path on the gateway's machine/ });
   await field.fill("/srv/clawtrate/workspaces/otto-3");
+  await hold(page);
   await page.getByRole("button", { name: "Save folder" }).click();
-  // The fixture answers after 300 ms: neither Escape nor Cancel ends the form before.
+  // Neither Escape nor Cancel ends the form before the answer.
   await expect(page.getByRole("button", { name: "Cancel" })).toBeDisabled();
   await field.press("Escape");
   await expect(field).toBeVisible();
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved. Otto's workspace: /srv/clawtrate/workspaces/otto-3",
   );
@@ -244,7 +265,9 @@ test("F-046: a refused save says what the gateway answered, and the setting show
   await openFixture(page, `${PANE}&access=admin&mwrite=refused`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
     /The gateway answered: invalid config/,
   );
@@ -404,18 +427,12 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   );
   // One explanation: the bar asks, the section says why.
   await expect(page.getByTestId("device-bar")).not.toContainText("needs device access");
-  // The owner's approval is held and then let through by the check, not left to a page timer: on a
-  // loaded machine that timer can stay unfired for longer than the check waits (#248).
-  await page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
-  );
+  await hold(page);
   await page.getByTestId("device-bar").getByRole("button", { name: "Request access" }).click();
   expect((await sent(page)).filter((c) => c.type === "requestAccess")).toEqual([
     { type: "requestAccess", tier: "pairing" },
   ]);
-  await page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
-  );
+  await release(page);
   const list = page.getByTestId("device-list");
   await expect(list).toBeVisible();
   await expect(list.locator("dt").first()).toHaveText("This device");

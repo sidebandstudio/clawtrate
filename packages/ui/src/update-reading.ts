@@ -6,6 +6,8 @@ import type {
 } from "@clawtrate/core";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
+import { downloadBlocked, handoffLocked, restartCapability } from "./update-restart.ts";
+
 type Reading = {
   snapshot: DesktopUpdateSnapshot | null;
   localChoice: UpdateTrack | null;
@@ -16,15 +18,18 @@ type Reading = {
 type Command =
   | { kind: "check"; track: UpdateTrack; revision: number }
   | { kind: "choose"; track: UpdateTrack }
+  | { kind: "restart"; offerId: string }
   | { kind: "download"; offerId: string };
 
 const unanswered = {
+  restart: "Couldn't get a reply to the restart request.",
   check: "Couldn't get a reply to the update check.",
   download: "Couldn't get a reply to the download request.",
   choose: "Couldn't get a reply to the track change.",
 };
 
 const failure = {
+  restart: "Couldn't start the restart.",
   check: "Couldn't start the update check.",
   download: "Couldn't start the download.",
   choose: "Couldn't change the update track.",
@@ -97,7 +102,17 @@ export class UpdateReading {
   };
   private async send(command: Command) {
     const { snapshot, localChoice } = this.value;
-    if (!snapshot || localChoice || snapshot.pendingTrack) return;
+    if (
+      !snapshot ||
+      localChoice ||
+      snapshot.pendingTrack ||
+      handoffLocked(snapshot.state) ||
+      this.work?.kind === "restart"
+    )
+      return;
+    if (command.kind === "download" && downloadBlocked(snapshot.install)) return;
+    if (command.kind === "restart" && restartCapability(snapshot)?.offerId !== command.offerId)
+      return;
     const choosing = command.kind === "choose";
     if (choosing) {
       if (command.track === snapshot.selectedTrack) return;
@@ -112,6 +127,9 @@ export class UpdateReading {
     try {
       let reply: DesktopUpdateReply;
       switch (command.kind) {
+        case "restart":
+          reply = await this.host.restart(command.offerId);
+          break;
         case "check":
           reply = await this.host.check(command.track, command.revision);
           break;
@@ -128,13 +146,15 @@ export class UpdateReading {
         (choosing ? this.choice : this.work) !== command ||
         current.revision !== reply.snapshot.revision ||
         current.pendingTrack ||
-        (current.state.kind !== "not-checked" && current.revision !== snapshot.revision)
+        (current.state.kind !== "not-checked" &&
+          current.revision !== snapshot.revision &&
+          !(command.kind === "restart" && restartCapability(current)?.offerId === command.offerId))
       )
         return;
       if (reply.outcome === "stale" || reply.outcome === "superseded") {
         this.set({
           message:
-            command.kind === "download"
+            command.kind === "download" || command.kind === "restart"
               ? "This offer is no longer current."
               : command.kind === "choose"
                 ? "This update track choice is no longer current."
@@ -142,7 +162,9 @@ export class UpdateReading {
                   ? "The update track changed. Check the selected source again."
                   : "The update result changed. Review it before checking again.",
         });
-      } else if (reply.outcome === "invalid") this.set({ message: failure[command.kind] });
+      } else if (reply.outcome === "busy" && command.kind === "restart")
+        this.set({ message: "Another update action is in progress." });
+      else if (reply.outcome === "invalid") this.set({ message: failure[command.kind] });
     } catch {
       if (
         (choosing ? this.choice : this.work) === command &&
@@ -161,6 +183,7 @@ export class UpdateReading {
   }
   check = (track: UpdateTrack, revision: number) => this.send({ kind: "check", track, revision });
   chooseTrack = (track: UpdateTrack) => this.send({ kind: "choose", track });
+  restart = (offerId: string) => this.send({ kind: "restart", offerId });
   download = (offerId: string) => this.send({ kind: "download", offerId });
 }
 
@@ -174,6 +197,7 @@ export function useDesktopUpdateSnapshot(host: DesktopUpdates) {
     retryRead: store.retryRead,
     check: store.check,
     download: store.download,
+    restart: store.restart,
     chooseTrack: store.chooseTrack,
   };
 }
