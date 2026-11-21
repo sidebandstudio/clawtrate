@@ -482,8 +482,8 @@ export function createComputer(api, options = {}) {
       }
     } catch (error) {
       if (error === STALE) return "stale";
-      // A command not answered, with no load or download seen: the proof failed, nothing more.
-      return cdp.closed ? "lost" : "unproved";
+      // A command not answered: a load or download seen says so; with none, the proof failed.
+      return cdp.closed ? "lost" : (watch.unresolved() ?? "unproved");
     }
   }
 

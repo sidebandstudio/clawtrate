@@ -305,6 +305,21 @@ describe("what the plugin can see in the bot's browser, a take does not grant ov
     await h.stop();
   });
 
+  it("a stop that isn't answered while another tab is loading says the browser is loading, not that it isn't watched", async () => {
+    const h = load({
+      quietWindowMs: 60,
+      quietTimeoutMs: 1500,
+      timeouts: { discoveryMs: 300, connectMs: 300, commandMs: 200 },
+    });
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SECOND)]);
+    await watched(h);
+    h.browser.tabEvent(ATLAS, SECOND, "Page.frameStartedLoading", { frameId: "f2" });
+    h.browser.stalledMethods.add("Page.stopLoading");
+    const refused = await h.call("control.take", tab);
+    expect(refused.payload).toMatchObject({ state: "busy", cause: "browser-not-quiet" });
+    await h.stop();
+  });
+
   it("refuses when the plugin cannot watch the bot's browser", async () => {
     const h = load();
     h.browser.noBrowserEndpoint = true;
