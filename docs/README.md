@@ -47,6 +47,8 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Search](research/search.md): what the gateway's message search matches, its order and limits, what a narrower search finds, its cost, and the file and routine lists, from OpenClaw's source and a development instance.
 - `research/search/`: the probe behind the search note.
+- [Steering and Stop](research/steer-stop.md): what the gateway records about a message sent during a run, how a held steer is withdrawn, and what Stop reaches, from OpenClaw's source and a development instance.
+- `research/steer-stop/`: the probe behind the steering and Stop note.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
