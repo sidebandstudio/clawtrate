@@ -6,7 +6,7 @@ How to run Clawtrate from a checkout. [CONTRIBUTING.md](../../CONTRIBUTING.md) c
 - [Testing](testing.md): the checks, what each one covers, the fixture mode and the visual tests.
 - [The SSH transport's tests](ssh.md): the tests of "Another computer" over SSH, against an `sshd` of their own.
 - [Packaging](packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
-- [Desktop release candidates](releases.md) covers stable and nightly builds, signing checks, publication and withdrawal.
+- [Desktop releases](releases.md) covers cutting, publishing and withdrawing a Mac beta, release candidates for Stable and Beta, signing checks and the owner's signed trial.
 
 ## Setup
 

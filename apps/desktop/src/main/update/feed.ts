@@ -3,7 +3,13 @@
 // Only the checked values leave this file; any other field is ignored.
 
 import type { UpdateTrack } from "@clawtrate/core";
-import { readable, type LoopbackHttpForTests } from "./address.ts";
+import {
+  GITHUB_RELEASE_ASSETS,
+  isReleaseDownload,
+  readable,
+  type LoopbackHttpForTests,
+  type ReleaseAssets,
+} from "./address.ts";
 import { parseVersion, versionTrack, type Version } from "./version.ts";
 
 export const FEED_FORMAT = 1;
@@ -57,8 +63,9 @@ export function parseReleaseDate(value: unknown): string | null {
 }
 
 /**
- * Checks a feed's text. The file for `key` must be on the feed's own origin
- * and readable by the same rule as the feed.
+ * Checks a feed's text. Every file must be on the feed's own origin, or a
+ * download of the project's own releases, and readable by the same rule as
+ * the feed.
  */
 export function parseFeed(
   text: string,
@@ -66,6 +73,7 @@ export function parseFeed(
   key: FileKey | null,
   loopback?: LoopbackHttpForTests,
   track: UpdateTrack = "stable",
+  releases: ReleaseAssets = GITHUB_RELEASE_ASSETS,
 ): FeedRead {
   let raw: unknown;
   try {
@@ -96,7 +104,8 @@ export function parseFeed(
     } catch {
       return MALFORMED;
     }
-    if (url.origin !== feedUrl.origin || !readable(url, loopback)) {
+    const placed = url.origin === feedUrl.origin || isReleaseDownload(url, releases);
+    if (!placed || !readable(url, loopback)) {
       return { ok: false, cause: "address-refused" };
     }
     if (name === key) file = { url, size: size as number, sha512 };

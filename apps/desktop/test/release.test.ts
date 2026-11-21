@@ -295,7 +295,7 @@ describe("the feed the release writes", () => {
       folder: "https://updates.example/nightly",
       releaseDate: "2026-11-01T00:00:00Z",
     };
-    expect(makeFeed({ ...options, version: "1.0.0-nightly.20261101.1" }).track).toBe("nightly");
+    expect(makeFeed({ ...options, version: "1.0.0-beta.20261101.1" }).track).toBe("nightly");
     expect(() => makeFeed({ ...options, version: "1.0.0-alpha.1" })).toThrow(/version/);
   });
 
