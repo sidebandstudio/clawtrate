@@ -23,6 +23,14 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import {
+  CHECKIN_EVERY,
+  MAX_CHECKIN_EVERY_CHARS,
+  MAX_CHECKIN_KEPT,
+  MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInDraft,
+  type CheckInRead,
+} from "./check-ins.ts";
 import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
@@ -219,6 +227,11 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  // Check-ins (`check-ins.ts`). Saving needs admin.
+  | { type: "refreshCheckIns"; botId?: string }
+  /** The draft as `CheckInDraft` says. The outcome is `checkIns.save`. */
+  | ({ type: "saveCheckIn"; saveId: string; botId: string } & CheckInDraft)
+  | { type: "dismissCheckInSave"; saveId: string }
   /**
    * The rail's task actions (`task-actions.ts`). They act on any task the rail
    * lists, open in this view or not, and each stays at `operator.write`.
@@ -354,13 +367,20 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                       type: "setMachineDefaults";
                                                                     }
                                                                   ? ApprovalsFile
-                                                                  : C extends { type: "listMemory" }
-                                                                    ? MemoryList
+                                                                  : C extends {
+                                                                        type: "refreshCheckIns";
+                                                                        botId: string;
+                                                                      }
+                                                                    ? CheckInRead | null
                                                                     : C extends {
-                                                                          type: "readMemory";
+                                                                          type: "listMemory";
                                                                         }
-                                                                      ? MemoryDocument
-                                                                      : void;
+                                                                      ? MemoryList
+                                                                      : C extends {
+                                                                            type: "readMemory";
+                                                                          }
+                                                                        ? MemoryDocument
+                                                                        : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -670,6 +690,37 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return command.tier === "admin" || command.tier === "pairing"
         ? { type: "requestAccess", tier: command.tier }
         : { type: "requestAccess" };
+    case "refreshCheckIns":
+      return command.botId === undefined
+        ? { type: command.type }
+        : { type: command.type, botId: botId(command.botId) };
+    case "saveCheckIn": {
+      const every = (value: unknown) =>
+        value === null ? null : shortText(value, MAX_CHECKIN_EVERY_CHARS, "cadence");
+      const prompt = (value: unknown) =>
+        value === null ? null : shortText(value, MAX_CHECKIN_PROMPT_CHARS, "prompt");
+      if (command.every !== null && !CHECKIN_EVERY.test(String(command.every)))
+        throw new Error("invalid check-in cadence");
+      const was = command.was as Record<string, unknown> | null;
+      if (!was || typeof was !== "object") throw new Error("invalid draft");
+      if (!Array.isArray(command.kept) || command.kept.length > MAX_CHECKIN_KEPT)
+        throw new Error("invalid draft");
+      return {
+        type: "saveCheckIn",
+        saveId: id(command.saveId, "save"),
+        botId: botId(command.botId),
+        gatewayId: id(command.gatewayId, "gateway"),
+        every: every(command.every),
+        prompt: prompt(command.prompt),
+        was: { every: every(was.every), prompt: prompt(was.prompt) },
+        kept: command.kept.map((each: Record<string, unknown>) => ({
+          botId: botId(each?.botId),
+          every: shortText(each?.every, MAX_CHECKIN_EVERY_CHARS, "cadence"),
+        })),
+      };
+    }
+    case "dismissCheckInSave":
+      return { type: "dismissCheckInSave", saveId: id(command.saveId, "save") };
     case "refreshRoutines":
       return { type: command.type };
     case "readCalendarRuns":
@@ -1319,6 +1370,23 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "refreshCheckIns":
+        return client.refreshCheckIns(command.botId);
+      case "saveCheckIn":
+        return client.saveCheckIn(
+          command.saveId,
+          command.botId,
+          {
+            gatewayId: command.gatewayId,
+            every: command.every,
+            prompt: command.prompt,
+            was: command.was,
+            kept: command.kept,
+          },
+          owner,
+        );
+      case "dismissCheckInSave":
+        return client.dismissCheckInSave(command.saveId);
       case "sendMessage": {
         const key = this.mine(command.key);
         if (command.attachmentIds.length > 0 && !policy.attachments) {
