@@ -7,7 +7,7 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
+import { contextFor, hold, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -19,17 +19,6 @@ const sent = (page: Page) =>
     (
       window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
-  );
-// The fixture's answers are held and then let through by the check, not left to a page timer:
-// on a loaded machine the check can look too late, or the timer can stay unfired for longer than
-// the check waits (#248, #252).
-const hold = (page: Page) =>
-  page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
-  );
-const release = (page: Page) =>
-  page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
   );
 /** The Work pane's live region, or Settings' when Settings is open. */
 const announcer = (page: Page) => page.getByTestId("work-announcer");
@@ -283,7 +272,9 @@ test("F-046: a save whose answer never came says it couldn't be confirmed and wh
   await openFixture(page, `${PANE}&access=admin&mwrite=unanswered`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
     "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
   );
@@ -304,7 +295,9 @@ test("F-046: a save whose answer never came, on a gateway that can't read its se
   await openFixture(page, `${PANE}&access=admin&mwrite=unreadable`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   // The read after the save fails too: the page says so, and the save's outcome stays with it.
   const failed = page.getByTestId("runs-on-error");
   await expect(failed.getByRole("heading")).toHaveText("Couldn't load where Otto runs");

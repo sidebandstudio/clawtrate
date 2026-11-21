@@ -3,7 +3,17 @@
 // 390 px in light and dark; the rest at 1440 and 390 in light. The fixture's
 // machines and devices are made up (apps/desktop/src/fixture/machines.ts).
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES, type Size } from "./fixture.ts";
+import {
+  contextFor,
+  hold,
+  openFixture,
+  OTTO_DISK,
+  release,
+  settle,
+  SIZES,
+  THEMES,
+  type Size,
+} from "./fixture.ts";
 
 type Scene = { name: string; rows: string; query: string; ready: (page: Page) => Promise<void> };
 
@@ -16,6 +26,14 @@ async function runsOn(page: Page) {
 }
 const runsOnReady = (page: Page) =>
   runsOn(page).then(() => expect(page.getByTestId("runs-on-workspace")).toBeVisible());
+
+async function saveGatewayMachine(page: Page) {
+  await runsOnReady(page);
+  await page.getByTestId("runs-on-machine").click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+}
 
 async function machines(page: Page) {
   await page.keyboard.press("ControlOrMeta+,");
@@ -151,9 +169,7 @@ const MORE: Scene[] = [
     rows: "F-046",
     query: `${PANE}&access=admin&mwrite=refused`,
     ready: async (page) => {
-      await runsOnReady(page);
-      await page.getByTestId("runs-on-machine").click();
-      await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+      await saveGatewayMachine(page);
       await expect(page.getByTestId("runs-on-error-line")).toBeVisible();
     },
   },
@@ -162,9 +178,7 @@ const MORE: Scene[] = [
     rows: "F-046",
     query: `${PANE}&access=admin&mwrite=unanswered`,
     ready: async (page) => {
-      await runsOnReady(page);
-      await page.getByTestId("runs-on-machine").click();
-      await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+      await saveGatewayMachine(page);
       await expect(page.getByTestId("runs-on-save-note")).toBeVisible();
       await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
         "Otto's command machine: The gateway's machine",
@@ -176,9 +190,7 @@ const MORE: Scene[] = [
     rows: "F-046",
     query: `${PANE}&access=admin&mwrite=unreadable`,
     ready: async (page) => {
-      await runsOnReady(page);
-      await page.getByTestId("runs-on-machine").click();
-      await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+      await saveGatewayMachine(page);
       await expect(page.getByTestId("runs-on-error")).toBeVisible();
       await expect(page.getByTestId("runs-on-save-note")).toBeVisible();
     },
