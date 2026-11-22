@@ -326,6 +326,8 @@ describe("the plugin's methods", () => {
       "records-full",
       "records-full",
     ]);
+    // Answering can't free a stored version, so the refusal doesn't say it would.
+    expect((await more(3)).error?.message).not.toMatch(/answer/i);
     const first = sent[0]!;
     expect(
       (await host.call("proposals.decline", { id: first.proposalId, digest: first.digest })).ok,
@@ -372,5 +374,105 @@ describe("the plugin's methods", () => {
     expect((await host.call("proposals.get", { id: late.proposalId })).payload).toMatchObject({
       state: "expired",
     });
+  });
+
+  it("a grant's deadline: 30 days only when none is given; an elapsed or invalid one is refused", async () => {
+    const host = load({ now: () => T });
+    const set = (extra: Record<string, unknown>) =>
+      host.call("relay.grants.set", { scope: "see", bots: ["pip"], ...extra });
+    expect((await set({})).payload).toMatchObject({ expiresAt: T + 30 * 24 * 60 * 60 * 1000 });
+    expect((await set({ expiresAt: T + 5000 })).payload).toMatchObject({ expiresAt: T + 5000 });
+    for (const expiresAt of [T, T - 1, "soon", 1.5, null])
+      expect(reasonOf(await set({ expiresAt }))).toBe("invalid");
+  });
+
+  it("an expired grant beside its open request reads the same everywhere before the sweep, and a decline can't land after it", async () => {
+    let now = T;
+    const host = load({ now: () => now });
+    const g = (
+      await host.call("relay.grants.set", { scope: "suggest", bots: ["pip"], expiresAt: T + 1000 })
+    ).payload!;
+    const send = async (field: Record<string, unknown>) =>
+      (await host.call("relay.propose", { grant: g.id, generation: 1, bot: "pip", fields: field }))
+        .payload!;
+    const p = await send({ label: "x" });
+    now = T + 999;
+    const read = host.versions.hold(`v:${p.proposalId}`, "read");
+    const got = host.call("proposals.get", { id: p.proposalId });
+    await read.reached;
+    now = T + 1000;
+    read.release();
+    expect((await got).payload).toMatchObject({ state: "withdrawn", generation: 1 });
+    expect((await host.call("proposals.list")).payload!.proposals).toMatchObject([
+      { id: p.proposalId, state: "withdrawn" },
+    ]);
+    expect((await host.call("status")).payload).toMatchObject({ open: 0 });
+    expect((await host.call("relay.grants.get", { id: g.id })).payload).toMatchObject({
+      revoked: "expired",
+      generation: 2,
+    });
+    // A decline checked before the grant expires, committing after: refused.
+    now = T;
+    const host2 = load({ now: () => now });
+    const g2 = (
+      await host2.call("relay.grants.set", { scope: "suggest", bots: ["pip"], expiresAt: T + 1000 })
+    ).payload!;
+    const q = (
+      await host2.call("relay.propose", {
+        grant: g2.id,
+        generation: 1,
+        bot: "pip",
+        fields: { label: "x" },
+      })
+    ).payload!;
+    now = T + 999;
+    host2.store.faults.beforeCommit = () => (now = T + 1000);
+    expect(
+      reasonOf(await host2.call("proposals.decline", { id: q.proposalId, digest: q.digest })),
+    ).toBe("expired");
+    host2.store.faults.beforeCommit = () => {};
+    expect((await host2.call("proposals.get", { id: q.proposalId })).payload).toMatchObject({
+      state: "withdrawn",
+    });
+  });
+
+  it("the list is a bounded page of summaries, newest first, and the same creation time never repeats or skips across pages", async () => {
+    const host = load({ now: () => T });
+    host.bots.splice(
+      0,
+      host.bots.length,
+      ...Array.from({ length: 5 }, (_, i) => ({ id: `b${i}`, createdAt: i + 1 })),
+    );
+    const g = (
+      await host.call("relay.grants.set", {
+        scope: "suggest",
+        bots: "all",
+        includeFuture: true,
+        includeInstructions: true,
+      })
+    ).payload!;
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const fields = { instructions: { agents: { text: "x".repeat(1000), baseHash: null } } };
+      ids.push(
+        (await host.call("relay.propose", { grant: g.id, generation: 1, bot: `b${i}`, fields }))
+          .payload!.proposalId as string,
+      );
+    }
+    const seen: string[] = [];
+    let cursor: unknown;
+    for (let page = 0; page < 3; page += 1) {
+      const answer = (
+        await host.call("proposals.list", { limit: 2, ...(cursor ? { cursor } : {}) })
+      ).payload!;
+      const rows = answer.proposals as Record<string, unknown>[];
+      expect(rows.length).toBe(page < 2 ? 2 : 1);
+      expect(rows.every((r) => r.payload === undefined)).toBe(true);
+      seen.push(...rows.map((r) => r.id as string));
+      cursor = answer.nextCursor;
+    }
+    expect(cursor).toBeUndefined();
+    expect(seen).toEqual([...ids].sort().reverse());
+    expect(reasonOf(await host.call("proposals.list", { limit: 500 }))).toBe("invalid");
   });
 });

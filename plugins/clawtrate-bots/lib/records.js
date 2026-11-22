@@ -111,7 +111,7 @@ export class Records {
       if (error?.code !== "PLUGIN_STATE_LIMIT_EXCEEDED") throw error;
       throw new Refusal(
         "records-full",
-        "Clawtrate's request records on this gateway are full. Answer some requests, then try again.",
+        "Clawtrate has stored as many requests as its bots plugin keeps in this version, and nothing frees that space yet. New requests can't be recorded.",
       );
     }
     if (!stored) throw new Error("A record with this id already exists.");

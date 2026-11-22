@@ -88,7 +88,7 @@ export function fits(ledger, budget = VALUE_MAX) {
 const full = () =>
   new Refusal(
     "records-full",
-    "Clawtrate's request records on this gateway are full. Answer some requests, then try again.",
+    "Clawtrate's request records on this gateway are full. Settled requests leave them 30 days after they're settled.",
   );
 
 /** Admits a proposal: the limits, the grant, supersession and the records' size, decided together. */

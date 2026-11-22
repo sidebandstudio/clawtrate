@@ -103,48 +103,36 @@ export function createBots(api, options = {}) {
     return roster.payload.agents.filter((a) => a.kind !== "system");
   }
 
-  /** A proposal as read: expiry the sweep hasn't stored yet shown, and its body's own bot, gateway and tokens. */
-  async function view(id, entry) {
-    const { grant, ...rest } = entry;
-    const state = rest.state === "open" && rest.expiresAt <= now() ? "expired" : rest.state;
-    const body = await records.version(id, entry.digest);
-    if (!body) return { id, ...rest, state, unreadable: true, said: unreadable().message };
-    const { kind, payload, reason, bot, gateway, tokens } = body;
-    return {
-      id,
-      ...rest,
-      state,
-      generation: grant?.generation,
-      kind,
-      payload,
-      reason,
-      bot,
-      gateway,
-      tokens,
+  /**
+   * The ledger as every read shows it: expiry and retention applied at the
+   * current clock to a copy, so a grant past its expiry reads as revoked and
+   * its suggestions as withdrawn before the sweep stores that. Nothing is written.
+   */
+  async function snapshot() {
+    const stored = await records.ledger();
+    const swept = () => {
+      const ledger = structuredClone(stored);
+      L.sweep(ledger, now());
+      return ledger;
     };
+    return { ledger: swept(), again: swept };
   }
-
-  async function grantView(id, entry) {
-    const body = entry ? await records.version(entry.version, entry.digest) : null;
-    if (!body) return null;
-    const { version: _v, ...state } = entry;
-    if (!state.revoked && state.expiresAt <= now()) state.revoked = "expired";
-    return { id, ...state, ...body.details };
-  }
-
-  const proposal = async (id) => {
-    const { proposals } = await records.ledger();
-    const entry = Object.hasOwn(proposals, id) ? proposals[id] : null;
-    if (!entry) throw new Refusal("unknown", "Clawtrate has no such request on this gateway.");
-    return entry;
-  };
+  const own = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
+  const summary = (id, { grant, digest: _d, ...entry }) => ({
+    id,
+    ...entry,
+    generation: grant?.generation,
+  });
+  const LIST_LIMIT = { default: 50, max: 200 };
+  const CURSOR = /^(\d+):(p_[0-9a-f]{32})$/;
+  // Newest first; the same creation time is ordered by id, so a page boundary never repeats or skips one.
+  const newestFirst = ([a, x], [b, y]) => y.createdAt - x.createdAt || (a < b ? 1 : a > b ? -1 : 0);
 
   const methods = {
     status: [
       "operator.read",
       async () => {
-        const ledger = await records.ledger();
-        const at = now();
+        const { ledger } = await snapshot();
         return {
           plugin: PLUGIN_ID,
           version: PLUGIN_VERSION,
@@ -152,28 +140,52 @@ export function createBots(api, options = {}) {
           capabilities: { proposals: true, relay: true, onboarding: false },
           apply: { available: false, reason: "incarnation" },
           describe: { available: false, reason: "route-binding" },
-          open: Object.values(ledger.proposals).filter(
-            (e) => e.state === "open" && e.expiresAt > at,
-          ).length,
+          open: Object.values(ledger.proposals).filter((e) => e.state === "open").length,
           limits: { ...LIMITS },
         };
       },
     ],
+    // A page of summaries from the ledger alone; the full request, with any instruction text, comes from get.
     "proposals.list": [
       "operator.read",
-      async () => {
-        const ledger = await records.ledger();
-        const entries = Object.entries(ledger.proposals).sort(
-          ([, a], [, b]) => b.createdAt - a.createdAt,
-        );
-        return { proposals: await Promise.all(entries.map(([id, e]) => view(id, e))) };
+      async ({ limit = LIST_LIMIT.default, cursor }) => {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > LIST_LIMIT.max)
+          throw bad(`limit must be 1 to ${LIST_LIMIT.max}.`);
+        const after =
+          cursor === undefined ? null : CURSOR.exec(typeof cursor === "string" ? cursor : "");
+        if (cursor !== undefined && !after) throw bad("cursor isn't one Clawtrate gave.");
+        const sorted = Object.entries((await snapshot()).ledger.proposals).sort(newestFirst);
+        const start = after
+          ? sorted.findIndex(
+              (row) => newestFirst(row, [after[2], { createdAt: Number(after[1]) }]) > 0,
+            )
+          : 0;
+        const page = start < 0 ? [] : sorted.slice(start, start + limit);
+        const last = page.at(-1);
+        const more = start >= 0 && start + limit < sorted.length;
+        return {
+          proposals: page.map(([id, e]) => summary(id, e)),
+          ...(more && last ? { nextCursor: `${last[1].createdAt}:${last[0]}` } : {}),
+        };
       },
     ],
+    // Its state is shown as of after the body was read, so a read that spans its expiry says so.
     "proposals.get": [
       "operator.read",
-      async ({ id }) => view(id, await proposal(requireId("p", id, "id"))),
+      async ({ id }) => {
+        requireId("p", id, "id");
+        const { ledger, again } = await snapshot();
+        const entry = own(ledger.proposals, id);
+        if (!entry) throw new Refusal("unknown", "Clawtrate has no such request on this gateway.");
+        const body = await records.version(id, entry.digest);
+        const current = summary(id, own(again().proposals, id) ?? entry);
+        if (!body) return { ...current, unreadable: true, said: unreadable().message };
+        const { kind, payload, reason, bot, gateway, tokens } = body;
+        return { ...current, digest: entry.digest, kind, payload, reason, bot, gateway, tokens };
+      },
     ],
-    // The claim is checked, then its version read, after every observation.
+    // The claim is checked, then its version read, after every observation. The
+    // commit is bound to the earlier of the request's and its grant's expiry.
     "proposals.decline": [
       "operator.write",
       async ({ id, digest }, opts) => {
@@ -184,7 +196,11 @@ export function createBots(api, options = {}) {
           async (l, at) => {
             if (!(await records.version(id, L.claim(l, id, digest, at).digest))) throw unreadable();
           },
-          (l) => l.proposals[id]?.expiresAt,
+          (l) => {
+            const entry = own(l.proposals, id);
+            const grant = entry?.grant && own(l.grants, entry.grant.grant);
+            return Math.min(entry?.expiresAt ?? 0, grant ? grant.expiresAt : Infinity);
+          },
         );
         return { id, state: "declined" };
       },
@@ -195,10 +211,10 @@ export function createBots(api, options = {}) {
       "operator.admin",
       async ({ id, digest }) => {
         requireId("p", id, "id");
-        const entry = L.claim(await records.ledger(), id, digest, now());
+        const entry = L.claim((await snapshot()).ledger, id, digest, now());
         if (!(await records.version(id, entry.digest))) throw unreadable();
         // Again, with the clock as it is after the read.
-        L.claim(await records.ledger(), id, digest, now());
+        L.claim((await snapshot()).ledger, id, digest, now());
         throw new Refusal(
           "apply-unavailable",
           "Clawtrate can't apply a saved request on this gateway. Review and save it yourself instead.",
@@ -209,14 +225,13 @@ export function createBots(api, options = {}) {
       "operator.read",
       async ({ id }) => {
         requireId("g", id, "id");
-        const ledger = await records.ledger();
-        const grant = await grantView(
-          id,
-          Object.hasOwn(ledger.grants, id) ? ledger.grants[id] : null,
-        );
-        if (!grant)
+        const { ledger, again } = await snapshot();
+        const entry = own(ledger.grants, id);
+        const body = entry ? await records.version(entry.version, entry.digest) : null;
+        if (!body)
           throw new Refusal("grant-missing", "This agent's access to Clawtrate isn't set up.");
-        return grant;
+        const { version: _v, ...state } = own(again().grants, id) ?? entry;
+        return { id, ...state, ...body.details };
       },
     ],
     "relay.grants.set": [
@@ -239,10 +254,13 @@ export function createBots(api, options = {}) {
         )
           throw bad('bots must be "all" or a list of bot ids.');
         const at = now();
-        const expiresAt =
-          Number.isSafeInteger(params.expiresAt) && params.expiresAt > at
-            ? params.expiresAt
-            : at + GRANT_DAYS_MS;
+        // The default applies only when no deadline was given; a given one is never replaced.
+        if (
+          params.expiresAt !== undefined &&
+          !(Number.isSafeInteger(params.expiresAt) && params.expiresAt > at)
+        )
+          throw bad("expiresAt must be a time, in milliseconds, after now.");
+        const expiresAt = params.expiresAt ?? at + GRANT_DAYS_MS;
         // Bots are their incarnations: an id and the time the gateway created it.
         const roster = (await bots()).filter(hasIncarnation);
         const chosen = all
