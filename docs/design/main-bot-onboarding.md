@@ -267,7 +267,7 @@ When installed, `clawtrate-bots.status` (read) says it runs and which version, a
 | Tools that know which bot called them       | v2 factories; `agentId`, `sessionKey`, `assertInvocationCurrent` (R1)                                                                                                              | live                           |
 | A tool per bot                              | A factory returns `null`; `tools.deny` removes it from the model and refuses it (R2)                                                                                               | live                           |
 | A write made by an owner's decision         | A plugin method with `dispatchGatewayMethod`, acting with the authenticated caller's own scopes, rechecked at the mutation's commit (R7)                                           | live                           |
-| Durable, atomic records                     | Keyed stores, retained or bounded, with `registerIfAbsent`, `compareAndApply` and `overflowPolicy: "reject-new"` (R9, R22)                                                         | live (store), source (compare) |
+| Durable, atomic records                     | Keyed stores with `registerIfAbsent` and `compareAndApply`: bounded ones, which take `overflowPolicy: "reject-new"`, or retained ones, with no eviction and no TTL (R9, R22)       | live (store), source (compare) |
 | Preconditions inside the write              | `config.patch {baseHash}`; `agents.files.set {expectedHash \| expectedMissing}` (R23); `cron.update {expectedConfigRevision}` (R27); `agents.create` refusing an existing id (R28) | live (files), source           |
 | No precondition                             | `agents.update` (name, picture, R24); `cron.remove` (R27)                                                                                                                          | source                         |
 | A model call with no tools on a bound route | Not available: `api.runtime.llm.complete` can't require an expected route (R31)                                                                                                    | source                         |
@@ -465,7 +465,7 @@ Undo exists only on the plugin's apply path, so on 2026.10.6 there is no Undo fr
 
 ### Proposal records
 
-Two kinds of storage, in one retained store with `overflowPolicy: "reject-new"` (R22):
+Two kinds of storage, in keyed stores (R22). On OpenClaw 2026.10.6 a retained store has no eviction and rejects `maxEntries`, `overflowPolicy` and TTLs (`docs/plugins/sdk-runtime/state-and-system.md`, lines 162 and 174). So the ledger is retained, enforces the limits below and is swept by the plugin for expiry and retention, and the versions are in a bounded namespace with `overflowPolicy: "reject-new"`, which refuses new versions when full and leaves room for every ledger decision:
 
 - **Immutable versions**, written once and never changed: a proposal's details, an Undo's details, a grant's details, and each journal entry.
 - **One ledger row per gateway**, the only mutable record that decides anything. It references versions by id and digest.
@@ -496,7 +496,8 @@ Its entry in the ledger: `{ version: digest, state, claim?: { by, at, attempt },
 - **Journal entries** are versions too, keyed by proposal, claim attempt and field, and written right after the gateway confirms each effect. The ledger then adds them to the proposal's `effects`. If the process stops between the two, recovery finds the entries by that key and adds them. A journal entry is evidence of a confirmed effect, even while it has no ledger reference. The one-hour cleanup skips journal entries. Recovery attaches them before normal journal retention runs. An effect with no journal entry is `unknown` (below).
 - **Races, decided by the ledger.** A revocation and an acceptance on two devices: whichever transition lands first decides. If the claim landed first, the commit goes on and the audit says "accepted before access was removed"; if the revocation landed first, the claim fails its generation check and the accept is refused as `withdrawn`. A helper still connected when access is removed from another device learns it from the plugin's event and from the ledger check before its next call. Two submissions racing for the last slot, and a supersession racing a claim, are ordered the same way: a proposal already `committing` can't be superseded.
 - **Supersession**: a new proposal for the same bot and field supersedes the open one from any source; for a picture, #302 §9's rule (a newer one from the same proposing bot) applies, and a picture proposal from another source stays alongside it.
-- **Expiry** is a field on the gateway's clock; terminal records are kept 30 days, then removed.
+- **Expiry** is a field on the gateway's clock; terminal records, and revoked grants, are kept 30 days, then removed.
+- **Storage full.** The ledger is one stored value, at most 1 MiB. A new proposal or grant is refused with `records-full` if the ledger, with room kept for every open proposal to settle and every grant to be revoked, wouldn't fit; deciding, expiring and revoking always can.
 - **Undo has its own version**: `{ id, undoes: <journal id>, field, restore: <the journaled before-value>, expect: <the journaled after-value or hash> }`, written before the ledger claim that starts it, and idempotent by id, so a second Undo or a retry after a lost answer finds the first. The values come from the journal, never from the caller.
 - **Crash and lost answers.** A proposal left in `committing` is settled from the journal: each effect journaled before the crash is `applied`. An effect not journaled is `unknown`, even when a read shows the proposed value, because an independent admin could have written the same value or restored the base; there is no durable receipt for a particular commit on this gateway. What a read shows is kept as `observed` and shown as "Now reads: …", never as an outcome. Clawtrate never resends an uncertain write; the person can apply again only as a new decision on a card drawn from a fresh read.
 - **Several fields** are applied one by one, and each confirmed effect is journaled before the next, so a partly applied proposal says exactly what landed.
@@ -687,6 +688,14 @@ On a development gateway, against the plugin and the real app, each named for it
 - **F-537**: a grant used; revoked mid-call (the admitted call's outcome recorded, its answer withheld); refused after; another device trying to apply the revoked grant's suggestion; a reconnect with a new generation refused; instructions withheld without the permission.
 - **F-538**: each denied tool absent in an interactive and a scheduled turn; ACP refused; a `full` session task shown as not under the limits; a worker-turn bot shown as not fully managed.
 - The plugin missing; a gateway switch mid-proposal.
+
+Where these run, as the records PR (step 1) found them:
+
+- **Restarts.** The development gateway never reuses state (`tools/dev-gateway/src/cli.ts`, "State is never reused"), so F-536's restart cases are unit tests over the store until a gateway restart that keeps state exists.
+- **F-537's withheld answer** belongs to the relay (step 8). The records PR checks that an admitted call's outcome is recorded and that the next call is refused.
+- **F-535's refusals** need a bot's tool, so they are contract tests in step 2; step 1's second part unit-tests the rule and checks `managers.set` on a gateway.
+- **F-536 once the plugin may apply** runs as unit tests in step 1's second part; its gateway checks wait for the primitives in "Gated on missing gateway primitives".
+- **Moved to step 1's second part**, each with its test: the cleanup sweep with its deletion marker (the records PR deletes no version, and publishing still checks its version exists), and grant updates (the records PR only creates and revokes grants, so a narrower grant is a new one).
 
 ### Not yet established
 
