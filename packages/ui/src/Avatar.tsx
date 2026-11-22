@@ -122,6 +122,12 @@ function Shape({ shape, clip }: { shape: AvatarShape; clip: string }): ReactElem
   }
 }
 
+/** The scene's fit as an SVG transform: its shift, then its scale about the grid's centre. */
+export function fitTransform(scene: { fit: number; shift: [number, number] }): string {
+  const [dx, dy] = scene.shift;
+  return `translate(${dx} ${dy}) translate(20 20) scale(${scene.fit}) translate(-20 -20)`;
+}
+
 /** A creature in a state, as inline SVG on the 40-unit grid. Sized by CSS. */
 export function Creature({
   choice,
@@ -151,7 +157,10 @@ export function Creature({
           </clipPath>
         ))}
       </defs>
-      <Shape shape={scene.root} clip={clip} />
+      {/* Fitted inside the crop circle: the same scale and shift in every state. */}
+      <g transform={fitTransform(scene)} data-part="fit">
+        <Shape shape={scene.root} clip={clip} />
+      </g>
     </svg>
   );
 }

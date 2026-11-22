@@ -189,6 +189,8 @@ The construction is in `packages/core/src/avatar.ts`, which the app and the iPho
 | Empty conversation    | 64 px               |                   |
 | New bot, Edit picture | 104 px              | `--avatar-create` |
 
+Every creature stays inside the circle an avatar is cropped to, in every state and every pose its motions reach, so nothing pokes through the state ring and the saved picture loses nothing. Each creature has its own fit, a scale and a shift that are the same in every state, so it keeps its size and place while it acts. `node packages/core/test/make-avatar-fit.ts` writes the fits, and a unit test measures every scene.
+
 Below 21 px a creature drops its fine detail: mouths, the glint in waiting eyes, and the lines on shells, all under a pixel wide there. Silhouette, eyes, claws, lure and shell spots stay.
 
 **States.** The creature acts out the state that `conversation.md` section 4 gives the avatar. The ring and the badge stay as that section draws them. Failed looks blocked; stopped looks idle.

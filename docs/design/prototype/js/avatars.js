@@ -79,7 +79,7 @@
       .join("");
     return (
       `<svg viewBox="0 0 40 40" class="creature" data-family="${choice.family}" data-state="${state}"` +
-      `${scene.muted ? " data-muted" : ""} aria-hidden="true"><defs>${defs}</defs>${shape(scene.root, clip)}</svg>`
+      `${scene.muted ? " data-muted" : ""} aria-hidden="true"><defs>${defs}</defs><g transform="translate(${scene.shift[0]} ${scene.shift[1]}) translate(20 20) scale(${scene.fit}) translate(-20 -20)">${shape(scene.root, clip)}</g></svg>`
     );
   }
 
