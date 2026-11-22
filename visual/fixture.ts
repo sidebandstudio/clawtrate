@@ -27,7 +27,8 @@ export const SIZES: Size[] = [
 export const THEMES = ["light", "dark"] as const;
 export type Theme = (typeof THEMES)[number];
 
-export function contextFor(size: Size, theme: Theme) {
+/** A test that names no theme gets the app's default, dark. */
+export function contextFor(size: Size, theme: Theme = "dark") {
   return {
     viewport: { width: size.width, height: size.height },
     deviceScaleFactor: 1,
@@ -38,7 +39,7 @@ export function contextFor(size: Size, theme: Theme) {
 }
 
 /** Open the fixture on a scene, with the clock fixed and the fonts loaded. */
-export async function openFixture(page: Page, query: string, theme: Theme): Promise<void> {
+export async function openFixture(page: Page, query: string, theme: Theme = "dark"): Promise<void> {
   await page.clock.setFixedTime(NOW);
   await page.goto(`/?${query}&theme=${theme}`);
   await page.locator(".app").waitFor();

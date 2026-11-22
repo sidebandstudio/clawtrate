@@ -138,6 +138,8 @@ test.describe("the rail", () => {
     await page.keyboard.press("Enter");
     await page.getByRole("menuitemradio", { name: "Dark" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // Dark is also what an empty store gives, so the save itself is checked.
+    expect(await page.evaluate(() => localStorage.getItem("clawtrate.theme"))).toBe("dark");
     await page.goto(`/?scene=main&${OTTO_DISK}`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await page
@@ -145,7 +147,82 @@ test.describe("the rail", () => {
       .last()
       .click();
     await page.getByRole("menuitemradio", { name: "Match the system" }).click();
-    await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+    expect(await page.evaluate(() => localStorage.getItem("clawtrate.theme"))).toBe("system");
+  });
+
+  test("draws a stored Light before the bundle runs, even on a dark system", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext(contextFor(WIDE, "dark"));
+    const page = await context.newPage();
+    await page.goto(`/?scene=main&${OTTO_DISK}`);
+    await page.evaluate(() => localStorage.setItem("clawtrate.theme", "light"));
+    // Hold the app's bundle: until it runs, only the page's head and stylesheet draw.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(/\/assets\/index-[^/]*\.js$/, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.reload({ waitUntil: "commit" });
+    const early = () =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        return {
+          theme: root.dataset.theme,
+          scheme: getComputedStyle(root).colorScheme,
+          ground: getComputedStyle(root).getPropertyValue("--bg").trim(),
+          meta: document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.content,
+          rendered: (document.getElementById("root")?.childElementCount ?? 0) > 0,
+        };
+      });
+    // The stylesheet is in once the root's ground is set.
+    await expect.poll(async () => (await early()).ground, { timeout: 5_000 }).not.toBe("");
+    expect(await early()).toEqual({
+      theme: "light",
+      scheme: "light",
+      ground: "#fff",
+      meta: "light",
+      rendered: false,
+    });
+    release();
+    await page.locator(".app").waitFor();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await context.close();
+  });
+
+  test("opens dark with no theme chosen, even on a light system, and says Dark is the default", async ({
+    page,
+    browser,
+  }) => {
+    const scheme = (on: Page) =>
+      on.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+    // Before any script runs, the stylesheet alone draws the dark theme.
+    const noScript = await browser.newContext({
+      ...contextFor(WIDE, "light"),
+      javaScriptEnabled: false,
+    });
+    const bare = await noScript.newPage();
+    await bare.goto(`/?scene=main&${OTTO_DISK}`);
+    expect(await scheme(bare)).toBe("dark");
+    await noScript.close();
+
+    // The system is light here, the address names no theme and nothing is stored.
+    await page.goto(`/?scene=main&${OTTO_DISK}`);
+    await page.locator(".app").waitFor();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect(await scheme(page)).toBe("dark");
+    await page
+      .getByRole("button", { name: /Open the gateway menu\.$/ })
+      .last()
+      .click();
+    const dark = page.getByRole("menuitemradio", { name: "Dark" });
+    await expect(dark).toHaveAttribute("aria-checked", "true");
+    await expect(dark).toHaveAccessibleDescription("The default");
+    // Match the system follows this light system; Light is light anywhere.
+    await page.getByRole("menuitemradio", { name: "Match the system" }).click();
+    await expect.poll(() => scheme(page)).toBe("light");
   });
 
   test("shows nothing that would do nothing on a read-only connection", async ({ page }) => {

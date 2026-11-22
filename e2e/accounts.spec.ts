@@ -78,13 +78,13 @@ async function shots(name: string): Promise<void> {
   ] as const) {
     for (const theme of ["light", "dark"] as const) {
       await page.setViewportSize({ width, height });
-      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
       await page.waitForTimeout(250);
       await page.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
     }
   }
   await page.setViewportSize(size);
-  await page.emulateMedia({ colorScheme: "light" });
+  await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
 }
 
 const dialog = (name: string | RegExp) => page.getByRole("dialog", { name });

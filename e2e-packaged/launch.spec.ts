@@ -205,6 +205,17 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(page_.csp).toContain("script-src 'self'");
 });
 
+test("opens dark, with no theme chosen yet", async () => {
+  // A fresh data folder holds no theme, so the window and the page are the dark default.
+  const theme = await page.evaluate(() => ({
+    stored: localStorage.getItem("clawtrate.theme"),
+    attribute: document.documentElement.dataset.theme,
+    scheme: getComputedStyle(document.documentElement).colorScheme,
+    ground: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+  }));
+  expect(theme).toEqual({ stored: null, attribute: "dark", scheme: "dark", ground: "#101112" });
+});
+
 test("looks on this computer only in the sandbox the launch check gave it", async () => {
   await page.getByRole("button", { name: "Back" }).click();
   await page
