@@ -1966,22 +1966,39 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       await h.remote.closeAll();
     });
 
-    it("with SSH refused at launch, the saved route is shown failed with the refusal, and Remove still forgets it", async () => {
+    it("with SSH refused at launch, the saved route is shown failed with the refusal; Remove keeps it and says so until its pin can be deleted, and a retry once the folder is safe forgets it", async () => {
       const h = host();
       await connected(h);
+      const [saved] = h.routes.list();
+      const pin = `clawtrate-route-${saved!.id}-`;
       await h.remote.closeAll();
+      let safe = false;
       const again = host({
         dir: h.dir,
         storage: h.storage,
-        transport: () => ({ refused: "app-files-unsafe" }),
+        transport: () =>
+          safe
+            ? new SshTransport({ ...t.world, appDir: join(h.dir, "ssh") }, { spawn })
+            : { refused: "app-files-unsafe" },
       });
       await again.client.start();
       await again.remote.resume();
       expect(again.setup().there?.failure?.kind).toBe("app-files-unsafe");
       expect(again.setup().route?.phase).toBe("failed");
       await again.remote.removeRoute();
+      expect(again.setup().there?.failure?.kind).toBe("remove-failed");
+      expect(again.setup().route?.phase).toBe("failed");
+      expect(again.routes.list()).toEqual([saved]);
+      expect(again.storage.data.has("connection")).toBe(true);
+      expect(h.knownHosts()).toContain(pin);
+      // The folder is safe again: the retry deletes the pin, the route and its saved connection.
+      safe = true;
+      await again.remote.removeRoute();
       expect(again.routes.list()).toEqual([]);
+      expect(again.storage.data.has("connection")).toBe(false);
+      expect(h.knownHosts()).not.toContain(pin);
       expect(again.setup().route ?? null).toBeNull();
+      await again.remote.closeAll();
     });
 
     it("a failed pairing of another computer leaves the saved route's strip as it was", async () => {

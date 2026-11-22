@@ -259,8 +259,10 @@ export class RemoteSetup {
     return { ...(this.state.there ?? emptyThere("")), ...patch };
   }
 
+  /** The transport, made once; a refusal is asked again, so a folder made safe since is used. */
   private transport(): SshTransport | TransportRefusal {
-    this.transportMade ??= this.options.transport();
+    if (!this.transportMade || "refused" in this.transportMade)
+      this.transportMade = this.options.transport();
     return this.transportMade;
   }
 
@@ -1675,8 +1677,9 @@ export class RemoteSetup {
    */
   private async forgetRecord(record: SshRouteRecord): Promise<boolean> {
     const transport = this.transport();
-    // A pin already gone (an earlier Remove got that far) is no failure: the rest carries on.
-    if (!("refused" in transport) && !transport.forgetId(record.id).ok) return false;
+    // The pin's deletion can't be verified without a transport: nothing is forgotten, and Remove
+    // says it didn't finish. A pin already gone (an earlier Remove got that far) is no failure.
+    if ("refused" in transport || !transport.forgetId(record.id).ok) return false;
     const client = this.options.client;
     try {
       await client.forgetRoute(record.key);
