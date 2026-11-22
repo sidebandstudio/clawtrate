@@ -66,8 +66,8 @@ export type AccountsContext = {
   ): Promise<unknown>;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
-  /** The bots the client lists: ids, names, which is the default. */
-  bots(): Array<{ id: string; name: string; isDefault: boolean }>;
+  /** The bots the client lists: ids, names, which is the default, and their pictures. */
+  bots(): Array<{ id: string; name: string; isDefault: boolean; avatarUrl: string | null }>;
   connected(): boolean;
   /** The connection holds `operator.admin`. */
   admin(): boolean;
@@ -90,7 +90,7 @@ export class AdminNeededError extends Error {
 
 export type CreateBotInput = {
   name: string;
-  /** A `data:image/png` picture of the chosen body and colour, or null. */
+  /** A `data:image/png` picture: the chosen creature with its choice inside (`avatar.ts`), or an uploaded one. */
   avatar: string | null;
   /** The account, or null for "Let the gateway choose". */
   account: string | null;
@@ -1185,6 +1185,20 @@ export class AccountsEngine {
       return this.creationFailed(new Error("The gateway did not say which bot it made."), true);
     this.planned = { ...this.planned, botId };
     return this.complete(name, botId, ["preference", "fallbacks", "listed", "task"]);
+  }
+
+  /**
+   * Change a bot's picture (bots.md section 8): `agents.update` with the new
+   * picture, then the bot list read again. It is saved once that list shows it.
+   */
+  async setBotPicture(botId: string, avatar: string): Promise<void> {
+    this.requireAdmin("Changing a bot's picture");
+    if (!avatar.startsWith("data:image/png;base64,") || avatar.length > MAX_CREATE_AVATAR_CHARS)
+      throw new Error("That picture is too large to keep.");
+    await this.ctx.request("agents.update", { agentId: botId, avatar });
+    await this.ctx.refreshBots();
+    if (this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl !== avatar)
+      throw new Error("The gateway took the picture, but its bot list doesn't show it yet.");
   }
 
   /**

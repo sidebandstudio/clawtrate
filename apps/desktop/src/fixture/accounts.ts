@@ -1111,6 +1111,16 @@ export function accountCommand(
       }));
       return Promise.resolve();
     }
+    case "setBotPicture": {
+      const state = get();
+      set({
+        ...state,
+        bots: state.bots.map((bot) =>
+          bot.id === command.botId ? { ...bot, avatarUrl: command.avatar } : bot,
+        ),
+      });
+      return Promise.resolve();
+    }
     case "removeBotFallbacks":
       put((a) => ({
         ...a,

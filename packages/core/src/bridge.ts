@@ -287,6 +287,8 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
+  | { type: "setBotPicture"; botId: string; avatar: string }
   // Check-ins (`check-ins.ts`). Saving needs admin.
   | { type: "refreshCheckIns"; botId?: string }
   /** The draft as `CheckInDraft` says. The outcome is `checkIns.save`. */
@@ -1017,6 +1019,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : id(command.effort, "effort"),
       };
+    case "setBotPicture":
+      return {
+        type: "setBotPicture",
+        botId: botId(command.botId),
+        avatar: shortText(command.avatar, 32_768, "picture"),
+      };
     case "changeBotAccount":
       return {
         type: "changeBotAccount",
@@ -1634,6 +1642,8 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "setBotPicture":
+        return client.setBotPicture(command.botId, command.avatar);
       case "refreshCheckIns":
         return client.refreshCheckIns(command.botId);
       case "saveCheckIn":

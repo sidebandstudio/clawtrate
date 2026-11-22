@@ -90,7 +90,7 @@ export class AccountsGateway {
     },
   };
   revision = 1;
-  bots: Array<{ id: string; name: string }> = [
+  bots: Array<{ id: string; name: string; avatar?: string }> = [
     { id: "main", name: "Juniper" },
     { id: "otto", name: "Otto" },
     { id: "pip", name: "Pip" },
@@ -115,6 +115,8 @@ export class AccountsGateway {
   readonly typed: unknown[] = [];
   /** Fail the next `config.patch` with this message. */
   failPatch: string | null = null;
+  /** Answer `agents.update` but list the bot without the picture, as a gateway that dropped it. */
+  keepNoPicture = false;
   /** Leave the next `agents.create` unanswered, then make the bot anyway. */
   silentCreate = false;
   /** Refuse the next `wizard.cancel`: the gateway is saving. */
@@ -136,8 +138,22 @@ export class AccountsGateway {
       g.handlers[method] = () => [];
     g.handlers["agents.list"] = () => ({
       defaultId: "main",
-      agents: this.bots.map((bot) => ({ id: bot.id, identity: { name: bot.name } })),
+      agents: this.bots.map((bot) => ({
+        id: bot.id,
+        identity: { name: bot.name, ...(bot.avatar ? { avatarUrl: bot.avatar } : {}) },
+      })),
     });
+    g.handlers["agents.update"] = (params) => {
+      const { agentId, avatar } = params as { agentId: string; avatar?: string };
+      const bot = this.bots.find((each) => each.id === agentId);
+      if (!bot)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `agent "${agentId}" not found`,
+        });
+      if (avatar !== undefined && !this.keepNoPicture) bot.avatar = avatar;
+      return { ok: true, agentId };
+    };
     g.handlers["config.get"] = () => ({
       config: JSON.parse(JSON.stringify(this.config)) as Json,
       hash: `h${this.revision}`,

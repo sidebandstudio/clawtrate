@@ -1124,7 +1124,12 @@ export class ClawtrateClient {
     update: (change) =>
       this.store.update((state) => ({ ...state, accounts: change(state.accounts) })),
     bots: () =>
-      this.state.bots.map((bot) => ({ id: bot.id, name: bot.name, isDefault: bot.isDefault })),
+      this.state.bots.map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+        isDefault: bot.isDefault,
+        avatarUrl: bot.avatarUrl,
+      })),
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
@@ -4665,6 +4670,11 @@ export class ClawtrateClient {
 
   removeBotFallbacks(botId: string): Promise<void> {
     return this.accounts.removeFallbacks(botId);
+  }
+
+  /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
+  setBotPicture(botId: string, avatar: string): Promise<void> {
+    return this.accounts.setBotPicture(botId, avatar);
   }
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
