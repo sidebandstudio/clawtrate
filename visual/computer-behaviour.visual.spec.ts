@@ -359,6 +359,10 @@ test.describe("the full view on the desktop", () => {
     );
     await expect(fullView(page).getByText("Watching", { exact: true })).toHaveCount(0);
     await expect(fullView(page).getByRole("button", { name: "Take control" })).toHaveCount(0);
+    const tabs = fullView(page).getByRole("group", { name: "Tabs" });
+    await tabs.getByRole("button", { name: "Lending apps" }).click();
+    await expect(controlBar(page).getByRole("button", { name: "Check" })).toHaveCount(0);
+    await tabs.getByRole("button", { name: "Your account" }).click();
     await controlBar(page).getByRole("button", { name: "Check" }).click();
     await expect(fullView(page).getByText("You still have control.")).toBeVisible();
   });

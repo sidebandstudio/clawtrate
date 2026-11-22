@@ -510,6 +510,7 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
       {label}
     </button>
   );
+  const canCheck = control.key === pane.key && control.targetId === pane.shown;
   const elsewhere = pane.tabs.find((each) => each.targetId === pane.shown)?.lease;
   let body: ReactNode = null;
   switch (control.status) {
@@ -597,7 +598,7 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
           )}
           <span className="spacer" />
           {button("Try again", () => props.onRelease(null), undefined, "release")}
-          {button("Check", props.onCheck)}
+          {canCheck && button("Check", props.onCheck)}
         </>,
         "alert",
       );
@@ -621,7 +622,7 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
         <>
           <span>{words.unverifiedLine(name)}</span>
           <span className="spacer" />
-          {button("Check", props.onCheck, undefined, "primary")}
+          {canCheck && button("Check", props.onCheck, undefined, "primary")}
           {button("Give back control", () => props.onRelease(null), undefined, "release")}
         </>,
         "alert",
