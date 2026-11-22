@@ -1,29 +1,9 @@
-// The home page's script: the theme switch, the install commands, the approval demo,
-// the questions, and the entrances. claws.js adds the Claws and the logo row.
+// The home page's script: the install commands, the approval demo, the questions,
+// and the entrances. theme.js is the theme switch; claws.js adds the Claws and the logo row.
 // The page reads fully without either, in dark.
 // Screens follow the theme through CSS, so the first paint is already right.
 
 (function () {
-  const root = document.documentElement;
-  const isLight = () => root.dataset.theme === "light";
-
-  const toggle = document.querySelector("[data-theme-toggle]");
-  function labelToggle() {
-    toggle.setAttribute("aria-label", isLight() ? "Switch to dark" : "Switch to light");
-  }
-  toggle.addEventListener("click", () => {
-    const next = isLight() ? "dark" : "light";
-    if (next === "light") root.dataset.theme = "light";
-    else delete root.dataset.theme;
-    try {
-      localStorage.setItem("theme", next);
-    } catch {
-      // Without storage the choice lasts for this visit.
-    }
-    labelToggle();
-  });
-  labelToggle();
-
   // Copy the install command.
   document.querySelectorAll("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {

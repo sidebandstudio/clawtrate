@@ -85,7 +85,7 @@
               Download for Mac
             </a>
             <p class="get-note">
-              Mac beta for Apple silicon and Intel, Developer ID signed and notarized by Apple.
+              Beta for Apple silicon and Intel, signed and notarized by Apple.
               <a href="https://github.com/sidebandstudio/clawtrate/releases">All releases</a>
             </p>
           </div>
@@ -1169,7 +1169,7 @@
             <p class="path-state">Ready in this beta</p>
             <p>Connect the gateway you already run. Keep the bots, tasks, and accounts you have.</p>
             <ol class="steps">
-              <li>Enter the gateway address and the token for pairing.</li>
+              <li>Choose Advanced, then enter your gateway address and token.</li>
               <li>Approve the device if your gateway asks.</li>
               <li>Open your bots and tasks.</li>
             </ol>
@@ -1179,8 +1179,8 @@
             <p class="path-state">Planned</p>
             <p>We're working on setup for people new to OpenClaw.</p>
             <p class="path-note">
-              For now, <a href="https://docs.openclaw.ai/install">Install OpenClaw</a>, then connect
-              it as an existing gateway.
+              For now, <a href="https://docs.openclaw.ai/install">install OpenClaw</a>, then connect
+              it through Advanced.
             </p>
           </article>
         </div>
@@ -1303,6 +1303,12 @@
           </div>
           <div class="stage stage-yellow rise">
             <picture class="theme-dark" data-ui>
+              <source
+                media="(max-width: 560px)"
+                srcset="shots/routines-phone-dark.webp"
+                width="370"
+                height="575"
+              />
               <img
                 src="shots/routines-dark.webp"
                 width="1440"
@@ -1312,6 +1318,12 @@
               />
             </picture>
             <picture class="theme-light" data-ui>
+              <source
+                media="(max-width: 560px)"
+                srcset="shots/routines-phone-light.webp"
+                width="370"
+                height="575"
+              />
               <img
                 src="shots/routines-light.webp"
                 width="1440"
@@ -1357,13 +1369,15 @@
       <!-- What is in the first beta and what is planned, from the project's own checklist and pull requests. -->
       <section id="beta" class="beta" aria-labelledby="beta-title">
         <h2 id="beta-title" class="rise">In the beta, and what's next</h2>
-        <p class="beta-intro rise">What's in the first Mac beta, and what's planned.</p>
         <div class="lists">
           <div class="list list-now rise">
             <h3>In this beta</h3>
             <p class="list-note">Some actions need gateway permissions or a plugin.</p>
             <ul>
-              <li>Connect the OpenClaw gateway you already run</li>
+              <li>
+                Connect an OpenClaw gateway you already run, through Advanced with its address and
+                token
+              </li>
               <li>Your bots with avatars and unread activity</li>
               <li>Start, rename, pin, archive, and delete tasks</li>
               <li>
@@ -1376,7 +1390,9 @@
               <li>Create a bot on an available provider account</li>
               <li>Read and edit a bot's root memory</li>
               <li>Per-bot usage tracking with weekly budget warnings</li>
-              <li>Routines, run history, and a week calendar</li>
+              <li>
+                View, create, edit, pause, and run routines, with run history and a week calendar
+              </li>
               <li>Choose where each bot runs commands. Manage approvals on supported machines.</li>
               <li>A read-only mode for watching a gateway</li>
               <!--
@@ -1400,9 +1416,8 @@
               </li>
               <li>
                 <span
-                  >Pair with OpenClaw on this Mac without typing a token. Not in this beta:
-                  Clawtrate won't run OpenClaw's own program before you agree, so for now you enter
-                  the address and token under Advanced</span
+                  >Pair with OpenClaw on this Mac without typing a token (use Advanced in this
+                  beta)</span
                 >
                 <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/design/setup.md"
                   >Design</a
@@ -1419,10 +1434,6 @@
               <li>
                 <span>Per-bot and per-task model and reasoning effort</span>
                 <a href="https://github.com/sidebandstudio/clawtrate/pull/118">#118</a>
-              </li>
-              <li>
-                <span>Create, edit, pause, and run routines</span>
-                <a href="https://github.com/sidebandstudio/clawtrate/pull/134">#134</a>
               </li>
               <li>
                 <span>Watch a bot's browser and take control</span>
@@ -1461,8 +1472,8 @@
               <h3 id="q2">What do I need?</h3>
               <div class="faq-a" id="a2" role="region" aria-labelledby="q2">
                 <p>
-                  You'll need a supported Mac and an OpenClaw gateway it can reach. You can install
-                  OpenClaw separately.
+                  A Mac with Apple silicon or Intel running macOS 13 or later, an OpenClaw gateway
+                  it can reach, and that gateway's address and token to connect through Advanced.
                 </p>
               </div>
             </li>
@@ -1470,13 +1481,13 @@
               <h3 id="q3">Can I verify the Mac download?</h3>
               <div class="faq-a" id="a3" role="region" aria-labelledby="q3">
                 <p>
-                  Yes. The Mac beta is Developer ID signed and notarized by Apple. Homebrew checks
-                  the download's SHA-256 against
+                  Yes. Every Mac beta is Developer ID signed and notarized by Apple. Homebrew checks
+                  its SHA-256 against
                   <a
                     href="https://github.com/sidebandstudio/homebrew-tap/blob/main/Casks/clawtrate.rb"
                     >the cask</a
-                  >. <a href="install.sh">install.sh</a> checks the SHA-256, the signature and the
-                  notarization before it installs, and leaves an existing copy alone.
+                  >, and <a href="install.sh">install.sh</a> verifies the SHA-256, signature, and
+                  notarization before installing without touching an existing copy.
                 </p>
               </div>
             </li>
@@ -1495,7 +1506,7 @@
               <h3 id="q5">What about Windows and iPhone?</h3>
               <div class="faq-a" id="a5" role="region" aria-labelledby="q5">
                 <p>
-                  The desktop app builds for Windows. The first public beta is for Mac. The iPhone
+                  This beta is Mac-only for now. Windows builds aren't published yet, and the iPhone
                   app is in development.
                 </p>
               </div>
@@ -1570,10 +1581,10 @@
             </div>
             <p class="oss">
               MIT licensed. The source, roadmap, and design decisions live on
-              <a href="https://github.com/sidebandstudio/clawtrate">GitHub</a>—help is welcome (<a
-                href="https://github.com/sidebandstudio/clawtrate/blob/main/CONTRIBUTING.md"
+              <a href="https://github.com/sidebandstudio/clawtrate">GitHub</a>. Want to help? See
+              <a href="https://github.com/sidebandstudio/clawtrate/blob/main/CONTRIBUTING.md"
                 >how to contribute</a
-              >).
+              >.
             </p>
           </div>
         </div>
@@ -3632,6 +3643,7 @@
       <p>Not affiliated with OpenClaw or xAI. No analytics on this site.</p>
     </footer>
 
+    <script src="theme.js" defer></script>
     <script src="main.js" defer onerror="document.documentElement.classList.remove('js')"></script>
     <script src="claws.js" defer></script>
     <script src="parade.js" defer></script>

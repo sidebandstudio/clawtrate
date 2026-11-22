@@ -53,13 +53,27 @@
           <img src="../../logo.webp" width="32" height="32" alt="" />
           <span>Clawtrate</span>
         </a>
+        <nav aria-label="Sections">
+          <a href="../../">Overview</a>
+        </nav>
+        <div class="bar-end">
+          <button class="theme" type="button" aria-label="Switch to light" data-theme-toggle>
+            <svg class="i-sun" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.75" />
+              <path
+                d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05"
+              />
+            </svg>
+            <svg class="i-moon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.25 9.6A5.5 5.5 0 0 1 6.4 2.75a5.5 5.5 0 1 0 6.85 6.85Z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
     <main class="download">
       <h1>Download Clawtrate for Mac</h1>
-      <p class="download-lede">
-        Two tracks, each with its own Claw. Beta is out now. Stable isn't released yet.
-      </p>
+      <p class="download-lede">Beta is out now for Mac. Stable isn't released yet.</p>
 
       <div class="tracks">
         <!-- Beta: the Lantern, a deep-sea Claw whose lure lights the way. -->
@@ -73,7 +87,7 @@
               aria-label="The Lantern, Beta's Claw. Press to play."
               data-claw
               data-react="waiting"
-              data-moment="working:1200 done:1600"
+              data-moment="working:650 done:1800"
             >
               <svg
                 class="claw-art lantern"
@@ -377,7 +391,7 @@
             <p class="track-tag">Out now</p>
             <h2 id="beta-title">Beta</h2>
             <p class="download-version">
-              Beta __CLAWTRATE_BETA_VERSION__, Developer ID signed and notarized by Apple.
+              __CLAWTRATE_BETA_VERSION__ · Developer ID signed and notarized by Apple.
             </p>
             <div class="download-choices">
               <a class="btn btn-primary" href="__CLAWTRATE_ARM64_ZIP__"
@@ -386,8 +400,8 @@
               <a class="btn btn-secondary" href="__CLAWTRATE_X64_ZIP__">Download for Intel</a>
             </div>
             <p class="download-note">
-              Not sure which? Choose About This Mac in the Apple menu: a chip named Apple M is Apple
-              silicon. Open the download and move Clawtrate to Applications.
+              Not sure which? Open About This Mac in the Apple menu—any Apple M‑series chip is Apple
+              silicon. Unzip the download and drag Clawtrate to Applications.
             </p>
             <p class="download-note">
               <a href="__CLAWTRATE_RELEASE_PAGE__">This beta on GitHub</a> ·
@@ -824,10 +838,7 @@
           <div class="track-body">
             <p class="track-tag">Not released yet</p>
             <h2 id="stable-title">Stable</h2>
-            <p class="track-text">
-              There is no Stable release yet, so there is nothing to download here. Until there is,
-              Beta is the way to get Clawtrate.
-            </p>
+            <p class="track-text">No Stable build yet. Use Beta to try Clawtrate today.</p>
             <p class="download-note">
               Releases appear on
               <a href="https://github.com/sidebandstudio/clawtrate/releases">GitHub</a> as they
@@ -903,6 +914,18 @@
         </ul>
       </section>
     </main>
+
+    <footer class="foot">
+      <p>Clawtrate — Your OpenClaw agents, orchestrated.</p>
+      <nav aria-label="Project">
+        <a href="https://github.com/sidebandstudio/clawtrate">Source</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/releases">Releases</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/LICENSE">MIT license</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/SECURITY.md">Security</a>
+      </nav>
+      <p>Not affiliated with OpenClaw or xAI. No analytics on this site.</p>
+    </footer>
+    <script src="../../theme.js" defer></script>
     <script
       src="../../claws.js"
       defer

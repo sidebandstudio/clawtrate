@@ -301,7 +301,8 @@ code {
   align-items: start;
   max-width: calc(var(--max) + 2 * var(--edge));
   margin: 0 auto;
-  padding: clamp(28px, 4.5vh, 56px) var(--edge) 0;
+  /* Room above the demo window for the Clawling that sits on its edge. */
+  padding: clamp(60px, 7vh, 80px) var(--edge) 0;
 }
 .hero h1 {
   font-size: var(--t-xl);
@@ -324,6 +325,7 @@ code {
 }
 .get-note a {
   color: var(--text);
+  white-space: nowrap;
 }
 .cmd {
   margin-top: 24px;
@@ -334,9 +336,24 @@ code {
   color: var(--text-muted);
   margin-bottom: 8px;
 }
-/* Homebrew or curl: one line each. Without script both show, each named. */
+/* Homebrew or curl: one line each. Without script both show, each named.
+   With it, the label and the tabs share a row above the command. */
 .cmd-tabs {
   display: none;
+}
+.js .cmd,
+.js .close-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+}
+.js .cmd-switch {
+  display: contents;
+}
+.js .cmd-box,
+.js .close-side .oss {
+  grid-column: 1 / -1;
 }
 .js .cmd-tabs {
   display: inline-flex;
@@ -425,6 +442,15 @@ code {
 }
 .copy:active {
   transform: scale(0.95);
+}
+/* In dark, the raised surface is darker than the track it sits on: lift the
+   chosen tab and Copy with a light veil instead. */
+:root:not([data-theme="light"]) .hero .cmd-tabs button[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+:root:not([data-theme="light"]) .hero .copy:not(:hover) {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* The live approval, drawn the way the app draws its conversation. */
@@ -840,10 +866,6 @@ h3 {
 /* In the beta: what ships, and what is being built. */
 .beta {
   padding-top: var(--gap-section);
-}
-.beta-intro {
-  margin-top: 16px;
-  max-width: 36em;
 }
 .lists {
   display: grid;
@@ -1263,12 +1285,15 @@ h3 {
   }
   .hero {
     grid-template-columns: minmax(0, 1fr);
+    padding-top: clamp(28px, 4.5vh, 56px);
   }
   .hero h1 {
     max-width: 12ch;
   }
+  /* Stacked, the space above the window is the Clawling's height and a little more. */
   .demo {
     max-width: 640px;
+    margin-top: calc(66px - clamp(32px, 5vw, 88px));
   }
   .row-split,
   .row-split:has(.stage-tall),
@@ -1395,7 +1420,7 @@ h3 {
    Each has its own Claw. Beta's card is the deep sea at night in both themes. */
 .download-lede {
   margin-top: 14px;
-  max-width: 34em;
+  max-width: 40em;
   color: var(--text-muted);
 }
 .tracks {
@@ -1467,9 +1492,24 @@ h3 {
   background: #081723;
   color: var(--text);
 }
+/* In light, only the stage stays the deep sea; the card is a light one, like Stable's. */
+:root[data-theme="light"] .track-beta {
+  --text: #111213;
+  --text-muted: #55575b;
+  --bg-inverse: #111213;
+  --text-inverse: #ffffff;
+  --bg-bubble: rgba(17, 18, 19, 0.06);
+  --bg-raised: #ffffff;
+  --accent: #0a6e5c;
+  --accent-line: #0d8f77;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(10, 110, 92, 0.1);
+  background: #edf2f5;
+}
+/* The water's glow fades out above the stage's floor instead of meeting it in a line. */
 .track-beta .track-stage {
   background:
-    radial-gradient(60% 70% at 50% 108%, rgba(69, 189, 245, 0.2), transparent 70%),
+    radial-gradient(58% 60% at 50% 60%, rgba(69, 189, 245, 0.2), transparent 70%),
     linear-gradient(180deg, #0b2030, #081723);
 }
 .claw-lantern {
@@ -1553,30 +1593,31 @@ h3 {
   width: var(--d);
   height: var(--d);
   border: 1.5px solid rgba(191, 233, 255, 0.75);
+  background: rgba(191, 233, 255, 0.16);
   opacity: 0;
 }
 .fizz i:nth-child(1) {
   --x: -38px;
-  --d: 10px;
+  --d: 12px;
 }
 .fizz i:nth-child(2) {
   --x: 30px;
-  --d: 7px;
+  --d: 9px;
   --fizz-delay: 120ms;
 }
 .fizz i:nth-child(3) {
   --x: -12px;
-  --d: 6px;
+  --d: 8px;
   --fizz-delay: 240ms;
 }
 .fizz i:nth-child(4) {
   --x: 46px;
-  --d: 12px;
+  --d: 15px;
   --fizz-delay: 360ms;
 }
 .fizz i:nth-child(5) {
   --x: -56px;
-  --d: 6px;
+  --d: 8px;
   --fizz-delay: 480ms;
 }
 [data-burst] .fizz i {
@@ -1599,16 +1640,22 @@ h3 {
 /* Stable: daybreak on the shore, the sun not quite up. */
 .track-stable .track-stage {
   background:
-    radial-gradient(
-      42% 60% at 50% 88%,
-      color-mix(in srgb, var(--stage-yellow) 22%, transparent),
-      transparent 70%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--stage-sky) var(--wash), var(--bg-rail)),
-      var(--bg-rail)
-    );
+    radial-gradient(65% 46% at 50% 72%, rgba(246, 189, 59, 0.28), transparent 72%),
+    linear-gradient(180deg, #101924 0%, #1c2630 56%, #392e24 100%);
+}
+:root[data-theme="light"] .track-stable .track-stage {
+  background:
+    radial-gradient(65% 46% at 50% 72%, rgba(246, 189, 59, 0.28), transparent 72%),
+    linear-gradient(180deg, #dcecf7 0%, #f3efe4 68%, #fae3be 100%);
+}
+:root[data-theme="light"] .shore {
+  background: #d6d4ce;
+}
+/* The white ball, on the hill and raised against the sky, keeps a darker rim here. */
+.track-stable .ball,
+.track-stable [data-part="ball"] {
+  stroke: #8c9199;
+  stroke-width: 1;
 }
 .shore {
   position: absolute;
@@ -1675,8 +1722,18 @@ h3 {
   opacity: 1;
 }
 .lantern [data-s="thinking"] .halo {
-  animation: av-glow 2600ms cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  animation: halo-low 2600ms cubic-bezier(0.42, 0, 0.58, 1) infinite;
   opacity: 0.35;
+}
+/* At rest the light stays low, so it visibly comes up when the Lantern wakes. */
+@keyframes halo-low {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.16;
+  }
 }
 
 /* The spec's motions (avatar.ts, AVATAR_MOTIONS), in grid units. */
@@ -1868,11 +1925,11 @@ h3 {
   }
 }
 
-/* The home page's Clawling sits on the demo window's ledge, its body behind
-   the window. The button covers only the part that shows. */
+/* The home page's Clawling sits on the demo window's ledge. The window's top
+   edge cuts it off: the button shows only the part above, in front of the
+   window's shadow. The window lines up with the headline. */
 .demo {
   position: relative;
-  margin-top: 76px;
 }
 .demo .win {
   position: relative;
@@ -1880,15 +1937,17 @@ h3 {
 }
 .claw-perch {
   position: absolute;
-  z-index: 0;
+  z-index: 2;
   right: clamp(24px, 8%, 64px);
-  top: -73px;
-  width: 100px;
-  height: 73px;
+  top: -58px;
+  width: 80px;
+  height: 58px;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
 }
 .claw-perch .claw-art {
-  width: 100px;
-  height: 100px;
+  width: 80px;
+  height: 80px;
 }
 
 /* Under reduced motion every Claw holds a still pose; a press still changes it. */
@@ -1911,7 +1970,7 @@ h3 {
   .pc [data-part="pupil"] {
     translate: none !important;
   }
-  .lantern .ping,
+  .lantern [data-part="ping"],
   .snow {
     display: none !important;
   }
@@ -1920,14 +1979,14 @@ h3 {
 /* Built by engineers from: the logos in one colour, each at its own height. */
 .pedigree {
   --s: 1;
-  padding-top: clamp(64px, 8vw, 112px);
+  padding-top: clamp(48px, 6vw, 72px);
 }
 .download .pedigree {
   padding: clamp(48px, 6vw, 80px) 0 0;
 }
 .pedigree-title {
   color: var(--text-muted);
-  font-size: clamp(1.0625rem, 0.95rem + 0.45vw, 1.3125rem);
+  font-size: var(--t-s);
   font-weight: 500;
   letter-spacing: -0.01em;
 }
@@ -1949,29 +2008,32 @@ h3 {
   width: auto;
   height: calc(var(--h) * var(--s));
   filter: brightness(0) invert(1);
-  opacity: 0.8;
+  opacity: 0.55;
 }
 :root[data-theme="light"] .pedigree-logos img {
   filter: brightness(0);
-  opacity: 0.74;
+  opacity: 0.58;
 }
+/* Heights and nudges by eye: the AWS and Amazon smiles sit below their words. */
 .logo-aws {
-  --h: 46px;
+  --h: 40px;
+  transform: translateY(3px);
 }
 .logo-amazon {
-  --h: 38px;
+  --h: 35px;
+  transform: translateY(4px);
 }
 .logo-sonos {
-  --h: 24px;
+  --h: 21px;
 }
 .logo-mit-lincoln-laboratory {
-  --h: 34px;
+  --h: 28px;
 }
 .logo-summit-partners {
-  --h: 34px;
+  --h: 28px;
 }
 .logo-philips {
-  --h: 21px;
+  --h: 23px;
 }
 /* The logos come in one after another, once. */
 .js .pedigree[data-reveal] li {
@@ -2033,32 +2095,34 @@ h3 {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-/* Phones and small tablets: three rows, MIT Lincoln Laboratory alone in the middle. */
+/* Phones and small tablets: two columns from the left, MIT Lincoln Laboratory
+   on a row of its own. */
 @media (max-width: 720px) {
   .pedigree {
-    --s: 0.8;
+    --s: 0.72;
   }
   .pedigree-logos {
-    gap: 0 16px;
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-auto-flow: row dense;
+    justify-content: start;
+    align-items: center;
+    gap: 24px 36px;
   }
-  .pedigree-logos::before,
-  .pedigree-logos::after {
-    content: "";
-    flex: 0 0 100%;
-    height: 32px;
+  .pedigree-logos::before {
+    content: none;
   }
-  .pedigree-logos::after {
-    order: 3;
-  }
-  .pedigree-logos li:nth-child(n + 5) {
-    order: 4;
-  }
-  .pedigree-logos li:nth-child(4) {
-    flex: 0 0 100%;
+  .pedigree-logos li {
     justify-content: flex-start;
   }
+  .pedigree-logos li:nth-child(n + 4) {
+    order: 0;
+  }
+  .pedigree-logos li:nth-child(4) {
+    grid-column: 1 / -1;
+  }
   .pedigree-logos .logo-mit-lincoln-laboratory {
-    width: min(100%, 340px);
+    width: min(100%, 280px);
     height: auto;
   }
   .track {
