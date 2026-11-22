@@ -32,6 +32,12 @@
 //   peer      fix round 1, candidate (e): open a plain TCP socket to the port and
 //             find which process of this account holds the accepted end of that
 //             exact connection (`lsof`, by its four-tuple), before any byte is sent
+//   exec      fix round 2: (e) plus the holder's executable and OpenClaw facts.
+//             For the gateway itself and then for a same-account TCP proxy that
+//             forwards to it: the kernel's executable path, OpenClaw's native module
+//             mapped from the OpenClaw package (and its SHA-256), descriptors open on
+//             the profile's gateway lock and state database (by inode), and the
+//             lock's own pid, role, port and start time against the kernel's
 //   tls       fix round 1, candidate (b): turn on `gateway.tls` in this development
 //             instance's own config, let the gateway restart itself, pin the
 //             certificate it wrote, and pair over wss:// with all six; then dial an
@@ -42,7 +48,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { createHash, generateKeyPairSync, createPublicKey, createPrivateKey, sign } from "node:crypto";
 import { readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
-import { connect as netConnect } from "node:net";
+import { connect as netConnect, createServer as createNetServer } from "node:net";
 import { connect as tlsConnect, createServer as createTlsServer } from "node:tls";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -407,9 +413,15 @@ async function code() {
   await watcher.client.stopAndWait().catch(() => {});
 }
 
+/** `lsof`, bounded: 2 s, 256 KiB, and an empty answer for anything that fails (unverified). */
+function lsof(args: string[]): string {
+  const run = spawnSync("/usr/sbin/lsof", args, { encoding: "utf8", timeout: 2000, maxBuffer: 256 * 1024 });
+  return run.error || typeof run.stdout !== "string" ? "" : run.stdout;
+}
+
 /** Who holds the accepted end of this exact TCP connection, as this account can see it. */
-function acceptedEnd(localPort: number) {
-  const out = spawnSync("/usr/sbin/lsof", ["-nP", "-a", `-iTCP@127.0.0.1:${localPort}`, "-sTCP:ESTABLISHED", "-FpLn"], { encoding: "utf8" }).stdout;
+function acceptedEnd(localPort: number, serverPort: number = port!) {
+  const out = lsof(["-nP", "-a", `-iTCP@127.0.0.1:${localPort}`, "-sTCP:ESTABLISHED", "-FpLn"]);
   const ends: Array<{ pid: number; login: string; name: string }> = [];
   let pid = 0;
   let login = "";
@@ -419,7 +431,7 @@ function acceptedEnd(localPort: number) {
     else if (line.startsWith("n")) ends.push({ pid, login, name: line.slice(1) });
   }
   // The gateway's end is the one whose local address is the gateway's port.
-  return ends.filter((e) => e.name === `127.0.0.1:${port}->127.0.0.1:${localPort}`);
+  return ends.filter((e) => e.name === `127.0.0.1:${serverPort}->127.0.0.1:${localPort}`);
 }
 
 async function peer() {
@@ -440,6 +452,111 @@ async function peer() {
   }
   const me = execFileSync("/usr/bin/id", ["-un"], { encoding: "utf8" }).trim();
   say("this account:", me);
+}
+
+/** Kernel facts about one process, and how they match the profile's OpenClaw. */
+function holderFacts(pid: number) {
+  // Mapped code (txt) and open regular files, with inodes: the kernel's view, not the process's.
+  const txt: string[] = [];
+  const open = new Map<string, number>();
+  let fd = "";
+  let inode = 0;
+  for (const line of lsof(["-nP", "-a", "-p", String(pid), "-Ffin"]).split("\n")) {
+    if (line.startsWith("f")) fd = line.slice(1);
+    else if (line.startsWith("i")) inode = Number(line.slice(1));
+    else if (line.startsWith("n")) {
+      if (fd === "txt") txt.push(line.slice(1));
+      else open.set(line.slice(1), inode);
+    }
+  }
+  const executable = txt[0] ?? null;
+  const addon = txt.find((path) => /\/node_modules\/@openclaw\/fs-safe-darwin-(arm64|x64)\/fs-safe-native\.node$/.test(path)) ?? null;
+  const packageRoot = addon ? addon.replace(/\/node_modules\/@openclaw\/.*$/, "") : null;
+  let packageVersion: string | null = null;
+  try {
+    const pkg = packageRoot ? (JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { name?: string; version?: string }) : null;
+    packageVersion = pkg?.name === "openclaw" ? (pkg.version ?? null) : null;
+  } catch {
+    packageVersion = null;
+  }
+  const addonSha256 = addon ? createHash("sha256").update(readFileSync(addon)).digest("hex").slice(0, 16) + "…" : null;
+  const uid = execFileSync("/usr/bin/id", ["-u"], { encoding: "utf8" }).trim();
+  const lockPath = join(stateDir, "tmp", `openclaw-${uid}`, "gateway.state.lock");
+  const dbPath = join(stateDir, "state", "openclaw.sqlite");
+  const holdsByInode = (path: string) => {
+    try {
+      const ino = statSync(path).ino;
+      return [...open.entries()].some(([name, i]) => name === path && i === ino);
+    } catch {
+      return false;
+    }
+  };
+  let lock: { pid?: number; role?: string; port?: number; startTime?: number; stateDir?: string } | null = null;
+  try {
+    lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  } catch {
+    lock = null;
+  }
+  const started = spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).stdout?.trim();
+  const kernelStart = started ? Math.floor(new Date(started).getTime() / 1000) : null;
+  return {
+    executable: executable?.replace(process.env.HOME!, "~") ?? null,
+    executableIsNode: Boolean(executable && /\/node$/.test(executable)),
+    openclawAddonMapped: Boolean(addon),
+    packageVersion,
+    addonSha256,
+    holdsGatewayLock: holdsByInode(lockPath),
+    holdsStateDatabase: holdsByInode(dbPath),
+    lockNamesThisPid: lock?.pid === pid,
+    lockRoleGateway: lock?.role === "gateway",
+    lockPortMatches: lock?.port === port,
+    lockStartMatchesKernel: lock?.startTime !== undefined && kernelStart !== null && Math.abs(lock.startTime - kernelStart) <= 1,
+    lockStateDirMatches: lock?.stateDir === stateDir,
+  };
+}
+
+async function proveVia(serverPort: number, label: string) {
+  const socket = netConnect(serverPort, "127.0.0.1");
+  await new Promise<void>((r) => socket.once("connect", () => r()));
+  const started = Date.now();
+  let found = acceptedEnd(socket.localPort!, serverPort);
+  while (found.length === 0 && Date.now() - started < 2000) {
+    await sleep(20);
+    found = acceptedEnd(socket.localPort!, serverPort);
+  }
+  const lookup = Date.now() - started;
+  const facts = found.length === 1 ? holderFacts(found[0]!.pid) : null;
+  const pass =
+    facts !== null &&
+    facts.executableIsNode &&
+    facts.openclawAddonMapped &&
+    facts.packageVersion === "2026.10.6" &&
+    facts.holdsGatewayLock &&
+    facts.holdsStateDatabase &&
+    facts.lockNamesThisPid &&
+    facts.lockRoleGateway &&
+    facts.lockPortMatches &&
+    facts.lockStartMatchesKernel &&
+    facts.lockStateDirMatches;
+  say(`${label}: accepted end`, found.map((f) => ({ pid: f.pid, login: f.login })), `(${lookup} ms), facts:`, facts, `→ ${pass ? "PASS" : "REFUSE"}, total ${Date.now() - started} ms, nothing sent`);
+  socket.destroy();
+}
+
+async function exec() {
+  says();
+  await proveVia(port!, "direct to the gateway");
+  await proveVia(port!, "direct to the gateway, again");
+  // A same-account proxy: accepts on its own loopback port and forwards every byte to the gateway.
+  const proxy = createNetServer((inbound) => {
+    const upstream = netConnect(port!, "127.0.0.1");
+    inbound.pipe(upstream).pipe(inbound);
+    inbound.on("error", () => upstream.destroy());
+    upstream.on("error", () => inbound.destroy());
+  });
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
+  const proxyPort = (proxy.address() as { port: number }).port;
+  await proveVia(proxyPort, `through a same-account forwarding proxy on ${proxyPort}`);
+  proxy.close();
 }
 
 async function tls() {
@@ -508,7 +625,7 @@ async function tls() {
   spawnSync("/bin/rmdir", [dir]);
 }
 
-const experiments: Record<string, () => Promise<unknown>> = { local, remote, inapp, repair, code, peer, tls };
+const experiments: Record<string, () => Promise<unknown>> = { local, remote, inapp, repair, code, peer, exec, tls };
 if (!experiment || !experiments[experiment]) {
   console.log(`usage: full-scope-probe.ts <${Object.keys(experiments).join("|")}> --instance <name>`);
   process.exit(1);

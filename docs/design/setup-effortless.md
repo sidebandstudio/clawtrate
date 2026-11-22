@@ -4,7 +4,7 @@ How a person gets from opening Clawtrate to chatting with their Main Bot with no
 
 The evidence is `docs/research/setup-effortless/full-scope-probe.ts`, run against development gateways, and OpenClaw 2026.10.6's own source and docs. `<openclaw>/…` is a path in the installed `openclaw` 2026.10.6 package, as in `docs/research/setup-flow.md`; chunk names carry a build hash, so search by the `//#region` marker. **Live** means a probe ran it on a development gateway; **source** means it was read only.
 
-This version takes in the first independent review. Its main change: no credential goes to a local socket until Clawtrate has proved who holds the other end of that exact socket (§3).
+This version takes in two independent reviews and the product owner's decision on local connect. No credential goes to a local socket until Clawtrate has checked who holds the other end of that exact socket, and what that holder is (§3). What remains is stated, and was accepted (§13).
 
 ## Why the earlier decision is superseded
 
@@ -19,18 +19,18 @@ So two things change on purpose:
 
 The targets:
 
-| Gateway                                                       | Terminal commands                                          | Approvals in total      | Clicks to connect |
-| ------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------- | ----------------- |
-| On this Mac, OpenClaw's defaults                              | 0                                                          | 0                       | 1 (Connect)       |
-| On another computer reached by SSH                            | 0                                                          | 0                       | as `setup.md` §5  |
-| On another computer by a `wss://` address (Tailscale, VPS)    | 0 when another Clawtrate is already connected; otherwise 1 | 1                       | 1 + the approval  |
-| A phone or a second computer, once one Clawtrate is connected | 0                                                          | 1 approval in Clawtrate | —                 |
+| Gateway                                                          | Terminal commands                                                  | Approvals in total                                                     | Clicks to connect |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------- | ----------------- |
+| On this Mac, OpenClaw's defaults (§3's gate)                     | 0                                                                  | 0                                                                      | 1 (Connect)       |
+| On another computer reached by SSH, with OpenClaw's TLS on there | 0                                                                  | 0                                                                      | as `setup.md` §5  |
+| On another computer by a `wss://` address (Tailscale, VPS)       | 0 when another Clawtrate with its helper is connected; otherwise 1 | 1                                                                      | 1 + the approval  |
+| A phone or a second computer, once one Clawtrate is connected    | 0                                                                  | 1 approval in Clawtrate, once its helper plugin is on the gateway (§5) | —                 |
 
 Every other approval or Terminal step is a defect. §12 lists the ones 2026.10.6 still forces, says why, and gives the smallest path around each.
 
 The rules that stay:
 
-- No credential goes to a socket whose other end isn't proved (§3).
+- No credential goes to a socket that fails the send gate (§3).
 - Local connect runs none of OpenClaw's programs (§3).
 - The approve prompt is bound to the device and the exact grant the person reviewed, and can't be clicked through (§5).
 - A non-loopback address must be protected: `wss://` or SSH (§4).
@@ -50,18 +50,18 @@ The rules that stay:
 10. Decisions this supersedes
 11. Parity rows
 12. What still needs an approval or a command, and why
-13. The local threat model, for the product owner
+13. Residual risk on this Mac, accepted
 14. Not covered
 
 ## 1. What changes, path by path
 
-| Path                                        | Today                                                                                                                                               | After                                                                                                                                                                                                          |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| This Mac, OpenClaw running                  | The look reads the version and stops. The person types the address and token under Advanced, then approves up to three access requests in Terminal. | Clawtrate reads the address and token from OpenClaw's settings file and proves the other end of its socket runs as this Mac account (or holds OpenClaw's TLS key). One Connect pairs it silently with all six. |
-| This Mac, a device paired earlier with less | Each first send, admin action or Machines visit asks for more, and each request waits for `openclaw devices approve`.                               | One offer, once: "Give this device full control" or "Keep current access" (§6).                                                                                                                                |
-| Another computer over SSH                   | Not built; would run `openclaw qr` over SSH.                                                                                                        | A fixed script reads the settings file there, and the same socket proof runs on the far side. Until that proof is built, the SSH route sends no credential by itself.                                          |
-| Another computer by address                 | Advanced, read-only, then one approval per tier.                                                                                                    | An address-and-token form or a pasted setup code, on the first screen. `wss://` only. One approval for all six.                                                                                                |
-| A phone                                     | "Clawtrate doesn't make codes for phones yet."                                                                                                      | "Connect a phone" makes a code through the gateway, with no command. The phone asks; Clawtrate on the desktop shows the approve prompt.                                                                        |
+| Path                                        | Today                                                                                                                                               | After                                                                                                                                                                                                                                                                   |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac, OpenClaw running                  | The look reads the version and stops. The person types the address and token under Advanced, then approves up to three access requests in Terminal. | Clawtrate reads the address and token from OpenClaw's settings file. It sends them only on a socket whose holder is this account's OpenClaw gateway for that profile (§3's gate), or that presents OpenClaw's TLS certificate. One Connect pairs silently with all six. |
+| This Mac, a device paired earlier with less | Each first send, admin action or Machines visit asks for more, and each request waits for `openclaw devices approve`.                               | One offer, once: "Give this device full control" or "Keep current access" (§6).                                                                                                                                                                                         |
+| Another computer over SSH                   | Not built; would run `openclaw qr` over SSH.                                                                                                        | A fixed script reads the settings file there. A credential goes through the forward by itself only when OpenClaw has TLS on there, with the pin read over SSH.                                                                                                          |
+| Another computer by address                 | Advanced, read-only, then one approval per tier.                                                                                                    | An address-and-token form or a pasted setup code, on the first screen. `wss://` only. One approval for all six.                                                                                                                                                         |
+| A phone                                     | "Clawtrate doesn't make codes for phones yet."                                                                                                      | "Connect a phone" makes a code through the gateway, with no command. The phone asks; Clawtrate on the desktop shows the approve prompt.                                                                                                                                 |
 
 ## 2. Scopes, consent and storage
 
@@ -151,51 +151,86 @@ A gateway-side revoke and a narrower replacement are later work (§14). A reject
 
 ## 3. Connect to OpenClaw on this Mac
 
-Clawtrate reads where the gateway listens and its token from OpenClaw's own settings file. It runs no OpenClaw program before or after Connect: OpenClaw's launcher may repair its own installation before any command (`<openclaw>/openclaw.mjs` lines 649-715). Before any credential leaves the host, Clawtrate proves who holds the other end of that exact socket.
+Clawtrate reads where the gateway listens and its token from OpenClaw's own settings file. It runs no OpenClaw program before or after Connect: OpenClaw's launcher may repair its own installation before any command (`<openclaw>/openclaw.mjs` lines 649-715). Before any credential leaves the host, Clawtrate checks who holds the other end of that exact socket, and what that holder is (below).
 
-### Proving the other end of the socket
+### The send gate
 
-A listener check identifies a listening socket at one moment. The credential goes to an accepted connection, and the two can differ. So the proof must be about the connection that will carry the credential. Five candidates were checked against 2026.10.6:
+The product owner decided how local connect works on this Mac. As relayed to this design, the decision is "pure one-click Connect, with the account check plus a check of the listening program's executable", with "no TLS switch and no OpenClaw restart". TLS pinning still applies whenever OpenClaw already has TLS on.
 
-| Candidate                                                                   | Works in 2026.10.6?                                        | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| (a) The gateway signs a client nonce with its identity key                  | **No.**                                                    | The gateway's identity is in OpenClaw's SQLite state, not a file (`loadOrCreateProcessDeviceIdentityAsync`, `<openclaw>/dist/device-identity-async-Dmb-qdPn.mjs` lines 20-45). Nothing signs before auth: `connect.challenge` is a bare server nonce (`<openclaw>/dist/ws-connection-Cq7PPwbb.mjs` lines 314-323), `hello-ok` carries no signature (`HelloOk` in the schema), and `gateway.identity.get` needs an authenticated connection.                                                                                                                                                                                                                                                                     |
-| (b) A TLS certificate pinned from an owner-only file                        | **Yes, when OpenClaw already has TLS on.** Off by default. | **Live** on a development instance with `gateway.tls.enabled: true`. OpenClaw wrote `gateway/tls/gateway-cert.pem` and `gateway-key.pem`, both 0600. The certificate's SHA-256 matched what it served. A new device pinning it over `wss://127.0.0.1` paired silently with all six (`approvedVia: "silent"`). Plain `ws://` to that port was reset. An impostor TLS listener dialled with the same pin got 0 bytes; the pinned client stopped with "gateway tls fingerprint mismatch" (`applyGatewayWebSocketTlsPin`, `@openclaw/gateway-client` `dist/index.mjs` lines 565-600). With the default `hybrid` reload, the config change restarted the gateway in its own process (same PID), with no `launchctl`. |
-| (c) A Unix-domain socket, where `LOCAL_PEERCRED` authenticates the peer     | **No.**                                                    | The gateway's WebSocket API listens on TCP only. The schema has no socket-path setting. The `.sock` files OpenClaw makes (`exec-approvals.sock`, the spawn broker's `resource.sock`) are internal channels, not the operator API.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| (d) The gateway proves it knows the shared token before the client sends it | **No.**                                                    | The first frame must be `connect`, carrying the credential (`<openclaw>/dist/message-handler-CRCo2VX0.mjs` lines 3520-3521). The challenge is a random UUID with no proof attached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| (e) The account that holds the accepted end of this exact connection        | **Yes, as an account proof.**                              | **Live.** Three plain TCP connections to a development gateway. Before any byte was sent, Clawtrate looked up the server end by the connection's four-tuple (`127.0.0.1:<port> → 127.0.0.1:<our local port>`). Each was held by the gateway's own PID, as this account, found in 139-273 ms. As a non-root account, the system shows only this account's sockets: a root-owned listener on this Mac showed nothing to `lsof`. A holder from another account can't be seen, so the proof fails closed.                                                                                                                                                                                                           |
+A listener check describes a listening socket at one moment. The credential goes to an accepted connection, and the two can differ. So every check below is about the connection that will carry the credential.
 
-**What Clawtrate uses.**
+What 2026.10.6 offers, checked against the source and, where it could work, live:
 
-1. **Use the TLS pin (b) when OpenClaw already has TLS on.**
-   - Read the certificate from `gateway.tls.certPath`, or else `<state>/gateway/tls/gateway-cert.pem`. It must be owner-only, and the same reader rules as the settings file apply.
-   - Check it on the same TLS socket before the WebSocket upgrade, using the pinned client's existing pin check.
-   - This proves the far end holds OpenClaw's private key, which only this account (or root) can read.
-2. **Otherwise use the account proof (e).**
-   - The host dials the TCP socket itself. The pinned `undici` `Agent` connector, matched to Node's bundled version, hands that socket to the WebSocket. So the socket that is proved is the socket that is used.
-   - The proof runs before the upgrade request's first byte, and again after `connect.challenge`, before the credential frame.
-   - Each check finds every holder of the accepted end by its four-tuple, and needs at least one holder. Every holder must be a process of this account. Nothing found within 2 s means unverified, and the socket closes.
-   - Every socket is checked, retries and reconnects included, whether it carries the shared token or this device's own token.
-   - On macOS the lookup is `proc_pidinfo` / `proc_pidfdinfo` in a small native helper, which is what `lsof` uses (the probe used `/usr/sbin/lsof`). On Linux it is `/proc/net/tcp`, which shows every socket's owner uid, then this account's `/proc/<pid>/fd`.
-3. **Neither proves the peer:** nothing is sent, and the card says "Clawtrate couldn't verify what is listening at port ‹port›."
+| Candidate                                                                       | In 2026.10.6                                | Evidence                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (a) The gateway signs a client nonce with its identity key                      | No                                          | The identity is in OpenClaw's SQLite state (`<openclaw>/dist/device-identity-async-Dmb-qdPn.mjs` lines 20-45). Nothing signs before auth: `connect.challenge` is a bare server nonce (`<openclaw>/dist/ws-connection-Cq7PPwbb.mjs` lines 314-323), and `hello-ok` carries no signature.                                      |
+| (b) A TLS certificate pinned from an owner-only file                            | Yes, when TLS is already on; off by default | **Live** on a development instance with TLS on. Pinned `wss://127.0.0.1` paired silently with all six, plain `ws://` was reset, and an impostor dialled with the pin got 0 application bytes ("gateway tls fingerprint mismatch"; `applyGatewayWebSocketTlsPin`, `@openclaw/gateway-client` `dist/index.mjs` lines 565-600). |
+| (c) A Unix-domain socket with peer credentials                                  | No                                          | The operator API is TCP only. OpenClaw's `.sock` files are internal channels.                                                                                                                                                                                                                                                |
+| (d) The gateway proves it knows the token first                                 | No                                          | The first frame must be `connect` with the credential (`<openclaw>/dist/message-handler-CRCo2VX0.mjs` lines 3520-3521).                                                                                                                                                                                                      |
+| (e) The account that holds the accepted end of this exact connection            | Yes, as an account check only               | **Live**, below. The confirming review showed that a same-account proxy passes it even when a sandbox denies that proxy the settings file.                                                                                                                                                                                   |
+| (f) The listening program: what the kernel says that holder runs and holds open | Yes, as an OpenClaw-instance check          | **Live**, below. It refused a same-account forwarding proxy that (e) alone would have passed.                                                                                                                                                                                                                                |
 
-**Why (e) is enough on this Mac.** It proves the credential reaches a process running as this macOS account. That is exactly the boundary that already holds the token: any process of this account can read the 0600 settings file. It is not a proof that the peer is OpenClaw. A same-account impostor gains nothing it couldn't read for itself. How the proof holds up in each case:
+**With TLS on: the pin (b).** This is the gate whenever OpenClaw already has TLS on.
 
-- **Alternate and wildcard listeners.** The proof is about the accepted connection, whichever listener took it.
-- **Another account, or root.** Their sockets are invisible to this account, so the proof fails closed.
-- **The holder exits, or its PID is reused.** The proof reads only a live connection's holder. If the holder exits, the connection closes and the send fails.
-- **The socket is passed on.** It can reach another process only from a holder of this account. Every holder found is checked.
+- **Where the pin comes from.** The public leaf certificate at the configured `gateway.tls.certPath`, or else `<state>/gateway/tls/gateway-cert.pem`.
+- **How it is read.**
+  - A held-descriptor walk through ancestors that no other account can write to.
+  - Links are refused, and so is a relative custom path that could mean more than one place.
+  - The leaf must be an owner-only regular file.
+  - The generated `gateway/tls` folder is 0755 inside the private state folder, and that is allowed when the integrity checks pass.
+- **What it proves.** A file certificate pins the leaf, and TLS proves the other end holds the matching private key. For a custom path, the public certificate's mode says nothing about who can read the key, so Clawtrate claims only possession of the key.
+- **What it is bound to.** The pin belongs to one profile and one normalized endpoint.
+- **When it is checked.** The SHA-256 of the leaf's DER is compared on the same TLS socket after `secureConnect`, before the upgrade. The pinned client already defers its upgrade until the pin passes. A second check before the credential frame isn't needed once the checked socket is the one used.
+- **A mismatch** closes the socket and keeps the prior pin.
+- **A local rotation** needs a new Look again and Connect against the newly verified file. A manually pinned remote address needs the new fingerprint from a trusted channel.
+- **A TLS failure** never falls back to plain `ws://`.
 
-What remains unproved live is a holder that belongs to another macOS account. Creating one needs a second account, so PR 2's packaged check does it on a hosted macOS runner, and asserts that zero credential bytes are sent. These checks reuse #291's attempt, consent, socket and generation guards (`apps/desktop/src/setup/controller.ts` from line 424) and close the socket on any failure.
+**With TLS off: (e) and (f) together, before the first byte and again before the credential.** Clawtrate dials the TCP socket itself: a pinned `undici` `Agent` connector hands that socket to the WebSocket, so the socket that is checked is the socket that is used. On that socket:
 
-**Turning TLS on for the person** would give (b) everywhere. It changes OpenClaw's own config and restarts the gateway. Every plain `ws://127.0.0.1` client of that gateway breaks: OpenClaw's own CLI reads the local pin by itself, but the Control UI in a browser meets a self-signed certificate. Clawtrate doesn't do this on its own; §13 puts the choice to the product owner.
+1. **(e) The accepted end.** Find every holder of the server end of this exact connection, by its four-tuple `127.0.0.1:<port> → 127.0.0.1:<our local port>`.
+   - At least one holder must be found, and every holder must be a process of this account.
+   - The macOS kernel returns `EPERM` for another account's or root's descriptors to an ordinary caller (XNU `proc_security_policy`, cited by the review), so their holders are invisible and the check fails closed.
+2. **(f) The listening program.** For that holder's PID, the kernel's own facts must all match. None of them come from the process's own arguments, which OpenClaw overwrites anyway: the live gateway's argument list read `openclaw-gateway`.
+   - **Executable.** The executable the kernel reports (`proc_pidpath`) is a Node binary.
+   - **OpenClaw's native module.** Its mapped code includes OpenClaw's own native module, `node_modules/@openclaw/fs-safe-<platform>-<arch>/fs-safe-native.node`, inside a package whose `package.json` is `openclaw` 2026.10.6. The module's SHA-256 equals the value Clawtrate pins for that version and architecture, from the published `@openclaw/fs-safe-*@0.25.0` packages that 2026.10.6 depends on exactly (`<openclaw>/package.json` lines 1843-1844). The module is ad-hoc signed with no team, so its code signature proves nothing and the hash is what binds it.
+   - **The profile's files.** It holds open descriptors on the profile's `tmp/openclaw-<uid>/gateway.state.lock` and `state/openclaw.sqlite`. Each is matched by device and inode against Clawtrate's own no-follow open of the same file.
+   - **The lock names it.** The lock is OpenClaw's compatibility projection of its gateway owner (`<openclaw>/docs/gateway/gateway-lock.md`), owner-only, read with the reader's rules. It must name this PID, role `gateway`, this port and this profile's state folder, with a `startTime` equal to the kernel's start time for the PID, to within a second.
+3. **Bounds.**
+   - Both checks run in a small helper off the main thread, with a 2 s deadline and bounded output. On macOS the helper uses libproc (`proc_pidfdinfo`, `proc_pidpath`, region and vnode info), as `lsof` does. On Linux it reads `/proc/net/tcp`, `/proc/<pid>/exe`, `/proc/<pid>/maps` and `/proc/<pid>/fd`.
+   - A missing helper, a timeout, denied access or malformed output all mean unverified, and nothing is sent.
+   - Every socket is checked, retries and reconnects included, whether it would carry the shared token or this device's own token.
+4. **When nothing proves the peer,** nothing is sent. The card stays at "OpenClaw settings found" with "Clawtrate couldn't verify what is listening at port ‹port›." It offers Look again and the address route, without filling in its token.
 
-**Over SSH,** the same rule applies on the far side. The SSH host key authenticates the SSH server, but the forward's far end is a loopback connection that is still unproved. Two options:
+**Live, on a development gateway of this checkout's (`exec` in the probe).**
 
-- With TLS on there, Clawtrate reads the certificate over SSH with the fixed script and pins it through the forward (`tlsServerName` 127.0.0.1).
-- Otherwise the fixed script runs the account proof there after Clawtrate's socket is open, and before the credential frame. It checks every established connection to `127.0.0.1:<port>` whose client end belongs to this account's `sshd`.
+- **Two direct connections to the gateway passed every check**, in 326 and 534 ms with `lsof`, with nothing sent. The facts:
+  - the executable was a Node binary;
+  - OpenClaw's native module was mapped from the 2026.10.6 package;
+  - the gateway lock and the state database were held, matched by inode;
+  - the lock named the PID, role `gateway`, the port, the state folder and the kernel's start time.
+- **A same-account TCP proxy that forwarded every byte to the gateway was refused** in 637 ms, with nothing sent. (e) alone would have passed it. The proxy had full access to the profile's files, and was refused anyway: it mapped no OpenClaw module, held neither file, and isn't the process the lock names.
 
-Until the SSH unit builds and tests one of these, the SSH route sends no credential by itself.
+**What (e) and (f) prove.** At the moment of the check, the server end of Clawtrate's connection is held only by processes of this account. One of them is a Node process that:
+
+- has OpenClaw 2026.10.6's own native module loaded;
+- has this profile's gateway lock and state database open;
+- is the process this profile's OpenClaw records as its running gateway, with the same start time.
+
+A process that can't open the profile's 0700 folder (a sandboxed proxy, the case the review built) can't hold those descriptors, and is refused.
+
+**What they don't prove:**
+
+- **That the JavaScript running is unmodified OpenClaw.** Node loads scripts and closes them. A process of this account with write access to the package, or the power to inject into the gateway, could change what runs. Such a process could read the token anyway.
+- **That no other holder exists.** An unprivileged scan can't see a duplicate of the accepted socket held by another account. One could exist only if a holder of this account passed it on (`SCM_RIGHTS`, inheritance).
+- **The moment between the last check and the write.** Two checks narrow that window but don't close it.
+- **That the gateway is the one its address implies,** in any cryptographic sense. Only (b) does that.
+
+§13 states what remains, and the product owner's acceptance of it.
+
+**Over SSH,** the same rule applies on the far side. The SSH host key authenticates the SSH server. The forward's far end is still an unproved loopback connection, and a scan of connections attributed to `sshd` can't bind its result to Clawtrate's channel. So:
+
+- With TLS on there, Clawtrate reads the certificate over the authenticated SSH channel and checks it inside TLS through the forward (`tlsServerName` 127.0.0.1).
+- Without TLS, the SSH route sends no credential by itself. The person uses the address route, or turns TLS on themselves.
 
 ### The settings reader
 
@@ -208,7 +243,7 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
 - **Opening.**
   - The profile folder is opened as a held directory descriptor beneath the home folder. Each untrusted component is walked without following links.
   - The file is opened relative to that descriptor: read-only, no-follow, nonblocking. A FIFO fails without blocking.
-  - Node has no `openat`. The same native helper as the socket proof does this, and checks ACLs (below).
+  - Node has no `openat`. The same native helper as the send gate does this, and checks ACLs (below).
 - **Checks on what was opened (`fstat`).**
   - The folder is this account's and private.
   - The file is this account's, a regular file with one link, mode exactly 0600.
@@ -216,8 +251,12 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
   - At most 1 MiB, checked against the bytes actually read as well as the first size.
   - OpenClaw writes them as 0700 and 0600 (`<openclaw>/dist/io.write-DVKwks5G.mjs` lines 171 and 267).
 - **Parsing.**
-  - A purpose-built JSON5 reader in the host. It evaluates nothing, follows no `$include`, does no `${…}` interpolation and imports no OpenClaw code.
-  - It allows at most 32 levels of nesting and 20,000 tokens.
+  - `json5` 2.2.3, pinned as a direct dependency (it is already in the lockfile). It is a non-evaluating parser: it follows no `$include`, does no `${…}` interpolation, and imports no OpenClaw code.
+  - `json5` has no depth or work limits of its own. So it runs only after a small in-tree lexer has passed the same 1 MiB of text, and that lexer is reviewed against these limits in PR 2a:
+    - at most 32 levels of nesting;
+    - at most 20,000 tokens;
+    - the keys of every object recorded, for the rejections below.
+  - The parse runs in a worker with `resourceLimits` and a deadline.
   - It rejects:
     - duplicate keys;
     - the names `__proto__`, `constructor` and `prototype`;
@@ -225,7 +264,8 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
   - It takes own properties of plain objects only. OpenClaw's format is JSON5 (`<openclaw>/dist/io.read-helpers-CMGXaUZA.mjs` lines 89-95, 119-156).
 - **What it extracts.** A local gateway's literal token, and nothing else.
   - `gateway.mode` must be `local` or absent.
-  - `gateway.auth.mode` must be `token`, or absent with a literal token and no password. An absent mode can mean password (`<openclaw>/dist/auth-resolve-2uQi6dqM.mjs` lines 21-59).
+  - `gateway.auth.mode` must be `token` or absent. An absent mode can mean password (`<openclaw>/dist/auth-resolve-2uQi6dqM.mjs` lines 21-59).
+  - `gateway.auth.password` must be absent in both cases, explicit `token` mode included. A mixed-auth fixture (a token and a password, with and without a mode) checks that the reader never stages a token.
   - The token is rejected when it is a SecretRef object, an unresolved `${…}`, the redaction sentinel, empty, longer than 4 KiB, or contains control characters. Ordinary punctuation is kept, with OpenClaw's own trimming.
   - Password and `none` modes are later routes, not this one.
   - The port must be an integer from 1 to 65535. 18789 is used only when the port is absent. Either way it is a candidate: a running gateway can override it (`--port`, `OPENCLAW_GATEWAY_PORT`; `config-gateway.md` lines 135-146).
@@ -240,15 +280,22 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
 
 The look only reads files and proves sockets, so it runs before the person answers "Where does OpenClaw run?".
 
-1. **Settings found, not yet proved:** a card "OpenClaw settings found", with "Port 18789 · default profile · version 2026.10.6" under it (the version comes from OpenClaw's own `package.json`). The look then opens one socket, proves it, sends nothing, and closes it.
+1. **Settings found, not yet proved:** a card "OpenClaw settings found", with "Port 18789 · default profile · version 2026.10.6" under it. The version comes from OpenClaw's own `package.json`. The look then opens one socket, runs the send gate on it, sends nothing, and closes it. The result is a discovery hint for the card; Connect checks again on its own sockets.
 2. **Proved:** the card says "OpenClaw is running on this Mac", with **Connect** and the consent line of §2 above it. Below it, quieter, is "Another computer".
 3. **Connect** shows steps in place of the button: "Reading OpenClaw's settings", "Checking it's OpenClaw on this Mac", "Pairing this Mac", "Loading your bots". This takes one to three seconds. Each socket is proved again (above).
 
-Clicking Connect is the consent. There is no second dialog. On this Mac the count is **1 click, 0 commands, 0 approvals** with OpenClaw's defaults, and the same when OpenClaw has TLS on.
+Clicking Connect is the consent. There is no second dialog. On this Mac the count is **1 click, 0 commands, 0 approvals**, with OpenClaw's defaults (TLS off, through (e) and (f)) and with TLS on (through the pin). It changes nothing in OpenClaw.
 
 ### In development
 
-A sandboxed run reads the development instance's own `openclaw.json`, proven as `sandbox.ts` proves the instance today. The development config contract has TLS off, so the setup checks exercise (e). The TLS path is checked by a probe-style test that turns TLS on in its own instance only. A development gateway has local auto-approval off by its contract. So the setup checks start their instance with `--default-local-pairing` for the zero-approval path, and without it for the one-approval path.
+A sandboxed run reads the development instance's own `openclaw.json`, proven as `sandbox.ts` proves the instance today. The development config contract has TLS off, so the setup checks exercise (e) and (f). On a development gateway, the pinned hash of OpenClaw's native module is the hash of the installed 2026.10.6 package's own file. F-492's boundary tests add four cases, each asserting zero upgrade and zero credential bytes:
+
+- a same-account forwarding proxy;
+- a same-account proxy that a sandbox denies the settings folder;
+- a listener that holds the port while the instance is stopped;
+- on a hosted macOS runner, a listener from a second account.
+
+The TLS path is checked by a probe-style test that turns TLS on in its own instance only. A development gateway has local auto-approval off by its contract. So the setup checks start their instance with `--default-local-pairing` for the zero-approval path, and without it for the one-approval path.
 
 ## 4. Another computer: the form up front
 
@@ -340,21 +387,32 @@ The host keeps the snapshot of the request it shows.
   - The whole role set. A request whose roles aren't exactly `operator` goes to Machines (`device-node.md`).
   - The complete effective scope set in the words of §2's table.
   - For a repair: what it holds now, and what is added.
-- **The code.** "Enter the code shown on the device you want to approve." One input for the 16-character code, with groups inserted as the person types, case-insensitive. Then one explicit **Approve**, enabled only on a match. "Deny" sits beside it.
+- **The code.** "Enter the code shown on the device you want to approve."
+  - The code is Crockford Base32 over the first 10 bytes of SHA-256 of the canonical raw Ed25519 public key: 16 characters, about 80 bits, in four groups of four.
+  - It is compared against the code the person reads off the intended device's own screen.
+  - One input. It is formatted and compared in place on every `input` event: groups are inserted, case is ignored, and `I`, `L` and `O` are read as `1`, `1` and `0`, as Crockford defines.
+  - The match or mismatch shows while the person types. Enter finishes editing and moves focus to Approve when the code matches; it never sends a decision.
+  - One explicit **Approve**, enabled only on a match. "Deny" sits beside it.
   - Enter in the input never sends a decision.
   - Focus starts outside the decisions. Escape dismisses ("Not now").
-  - At phone width, the input and both buttons stay reachable when the sheet scrolls or the keyboard is up.
+  - At phone width, the request details scroll inside the sheet, and the input and both buttons stay pinned above the keyboard. Match, mismatch, Tab, Enter and Escape are checked at 390 px with the keyboard up.
   - There are no multiple choices and no second guess on the same review. A wrong code says "That code doesn't match this request." and keeps Approve disabled.
-- **The click.** Before calling `device.pair.approve`, the host revalidates against a fresh `device.pair.list`:
-  - the connection's generation and admin;
-  - the request id;
-  - the public key and device id;
-  - the roles and scopes;
-  - the repair baseline;
-  - the reported details shown.
-
-  Any visible change clears the code and asks for a fresh review. Only a confirmed RPC answer is reported as success: "Approved. The device connects in a moment."
-
+- **The click.** The comparison happens inside the gateway's own approval mutation, not in a list-then-approve wrapper. A wrapper inherits the race.
+  - **The plugin.** A small Clawtrate plugin, `clawtrate-pairing`, registers one admin method: `clawtrate-pairing.approve {requestId, expected}`.
+  - **What `expected` carries.** Everything the prompt showed: public key and device id, roles, scopes, the reported fields as displayed, `remoteIp`, and for a repair the paired record's roles and token scopes as shown.
+  - **How it approves.** The method calls `approveDevicePairing(requestId, { callerScopes, isApprovalCurrent })` from the pinned plugin SDK (`openclaw/plugin-sdk/device-bootstrap`; type `DevicePairingApprovalOptions`, `<openclaw>/dist/config-contracts-C65kIjn4.d.ts` lines 16344-16358). `callerScopes` are the caller's own scopes.
+  - **Where the comparison runs.** `isApprovalCurrent({pending, existing})` runs inside the pairing worker's admitted transaction, after the pairing lock (`approvalAdmission`, `<openclaw>/dist/device-pairing-approval-uwflSfHu.mjs` lines 17-38; `requestDevicePairingMutationAdmission`, `device-pairing-core.worker-B-kYFMQS.mjs` lines 82-89). It compares the authoritative pending row and paired record with `expected`, field by field. Any difference refuses the approval ("approval-policy-changed"), and nothing is approved.
+  - **The first decision wins.** It applies the stock rules too: expiry, and the cross-device and caller-scope rules, because the plugin method is admin-only, like every plugin method.
+  - **On a refusal,** the prompt re-reads the list, clears the code and asks for a fresh review.
+  - **Only a confirmed answer counts.** Success is reported only on a confirmed RPC answer: "Approved. The device connects in a moment."
+  - **Without the plugin.** When `clawtrate-pairing.approve` isn't in `hello-ok.features.methods`, Clawtrate doesn't approve from the app. The prompt becomes a passive notice with the gateway-owner route: the Control UI's Devices, or the command. Stock `device.pair.approve` takes only a `requestId` and can't hold the displayed snapshot.
+  - **The scenario check.** A pinned `pnpm scenarios` check covers:
+    - a same-envelope refresh keeping the id;
+    - an expansion or origin change superseding the id;
+    - role removal under an existing id (`removePairedDeviceRoleInWorker`, the same file lines 402-439);
+    - a repair whose existing token changed (`device.token.rotate`);
+    - a stale decision leaving the request unapproved.
+  - **Installing the plugin.** It needs `plugins.install` (`operator.admin`). Clawtrate offers it once, with its own consent: "Install Clawtrate's device approval helper on this gateway". It never installs it silently. How Clawtrate ships its plugins to a person's gateway is shared with the memory and rules plugins, and is PR 3a's dependency.
 - **Deny** calls `device.pair.reject`: "Denied. The device can ask again."
 
 ### Several windows and hosts
@@ -469,7 +527,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "So the look never runs an installed OpenClaw whose version isn't on a list of versions verified to have a read-only path (`READ_ONLY_VERSIONS` …), and that list is empty."
 
-   Replacement: "The look runs no OpenClaw program on any version. It reads the version from `package.json`, and the address and token from `openclaw.json` with the bounded reader of `setup-effortless.md` §3. It sends nothing to a socket until the socket's other end is proved: by OpenClaw's own TLS certificate when TLS is on, and otherwise by the account holding the accepted end. `READ_ONLY_VERSIONS`, `gateway status`, `config get` and `qr` leave the look."
+   Replacement: "The look runs no OpenClaw program on any version. It reads the version from `package.json`, and the address and token from `openclaw.json` with the bounded reader of `setup-effortless.md` §3. It sends nothing to a socket until it passes `setup-effortless.md` §3's send gate: OpenClaw's TLS pin when TLS is on, and otherwise the account that holds the accepted end plus the kernel's facts about that holder. `READ_ONLY_VERSIONS`, `gateway status`, `config get` and `qr` leave the look."
 
 5. **The host's confirmation**:
 
@@ -481,7 +539,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "After the dialog the host runs `openclaw [--profile clawtrate] qr --json --voice-node …`"
 
-   Replacement: removed. The host sends the settings file's token on a proved socket, holding it for one attempt.
+   Replacement: removed. The host sends the settings file's token on a socket that passed the send gate, holding it for one attempt.
 
 7. **No grant wider than the request**:
 
@@ -493,7 +551,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "The shared token is never asked for; only Advanced takes a token, typed."
 
-   Replacement: "The shared token is read from OpenClaw's settings file, held in the host for one attempt, sent only on a proved socket, and scrubbed from everything the client publishes and logs."
+   Replacement: "The shared token is read from OpenClaw's settings file, held in the host for one attempt, sent only on a socket that passed the send gate, and scrubbed from everything the client publishes and logs."
 
 9. `setup.md`, the four facts:
 
@@ -519,52 +577,55 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
     Replacement: "a setup code gives the device what it asks for, up to the code's ceiling: all six for a full code; read, write, approvals and questions for a limited one."
 
-**A proposed change to `AGENTS.md`, for the product owner.** Not made here. Today it says "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." The reviewer proposed:
+**The change to `AGENTS.md`, approved by the product owner.** It is made in setup PR 1 (#318), not in this design branch. Today it says "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." It becomes:
 
 > "On first pairing, ask once for the six standard operator scopes: read, write, approvals, questions, admin and pairing. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
 
 ## 11. Parity rows
 
 - **F-002** keeps "a pending-approval screen lists the exact operator scopes requested", now six.
-- **F-491, F-492, F-494, F-515 and F-516** become reachable on a real computer. F-492's boundary checks (`apps/desktop/test/setup-connect-boundaries.test.ts`) gain a case: an unproved peer receives zero credential bytes.
-- **F-496** reads the settings file over SSH and proves the far socket.
+- **F-491, F-492, F-494, F-515 and F-516** become reachable on a real computer. F-492's boundary checks (`apps/desktop/test/setup-connect-boundaries.test.ts`) gain four cases from §3's "In development": a same-account proxy, a sandboxed same-account proxy, a port holder while the gateway is down, and another account's listener on a hosted runner. In each, zero upgrade and credential bytes are sent.
+- **F-496** reads the settings file over SSH, and sends a credential by itself only through a TLS pin read over SSH.
 - **F-500** becomes §6: the shared-token upgrade on a proved local socket, the remote request with one owner decision, and the owner's route when local auto-approval is off.
 - **F-506** becomes §9.
 - **F-509** changes as in §10.
-- **A new row** for the approve prompt: bound to the key and grant, entered code, revalidated on click.
+- **A new row** for the approve prompt: bound to the key and grant by `clawtrate-pairing.approve` inside the gateway's approval mutation, with a typed Crockford code.
 
 ## 12. What still needs an approval or a command, and why
 
-| Case                                     | What 2026.10.6 forces     | Why                                                                                                                                                                                  | Smallest path around it                                                                        |
-| ---------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| The first device of a gateway by address | One approval              | Off loopback, a client that isn't one of OpenClaw's own apps is never paired by its credential alone (`resolvePairingApprovalPlan`, `message-handler-CRCo2VX0.mjs` lines 1916-1969). | SSH (0, once its socket proof lands); the Control UI's Devices (no command); the command, last |
-| This Mac with `autoApproveLocal: false`  | One approval              | The owner turned silent local pairing off (`node-connect-reconcile-CAkPC2vI.mjs` line 182).                                                                                          | The Control UI or the command; Clawtrate doesn't run it                                        |
-| A token kept as a SecretRef              | Typing the token once     | The value is in OpenClaw's database, a service's environment or a command                                                                                                            | The address form                                                                               |
-| A socket whose other end can't be proved | No connection             | §3                                                                                                                                                                                   | §13                                                                                            |
-| A changed platform or family             | One approval off loopback | The gateway pins both                                                                                                                                                                | Never change them                                                                              |
-| A token its owner narrowed               | Keep the narrower grant   | The owner's limit wins                                                                                                                                                               | None, by design                                                                                |
+| Case                                                                | What 2026.10.6 forces     | Why                                                                                                                                                                                  | Smallest path around it                                                                |
+| ------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| The first device of a gateway by address                            | One approval              | Off loopback, a client that isn't one of OpenClaw's own apps is never paired by its credential alone (`resolvePairingApprovalPlan`, `message-handler-CRCo2VX0.mjs` lines 1916-1969). | SSH (0 when TLS is on there); the Control UI's Devices (no command); the command, last |
+| This Mac with `autoApproveLocal: false`                             | One approval              | The owner turned silent local pairing off (`node-connect-reconcile-CAkPC2vI.mjs` line 182).                                                                                          | The Control UI or the command; Clawtrate doesn't run it                                |
+| A token kept as a SecretRef                                         | Typing the token once     | The value is in OpenClaw's database, a service's environment or a command                                                                                                            | The address form                                                                       |
+| A socket whose other end can't be proved                            | No connection             | §3                                                                                                                                                                                   | §13                                                                                    |
+| Approving another device without `clawtrate-pairing` on the gateway | The owner's route         | The stock RPC can't bind the displayed request (§5)                                                                                                                                  | Install the helper once from the app, with consent                                     |
+| A changed platform or family                                        | One approval off loopback | The gateway pins both                                                                                                                                                                | Never change them                                                                      |
+| A token its owner narrowed                                          | Keep the narrower grant   | The owner's limit wins                                                                                                                                                               | None, by design                                                                        |
 
-## 13. The local threat model, for the product owner
+## 13. Residual risk on this Mac, accepted
 
-Ask: keep the default at the account proof (e), or also let Clawtrate offer to turn OpenClaw's TLS on.
+**The decision.** The product owner chose the local send gate of §3. As relayed to this design: "pure one-click Connect, with the account check plus a check of the listening program's executable", "no TLS switch and no OpenClaw restart". The confirming review found that the account check alone isn't a proof of identity. The relay records that the product owner "accepts that narrow residual risk".
 
-**What is at stake.** OpenClaw's shared token. Whoever has it can pair a device with full control, which includes a terminal as the gateway's user.
+**What is at stake.** OpenClaw's shared token. Whoever has it can pair a device with full control, and that includes a terminal as the gateway's user.
 
-**Who already has it.** Every process of this Mac account: the settings file is 0600 and belongs to the account. Same-account malware gains nothing from Clawtrate.
+**What remains, plainly:**
 
-**Who could get it if Clawtrate sent it carelessly.** Another macOS account, or root, that holds `127.0.0.1:<port>`. That can happen if it starts listening first, or while OpenClaw is stopped. OpenClaw's own CLI and Control UI send the same token to the same port the same way, with no proof of the peer.
+- **A same-account process that grabs OpenClaw's port while OpenClaw is down.** (e) passes it. (f) refuses it unless it also does all of these:
+  - holds the profile's gateway lock and state database open;
+  - has OpenClaw's native module loaded;
+  - is the process the lock names, with a matching start time.
 
-**What Clawtrate does.** It sends nothing unless one of these holds:
+  It can do that only with read and write access to the profile's 0700 folder. With that access it could read the settings file, and the token in it, directly. A sandboxed process denied that folder, the review's case, is refused.
 
-- the peer presents OpenClaw's own TLS certificate, read from an owner-only file;
-- the peer's accepted socket is held by a process of this account.
+- **Descriptor hand-off.** A process of this account that holds the accepted socket can pass it to another process (`SCM_RIGHTS`, inheritance). That process may run as another account and stay invisible to the scan. It needs the cooperation of a same-account holder, which normally is the gateway itself.
+- **Modified OpenClaw code.** A same-account process with write access to OpenClaw's package, or that can inject into the gateway process, can change what runs behind checks (e) and (f). It could read the token anyway.
+- **The window between the last check and the write.** It is narrowed by checking twice, not closed.
+- **Root.** Root can read the settings file and is outside the account boundary in every case.
 
-Either way: 1 click, 0 commands, 0 approvals. Otherwise it refuses, and says that something it can't verify is listening.
+**How this compares with OpenClaw's own clients.** OpenClaw's CLI and its Control UI send the same token to the same `127.0.0.1` port the same way, with no check of the peer at all. With TLS off, Clawtrate's gate is stricter than OpenClaw's own. With TLS on, the pin of §3 authenticates the endpoint cryptographically, and Clawtrate uses it.
 
-**The choice left to the product owner.**
-
-- **(e) as the default**, with (b) used whenever OpenClaw already has TLS on. Recommended. It is as strong as the file's own protection and changes nothing in OpenClaw.
-- **Add an offer to turn OpenClaw's TLS on.** That is a second click ("Encrypt the connection to OpenClaw on this Mac") and a change to OpenClaw's config with a gateway restart. It proves OpenClaw rather than the account, and it breaks the Control UI's plain address and any other plain `ws://` client of that gateway. Recommended only as a Settings option, never on the first run.
+**What would remove the residue.** A gateway-signed challenge, a Unix socket with peer credentials, or TLS by default. 2026.10.6 offers only TLS, and the product owner decided not to switch it on for the person.
 
 ## 14. Not covered
 

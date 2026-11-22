@@ -182,9 +182,12 @@
       `<p class="se-waiting" role="status">${icon("clock")} Checking every few seconds · <a href="${go("waiting")}">Check now</a></p>`,
   };
 
-  // The approve prompt, drawn over a stand-in for the app.
+  // The approve prompt, drawn over a stand-in for the app. The code is compared in
+  // place as it is typed; Enter finishes editing and never decides.
+  const CROCKFORD = (raw) =>
+    raw.toUpperCase().replace(/[IL]/g, "1").replace(/O/g, "0").replace(/[^0-9A-HJKMNP-TV-Z]/g, "").slice(0, 16);
+  const groups = (code) => code.match(/.{1,4}/g)?.join("-") ?? "";
   const prompt = () => {
-    const typed = (params.get("typed") || "").toUpperCase();
     const result = params.get("result");
     if (result) {
       const text = {
@@ -194,10 +197,10 @@
       }[result];
       return `<div class="se-toast" role="status">${icon(result === "approved" ? "check" : "warning")}<span>${text}</span></div>`;
     }
-    const matches = typed === DEVICE;
-    const wrong = typed.length === DEVICE.length && !matches;
+    const typed = groups(CROCKFORD(params.get("typed") || ""));
     return (
       `<div class="se-scrim"><section class="se-prompt" role="dialog" aria-modal="true" aria-labelledby="se-prompt-title">` +
+      `<div class="se-prompt-body">` +
       `<h2 id="se-prompt-title" tabindex="-1">Let a new device control this gateway?</h2>` +
       `<p class="se-gateway">Gateway <b>gateway.example</b></p>` +
       `<div class="se-who">` +
@@ -211,16 +214,15 @@
       `</div>` +
       `<h3 class="se-h3">It gets</h3>` +
       scopeList() +
+      `</div>` +
+      `<div class="se-prompt-foot">` +
       `<label class="field se-code-entry"><span class="s-field-label">Enter the code shown on the device you want to approve.</span>` +
-      `<input class="input se-code-input" type="text" value="${typed}" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="19" /></label>` +
-      (wrong ? `<p class="s-field-error" role="alert">That code doesn't match this request.</p>` : "") +
-      (matches ? `<p class="se-match" role="status">${icon("check")} The code matches this request.</p>` : "") +
+      `<input class="input se-code-input" type="text" value="${typed}" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="19" aria-describedby="se-code-state" /></label>` +
+      `<p class="se-code-state" id="se-code-state" role="status" aria-live="polite"></p>` +
       `<div class="se-prompt-buttons">` +
       `<a class="button" data-size="lg" href="${go("approve", { result: "denied" })}">Deny</a>` +
-      (matches
-        ? `<a class="button" data-variant="primary" data-size="lg" href="${go("approve", { result: "approved" })}">Approve</a>`
-        : `<button type="button" class="button" data-variant="primary" data-size="lg" disabled aria-disabled="true">Approve</button>`) +
-      `</div>` +
+      `<button type="button" class="button" data-variant="primary" data-size="lg" id="se-approve" disabled aria-disabled="true">Approve</button>` +
+      `</div></div>` +
       `</section></div>`
     );
   };
@@ -231,14 +233,30 @@
     card.innerHTML = SCREENS.found();
     document.getElementById("setup-over").innerHTML = prompt();
     const input = document.querySelector(".se-code-input");
-    // Groups are inserted as the person types; Enter never decides.
+    const state = document.getElementById("se-code-state");
+    const approve = document.getElementById("se-approve");
+    const update = () => {
+      if (!input || !state || !approve) return;
+      const code = CROCKFORD(input.value);
+      const formatted = groups(code);
+      if (input.value !== formatted) input.value = formatted;
+      const match = formatted === DEVICE;
+      approve.disabled = !match;
+      approve.setAttribute("aria-disabled", String(!match));
+      state.dataset.state = match ? "match" : code.length === 16 ? "wrong" : "";
+      state.textContent = match ? "The code matches this request." : code.length === 16 ? "That code doesn't match this request." : "";
+    };
+    input?.addEventListener("input", update);
+    // Enter finishes editing: on a match it moves focus to Approve; it never decides.
     input?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") event.preventDefault();
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      if (approve && !approve.disabled) approve.focus();
     });
-    input?.addEventListener("change", () => {
-      const raw = input.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
-      location.href = go("approve", { typed: raw.match(/.{1,4}/g)?.join("-") ?? "" });
+    approve?.addEventListener("click", () => {
+      if (!approve.disabled) location.href = go("approve", { result: "approved" });
     });
+    update();
     document.getElementById("se-prompt-title")?.focus();
   } else {
     card.innerHTML = (SCREENS[screen] || SCREENS.found)();

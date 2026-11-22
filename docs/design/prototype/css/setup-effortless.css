@@ -366,3 +366,53 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Fix round 2: the code is compared in place; the input and decisions stay reachable. */
+.se-prompt {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+}
+
+.se-prompt-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-5) var(--space-2);
+}
+
+.se-prompt-foot {
+  flex: none;
+  padding: var(--space-2) var(--space-5) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.se-prompt-foot .se-code-entry {
+  margin-top: var(--space-2);
+}
+
+.se-code-state {
+  min-height: 1.4em;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+
+.se-code-state[data-state="match"] {
+  color: var(--accent);
+}
+
+.se-code-state[data-state="wrong"] {
+  color: var(--danger);
+}
+
+.se-prompt-foot .se-prompt-buttons {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 500px) {
+  .se-prompt {
+    max-height: 100dvh;
+  }
+}
