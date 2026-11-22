@@ -29,7 +29,9 @@
     plugin: p.get("plugin") === "missing" ? "missing" : "present",
     opening: p.get("opening"),
     sheet: false,
+    alsoMain: false,
   };
+  const AUTONOMY = { "hands-off": "Hands-off", ask: "Ask before acting" };
 
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -37,6 +39,9 @@
     live.textContent = "";
     setTimeout(() => (live.textContent = text), 30);
   };
+  // A name as the gateway stores it: whitespace collapsed and trimmed (R26).
+  const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const storedAs = (raw) => (norm(raw) && norm(raw) !== raw ? `Saved as “${norm(raw)}”` : "");
   const reduced = () => document.documentElement.dataset.motion === "reduce";
   const phone = () => document.documentElement.dataset.width === "phone";
 
@@ -101,13 +106,16 @@
 
   const gateway = {
     bots: [],
+    newBots: null, // the new-bot default the autonomy step writes
     answer(ms, fn) {
       return new Promise((resolve) => setTimeout(() => resolve(fn()), reduced() ? 0 : ms));
     },
   };
   function seedBots() {
-    const fresh = state.view === "first" && !state.existing;
-    const main = { id: "main", name: fresh ? "main" : "Juniper", main: true };
+    const fresh = !state.existing;
+    const main = fresh
+      ? { id: "main", name: "main", main: true, autonomy: null, role: "", avatar: null }
+      : { id: "main", name: "Juniper", main: true, autonomy: "ask", role: "", avatar: "claw" };
     gateway.bots = fresh
       ? [main]
       : [
@@ -147,7 +155,7 @@
     const b = botById(bot);
     const back = phone() ? `<button type="button" class="mb-round mb-back" aria-label="Back to bots">‹</button>` : "";
     return (
-      `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" aria-label="${esc(b.main ? `${b.name}, Main Bot` : b.name)}">` +
+      `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" data-picture="${b.avatar ? "claw" : "none"}" aria-label="${esc(b.main ? `${b.name}, Main Bot` : b.name)}">` +
       `${claw(b.name, 22, { star: b.main })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>`
     );
   }
@@ -206,8 +214,8 @@
       return (
         `<article class="mb-card mb-guided" data-kind="saved" data-testid="guided-saved" aria-label="Saved">` +
         `<div class="mb-card-head">${claw(g.name, 18)}<strong>Saved</strong></div>` +
-        `<div class="mb-card-row"><span>Name</span><span><strong>${esc(g.name)}</strong> ${read}</span></div>` +
-        `<div class="mb-card-row"><span>Role</span><span>saved ${read}</span></div>` +
+        `<div class="mb-card-row"><span>Name</span><span><strong data-testid="saved-name">${esc(g.name)}</strong> ${read}</span></div>` +
+        `<div class="mb-card-row"><span>Role</span><span><span data-testid="saved-role">${g.role ? esc(g.role) : "None"}</span> ${read}</span></div>` +
         `</article>`
       );
     }
@@ -217,7 +225,11 @@
       `<form class="mb-card mb-guided" data-kind="guided" data-testid="guided" aria-label="Name your Main Bot">` +
       `<div class="mb-card-head"><strong>Name your Main Bot</strong></div>` +
       `<label class="mb-field"><span>Name</span><input id="g-name" maxlength="64" value="${esc(g.name || "")}" placeholder="For example, Maple"${busy}/></label>` +
+      `<p class="mb-hint" data-testid="stored-as">${esc(storedAs(g.name || ""))}</p>` +
       `<label class="mb-field"><span>How should it help?</span><textarea id="g-role" maxlength="500" rows="2" placeholder="For example, plan meals and keep my week on track"${busy}>${esc(g.role || "")}</textarea></label>` +
+      (g.proposed
+        ? `<p class="mb-hint" data-testid="proposed-note">${esc(botById("main").name)} suggested these from your message. Nothing is saved until you press Save.</p>`
+        : "") +
       `<p class="mb-hint">${missing ? "Saves this name and role yourself, in Clawtrate." : "Saves this name and role. Clawtrate shows them once the gateway confirms."}</p>` +
       (g.problem ? `<p class="mb-card-note" data-tone="warn" data-testid="guided-problem">${esc(g.problem)}</p>` : "") +
       `<div class="mb-card-actions"><button type="submit" class="mb-btn" data-variant="primary"${busy}>${g.saving ? "Saving…" : missing ? "Save in Clawtrate" : "Save"}</button></div>` +
@@ -247,7 +259,7 @@
       ? `<p class="mb-setup-now" data-testid="existing-line">Juniper has its own command settings: Ask before acting.</p>`
       : "";
     const also = state.existing
-      ? `<label class="mb-switch" data-testid="also-main"><input type="checkbox"/><span>Also use this for Juniper</span></label>`
+      ? `<label class="mb-switch" data-testid="also-main"><input type="checkbox"${state.alsoMain ? " checked" : ""}/><span>Also use this for Juniper</span></label>`
       : "";
     const choice = (id, title, line) => {
       const checked = state.autonomy === id;
@@ -258,7 +270,7 @@
       );
     };
     root.innerHTML =
-      `<div class="mb-setup"><div class="mb-setup-card">` +
+      `<div class="mb-setup"><div class="mb-setup-card"${state.sheet ? " inert" : ""}>` +
       `<p class="mb-setup-done"><span aria-hidden="true">✓</span> Connected to OpenClaw on this Mac</p>` +
       `<h1 id="mb-setup-title">How should bots run commands?</h1>${existing}` +
       `<div class="mb-choices" role="radiogroup" aria-labelledby="mb-setup-title" data-testid="autonomy">` +
@@ -291,13 +303,19 @@
     greeting: "Hi! I'm your new assistant on this gateway, and I just came online. What would you like to call me, and what should I help you with most?",
     name: "Maple",
     role: "Plan meals and keep my week on track.",
-    reply: "I'm Maple now. I'll plan meals with you and keep your week on track. Want to start with this week's dinners?",
   };
   let guidedCard = null;
 
   async function playFirst() {
     if (state.existing) {
-      chat.items.push({ kind: "line", text: "Juniper is your Main Bot.", testid: "existing-main" });
+      const main = botById("main");
+      chat.items.push({ kind: "line", text: `${main.name} is your Main Bot.`, testid: "existing-main" });
+      if (gateway.newBots)
+        chat.items.push({
+          kind: "line",
+          text: `New bots: ${AUTONOMY[gateway.newBots]}. ${main.name}: ${AUTONOMY[main.autonomy]}.`,
+          testid: "autonomy-line",
+        });
       chat.items.push({ kind: "chips", chips: ["Ask Juniper to change itself", "Make a new bot"] });
       return renderChat();
     }
@@ -342,7 +360,7 @@
 
   async function saveFirst() {
     const b = botById("main");
-    const name = guidedCard.name.trim();
+    const name = norm(guidedCard.name);
     const role = (guidedCard.role || "").trim();
     if (!name) {
       guidedCard.problem = "Give your Main Bot a name first.";
@@ -355,51 +373,64 @@
     renderChat();
     if (state.at === "saving") return;
     const outcome = await gateway.answer(1100, () => {
-      if (state.card === "unconfirmed") return "unconfirmed";
-      if (state.card === "stale") return "stale";
+      if (state.card === "unconfirmed") return { status: "unconfirmed" };
+      if (state.card === "stale") return { status: "stale" };
       b.name = name;
-      return "saved";
+      b.role = role;
+      return { status: "saved", name: b.name, role: b.role, avatar: b.avatar };
     });
     guidedCard.saving = false;
-    if (outcome === "unconfirmed") {
+    if (outcome.status === "unconfirmed") {
       guidedCard.problem = "Clawtrate couldn't confirm whether this changed. It will show the name once the gateway does.";
       renderChat();
       return;
     }
-    if (outcome === "stale") {
+    if (outcome.status === "stale") {
       guidedCard.problem = "The name changed somewhere else since this card was shown, so nothing was saved.";
       renderChat();
       return;
     }
-    Object.assign(guidedCard, { done: true, name });
-    if (state.plugin !== "missing")
+    // The saved card and what follows show what the stand-in read back.
+    const saved = outcome.name;
+    Object.assign(guidedCard, { done: true, name: saved, role: outcome.role });
+    if (state.plugin !== "missing" && !outcome.avatar)
       chat.items.push({
         kind: "card",
         cardKind: "picture-offer",
         id: "picture",
-        who: name,
-        title: `Use ${name}'s Claw as its picture?`,
-        rows: [["Picture", `${claw(name, 32)} ${esc(name)}'s Claw`]],
-        note: `Sets ${name}'s picture to this Claw. If someone sets a picture elsewhere at the same moment, this replaces it.`,
-        actions: [[`Use ${name}'s Claw`, "use-claw", "primary"], ["Not now", "picture-no"]],
+        who: saved,
+        title: `Use ${saved}'s Claw as its picture?`,
+        rows: [["Picture", `${claw(saved, 32)} ${esc(saved)}'s Claw`]],
+        note: `Sets ${saved}'s picture to this Claw. If someone sets a picture elsewhere at the same moment, this replaces it.`,
+        actions: [[`Use ${saved}'s Claw`, "use-claw", "primary"], ["Not now", "picture-no"]],
       });
-    chat.items.push({ kind: "user", text: `Call yourself ${name}. ${role}` });
-    chat.items.push({ kind: "bot", text: FIRST.reply.replace("Maple", name) });
+    chat.items.push({ kind: "user", text: outcome.role ? `Call yourself ${saved}. ${outcome.role}` : `Call yourself ${saved}.` });
+    chat.items.push({ kind: "bot", text: `I'm ${saved} now. Where would you like to start?` });
     renderChat();
-    say(`Renamed to ${name}`);
+    say(`Renamed to ${saved}`);
   }
 
   // ---- events -------------------------------------------------------------------
+
+  function closeSheet() {
+    state.sheet = false;
+    renderSetup();
+    root.querySelector('[data-act="sheet"]').focus();
+  }
 
   root.addEventListener("click", async (event) => {
     const t = event.target.closest("[data-choose],[data-act],[data-fill]");
     if (!t) return;
     if (t.dataset.choose) {
-      state.autonomy = t.dataset.choose;
-      say(t.dataset.choose === "ask" ? "Ask before acting" : "Hands-off");
+      const choice = t.dataset.choose;
+      state.autonomy = choice;
+      // Setup always writes the new-bot default. A Main Bot never set up is
+      // newly managed and takes the choice; an existing one only with the opt-in.
+      gateway.newBots = choice;
+      if (!state.existing || state.alsoMain) botById("main").autonomy = choice;
+      say(AUTONOMY[choice]);
       state.view = "first";
       state.at = null;
-      state.existing = false;
       start();
       return;
     }
@@ -414,26 +445,28 @@
       renderSetup();
       root.querySelector(".mb-sheet button").focus();
     } else if (act === "sheet-close") {
-      state.sheet = false;
-      renderSetup();
-      root.querySelector('[data-act="sheet"]').focus();
-    } else if (act === "use-claw" || act === "picture-no") {
+      closeSheet();
+    } else if (act === "use-claw") {
       const c = chat.items.find((i) => i.id === id);
-      const yes = act === "use-claw";
-      if (yes) {
-        c.actions = [];
-        c.stateText = "Saving…";
-        renderChat();
-        await gateway.answer(700, () => {});
-      }
+      c.actions = [];
+      c.stateText = "Saving…";
+      renderChat();
+      const read = await gateway.answer(700, () => {
+        const b = botById("main");
+        b.avatar = "claw";
+        return { name: b.name, avatar: b.avatar };
+      });
       Object.assign(c, {
         stateText: "",
-        actions: [],
-        cardKind: yes ? "applied" : "declined",
-        title: yes ? `${c.who}'s picture is its Claw` : c.title,
-        note: yes ? "" : "Not now. Nothing changed.",
-        rows: yes ? [["Picture", `${claw(c.who, 32)} read back`]] : c.rows,
+        cardKind: "applied",
+        title: `${read.name}'s picture is its Claw`,
+        note: "",
+        rows: [["Picture", `${claw(read.name, 32)} read back`]],
       });
+      renderChat();
+    } else if (act === "picture-no") {
+      const c = chat.items.find((i) => i.id === id);
+      Object.assign(c, { actions: [], cardKind: "declined", note: "Not now. Nothing changed." });
       renderChat();
     } else if (act === "resend") {
       const c = chat.items.find((i) => i.id === "opening");
@@ -454,9 +487,18 @@
       composer.value = "";
       chat.items.push({ kind: "user", text });
       if (guidedCard && !guidedCard.done) {
-        const m = /call (?:yourself|you) ([\p{L}][\p{L}\p{N} '-]{0,63}?)(?:[.,!]|$)/iu.exec(text);
-        if (m) guidedCard.name = m[1];
-        chat.items.push({ kind: "bot", text: "Thanks! I've put that in the card. Change anything you like, then press Save." });
+        // With the plugin, the bot proposes the values and they fill the card;
+        // without it, nothing fills the card for the person.
+        const m = /call\s+(?:yourself|you)\s+([\p{L}][\p{L}\p{N} '-]{0,63}?)(?:[.,!]\s*|$)([\s\S]*)/iu.exec(text);
+        if (m && state.plugin !== "missing") {
+          guidedCard.name = norm(m[1]);
+          if (m[2].trim()) guidedCard.role = m[2].trim().slice(0, 500);
+          guidedCard.proposed = true;
+          chat.items.push({ kind: "bot", text: "Thanks! I've put that in the card. Change anything you like, then press Save." });
+        } else {
+          const save = state.plugin === "missing" ? "Save in Clawtrate" : "Save";
+          chat.items.push({ kind: "bot", text: `Thanks! Put that in the card, then press ${save}.` });
+        }
       }
       renderChat();
       root.querySelector("#mb-input")?.focus();
@@ -475,13 +517,21 @@
       const send = root.querySelector(".mb-send");
       if (send) send.disabled = !composer.value;
     }
-    if (guidedCard && event.target.id === "g-name") guidedCard.name = event.target.value;
+    if (guidedCard && event.target.id === "g-name") {
+      guidedCard.name = event.target.value;
+      root.querySelector('[data-testid="stored-as"]').textContent = storedAs(event.target.value);
+    }
+    if (event.target.closest?.('[data-testid="also-main"]')) state.alsoMain = event.target.checked;
     if (guidedCard && event.target.id === "g-role") guidedCard.role = event.target.value;
   });
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.sheet) {
-      state.sheet = false;
-      renderSetup();
+    if (event.key === "Escape" && state.sheet) closeSheet();
+    if (event.key === "Tab" && state.sheet) {
+      // The setup behind the sheet is inert; Tab and Shift+Tab cycle inside it.
+      const all = [...root.querySelectorAll(".mb-sheet button")];
+      const at = all.indexOf(document.activeElement);
+      all[(at + (event.shiftKey ? all.length - 1 : 1)) % all.length].focus();
+      event.preventDefault();
     }
     const radio = event.target.closest?.(".mb-choice");
     if (radio && ["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"].includes(event.key)) {
@@ -497,7 +547,6 @@
   // ---- start ----------------------------------------------------------------
 
   function start() {
-    seedBots();
     guidedCard = null;
     composer = { value: "" };
     chat = { bot: "main", items: [] };
@@ -509,5 +558,6 @@
     if (state.view === "setup") renderSetup();
     else if (chat) renderChat();
   });
+  seedBots();
   start();
 })();

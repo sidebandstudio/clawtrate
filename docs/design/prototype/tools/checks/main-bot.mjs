@@ -66,8 +66,21 @@ await check("MB-02 What this means: rule matches, the fallback, stop isn't undo"
   await has(page, '[data-testid="sheet"]', "unless this computer's or the task's own rules decide first");
   await has(page, '[data-testid="sheet"]', "If nobody answers in 30 minutes, the computer's own fallback decides");
   await has(page, '[data-testid="sheet"]', "It doesn't undo a command that already ran.");
+  // The setup behind is inert, and Tab and Shift+Tab stay in the sheet.
+  assert.equal(await page.locator(".mb-setup-card").getAttribute("inert"), "");
+  const inSheet = () => page.evaluate(() => Boolean(document.activeElement?.closest('[data-testid="sheet"]')));
+  for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    assert(await inSheet(), `focus stays in the sheet after ${key}`);
+  }
+  const onOpener = () => page.evaluate(() => document.activeElement?.dataset.testid === "what-this-means");
   await page.keyboard.press("Escape");
   assert.equal(await page.getByTestId("sheet").count(), 0);
+  assert(await onOpener(), "Escape returns focus to What this means");
+  assert.equal(await page.locator(".mb-setup-card").getAttribute("inert"), null);
+  await page.getByRole("button", { name: "What this means" }).click();
+  await page.getByRole("button", { name: "Done" }).click();
+  assert(await onOpener(), "Done returns focus to What this means");
 });
 
 await check("MB-03 an existing Main Bot: its policy named, nothing inferred, opt-in to change it", async ({ page, open }) => {
@@ -75,6 +88,24 @@ await check("MB-03 an existing Main Bot: its policy named, nothing inferred, opt
   await has(page, '[data-testid="existing-line"]', "Juniper has its own command settings: Ask before acting.");
   assert.deepEqual(await page.getByRole("radio").evaluateAll((r) => r.map((x) => x.getAttribute("aria-checked"))), ["false", "false"]);
   assert.equal(await page.getByLabel("Also use this for Juniper").isChecked(), false);
+
+  // Through to chat: Juniper is kept, nothing is sent for the person, and only
+  // the opt-in changes Juniper's own policy. The opt-in survives the sheet.
+  for (const also of [false, true]) {
+    await open("view=setup&existing=1");
+    if (also) {
+      await page.getByLabel("Also use this for Juniper").check();
+      await page.getByRole("button", { name: "What this means" }).click();
+      await page.keyboard.press("Escape");
+      assert.equal(await page.getByLabel("Also use this for Juniper").isChecked(), true);
+    }
+    await page.getByRole("radio", { name: /Hands-off/ }).click();
+    await page.getByTestId("existing-main").waitFor();
+    assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Juniper");
+    assert.equal(await page.locator(".mb-msg.is-user").count(), 0);
+    assert.equal(await page.getByTestId("guided").count(), 0);
+    await has(page, '[data-testid="autonomy-line"]', `New bots: Hands-off. Juniper: ${also ? "Hands-off" : "Ask before acting"}.`);
+  }
 });
 
 await check("MB-04 choosing opens the first run: opening, greeting, guided card, empty composer", async ({ page, open }) => {
@@ -116,19 +147,24 @@ await check("MB-06 the rail and header wait for the gateway's answer", async ({ 
 
 await check("MB-07 Save writes exactly the card's name and role, read back; the Claw is a separate explicit edit", async ({ page, open, width }) => {
   await open("view=first");
-  await page.locator("#g-name").fill("Fennel");
+  await page.locator("#g-name").fill("  Fennel   Bulb ");
+  await has(page, '[data-testid="stored-as"]', "Saved as “Fennel Bulb”");
   await page.locator("#g-role").fill("Help me plan the garden.");
   await page.getByTestId("guided").getByRole("button", { name: "Save" }).click();
   await page.getByTestId("guided-saved").waitFor();
-  await has(page, '[data-testid="guided-saved"]', "Fennel");
+  assert.equal((await page.getByTestId("saved-name").innerText()).trim(), "Fennel Bulb");
+  assert.equal((await page.getByTestId("saved-role").innerText()).trim(), "Help me plan the garden.");
   assert.doesNotMatch(await text(page, '[data-testid="guided-saved"]'), /Claw/);
+  assert.doesNotMatch(await text(page, ".mb-transcript"), /meals/);
+  assert.equal(await page.getByTestId("title-pill").getAttribute("data-picture"), "none");
   await has(page, '[data-testid="card-picture-offer"]', "If someone sets a picture elsewhere at the same moment, this replaces it.");
-  await page.getByRole("button", { name: "Use Fennel's Claw" }).click();
-  await page.getByText("Fennel's picture is its Claw").waitFor();
-  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Fennel");
-  if (width !== "phone") assert.equal(await railName(page, "main", width), "Fennel");
-  assert.equal(await page.getByTestId("title-pill").getAttribute("aria-label"), "Fennel, Main Bot");
-  await has(page, ".mb-transcript", "Call yourself Fennel. Help me plan the garden.");
+  await page.getByRole("button", { name: "Use Fennel Bulb's Claw" }).click();
+  await page.getByText("Fennel Bulb's picture is its Claw").waitFor();
+  assert.equal(await page.getByTestId("title-pill").getAttribute("data-picture"), "claw");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Fennel Bulb");
+  if (width !== "phone") assert.equal(await railName(page, "main", width), "Fennel Bulb");
+  assert.equal(await page.getByTestId("title-pill").getAttribute("aria-label"), "Fennel Bulb, Main Bot");
+  await has(page, ".mb-transcript", "Call yourself Fennel Bulb. Help me plan the garden.");
 });
 
 await check("MB-08 unconfirmed and stale saves leave the name and say why", async ({ page, open }) => {
@@ -153,6 +189,20 @@ await check("MB-11 the plugin missing: Save in Clawtrate, and the line", async (
   await open("view=first&plugin=missing");
   await has(page, '[data-testid="plugin-missing"]', "bots can't ask to change their settings");
   assert.equal(await page.getByTestId("guided").getByRole("button", { name: "Save in Clawtrate" }).count(), 1);
+
+  // No bot tool fills the card; the person's own Save still works.
+  await page.locator("#mb-input").fill("Call yourself Basil. Help me plan the garden.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByText("Put that in the card, then press Save in Clawtrate.").waitFor();
+  assert.equal(await page.locator("#g-name").inputValue(), "");
+  assert.equal(await page.getByTestId("proposed-note").count(), 0);
+  await page.locator("#g-name").fill("Basil");
+  await page.locator("#g-role").fill("Help me plan the garden.");
+  await page.getByRole("button", { name: "Save in Clawtrate" }).click();
+  await page.getByTestId("guided-saved").waitFor();
+  assert.equal((await page.getByTestId("saved-name").innerText()).trim(), "Basil");
+  assert.equal((await page.getByTestId("saved-role").innerText()).trim(), "Help me plan the garden.");
+  assert.equal(await page.getByTestId("card-picture-offer").count(), 0);
 });
 
 await check("MB-18 an ambiguous opening stops and waits for an explicit retry", async ({ page, open }) => {
@@ -167,16 +217,19 @@ await check("MB-18 an ambiguous opening stops and waits for an explicit retry", 
 await check("MB-19 a long answer in the composer is sent, clears the composer, and fills the card", async ({ page, open }) => {
   await open("view=first");
   await page.getByTestId("guided").waitFor();
-  const long = "Call yourself Basil. " + "Help me plan meals, shopping and the week's errands, and remind me what's coming up. ".repeat(5);
+  const role = "Help me plan meals, shopping and the week's errands, and remind me what's coming up. ".repeat(5).trim();
+  const long = "Call yourself  Basil   Leaf. " + role;
   await page.locator("#mb-input").fill(long);
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByText("I've put that in the card").waitFor();
   assert.equal(await page.locator("#mb-input").inputValue(), "");
-  assert.equal(await page.locator("#g-name").inputValue(), "Basil");
+  assert.equal(await page.locator("#g-name").inputValue(), "Basil Leaf");
+  assert.equal(await page.locator("#g-role").inputValue(), role);
+  await has(page, '[data-testid="proposed-note"]', "Nothing is saved until you press Save.");
   const fits = await page.locator(".mb-msg.is-user .mb-bubble").last().evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
   assert(fits, "the sent message wraps inside its bubble");
-  await page.locator("#g-name").fill("Basil Leaf");
-  assert.equal(await page.locator("#g-name").inputValue(), "Basil Leaf");
+  await page.locator("#g-name").fill("Basil Sprout");
+  assert.equal(await page.locator("#g-name").inputValue(), "Basil Sprout");
 
   const unbroken = "a".repeat(1000);
   await page.locator("#mb-input").fill(unbroken);
