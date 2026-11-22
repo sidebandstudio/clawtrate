@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate — Your OpenClaw bots, in one app</title>
+    <meta
+      name="description"
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Open action cards and answer approvals in the conversation. Beta for Mac."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#101112" />
+    <link rel="icon" href="favicon.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link
+      rel="preload"
+      href="fonts/figtree-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      // Dark unless this visitor chose light.
+      try {
+        if (localStorage.getItem("theme") === "light")
+          document.documentElement.dataset.theme = "light";
+      } catch (e) {}
+      document.documentElement.classList.add("js");
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to the content</a>
+
+    <header class="bar">
+      <div class="bar-inner">
+        <a class="brand" href="./" aria-label="Clawtrate, home">
+          <img src="logo.webp" width="32" height="32" alt="" />
+          <span>Clawtrate</span>
+        </a>
+        <nav aria-label="Sections">
+          <a href="#start">Get started</a>
+          <a href="#tour">The app</a>
+          <a href="#beta">In the beta</a>
+          <a href="https://github.com/sidebandstudio/clawtrate">GitHub</a>
+        </nav>
+        <div class="bar-end">
+          <button class="theme" type="button" aria-label="Switch to light" data-theme-toggle>
+            <svg class="i-sun" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.75" />
+              <path
+                d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05"
+              />
+            </svg>
+            <svg class="i-moon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.25 9.6A5.5 5.5 0 0 1 6.4 2.75a5.5 5.5 0 1 0 6.85 6.85Z" />
+            </svg>
+          </button>
+          <a class="btn btn-small" href="download/mac/">Download</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- The first screen: what it is, the download, the command, and the app doing its job. -->
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <h1 id="hero-title" class="rise">Your OpenClaw bots, in one app.</h1>
+          <p class="lede rise">
+            A free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar.
+            Open action cards and answer approvals in the conversation.
+          </p>
+          <div class="get rise">
+            <a class="btn btn-primary" href="download/mac/">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10" />
+              </svg>
+              Download for Mac
+            </a>
+            <p class="get-note">
+              Mac beta for Apple silicon and Intel, Developer ID signed and notarized by Apple.
+              <a href="https://github.com/sidebandstudio/clawtrate/releases">All releases</a>
+            </p>
+          </div>
+          <div class="cmd rise">
+            <p class="cmd-label" id="cmd-hero-label">Or install from Terminal</p>
+            <div class="cmd-box">
+              <pre
+                aria-labelledby="cmd-hero-label"
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"\$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              <button class="copy" type="button" data-copy>Copy</button>
+            </div>
+            <p class="cmd-note">
+              For a first install. It downloads the installer whole before running it, and the
+              installer checks the download and the app's signature before it installs. Later
+              updates come from Settings. No sudo. <a href="install.sh">Read install.sh</a>
+            </p>
+          </div>
+        </div>
+
+        <!-- The live thing: an approval card from the app's own sample conversation. -->
+        <figure class="demo rise" aria-label="Try an approval" data-state="pending">
+          <div class="win" data-ui>
+            <div class="pill">
+              <img src="bots/otto.svg" width="22" height="22" alt="" />
+              <b>Otto</b><span aria-hidden="true">·</span
+              ><span class="pill-task">Disk almost full on the media box</span>
+            </div>
+            <div class="talk">
+              <p class="bubble bot">
+                The media box is at 94%. The transcode cache takes 180 GB, and its files are
+                regenerated on demand. Should I clear it? I'll move it aside first so it can be
+                restored.
+              </p>
+              <p class="bubble me">Yes, clear the transcode cache.</p>
+              <div class="card" role="group" aria-labelledby="ask-title">
+                <div class="card-head">
+                  <b id="ask-title">Otto wants to run a command</b>
+                  <span class="tag" data-tag>Needs approval</span>
+                </div>
+                <p class="card-body">
+                  Run <code>mv /srv/media/transcode-cache /srv/scratch/transcode-cache</code> on
+                  <b>media-box</b>.
+                </p>
+                <div class="card-actions" data-when="pending">
+                  <button type="button" class="ui-btn ui-primary" data-answer="allow">
+                    Allow once
+                  </button>
+                  <button type="button" class="ui-btn ui-quiet" data-answer="deny">Deny</button>
+                </div>
+                <p class="card-foot" data-when="pending">Example expiry: 28 minutes.</p>
+              </div>
+              <p class="event" data-when="allowed">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.5 3 3 6.5-7" /></svg>
+                Ran <code>mv</code> on media-box
+              </p>
+              <p class="bubble bot" data-when="allowed">
+                Done. The disk is now at 61%, and the cache is in <code>/srv/scratch</code> if you
+                want it back.
+              </p>
+              <p class="bubble bot" data-when="denied">
+                Understood. I left the cache where it is and changed nothing.
+              </p>
+            </div>
+            <p class="demo-live" aria-live="polite"></p>
+          </div>
+          <figcaption>
+            <span data-when="pending"
+              >Try Allow once or Deny. An approval card shows a request from your gateway.</span
+            >
+            <button type="button" class="link-btn" data-when="answered" data-reset>
+              Reset demo
+            </button>
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- Both ways in, side by side: the one that works today leads. -->
+      <section id="start" class="start" aria-labelledby="start-title">
+        <h2 id="start-title" class="rise">Two ways to start</h2>
+        <div class="paths">
+          <article class="path path-have rise" aria-labelledby="have-title">
+            <h3 id="have-title">Already have OpenClaw</h3>
+            <p class="path-state">Ready in this beta</p>
+            <p>Connect the gateway you already run. Keep the bots, tasks, and accounts you have.</p>
+            <ol class="steps">
+              <li>Enter the gateway address and the token for pairing.</li>
+              <li>Approve the device if your gateway asks.</li>
+              <li>Open your bots and tasks.</li>
+            </ol>
+          </article>
+          <article class="path path-new rise" aria-labelledby="new-title">
+            <h3 id="new-title">Starting from scratch</h3>
+            <p class="path-state">Planned</p>
+            <p>We're working on setup for people new to OpenClaw.</p>
+            <p class="path-note">
+              For now, <a href="https://docs.openclaw.ai/install">Install OpenClaw</a>, then connect
+              it as an existing gateway.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Real screens from the app's fixture mode, which runs on sample data. Each theme has its own. -->
+      <section id="tour" class="tour" aria-labelledby="tour-title">
+        <h2 id="tour-title" class="rise">Inside the app</h2>
+
+        <div class="row row-wide">
+          <div class="row-text rise">
+            <h3>Bots and their tasks, one list.</h3>
+            <p>
+              Bots live in the sidebar with their tasks underneath, leaving the middle for the
+              conversation. Tool calls appear in action cards you can open to see the details.
+            </p>
+          </div>
+          <div class="stage stage-blue rise">
+            <picture class="theme-dark" data-ui>
+              <source
+                media="(max-width: 560px)"
+                srcset="shots/phone-dark.webp"
+                width="390"
+                height="844"
+              />
+              <img
+                src="shots/run-dark.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
+                alt="Clawtrate's bot and task list, with Otto's disk task selected."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <source
+                media="(max-width: 560px)"
+                srcset="shots/phone-light.webp"
+                width="390"
+                height="844"
+              />
+              <img
+                src="shots/run-light.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
+                alt="Clawtrate's bot and task list, with Otto's disk task selected."
+              />
+            </picture>
+            <p class="narrow-note">Clawtrate desktop in a narrow window.</p>
+          </div>
+        </div>
+
+        <div class="row row-split">
+          <div class="row-text rise">
+            <h3>See when bots message each other.</h3>
+            <p>
+              Open a Messaged card to see what the gateway reported. Jump to the other bot's task
+              when the card links to it.
+            </p>
+          </div>
+          <div class="stage stage-orange stage-card rise">
+            <picture class="theme-dark" data-ui>
+              <img
+                src="shots/messaged-dark.webp"
+                width="640"
+                height="275"
+                loading="lazy"
+                alt="A Messaged card: Otto asked Marlow for a two-line entry for the house log, and Marlow replied a minute later."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/messaged-light.webp"
+                width="640"
+                height="275"
+                loading="lazy"
+                alt="A Messaged card: Otto asked Marlow for a two-line entry for the house log, and Marlow replied a minute later."
+              />
+            </picture>
+          </div>
+        </div>
+
+        <div class="row row-split row-flip">
+          <div class="row-text rise">
+            <h3>Use a provider account you already have.</h3>
+            <p>
+              Choose an available account when you create a bot. Your gateway handles provider
+              sign-in.
+            </p>
+          </div>
+          <div class="stage stage-green stage-tall rise">
+            <picture class="theme-dark" data-ui>
+              <img
+                src="shots/signin-dark.webp"
+                width="440"
+                height="696"
+                loading="lazy"
+                alt="The Connect an account dialog, listing subscriptions such as ChatGPT, GitHub Copilot, and MiniMax, and OpenRouter billed per token."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/signin-light.webp"
+                width="440"
+                height="696"
+                loading="lazy"
+                alt="The Connect an account dialog, listing subscriptions such as ChatGPT, GitHub Copilot, and MiniMax, and OpenRouter billed per token."
+              />
+            </picture>
+          </div>
+        </div>
+
+        <div class="row row-wide">
+          <div class="row-text rise">
+            <h3>Routines, on a calendar.</h3>
+            <p>
+              See the routines your gateway reports, their recent runs, and this week's calendar in
+              your time zone.
+            </p>
+          </div>
+          <div class="stage stage-yellow rise">
+            <picture class="theme-dark" data-ui>
+              <img
+                src="shots/routines-dark.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
+                alt="The Routines week view: a nightly backup check every night, a morning digest on weekdays, and a weekly plan on Sunday."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/routines-light.webp"
+                width="1440"
+                height="828"
+                loading="lazy"
+                alt="The Routines week view: a nightly backup check every night, a morning digest on weekdays, and a weekly plan on Sunday."
+              />
+            </picture>
+          </div>
+        </div>
+
+        <div class="row row-split">
+          <div class="row-text rise">
+            <h3>Track what each bot uses.</h3>
+            <p>
+              See token totals and estimated costs your gateway reports. Set a weekly token budget
+              for warnings.
+            </p>
+          </div>
+          <div class="stage stage-sky stage-tall rise">
+            <picture class="theme-dark" data-ui>
+              <img
+                src="shots/usage-dark.webp"
+                width="359"
+                height="788"
+                loading="lazy"
+                alt="Otto's usage this week: 1,640,000 of a 2,500,000 token budget (65%), with input, output, and cache totals below and a cost of about $3.29."
+              />
+            </picture>
+            <picture class="theme-light" data-ui>
+              <img
+                src="shots/usage-light.webp"
+                width="359"
+                height="788"
+                loading="lazy"
+                alt="Otto's usage this week: 1,640,000 of a 2,500,000 token budget (65%), with input, output, and cache totals below and a cost of about $3.29."
+              />
+            </picture>
+          </div>
+        </div>
+      </section>
+
+      <!-- What is in the first beta and what is planned, from the project's own checklist and pull requests. -->
+      <section id="beta" class="beta" aria-labelledby="beta-title">
+        <h2 id="beta-title" class="rise">In the beta, and what's next</h2>
+        <p class="beta-intro rise">What's in the first Mac beta, and what's planned.</p>
+        <div class="lists">
+          <div class="list list-now rise">
+            <h3>In this beta</h3>
+            <p class="list-note">Some actions need gateway permissions or a plugin.</p>
+            <ul>
+              <li>Connect the OpenClaw gateway you already run</li>
+              <li>Your bots with avatars and unread activity</li>
+              <li>Start, rename, pin, archive, and delete tasks</li>
+              <li>
+                Send messages, watch replies stream in, and ask your gateway to steer or stop a run
+              </li>
+              <li>Open action cards to see raw tool calls</li>
+              <li>Approvals and questions answered in place</li>
+              <li>Cards for bot-to-bot messages and T3 Code calls reported by your gateway</li>
+              <li>A task's files in the Work pane beside the conversation</li>
+              <li>Create a bot on an available provider account</li>
+              <li>Read and edit a bot's root memory</li>
+              <li>Per-bot usage tracking with weekly budget warnings</li>
+              <li>Routines, run history, and a week calendar</li>
+              <li>Choose where each bot runs commands. Manage approvals on supported machines.</li>
+              <li>A read-only mode for watching a gateway</li>
+              <!--
+                Updates, written for a first signed build that includes #202 and #204.
+                If it does not: keep the first row below, drop "Restart into a
+                downloaded update" here and add it under "Being built" with #202.
+                The FAQ's update answer has its own variant.
+              -->
+              <li>Check for Beta updates and download verified builds in Settings</li>
+              <li>Restart into a downloaded update</li>
+            </ul>
+          </div>
+          <div class="list list-next rise">
+            <h3>Being built</h3>
+            <ul>
+              <li>
+                <span>Plans for built-in OpenClaw setup</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/design/setup.md"
+                  >Design</a
+                >
+              </li>
+              <li>
+                <span
+                  >Pair with OpenClaw on this Mac without typing a token. Not in this beta:
+                  Clawtrate won't run OpenClaw's own program before you agree, so for now you enter
+                  the address and token under Advanced</span
+                >
+                <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/design/setup.md"
+                  >Design</a
+                >
+              </li>
+              <li>
+                <span>Connect to another computer over SSH in read-only mode</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/247">#247</a>
+              </li>
+              <li>
+                <span>Per-bot tool permissions: allow, ask, or never</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/225">#225</a>
+              </li>
+              <li>
+                <span>Per-bot and per-task model and reasoning effort</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/118">#118</a>
+              </li>
+              <li>
+                <span>Create, edit, pause, and run routines</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/134">#134</a>
+              </li>
+              <li>
+                <span>Watch a bot's browser and take control</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/122">#122</a>
+              </li>
+              <li>
+                <span>iPhone app</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/pull/143">#143</a>
+              </li>
+              <li>
+                <span>Plans for notifications, search, and voice</span>
+                <a href="https://github.com/sidebandstudio/clawtrate/blob/main/docs/roadmap.md"
+                  >Roadmap</a
+                >
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Questions before installing: on wide screens the open answer sits beside the list. -->
+      <section id="faq" class="faq" aria-labelledby="faq-title">
+        <h2 id="faq-title" class="rise">Before you install</h2>
+        <div class="faq-grid rise" data-faq>
+          <ul class="faq-q" role="list">
+            <li>
+              <h3 id="q1">Is it free?</h3>
+              <div class="faq-a" id="a1" role="region" aria-labelledby="q1">
+                <p>
+                  Yes. It is open source under the MIT license. You bring your own OpenClaw gateway
+                  and model provider.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q2">What do I need?</h3>
+              <div class="faq-a" id="a2" role="region" aria-labelledby="q2">
+                <p>
+                  You'll need a supported Mac and an OpenClaw gateway it can reach. You can install
+                  OpenClaw separately.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q3">Can I verify the Mac download?</h3>
+              <div class="faq-a" id="a3" role="region" aria-labelledby="q3">
+                <p>
+                  The Mac beta is Developer ID signed and Apple-notarized. The Terminal installer
+                  checks the download and the app's signature before it installs. It is for a first
+                  install and leaves an existing copy alone.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q4">Which sign-in details does Clawtrate keep?</h3>
+              <div class="faq-a" id="a4" role="region" aria-labelledby="q4">
+                <p>
+                  Clawtrate keeps your gateway's address and its own device key. It keeps the setup
+                  token until the gateway issues a device token, then uses the device token to
+                  reconnect. Provider passwords stay with the provider. Clawtrate sends any API key
+                  you enter to your gateway to save.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q5">What about Windows and iPhone?</h3>
+              <div class="faq-a" id="a5" role="region" aria-labelledby="q5">
+                <p>
+                  The desktop app builds for Windows. The first public beta is for Mac. The iPhone
+                  app is in development.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q6">How does it update?</h3>
+              <div class="faq-a" id="a6" role="region" aria-labelledby="q6">
+                <!--
+                  Written for a first signed build that includes #202 and #204. If it does not, use:
+                  "Check for Beta updates in Settings. Install a newer build from its Mac download."
+                -->
+                <p>
+                  Check for Beta updates in Settings. When an update is available, choose Download.
+                  If Restart to Update appears, choose it, then confirm Restart.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3 id="q7">Is it part of OpenClaw?</h3>
+              <div class="faq-a" id="a7" role="region" aria-labelledby="q7">
+                <p>
+                  No. OpenClaw runs your bots; Clawtrate is an independent client, not affiliated
+                  with OpenClaw or xAI.
+                </p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- The close: download again, and the source. -->
+      <section id="get" class="close" aria-labelledby="get-title">
+        <div class="close-inner">
+          <div class="close-text">
+            <h2 id="get-title" class="rise">Get the beta</h2>
+            <p class="rise">Free, open source, and yours to read before you run it.</p>
+            <div class="close-actions rise">
+              <a class="btn btn-close" href="download/mac/">Download for Mac</a>
+              <a class="btn btn-ghost" href="https://github.com/sidebandstudio/clawtrate">
+                <svg viewBox="0 0 16 16" aria-hidden="true" class="star">
+                  <path
+                    d="m8 1.9 1.8 3.8 4.1.5-3 2.9.8 4.1L8 11.2l-3.7 2 .8-4.1-3-2.9 4.1-.5L8 1.9Z"
+                  />
+                </svg>
+                Star on GitHub
+              </a>
+            </div>
+          </div>
+          <div class="close-side rise">
+            <p class="cmd-label" id="cmd-close-label">Or from Terminal</p>
+            <div class="cmd-box cmd-close">
+              <pre
+                aria-labelledby="cmd-close-label"
+              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"\$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
+              <button class="copy" type="button" data-copy>Copy</button>
+            </div>
+            <p class="oss">
+              MIT licensed. The source, roadmap, and design decisions live on
+              <a href="https://github.com/sidebandstudio/clawtrate">GitHub</a>—help is welcome (<a
+                href="https://github.com/sidebandstudio/clawtrate/blob/main/CONTRIBUTING.md"
+                >how to contribute</a
+              >).
+            </p>
+          </div>
+        </div>
+        <div class="cast" aria-hidden="true">
+          <img src="bots/juniper.svg" alt="" width="96" height="96" />
+          <img src="bots/extra2.svg" alt="" width="96" height="96" />
+          <img src="bots/pip.svg" alt="" width="96" height="96" />
+          <img src="bots/otto-done.svg" alt="" width="96" height="96" />
+          <img src="bots/extra1.svg" alt="" width="96" height="96" />
+          <img src="bots/marlow.svg" alt="" width="96" height="96" />
+          <img src="bots/extra4.svg" alt="" width="96" height="96" />
+          <img src="bots/extra3.svg" alt="" width="96" height="96" />
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>Clawtrate — Your OpenClaw agents, orchestrated.</p>
+      <nav aria-label="Project">
+        <a href="https://github.com/sidebandstudio/clawtrate">Source</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/releases">Releases</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/LICENSE">MIT license</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/SECURITY.md">Security</a>
+      </nav>
+      <p>Not affiliated with OpenClaw or xAI. No analytics on this site.</p>
+    </footer>
+
+    <script src="main.js" defer onerror="document.documentElement.classList.remove('js')"></script>
+  </body>
+</html>

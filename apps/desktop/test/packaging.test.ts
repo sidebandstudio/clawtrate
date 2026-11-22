@@ -2,6 +2,7 @@
 // the environment alone.
 import { FuseV1Options } from "@electron/fuses";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -36,6 +37,48 @@ describe("packaging configuration", () => {
     expect(script).toContain('Delete "$LOCALAPPDATA\\${APP_INSTALLER_STORE_FILE}"');
     expect(script).toContain('RMDir "$LOCALAPPDATA\\${CLAWTRATE_UPDATER_DIR}"');
   });
+
+  it("validates an output override before packaging on either platform", () => {
+    const output = (path: string) =>
+      builderConfig({ CLAWTRATE_PACKAGE_OUTPUT: path }, "45.3.2").directories?.output;
+    expect(output("  ")).toBe("dist");
+    expect(output(APP)).toBe(APP);
+    expect(() => output("custom-dist")).toThrow("must be an absolute path");
+  });
+
+  it.each(["1.2.0", "1.2.0-beta.20261104.10"])(
+    "emits the full signed setup version and setup-only marker for %s",
+    (version) => {
+      const config = builderConfig({}, "45.3.2");
+      const include = readFileSync(join(APP, config.nsis!.include!), "utf8");
+      expect(include).toMatch(
+        /!ifndef BUILD_UNINSTALLER\s+VIAddVersionKey \/LANG=1033 "OriginalFilename" "ClawtrateSetup.exe"\s+!endif/,
+      );
+      const require = createRequire(import.meta.url);
+      require("electron-builder");
+      const builderRequire = createRequire(require.resolve("electron-builder"));
+      // Ask the pinned packager for the actual NSIS version-resource commands.
+      // No installer is built or run.
+      const { NsisTarget } = builderRequire("app-builder-lib/out/targets/nsis/NsisTarget.js") as {
+        NsisTarget: { prototype: { computeVersionKey(): string[] } };
+      };
+      const fields = NsisTarget.prototype.computeVersionKey.call({
+        options: config.nsis,
+        packager: {
+          platformSpecificBuildOptions: {},
+          appInfo: {
+            productName: config.productName,
+            version,
+            buildVersion: version,
+            description: "Fixture",
+            copyright: "Fixture",
+          },
+        },
+      });
+      expect(fields).toContain('/LANG=1033 ProductName "Clawtrate"');
+      expect(fields).toContain(`/LANG=1033 ProductVersion "${version}"`);
+    },
+  );
 
   it("builds into a folder git ignores and publishes nothing", () => {
     const config = builderConfig({}, "45.3.2");
@@ -146,4 +189,11 @@ describe("packaging configuration", () => {
       expect(config[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]).toBe(true);
     }
   });
+});
+
+it("manual NSIS setup leaves app-close handling to the stock template", () => {
+  const include = readFileSync(join(APP, builderConfig({}, "45.3.2").nsis!.include!), "utf8");
+  expect(include).not.toMatch(
+    /customCheckAppRunning|getProcessInfo\.nsh|CLAWTRATE_EXITED_INSTALL_DIR/,
+  );
 });

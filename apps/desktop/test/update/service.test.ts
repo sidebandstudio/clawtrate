@@ -1,3 +1,11 @@
+import { spawn, type SpawnOptions } from "node:child_process";
+import { PassThrough } from "node:stream";
+import { fstatSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
+import { linkSync, watch } from "node:fs";
+import { macInstaller } from "../../src/main/mac-install.ts";
+import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createUpdatePreferenceStore } from "../../src/main/update/preferences.ts";
 import { updateDefines } from "../../packaging/update-defines.ts";
@@ -10,17 +18,29 @@ import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
 
-import { rename } from "node:fs/promises";
+vi.mock(import("node:child_process"), async (original) => {
+  const cp = { ...(await original()) };
+  vi.spyOn(cp, "spawn");
+  return cp;
+});
+vi.mock(import("node:fs"), async (original) => {
+  const fs = { ...(await original()) };
+  vi.spyOn(fs, "watch");
+  return fs;
+});
+
+import type * as FileSystem from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
 vi.mock(import("node:fs/promises"), async (original) => {
   const actual = await original();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
 let server: FeedServer;
 let dir: ReturnType<typeof tempDir>;
 let updates: string;
 const snapshots: DesktopUpdateSnapshot[] = [];
 const fixture = payload(4000);
-const nightly = "1.1.0-nightly.20261101.9";
+const nightly = "1.1.0-beta.20261101.9";
 function document(version: string, track: string) {
   return feedFor(
     server.origin,
@@ -178,13 +198,13 @@ it("keeps the previous track when saving fails and checks it next", async () => 
   expect(server.requests).toEqual(["/stable"]);
 });
 it("reports the running version when the selected track offers an older build", async () => {
-  const service = await start({ version: "2.0.0-nightly.20261102.1" });
+  const service = await start({ version: "2.0.0-beta.20261102.1" });
   expect(service.get().selectedTrack).toBe("nightly");
   await service.chooseTrack("stable");
   expect(
     (await service.check(service.get().selectedTrack, service.get().revision)).snapshot,
   ).toMatchObject({
-    runningVersion: "2.0.0-nightly.20261102.1",
+    runningVersion: "2.0.0-beta.20261102.1",
     state: { kind: "nothing-newer" },
   });
 });
@@ -679,6 +699,23 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
   },
 );
 
+it("retires the watch and the held archive when the verified file cannot be read again", async () => {
+  const installer = { ...installStandIn(), retire: vi.fn() };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: id });
+  installer.retire.mockClear();
+  // The read fails while the watch still sees the same file.
+  vi.spyOn(UpdateEngine.prototype, "recheckFile").mockResolvedValueOnce(false);
+  expect(await service.recheckVerified(id)).toBe(false);
+  expect(installer.retire).toHaveBeenCalledTimes(1);
+  expect(service.get()).toMatchObject({
+    state: { kind: "failed", reason: "artifact-changed" },
+    install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+  });
+});
+
 it("reads the last JSON value for a repeated track", async () => {
   const service = await start();
   const feed = JSON.stringify(document("1.1.0", "stable"));
@@ -698,12 +735,7 @@ it("reads the last JSON value for a repeated track", async () => {
 it("bounds preference reads and recovers when the file is repaired", async () => {
   const path = join(dir.path, "preferences.json");
   const prefs = store();
-  for (const bad of [
-    " ".repeat(1024) + "{}",
-    "[]",
-    '{"selectedTrack":42}',
-    '{"lastCheck":false}',
-  ]) {
+  for (const bad of [" ".repeat(1024) + "{}", "[]"]) {
     writeFileSync(path, bad);
     const service = await start({ store: prefs });
     expect(service.get()).toMatchObject({
@@ -800,7 +832,7 @@ it("distinguishes folder preparation from a settings read even with no source", 
     state: { reason: "not-configured" },
   });
   const prefs = store();
-  vi.spyOn(prefs, "get").mockRejectedValueOnce(Error("fixture read"));
+  vi.spyOn(prefs, "readPreferences").mockRejectedValueOnce(Error("fixture read"));
   const unreadable = await start({ feeds, store: prefs });
   expect(unreadable.get()).toMatchObject({
     selectedTrack: null,
@@ -851,6 +883,457 @@ it("defaults an invalid version to Stable and preserves the saved choice when fo
   expect(server.requests).toEqual([]);
 });
 
+function installStandIn(): UpdateInstaller {
+  return { unavailable: null, inspect: vi.fn(async () => null), launch: vi.fn(async () => null) };
+}
+
+it.each(["build-not-signed", "no-installer-path"] as const)(
+  "never asks the adapter to inspect or launch when the build says %s",
+  async (reason) => {
+    const installer = { ...installStandIn(), unavailable: reason };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect(service.get().install).toEqual({ kind: "unavailable-in-this-build", reason });
+    expect((await service.restart(id)).outcome).toBe("invalid");
+    service.shutdown();
+    expect(installer.inspect).not.toHaveBeenCalled();
+    expect(installer.launch).not.toHaveBeenCalled();
+    expect(await store().get("attempt")).toBeNull();
+  },
+);
+
+it.each([
+  "running-signature-untrusted",
+  "mac-archive",
+  "mac-designated-requirement",
+  "installer-version",
+] as const)(
+  "matching bytes alone cannot offer Restart when inspection reports %s",
+  async (reason) => {
+    const installer = installStandIn();
+    installer.inspect = async () => reason;
+    const service = await start({ installer });
+    const id = await offer(service);
+    expect((await service.download(id)).snapshot).toMatchObject({
+      state: { kind: "verified", offerId: id },
+      install: { kind: "unavailable-in-this-build", reason },
+    });
+    expect((await service.restart(id)).outcome).toBe("invalid");
+    expect(installer.launch).not.toHaveBeenCalled();
+  },
+);
+
+// A file symbolic link on Windows needs Developer Mode or the symbolic link privilege.
+it.each(
+  ["changed", "replaced", "truncated", "hardlink"].concat(
+    process.platform === "win32" ? [] : ["symlink"],
+  ),
+)("refuses a %s file between offering Restart and acting on it", async (change) => {
+  const installer = installStandIn();
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id);
+  const path = join(folder, readdirSync(folder)[0]!);
+  if (change === "truncated") writeFileSync(path, fixture.body.subarray(0, 1));
+  if (change === "changed") writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
+  if (change === "hardlink") linkSync(path, path + ".other");
+  if (change === "replaced" || change === "symlink") {
+    renameSync(path, path + ".old");
+    if (change === "symlink") symlinkSync(path + ".old", path);
+    else writeFileSync(path, fixture.body);
+  }
+  expect(await service.restart(id)).toMatchObject({
+    outcome: "stale",
+    snapshot: {
+      state: { kind: "failed", stage: "download", reason: "artifact-changed" },
+      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+    },
+  });
+  expect(installer.launch).not.toHaveBeenCalled();
+  expect(await store().get("attempt")).toBeNull();
+});
+
+it("accepts Restart from the first eligible verified snapshot after inspection", async () => {
+  const installer = installStandIn();
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  installer.inspect = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+    return null;
+  });
+  let restart: Promise<DesktopUpdateReply> | undefined;
+  const service = await start({
+    installer,
+    changed: ({ state, install }) => {
+      if (state.kind === "verified" && install.kind === "restart-available")
+        restart = service.restart(install.offerId);
+    },
+  });
+  const id = await offer(service);
+  const download = service.download(id);
+  await entered.promise;
+  const during = service.get();
+  const early = await service.restart(id);
+  release.resolve();
+  await download;
+  expect(during.state.kind).toBe("downloading");
+  expect(during.install.kind).toBe("unavailable-in-this-build");
+  expect(early.outcome).toBe("busy");
+  expect(await restart).toMatchObject({
+    outcome: "accepted",
+    snapshot: { state: { kind: "handing-off" } },
+  });
+  expect(installer.launch).toHaveBeenCalledTimes(1);
+});
+
+it("pins Restart to the displayed verified offer across a new check of the same track", async () => {
+  const installer = installStandIn();
+  const service = await start({ installer });
+  const old = await offer(service);
+  await service.download(old);
+  const checking = service.check("stable", service.get().revision);
+  expect((await service.restart(old)).outcome).toBe("busy");
+  await checking;
+  const state = service.get().state;
+  if (state.kind !== "offered") throw Error("Expected new offer");
+  await service.download(state.offerId);
+  expect((await service.restart(old)).outcome).toBe("stale");
+  expect((await service.restart({ path: "foreign" })).outcome).toBe("invalid");
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: state.offerId });
+  expect(installer.launch).not.toHaveBeenCalled();
+});
+
+it("F-231: one explicit Restart records the attempt before one stand-in handoff and quit", async () => {
+  const installer = installStandIn();
+  const quitAfterLaunch = vi.fn();
+  const entered = Promise.withResolvers<void>(),
+    resume = Promise.withResolvers<void>();
+  let launched: { file: unknown; attempt: string | null } | undefined;
+  // Assertions stay in the test body: the service would turn a throw here into a launch failure.
+  installer.launch = vi.fn(async (file) => {
+    launched = { file, attempt: await store().get("attempt") };
+    entered.resolve();
+    await resume.promise;
+    return null;
+  });
+  const service = await start({ installer, quitAfterLaunch });
+  const id = await offer(service);
+  await service.download(id);
+  expect(installer.launch).not.toHaveBeenCalled();
+  const pending = service.restart(id);
+  try {
+    expect(service.get().state.kind).toBe("preparing");
+    expect((await service.restart(id)).outcome).toBe("busy");
+    await Promise.race([entered.promise, pending]);
+    expect(launched?.file).toMatchObject({
+      track: "stable",
+      version: "1.1.0",
+      sha512: fixture.sha512,
+      size: fixture.body.length,
+    });
+    expect(JSON.parse(launched!.attempt!)).toMatchObject({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      phase: "handoff",
+      time: expect.stringMatching(/Z$/),
+    });
+    expect(service.get().state.kind).toBe("handing-off");
+    for (const command of [
+      service.check("stable", service.get().revision),
+      service.chooseTrack("nightly"),
+      service.download(id),
+      service.restart(id),
+    ])
+      expect((await command).outcome).toBe("busy");
+    expect(quitAfterLaunch).not.toHaveBeenCalled();
+    resume.resolve();
+    expect((await pending).snapshot.lastAttempt).toBeNull();
+    expect(quitAfterLaunch).toHaveBeenCalledTimes(1);
+    expect(installer.launch).toHaveBeenCalledTimes(1);
+    expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+  } finally {
+    resume.resolve();
+    try {
+      await pending;
+    } finally {
+      service.shutdown();
+    }
+  }
+  for (const [version, kind] of [
+    ["1.1.0", "target-running"],
+    ["1.0.0", "old-version-running"],
+    ["1.0.1", "unconfirmed"],
+    ["invalid", "unconfirmed"],
+  ] as const) {
+    const prefs = store();
+    if (version === "1.1.0") {
+      const read = prefs.readPreferences;
+      vi.spyOn(prefs, "readPreferences").mockImplementation(async () => {
+        expect(existsSync(updates)).toBe(true);
+        return read();
+      });
+    }
+    const next = await start({ version, store: prefs });
+    expect(next.get().lastAttempt).toEqual({
+      kind,
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      running: version === "invalid" ? null : version,
+    });
+    expect(existsSync(updates)).toBe(false);
+  }
+  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+});
+
+it.each([
+  "attempt-not-saved",
+  "mac-designated-requirement",
+  "installer-failed",
+  "artifact-changed",
+] as const)("reports %s without quitting or retrying", async (reason) => {
+  const installer = installStandIn(),
+    prefs = store(),
+    quitAfterLaunch = vi.fn();
+  const service = await start({ installer, store: prefs, quitAfterLaunch });
+  const id = await offer(service);
+  await service.download(id);
+  if (reason === "attempt-not-saved") vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("write"));
+  if (reason === "mac-designated-requirement") installer.inspect = async () => reason;
+  if (reason === "installer-failed" || reason === "artifact-changed")
+    installer.launch = vi.fn(async () => reason);
+  expect((await service.restart(id)).snapshot).toMatchObject({
+    lastAttempt: null,
+    state: { kind: "handoff-failed", reason },
+  });
+  expect((await service.restart(id)).outcome).toBe("stale");
+  expect(quitAfterLaunch).not.toHaveBeenCalled();
+  expect(installer.launch).toHaveBeenCalledTimes(
+    reason === "installer-failed" || reason === "artifact-changed" ? 1 : 0,
+  );
+});
+
+it("quit during signature inspection retires Restart without a handoff", async () => {
+  const installer = installStandIn(),
+    service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  installer.inspect = async () => {
+    entered.resolve();
+    await release.promise;
+    return null;
+  };
+  const pending = service.restart(id);
+  await entered.promise;
+  service.shutdown();
+  release.resolve();
+  expect((await pending).outcome).toBe("superseded");
+  expect(installer.launch).not.toHaveBeenCalled();
+  expect(await store().get("attempt")).toBeNull();
+});
+
+it.skipIf(process.platform === "win32").each(["success", "failure", "quit"])(
+  "one confirmed Mac handoff serves the preflight archive once (%s)",
+  async (action) => {
+    type Feed = { url: string; size: number; sha256: string };
+    let url: string | undefined;
+    let seen:
+      | {
+          state: string;
+          attempt: string | null;
+          feed: Feed;
+          repeatedFeed: number;
+          length: string | null;
+          body: Buffer;
+          repeatedArchive: number;
+          unrelated: number;
+        }
+      | undefined;
+    const inspected = vi.fn(async () => null);
+    // The service keeps handed-to-system whatever the stage throws, so only record here.
+    const installer = macInstaller("arm64", inspected, async (address, _signal, handed) => {
+      url = address;
+      handed();
+      const state = service.get().state.kind;
+      const attempt = await store().get("attempt");
+      const feed = (await (await fetch(address)).json()) as Feed;
+      const repeatedFeed = (await fetch(address)).status;
+      const archive = await fetch(feed.url);
+      const length = archive.headers.get("content-length");
+      const body = Buffer.from(await archive.arrayBuffer());
+      seen = {
+        state,
+        attempt,
+        feed,
+        repeatedFeed,
+        length,
+        body,
+        repeatedArchive: (await fetch(feed.url)).status,
+        unrelated: (await fetch(new URL("/unrelated", address))).status,
+      };
+      if (action === "failure") throw Error("Staging response lost");
+    });
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect(inspected).toHaveBeenCalledTimes(1);
+    expect(service.get().install).toEqual({
+      kind: "restart-available",
+      offerId: id,
+      completesOnQuit: true,
+    });
+    expect(url).toBeUndefined();
+    if (action === "quit") {
+      service.shutdown();
+      expect(url).toBeUndefined();
+      expect(await store().get("attempt")).toBeNull();
+      return;
+    }
+    expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
+    expect((await service.restart(id)).outcome).toBe("busy");
+    expect(seen).toMatchObject({
+      state: "handed-to-system",
+      attempt: expect.any(String),
+      feed: {
+        size: fixture.body.length,
+        sha256: createHash("sha256").update(fixture.body).digest("hex"),
+      },
+      repeatedFeed: 404,
+      length: String(fixture.body.length),
+      repeatedArchive: 404,
+      unrelated: 404,
+    });
+    expect(seen!.body).toEqual(fixture.body);
+    expect(url).toBeDefined();
+    await expect(fetch(url!)).rejects.toThrow();
+    service.shutdown();
+  },
+);
+
+it("retains the selected track and last check when an authorized write replaces a corrupt attempt", async () => {
+  const path = join(dir.path, "preferences.json");
+  const lastCheck = { track: "nightly", readAt: "2026-11-12T10:00:00.000Z" };
+  const prefs = store();
+  writeFileSync(
+    path,
+    JSON.stringify({ selectedTrack: "nightly", lastCheck, attempt: { phase: "unknown" } }),
+  );
+  const read = vi.spyOn(prefs, "readPreferences");
+  const service = await start({ store: prefs });
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(service.get()).toMatchObject({
+    selectedTrack: "nightly",
+    lastCheck,
+    lastAttempt: null,
+    preferenceIssue: "attempt-not-read",
+  });
+  const attempt = {
+    from: "1.0.0",
+    target: "1.2.0",
+    track: "stable",
+    time: lastCheck.readAt,
+    phase: "handoff",
+  };
+  await prefs.set("attempt", JSON.stringify(attempt));
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+    selectedTrack: "nightly",
+    lastCheck,
+    attempt,
+  });
+  for (const [version, kind] of [
+    ["1.2.0", "target-running"],
+    ["1.0.0", "old-version-running"],
+  ] as const) {
+    const next = await start({ version, store: prefs });
+    expect(next.get().lastAttempt).toMatchObject({ kind, running: version });
+  }
+});
+
+it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
+  "reports and repairs an invalid preference field %o",
+  async (bad) => {
+    writeFileSync(join(dir.path, "preferences.json"), JSON.stringify(bad));
+    const service = await start();
+    expect(service.get().preferenceIssue).toBe("preferences-not-read");
+    expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("nightly");
+  },
+);
+
+it("reads a valid attempt from a store without a projection when its last check is bad", async () => {
+  const saved: Record<string, string> = {
+    lastCheck: "{",
+    attempt: JSON.stringify({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      time: "2026-11-12T10:00:00.000Z",
+      phase: "handoff",
+    }),
+  };
+  const service = await start({
+    version: "1.1.0",
+    store: { get: async (key) => saved[key] ?? null, set: async () => {} },
+  });
+  expect(service.get()).toMatchObject({
+    preferenceIssue: "preferences-not-read",
+    lastCheck: null,
+    lastAttempt: { kind: "target-running", target: "1.1.0", running: "1.1.0" },
+  });
+});
+
+it("keeps the handoff visible through actual exit after a definite launch failure", async () => {
+  const installer = installStandIn();
+  installer.launch = async () => "installer-failed";
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state).toMatchObject({
+    kind: "handoff-failed",
+    reason: "installer-failed",
+  });
+  const next = await offer(service);
+  await service.download(next);
+  installer.launch = async () => {
+    service.shutdown();
+    return null;
+  };
+  expect((await service.restart(next)).snapshot.state.kind).toBe("handing-off");
+});
+
+it("retires a changed file before publishing the first eligible snapshot", async () => {
+  const installer = installStandIn();
+  installer.inspect = async (file) => {
+    writeFileSync(file.path, Buffer.alloc(file.size, 7));
+    return null;
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({
+    kind: "failed",
+    reason: "artifact-changed",
+  });
+  expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
+  expect((await service.restart(id)).outcome).toBe("stale");
+  expect(installer.launch).not.toHaveBeenCalled();
+});
+it("withdraws Restart when the already inspected download is replaced", async () => {
+  const service = await start({ installer: installStandIn() });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id),
+    path = join(folder, readdirSync(folder)[0]!);
+  renameSync(path, path + ".old");
+  writeFileSync(path, fixture.body);
+  expect(service.get().install).toMatchObject({ reason: "artifact-changed" });
+  expect((await service.restart(id)).outcome).toBe("stale");
+});
+
 it("refuses an old same-track revision or a malformed revision without replacing the result", async () => {
   const service = await start();
   const old = service.get();
@@ -893,3 +1376,202 @@ it("records a storage-blocked check separately from a startup storage notice", a
   });
   expect(server.requests).toEqual(["/stable"]);
 });
+it.skipIf(process.platform === "win32")(
+  "a native refusal cannot publish handed-to-system before update-downloaded",
+  async () => {
+    const updater = Object.assign(new EventEmitter(), {
+      setFeedURL: vi.fn(),
+      checkForUpdates: vi.fn(),
+      quitAndInstall: vi.fn(),
+    });
+    vi.doMock("electron", () => ({ autoUpdater: updater }));
+    // The stand-in updater reads what Squirrel would: the feed, then perhaps the archive.
+    async function read(feed: string, archive: boolean) {
+      const { url } = (await (await fetch(feed)).json()) as { url: string };
+      if (archive) await (await fetch(url)).arrayBuffer();
+    }
+    try {
+      for (const scenario of [
+        "feed-error",
+        "throw",
+        "error-after-feed",
+        "deadline",
+        "error-after-archive",
+        "deadline-after-archive",
+        "ready",
+      ] as const) {
+        let feed = "";
+        updater.setFeedURL.mockImplementation(({ url }: { url: string }) => {
+          feed = url;
+          if (scenario === "feed-error") updater.emit("error", Error("refused"));
+        });
+        updater.checkForUpdates.mockClear().mockImplementation(() => {
+          if (scenario === "throw") throw Error("refused");
+          if (scenario === "ready") updater.emit("update-downloaded");
+          if (scenario === "error-after-feed" || scenario === "error-after-archive")
+            void read(feed, scenario === "error-after-archive").then(() =>
+              // Squirrel's read-only volume check fails here, before the archive request.
+              updater.emit("error", Error("refused")),
+            );
+          if (scenario === "deadline-after-archive") void read(feed, true);
+        });
+        updater.quitAndInstall.mockImplementation(() => {
+          updater.emit("error", Error("late"));
+        });
+        const installer = macInstaller("arm64", async () => null, undefined, 1000);
+        const states: string[] = [];
+        const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
+        const id = await offer(service);
+        await service.download(id);
+        const result = (await service.restart(id)).snapshot.state;
+        if (scenario === "feed-error") expect(updater.checkForUpdates).not.toHaveBeenCalled();
+        if (
+          scenario === "feed-error" ||
+          scenario === "throw" ||
+          scenario === "error-after-feed" ||
+          scenario === "deadline"
+        ) {
+          // No archive was served, so nothing can have been staged: the person can check again.
+          expect(result).toEqual({
+            kind: "handoff-failed",
+            version: "1.1.0",
+            reason: scenario === "deadline" ? "installer-failed" : "mac-updater-refused",
+          });
+          expect((await service.restart(id)).outcome).toBe("stale");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("accepted");
+          expect((await service.chooseTrack("stable")).outcome).toBe("accepted");
+          const again = await offer(service);
+          expect((await service.download(again)).snapshot.state).toMatchObject({
+            kind: "verified",
+            offerId: again,
+          });
+        } else {
+          expect(result).toEqual({
+            kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",
+            offerId: id,
+            version: "1.1.0",
+          });
+          expect((await service.restart(id)).outcome).toBe("busy");
+          expect((await service.check("stable", service.get().revision)).outcome).toBe("busy");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
+          expect((await service.download(id)).outcome).toBe("busy");
+        }
+        expect(states.includes("handed-to-system")).toBe(scenario === "ready");
+        expect(updater.listenerCount("error")).toBe(1);
+        service.shutdown();
+      }
+    } finally {
+      vi.doUnmock("electron");
+    }
+  },
+);
+
+it("a watch error during inspection prevents the first eligible event", async () => {
+  const installer = installStandIn();
+  installer.inspect = async () => {
+    const watcher = vi.mocked(watch).mock.results.at(-1)!.value;
+    watcher.emit("error", Error("watch stopped"));
+    return null;
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({
+    kind: "failed",
+    reason: "artifact-changed",
+  });
+  expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
+  expect((await service.restart(id)).outcome).toBe("stale");
+});
+
+it.skipIf(process.platform === "win32")(
+  "quit during Mac Download aborts native inspection and closes its archive and scratch",
+  async () => {
+    const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/fixture/Contents/Resources",
+      configurable: true,
+    });
+    const child = () =>
+      Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: vi.fn() });
+    const inspector = child();
+    const entered = Promise.withResolvers<{ scratch: string; fd: number; signal: AbortSignal }>();
+    vi.mocked(spawn)
+      .mockImplementationOnce(() => {
+        const classification = child();
+        queueMicrotask(() => {
+          classification.stdout.end("ok");
+          classification.emit("close", 0);
+        });
+        return classification as unknown as ReturnType<typeof spawn>;
+      })
+      .mockImplementationOnce((_command, args, options) => {
+        const controls = options as SpawnOptions;
+        entered.resolve({
+          scratch: args[0]!,
+          fd: (controls.stdio as number[])[3]!,
+          signal: controls.signal!,
+        });
+        return inspector as unknown as ReturnType<typeof spawn>;
+      });
+    try {
+      const service = await start({ installer: macInstaller("arm64") });
+      const id = await offer(service);
+      const pending = service.download(id);
+      const { scratch, fd, signal } = await entered.promise;
+      try {
+        service.shutdown();
+        expect(signal.aborted).toBe(true);
+        inspector.emit("error", Error("aborted"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(existsSync(scratch)).toBe(true);
+        expect(fstatSync(fd).isFile()).toBe(true);
+      } finally {
+        inspector.emit("close", null, "SIGKILL");
+        await pending;
+      }
+      expect(existsSync(scratch)).toBe(false);
+      expect(() => fstatSync(fd)).toThrow();
+      expect((await pending).outcome).toBe("superseded");
+    } finally {
+      if (old) Object.defineProperty(process, "resourcesPath", old);
+      else Reflect.deleteProperty(process, "resourcesPath");
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "a full scratch disk leaves the download verified and refuses Restart with inspection-failed",
+  async () => {
+    const fs = await vi.importActual<typeof FileSystem>("node:fs/promises");
+    const full = vi.fn(async () => {
+      throw Object.assign(Error("full"), { code: "ENOSPC" });
+    });
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const fd = await fs.open(...args);
+      if (String(args[0]).includes("/.hold-") && args[1] === "wx") fd.writeFile = full;
+      return fd;
+    });
+    try {
+      const inspect = vi.fn(async () => null);
+      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const id = await offer(service);
+      expect((await service.download(id)).snapshot).toMatchObject({
+        state: { kind: "verified", offerId: id },
+        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+      });
+      expect(full).toHaveBeenCalled();
+      expect(inspect).not.toHaveBeenCalled();
+      const files = readdirSync(join(updates, id));
+      expect(files).toHaveLength(1);
+      expect(
+        createHash("sha512")
+          .update(readFileSync(join(updates, id, files[0]!)))
+          .digest("base64"),
+      ).toBe(fixture.sha512);
+      expect((await service.restart(id)).outcome).toBe("invalid");
+      service.shutdown();
+    } finally {
+      vi.mocked(open).mockImplementation(fs.open);
+    }
+  },
+);

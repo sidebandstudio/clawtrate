@@ -43,13 +43,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
+import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
 import {
   cleanUp,
+  readRecord,
+  recordPath,
   recoverDeadRuns,
   saveRecord,
   TEMP_PREFIX,
@@ -117,7 +120,8 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
 
 /**
  * The processes listening on the protected ports, each by PID, start time and
- * address. `lsof` exits 1 when nothing listens, which is an answer too.
+ * address. `lsof` exits 1 when any one of the ports has no listener, with the
+ * others' rows on its output, or none when nothing listens: both are answers.
  */
 export function protectedListeners(): string[] {
   let out: string;
@@ -129,8 +133,8 @@ export function protectedListeners(): string[] {
     );
   } catch (error) {
     const failed = error as { status?: number; stdout?: string };
-    if (failed.status !== 1 || failed.stdout) throw error;
-    out = "";
+    if (failed.status !== 1) throw error;
+    out = failed.stdout ?? "";
   }
   const rows: string[] = [];
   let pid = 0;
@@ -239,7 +243,83 @@ function cliEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** The app's environment: nothing that could point it at a development gateway or change Electron. */
+/**
+ * The environment and working folder of every packaged launch, the second
+ * included: the app's own, with the run's temporary home and temporary
+ * folder, in a working folder of the run's own. Made under `dir`.
+ */
+export function launchPlace(dir: string): { env: NodeJS.ProcessEnv; cwd: string } {
+  const home = join(dir, "home");
+  const tmp = join(dir, "tmp");
+  const cwd = join(dir, "work");
+  for (const folder of [home, tmp, cwd]) mkdirSync(folder, { recursive: true, mode: 0o700 });
+  return { env: { ...appEnv(), HOME: home, TMPDIR: tmp, TEMP: tmp, TMP: tmp }, cwd };
+}
+
+/** The exit of each packaged app this run started, recorded the moment it was spawned. */
+const exits = new WeakMap<ChildProcess, Promise<void>>();
+export function recordExit(child: ChildProcess): ChildProcess {
+  exits.set(child, new Promise((resolve) => child.once("exit", () => resolve())));
+  return child;
+}
+
+/**
+ * Whether the recorded app exited within `ms`: its recorded exit event, or the
+ * kernel saying its PID is gone. Never a wait that started after it exited.
+ */
+export async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  const gone = async () => {
+    for (;;) {
+      await sleep(200);
+      try {
+        process.kill(child.pid!, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      }
+    }
+  };
+  const ended = await Promise.race([
+    (exits.get(child) ?? new Promise<void>(() => {})).then(() => true),
+    gone(),
+    sleep(ms).then(() => false),
+  ]);
+  return ended;
+}
+
+/**
+ * The packaged app's launch arguments: its own data folder, the debugging
+ * port this check drives it over, always a sandbox, and the checkout whose
+ * run records prove the sandbox's instance (a packaged app has no checkout of
+ * its own). Nothing may automate a packaged app without a sandbox: such an
+ * app would be a person's, and look at the real computer.
+ */
+export function launchArgs(userData: string, sandbox: string, checkout: string): string[] {
+  return [
+    `--user-data-dir=${userData}`,
+    "--remote-debugging-port=0",
+    `--clawtrate-setup-sandbox=${sandbox}`,
+    `--clawtrate-setup-checkout=${checkout}`,
+  ];
+}
+
+/** This checkout, as the dev-gateway tool records it. */
+export const CHECKOUT = realpathSync(ROOT);
+
+/**
+ * The sandbox the app's look on this computer is given (docs/development/setup.md):
+ * a private run folder whose description names this run's instance and its
+ * current run. On Windows the look reads nothing and no instance runs, so the
+ * description there names none that is running.
+ */
+function setupSandbox(dir: string, instance: string): { file: string; appData: string } {
+  const parent = join(dir, "setup");
+  mkdirSync(parent, { recursive: true });
+  const run = process.platform === "win32" ? { run: "0".repeat(48) } : {};
+  const sandbox = writeSandbox({ instance, parent, ...run });
+  // The app keeps its data in the sandbox's own folder; the check passes and reads that one.
+  return { file: sandbox.file, appData: realpathSync.native(sandbox.appData) };
+}
 
 export default async function globalSetup() {
   if (process.platform === "win32") return windowsSetup();
@@ -280,7 +360,12 @@ export default async function globalSetup() {
     });
   };
   let cleaned: string[] | null = null;
-  const cleanUpOnce = () => (cleaned ??= cleanUp(RECORDS, record, reset));
+  const cleanUpOnce = () => {
+    // A test may have recorded a newer build it started on the same data folder.
+    const saved = readRecord(recordPath(RECORDS, record.run));
+    if (saved?.successor) record.successor = saved.successor;
+    return (cleaned ??= cleanUp(RECORDS, record, reset));
+  };
   // Restored after the app is gone, which cleanUp makes sure of.
   const finish = () => {
     const problems = [...cleanUpOnce()];
@@ -313,16 +398,18 @@ export default async function globalSetup() {
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(dir);
   saveRecord(RECORDS, record);
-  const userData = join(realpathSync.native(dir), "user-data");
+  // The sandbox's data folder once it is written; nothing of the app's runs before that.
+  let userData = join(realpathSync.native(dir), "user-data");
 
   const teardown = async () => {
     const problems: string[] = [];
     // Quit the app the way the system does at logout, and wait for it and its helpers.
     if (appProcess && appProcess.exitCode === null && appProcess.signalCode === null) {
-      const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
       appProcess.kill("SIGTERM");
-      if ((await Promise.race([exited, sleep(15_000).then(() => "timeout")])) === "timeout") {
+      if (!(await exitedWithin(appProcess, 15_000))) {
+        // The graceful shutdown failed: that is reported, and only the recorded app is ended.
         problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
+        forceEnd(appProcess.pid!);
       }
     }
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
@@ -385,19 +472,28 @@ export default async function globalSetup() {
       }
     }
 
-    mkdirSync(userData);
     // What the app writes to its output, its log, kept beside its data folder for the checks.
     const log = join(dir, "app.log");
     const logFd = openSync(log, "a", 0o600);
     record.hostPending = true;
     saveRecord(RECORDS, record);
+    const written = setupSandbox(dir, name);
+    const sandbox = written.file;
+    userData = written.appData;
+    process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
+    const place = launchPlace(dir);
+    process.env.CLAWTRATE_PACKAGED_PLACE = dir;
     const gated = gatedSpawn(
       spawn,
       packagedExecutable(app),
-      [`--user-data-dir=${userData}`, "--remote-debugging-port=0"],
-      { cwd: dir, env: appEnv(), stdio: ["ignore", logFd, logFd] },
+      launchArgs(userData, sandbox, CHECKOUT),
+      {
+        cwd: place.cwd,
+        env: place.env,
+        stdio: ["ignore", logFd, logFd],
+      },
     );
-    appProcess = gated.child;
+    appProcess = recordExit(gated.child);
     const found = processIdentity(appProcess.pid!);
     if (found.state !== "alive") {
       gated.abort();
@@ -414,6 +510,7 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
     process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
     process.env.CLAWTRATE_PACKAGED_LOG = log;
+    process.env.CLAWTRATE_PACKAGED_RECORD = recordPath(RECORDS, record.run);
   } catch (error) {
     await teardown().catch((problem: unknown) => console.error(String(problem)));
     throw error;
@@ -436,8 +533,8 @@ async function windowsSetup() {
   const REAL_DATA = realData();
   const realBefore = fingerprint(REAL_DATA);
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
-  const userData = join(realpathSync.native(dir), "user-data");
-  mkdirSync(userData);
+  // The sandbox's data folder once it is written.
+  let userData = join(realpathSync.native(dir), "user-data");
   let appProcess: ChildProcess | null = null;
 
   /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
@@ -460,10 +557,9 @@ async function windowsSetup() {
         `the app exited before it was asked to close, with ${appProcess.exitCode ?? appProcess.signalCode}`,
       );
     } else if (appProcess) {
-      const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
       const refused = askToClose(appProcess.pid!);
       if (refused) problems.push(`asking the app to close failed: ${refused}`);
-      else if ((await Promise.race([exited, sleep(15_000).then(() => "timeout")])) === "timeout") {
+      else if (!(await exitedWithin(appProcess, 15_000))) {
         problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
       } else if (appProcess.exitCode !== 0) {
         problems.push(`the app exited with ${appProcess.exitCode ?? appProcess.signalCode}`);
@@ -482,11 +578,19 @@ async function windowsSetup() {
   };
 
   try {
-    appProcess = spawn(exe, [`--user-data-dir=${userData}`, "--remote-debugging-port=0"], {
-      cwd: dirname(userData),
-      env: appEnv(),
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+    const written = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    const sandbox = written.file;
+    userData = written.appData;
+    process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
+    const place = launchPlace(dir);
+    process.env.CLAWTRATE_PACKAGED_PLACE = dir;
+    appProcess = recordExit(
+      spawn(exe, launchArgs(userData, sandbox, CHECKOUT), {
+        cwd: place.cwd,
+        env: place.env,
+        stdio: ["ignore", "ignore", "inherit"],
+      }),
+    );
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
