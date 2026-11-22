@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EXPIRES_MS, admit } from "../lib/ledger.js";
+import { EXPIRES_MS, admit, decline } from "../lib/ledger.js";
 import { Records } from "../lib/records.js";
 import { load, memoryStore } from "./harness.ts";
 
@@ -31,7 +31,7 @@ describe("the records", () => {
       [20, ["pip", "pip"]],
       [200, ["s9", "s10"]],
     ] as const) {
-      const records = new Records(memoryStore(), { now: () => T });
+      const records = new Records(memoryStore(), memoryStore(), { now: () => T });
       for (let i = 0; i < limit - 1; i += 1)
         await propose(
           records,
@@ -52,7 +52,7 @@ describe("the records", () => {
 
   it("readers use only versions that read and match: missing, corrupt and changed ones are unreadable", async () => {
     const store = memoryStore();
-    const records = new Records(store, { now: () => T });
+    const records = new Records(memoryStore(), store, { now: () => T });
     for (const id of ["a", "b", "c"]) await propose(records, id, { kind: "bot", bot: id }, id);
     const { proposals } = await records.ledger();
     store.rows.set("v:a", { json: JSON.stringify({ digest: proposals.a.digest }), rev: 900 });
@@ -68,7 +68,7 @@ describe("the records", () => {
 
   it("publishing checks, after each observation, that its version exists and reads", async () => {
     const store = memoryStore();
-    const records = new Records(store, { now: () => T });
+    const records = new Records(memoryStore(), store, { now: () => T });
     const digest = await records.persist("p", { id: "p" });
     store.rows.delete("v:p");
     const publish = records.publish("p", digest, (l, at) =>
@@ -78,14 +78,33 @@ describe("the records", () => {
     expect((await records.ledger()).proposals).toEqual({});
   });
 
-  it("reopening Records over the same store reads the same ledger and versions", async () => {
-    const store = memoryStore();
-    await propose(new Records(store, { now: () => T }), "p", { kind: "bot", bot: "pip" }, "pip");
-    const again = new Records(store, { now: () => T + 1 });
-    expect(await again.version("p", (await again.ledger()).proposals.p.digest)).toEqual({
-      id: "p",
-      bot: "pip",
+  it("reopening Records over the same stores: before publication nothing was admitted, after it the entry is there once", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const unpublished = await new Records(store, versions, { now: () => T }).persist("u", {
+      id: "u",
     });
+    const reopened = new Records(store, versions, { now: () => T + 1 });
+    expect((await reopened.ledger()).proposals).toEqual({});
+    expect(await reopened.version("u", unpublished)).toEqual({ id: "u" });
+    await propose(reopened, "p", { kind: "bot", bot: "pip" }, "pip");
+    const digest = (await reopened.ledger()).proposals.p.digest;
+    const again = new Records(store, versions, { now: () => T + 2 });
+    const { proposals } = await again.ledger();
+    expect(Object.keys(proposals)).toEqual(["p"]);
+    expect(proposals.p).toMatchObject({ digest, state: "open" });
+    expect(await again.version("p", digest)).toEqual({ id: "p", bot: "pip" });
+  });
+
+  it("a full versions namespace refuses new records with records-full, and decisions still commit", async () => {
+    const records = new Records(memoryStore(), memoryStore({ maxEntries: 2 }), { now: () => T });
+    await propose(records, "a", { kind: "bot", bot: "pip" }, "a");
+    await propose(records, "b", { kind: "bot", bot: "pip" }, "b");
+    await expect(propose(records, "c", { kind: "bot", bot: "pip" }, "c")).rejects.toMatchObject({
+      reason: "records-full",
+    });
+    const { digest } = (await records.ledger()).proposals.a;
+    await records.transact((l, at) => decline(l, "a", digest, "dev", at));
+    expect((await records.ledger()).proposals.a.state).toBe("declined");
   });
 });
 
@@ -186,7 +205,7 @@ describe("the plugin's methods", () => {
   it("a suggestion admitted before the revocation is withdrawn on every device; one after is refused", async () => {
     const { host, grant, suggest } = await setup();
     const before = (await suggest({})).payload!;
-    const held = host.store.hold("v:p_");
+    const held = host.versions.hold("v:p_");
     const after = suggest({ fields: { model: "m" } });
     await held.reached;
     await host.call("relay.grants.set", { id: grant.id, revoke: true });
@@ -206,7 +225,7 @@ describe("the plugin's methods", () => {
       const old = (await suggest({})).payload!;
       const decline = () =>
         host.call("proposals.decline", { id: old.proposalId, digest: old.digest });
-      const held = host.store.hold("v:p_");
+      const held = host.versions.hold("v:p_");
       const newer = suggest({ fields: { label: "newer" } });
       await held.reached;
       const first = declineFirst ? await decline() : null;
@@ -255,7 +274,7 @@ describe("the plugin's methods", () => {
         })
       ).payload!;
     const broken = await send("pip");
-    host.store.faults.corrupt.add(`v:${broken.proposalId}`);
+    host.versions.faults.corrupt.add(`v:${broken.proposalId}`);
     expect(
       reasonOf(
         await host.call("proposals.decline", { id: broken.proposalId, digest: broken.digest }),
@@ -269,6 +288,88 @@ describe("the plugin's methods", () => {
     const accept = await host.call("proposals.accept", { id: old.proposalId, digest: old.digest });
     expect(accept.error?.details).toMatchObject({ reason: "settled", state: "expired" });
     expect((await host.call("proposals.get", { id: old.proposalId })).payload).toMatchObject({
+      state: "expired",
+    });
+  });
+
+  it("a refused submission keeps no record, and a full versions namespace still lets decline and revoke commit", async () => {
+    const host = load({ now: () => T, versions: memoryStore({ maxEntries: 23 }) });
+    const bots = Array.from({ length: 30 }, (_, i) => ({ id: `b${i}`, createdAt: i + 1 }));
+    host.bots.splice(0, host.bots.length, ...bots);
+    const g = (
+      await host.call("relay.grants.set", { scope: "suggest", bots: "all", includeFuture: true })
+    ).payload!;
+    const send = (i: number) =>
+      host.call("relay.propose", {
+        grant: g.id,
+        generation: 1,
+        bot: `b${i}`,
+        fields: { label: "x" },
+      });
+    const sent = [];
+    for (let i = 0; i < 20; i += 1) sent.push((await send(i)).payload!);
+    const rows = host.versions.rows.size;
+    for (let i = 20; i < 25; i += 1) expect(reasonOf(await send(i))).toBe("source-limit");
+    expect(host.versions.rows.size).toBe(rows);
+    const other = (
+      await host.call("relay.grants.set", { scope: "suggest", bots: "all", includeFuture: true })
+    ).payload!;
+    const more = (i: number) =>
+      host.call("relay.propose", {
+        grant: other.id,
+        generation: 1,
+        bot: `b${i}`,
+        fields: { model: "m" },
+      });
+    expect([reasonOf(await more(0)), reasonOf(await more(1)), reasonOf(await more(2))]).toEqual([
+      undefined,
+      "records-full",
+      "records-full",
+    ]);
+    const first = sent[0]!;
+    expect(
+      (await host.call("proposals.decline", { id: first.proposalId, digest: first.digest })).ok,
+    ).toBe(true);
+    expect((await host.call("relay.grants.set", { id: g.id, revoke: true })).ok).toBe(true);
+  });
+
+  it("expiry reached while a decision reads the version, or before its commit, settles nothing", async () => {
+    let now = T;
+    const host = load({ now: () => now });
+    const g = (
+      await host.call("relay.grants.set", { scope: "suggest", bots: "all", includeFuture: true })
+    ).payload!;
+    const send = async (bot: string) =>
+      (
+        await host.call("relay.propose", {
+          grant: g.id,
+          generation: 1,
+          bot,
+          fields: { label: "x" },
+        })
+      ).payload!;
+    for (const decision of ["proposals.decline", "proposals.accept"]) {
+      now = T;
+      const p = await send(decision === "proposals.decline" ? "pip" : "main");
+      now = T + EXPIRES_MS - 1;
+      const read = host.versions.hold(`v:${p.proposalId}`, "read");
+      const answer = host.call(decision, { id: p.proposalId, digest: p.digest });
+      await read.reached;
+      now = T + EXPIRES_MS;
+      read.release();
+      expect((await answer).error?.details).toMatchObject({ reason: "settled", state: "expired" });
+    }
+    // Past the read, the deadline is checked again up to the commit.
+    const issued = T + EXPIRES_MS + 10;
+    now = issued;
+    const late = await send("pip");
+    now = issued + EXPIRES_MS - 1;
+    host.store.faults.beforeCommit = () => (now = issued + EXPIRES_MS);
+    expect(
+      reasonOf(await host.call("proposals.decline", { id: late.proposalId, digest: late.digest })),
+    ).toBe("expired");
+    host.store.faults.beforeCommit = () => {};
+    expect((await host.call("proposals.get", { id: late.proposalId })).payload).toMatchObject({
       state: "expired",
     });
   });

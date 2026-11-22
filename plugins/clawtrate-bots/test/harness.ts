@@ -1,4 +1,4 @@
-// A stand-in for the gateway's retained keyed store and host, for the unit
+// A stand-in for the gateway's keyed stores and host, for the unit
 // tests. Every operation yields once, as the real store's worker does, so
 // concurrent callers interleave. compareAndApply refuses when the row changed
 // since it was observed, as the real one does in one SQLite transaction.
@@ -8,7 +8,7 @@ import { createBots } from "../lib/bots.js";
 type Row = { json: string; rev: number };
 type Json = Record<string, unknown>;
 
-export function memoryStore() {
+export function memoryStore({ maxEntries = Infinity } = {}) {
   const rows = new Map<string, Row>();
   let rev = 0;
   const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -23,23 +23,37 @@ export function memoryStore() {
     return JSON.stringify(value);
   };
   const mark = (key: string) => `${key}#${rows.get(key)?.rev ?? "absent"}`;
-  /** Holds writes of keys with a prefix until released; `reached` resolves when one is held. */
-  const gates: { prefix: string; reach: () => void; wait: Promise<void> }[] = [];
-  const faults = { corrupt: new Set<string>() };
-  return {
+  /** Holds reads or writes of keys with a prefix until released; `reached` resolves when one is held. */
+  const gates: { prefix: string; on: string; reach: () => void; wait: Promise<void> }[] = [];
+  const pass = async (key: string, on: string) => {
+    for (const gate of gates.filter((g) => g.on === on && key.startsWith(g.prefix))) {
+      gate.reach();
+      await gate.wait;
+    }
+  };
+  const faults = { corrupt: new Set<string>(), beforeCommit: () => {} };
+  type Intent = { action: string; value?: unknown };
+  const apply = (key: string, comparison: string, intent: Intent) => {
+    if (mark(key) !== comparison)
+      return { status: "conflict", current: { value: read(key), comparison: mark(key) } };
+    if (intent.action === "set") rows.set(key, { json: json(intent.value), rev: ++rev });
+    return { status: "applied" };
+  };
+  const store = {
     rows,
     faults,
-    hold(prefix: string) {
+    hold(prefix: string, on: "read" | "write" = "write") {
       let reach = () => {};
       let release = () => {};
       const reached = new Promise<void>((resolve) => (reach = resolve));
       const wait = new Promise<void>((resolve) => (release = resolve));
-      const gate = { prefix, reach, wait };
+      const gate = { prefix, on, reach, wait };
       gates.push(gate);
       return { reached, release: () => (gates.splice(gates.indexOf(gate), 1), release()) };
     },
     async lookup(key: string) {
       await tick();
+      await pass(key, "read");
       if (faults.corrupt.has(key))
         throw Object.assign(new Error("corrupt"), { code: "PLUGIN_STATE_CORRUPT" });
       return read(key);
@@ -48,44 +62,35 @@ export function memoryStore() {
       await tick();
       return { value: read(key), comparison: mark(key) };
     },
-    async compareAndApply(
-      key: string,
-      comparison: string,
-      intent: { action: string; value?: unknown },
-    ) {
+    async compareAndApply(key: string, comparison: string, intent: Intent) {
       await tick();
-      if (mark(key) !== comparison)
-        return { status: "conflict", current: { value: read(key), comparison: mark(key) } };
-      if (intent.action === "set") rows.set(key, { json: json(intent.value), rev: ++rev });
-      return { status: "applied" };
+      return apply(key, comparison, intent);
     },
+    /** The assertion is checked at the transaction and again at commit, as the real store does. */
+    withCurrent({ assertCurrent }: { assertCurrent: () => void }) {
+      return {
+        ...store,
+        async compareAndApply(key: string, comparison: string, intent: Intent) {
+          assertCurrent();
+          await tick();
+          faults.beforeCommit();
+          assertCurrent();
+          return apply(key, comparison, intent);
+        },
+      };
+    },
+    /** A bounded namespace with overflowPolicy "reject-new" refuses new keys at its limit. */
     async registerIfAbsent(key: string, value: unknown) {
       await tick();
-      for (const gate of gates.filter((g) => key.startsWith(g.prefix))) {
-        gate.reach();
-        await gate.wait;
-      }
+      await pass(key, "write");
       if (rows.has(key)) return false;
+      if (rows.size >= maxEntries)
+        throw Object.assign(new Error("limit"), { code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
       rows.set(key, { json: json(value), rev: ++rev });
       return true;
     },
-    async delete(key: string) {
-      await tick();
-      return rows.delete(key);
-    },
-    async entriesInKeyRange(range: {
-      keyStartInclusive: string;
-      keyEndExclusive: string;
-      limit: number;
-    }) {
-      await tick();
-      return [...rows.keys()]
-        .filter((k) => k >= range.keyStartInclusive && k < range.keyEndExclusive)
-        .sort()
-        .slice(0, range.limit)
-        .map((key) => ({ key, value: read(key), createdAt: 0 }));
-    },
   };
+  return store;
 }
 
 export type Store = ReturnType<typeof memoryStore>;
@@ -96,8 +101,11 @@ export type Answer = {
 };
 
 /** The plugin on a fake host: its methods, the events it emitted, and every method it dispatched. */
-export function load(options: { store?: Store; now?: () => number; bots?: Json[] } = {}) {
+export function load(
+  options: { store?: Store; versions?: Store; now?: () => number; bots?: Json[] } = {},
+) {
   const store = options.store ?? memoryStore();
+  const versions = options.versions ?? memoryStore({ maxEntries: 512 });
   const handlers = new Map<string, { handler: (opts: Json) => Promise<void>; scope: string }>();
   const events: string[] = [];
   const dispatched: string[] = [];
@@ -116,6 +124,7 @@ export function load(options: { store?: Store; now?: () => number; bots?: Json[]
   };
   createBots(api, {
     store,
+    versions,
     now: options.now,
     sdk: {
       dispatchGatewayMethod: async (method: string) => {
@@ -145,5 +154,5 @@ export function load(options: { store?: Store; now?: () => number; bots?: Json[]
     });
     return answer;
   }
-  return { store, handlers, events, dispatched, call, bots };
+  return { store, versions, handlers, events, dispatched, call, bots };
 }

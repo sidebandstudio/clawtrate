@@ -176,7 +176,7 @@ try {
   );
 
   await check(
-    "A gateway switch mid-proposal: two instances are isolated, so a request and a grant stay with their gateway",
+    "A gateway switch after a completed submission: the two instances are isolated, so the request and the grant stay with their gateway",
     async () => {
       const switched = await propose(op, { id: grantId, generation: 1 }, bot, "effort");
       const opB = await admin(b, "Bots check, second gateway");

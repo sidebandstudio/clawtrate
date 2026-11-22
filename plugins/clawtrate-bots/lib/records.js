@@ -4,8 +4,10 @@
 // (OpenClaw 2026.10.6, docs/plugins/sdk-runtime/state-and-system.md), so the
 // ledger enforces the limits and the plugin's own sweep does the expiry.
 //
-//   v:<id>    a version, written once: { body, digest, storedAt }
-//   ledger    the ledger (lib/ledger.js), changed only by compareAndApply
+//   ledger    the ledger (lib/ledger.js), changed only by compareAndApply, in
+//             the retained namespace, so a decision can always be stored
+//   v:<id>    a version, written once: { body, digest, storedAt }, in a
+//             bounded namespace of its own that refuses new rows when full
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
@@ -16,6 +18,8 @@ import { canonical, digestOf } from "./canonical.js";
 import { Refusal, emptyLedger, sweep } from "./ledger.js";
 
 export const NAMESPACE = "records";
+/** Versions are bounded: nothing deletes one in this part, and a refused submission keeps no row. */
+export const VERSIONS = { namespace: "versions", maxEntries: 512, overflowPolicy: "reject-new" };
 const LEDGER = "ledger";
 const VERSION = "v:";
 /** compareAndApply retries before giving up; each retry means another change landed. */
@@ -23,11 +27,12 @@ const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 export class Records {
-  constructor(store, { now = Date.now, onChange = () => {} } = {}) {
-    for (const need of ["observe", "compareAndApply", "registerIfAbsent"])
+  constructor(store, versions, { now = Date.now, onChange = () => {} } = {}) {
+    for (const need of ["observe", "compareAndApply", "withCurrent"])
       if (typeof store[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.store = store;
+    this.versions = versions;
     this.now = now;
     this.onChange = onChange;
   }
@@ -40,30 +45,49 @@ export class Records {
   /**
    * Runs `change` on the current ledger after expiry and retention, and
    * stores the result in one compareAndApply. `verify`, if given, runs after
-   * each observation and before the change. A Refusal from either writes
-   * nothing. On a conflict it starts again from what is stored.
+   * each observation; the clock is read again after it, and expiry run again,
+   * before the change. `deadline`, if given, is when the change stops being
+   * valid: the store checks it up to its commit. A Refusal writes nothing.
+   * On a conflict it starts again from what is stored.
    * @template R
    * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => R} change
    * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => Promise<void>} [verify]
+   * @param {(ledger: ReturnType<typeof emptyLedger>) => number} [deadline]
    * @returns {Promise<R>}
    */
-  async transact(change, verify) {
+  async transact(change, verify, deadline) {
     for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
       const seen = await this.store.observe(LEDGER);
       const before = seen.value ?? emptyLedger();
       const ledger = structuredClone(before);
+      sweep(ledger, this.now());
+      if (verify) await verify(ledger, this.now());
       const now = this.now();
       sweep(ledger, now);
-      if (verify) await verify(ledger, now);
+      const until = deadline?.(ledger) ?? Infinity;
       const result = change(ledger, now);
       if (digestOf(ledger) === digestOf(before) && seen.value) return result;
       // A revision on every stored change, so no change restores an earlier row.
       ledger.rev = (before.rev ?? 0) + 1;
-      const out = await this.store.compareAndApply(LEDGER, seen.comparison, {
-        operation: "update",
-        action: "set",
-        value: ledger,
+      let late = false;
+      const store = this.store.withCurrent({
+        assertCurrent: () => {
+          if (this.now() < until) return;
+          late = true;
+          throw new Refusal("expired", "This expired before the change was stored.");
+        },
       });
+      let out;
+      try {
+        out = await store.compareAndApply(LEDGER, seen.comparison, {
+          operation: "update",
+          action: "set",
+          value: ledger,
+        });
+      } catch (error) {
+        if (late) throw new Refusal("expired", "This expired before the change was stored.");
+        throw error;
+      }
       if (out.status === "conflict") continue;
       this.onChange();
       return result;
@@ -76,11 +100,20 @@ export class Records {
     // The store takes only JSON values: the canonical form leaves out undefined.
     const clean = JSON.parse(canonical(body));
     const digest = digestOf(clean);
-    const stored = await this.store.registerIfAbsent(VERSION + id, {
-      body: clean,
-      digest,
-      storedAt: this.now(),
-    });
+    let stored;
+    try {
+      stored = await this.versions.registerIfAbsent(VERSION + id, {
+        body: clean,
+        digest,
+        storedAt: this.now(),
+      });
+    } catch (error) {
+      if (error?.code !== "PLUGIN_STATE_LIMIT_EXCEEDED") throw error;
+      throw new Refusal(
+        "records-full",
+        "Clawtrate's request records on this gateway are full. Answer some requests, then try again.",
+      );
+    }
     if (!stored) throw new Error("A record with this id already exists.");
     return digest;
   }
@@ -89,7 +122,7 @@ export class Records {
   async version(id, digest) {
     let row;
     try {
-      row = await this.store.lookup(VERSION + id);
+      row = await this.versions.lookup(VERSION + id);
     } catch (error) {
       if (error?.code === "PLUGIN_STATE_CORRUPT") return null;
       throw error;
@@ -105,12 +138,17 @@ export class Records {
    * @param {string} id
    * @param {string} digest
    * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => R} change
+   * @param {(ledger: ReturnType<typeof emptyLedger>) => number} [deadline]
    * @returns {Promise<R>}
    */
-  publish(id, digest, change) {
-    return this.transact(change, async () => {
-      if (!(await this.version(id, digest)))
-        throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
-    });
+  publish(id, digest, change, deadline) {
+    return this.transact(
+      change,
+      async () => {
+        if (!(await this.version(id, digest)))
+          throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
+      },
+      deadline,
+    );
   }
 }

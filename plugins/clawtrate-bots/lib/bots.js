@@ -3,7 +3,7 @@
 import { hashDevice, newId } from "./canonical.js";
 import * as L from "./ledger.js";
 import { EXPIRES_MS, LIMITS, Refusal, requireId } from "./ledger.js";
-import { NAMESPACE, Records } from "./records.js";
+import { NAMESPACE, Records, VERSIONS } from "./records.js";
 
 export const PLUGIN_ID = "clawtrate-bots";
 export const PLUGIN_VERSION = "0.1.0";
@@ -81,7 +81,8 @@ export function createBots(api, options = {}) {
     options.store ??
     api.runtime.state.openKeyedStore({ namespace: NAMESPACE, retention: "retained" });
   let emit = null;
-  const records = new Records(store, {
+  const versions = options.versions ?? api.runtime.state.openKeyedStore(VERSIONS);
+  const records = new Records(store, versions, {
     now,
     // Empty: readers fetch again, and nothing about a request goes out.
     onChange: () => emit?.("changed", {}, { scope: "operator.read" }),
@@ -183,6 +184,7 @@ export function createBots(api, options = {}) {
           async (l, at) => {
             if (!(await records.version(id, L.claim(l, id, digest, at).digest))) throw unreadable();
           },
+          (l) => l.proposals[id]?.expiresAt,
         );
         return { id, state: "declined" };
       },
@@ -195,6 +197,8 @@ export function createBots(api, options = {}) {
         requireId("p", id, "id");
         const entry = L.claim(await records.ledger(), id, digest, now());
         if (!(await records.version(id, entry.digest))) throw unreadable();
+        // Again, with the clock as it is after the read.
+        L.claim(await records.ledger(), id, digest, now());
         throw new Refusal(
           "apply-unavailable",
           "Clawtrate can't apply a saved request on this gateway. Review and save it yourself instead.",
@@ -260,8 +264,11 @@ export function createBots(api, options = {}) {
         const version = newId("gv");
         const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
         const digest = await records.persist(version, body);
-        const { generation } = await records.publish(version, digest, (l, t) =>
-          L.publishGrant(l, id, { version, digest, expiresAt }, t),
+        const { generation } = await records.publish(
+          version,
+          digest,
+          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, t),
+          () => expiresAt,
         );
         return { id, generation, ...details };
       },
@@ -321,14 +328,26 @@ export function createBots(api, options = {}) {
           createdAt: at,
           expiresAt: at + EXPIRES_MS,
         };
-        const digest = await records.persist(id, body);
         const fields = fieldNames(payload);
-        const { superseded } = await records.publish(id, digest, (l, t) =>
-          L.admit(
-            l,
-            { id, digest, source, bot: body.bot, fields, createdAt: at, expiresAt: body.expiresAt },
-            t,
-          ),
+        const admission = (digest) => ({
+          id,
+          digest,
+          source,
+          bot: body.bot,
+          fields,
+          createdAt: at,
+          expiresAt: body.expiresAt,
+        });
+        // Refused before anything is stored, when the ledger already says so.
+        const snapshot = await records.ledger();
+        L.sweep(snapshot, now());
+        L.admit(snapshot, admission(""), now());
+        const digest = await records.persist(id, body);
+        const { superseded } = await records.publish(
+          id,
+          digest,
+          (l, t) => L.admit(l, admission(digest), t),
+          (l) => Math.min(body.expiresAt, l.grants[grantId]?.expiresAt ?? 0),
         );
         return {
           status: "proposed",
