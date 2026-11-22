@@ -111,9 +111,9 @@ async function connect() {
 
 /**
  * Connect, and deliver a link once the bots are loading, which the gateway holds
- * back until the waiting screen has been seen.
+ * back until `shown` has been seen.
  */
-async function deliverWhileBotsLoad(given: string) {
+async function deliverWhileBotsLoad(given: string, shown: Locator) {
   const listed = Promise.withResolvers<void>();
   const agents = served.gateway.handlers["agents.list"]!;
   served.gateway.handlers["agents.list"] = async (params) => {
@@ -126,7 +126,7 @@ async function deliverWhileBotsLoad(given: string) {
       timeout: 30_000,
     });
     await deliver(given);
-    await expect(page.getByRole("region", { name: "Loading conversation" })).toBeVisible();
+    await expect(shown).toBeVisible();
   } finally {
     listed.resolve();
     served.gateway.handlers["agents.list"] = agents;
@@ -469,7 +469,10 @@ test("F-248: a link that starts the app says so when no gateway is connected", a
 });
 
 test("F-248: a link that comes while the bots load waits for them, then opens the chat", async () => {
-  await deliverWhileBotsLoad(link("otto", "Check the release notes."));
+  await deliverWhileBotsLoad(
+    link("otto", "Check the release notes."),
+    page.getByRole("region", { name: "Loading conversation" }),
+  );
   await expect(field()).toHaveAttribute("aria-label", "Message Otto", { timeout: 30_000 });
   await expect(field()).toHaveValue("Check the release notes.");
   await expect(note()).toHaveText(ADDED);
@@ -480,14 +483,14 @@ test("F-248: a link that comes while the bots load waits for them, then opens th
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
-test("F-248: closing the card of a link that waited focuses the heading of the screen shown", async () => {
+test("F-248: a link's card closes to the heading of the screen that replaced the one it opened over", async () => {
   await quit();
   page = await launch();
-  // The card opens as the chat replaces the waiting screen.
-  await deliverWhileBotsLoad(link("nobody", "Hi"));
-  await expect(refusal()).toBeVisible({ timeout: 30_000 });
-  await expectCantOpen(
-    "This bot isn't on the connected gateway. Check the link or ask for a new one.",
-  );
-  await expect(page.locator(".conversation h1[tabindex]").first()).toBeFocused();
+  // The bots load only once the card is open over the setup steps, so the chat
+  // replaces that screen behind the card.
+  await deliverWhileBotsLoad(`${link("otto", "Hi")}&send=1`, refusal());
+  const heading = page.locator(".conversation h1[tabindex]").first();
+  await expect(heading).toBeAttached({ timeout: 30_000 });
+  await expectCantOpen("This Clawtrate link is invalid. Ask for a new link.");
+  await expect(heading).toBeFocused();
 });
