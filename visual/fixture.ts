@@ -49,6 +49,18 @@ export async function openFixture(page: Page, query: string, theme: Theme = "dar
     .toBe(true);
 }
 
+// The fixture's answers are held and then let through by the check, not left to a page timer:
+// on a loaded machine the check can look too late, or the timer can stay unfired for longer than
+// the check waits (#248, #252).
+export const hold = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
+export const release = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
+
 /** Let layout, ResizeObservers and the follow-to-end logic settle. */
 export async function settle(page: Page): Promise<void> {
   await page.evaluate(

@@ -7,13 +7,14 @@
 
 import { FuseV1Options, FuseVersion, type FuseV1Config } from "@electron/fuses";
 import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
-import { APP_ID } from "../src/main/identity.ts";
+import { APP_ID, PRODUCT_NAME } from "../src/main/identity.ts";
+import { packageOutput } from "./output.ts";
 import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
 
-export { APP_ID, macSigningRequested, type Env };
-export const PRODUCT_NAME = "Clawtrate";
+export { APP_ID, macSigningRequested, PRODUCT_NAME, type Env };
 
 /**
  * Electron fuses, flipped in the binary at package time. The packaged app has
@@ -43,6 +44,30 @@ export function afterPack(env: Env) {
   return async (context: AfterPackContext): Promise<void> => {
     const platform = context.electronPlatformName;
     await context.packager.addElectronFuses(context, fuses(platform));
+    if (platform === "darwin" && macSigningRequested(env)) {
+      const helpers = join(context.appOutDir, PRODUCT_NAME + ".app", "Contents", "Helpers");
+      mkdirSync(helpers, { recursive: true });
+      execFileSync("/usr/bin/xcrun", [
+        "clang",
+        "-fobjc-arc",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-arch",
+        "arm64",
+        "-arch",
+        "x86_64",
+        "-mmacosx-version-min=12.0",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Security",
+        "-larchive.2",
+        join(import.meta.dirname, "mac", "inspect-archive.m"),
+        "-o",
+        join(helpers, "ClawtrateUpdateInspection"),
+      ]);
+    }
     if (platform === "darwin" && !macSigningRequested(env)) {
       const app = join(context.appOutDir, `${PRODUCT_NAME}.app`);
       // "-" is the ad-hoc identity: no certificate and no keychain are involved.
@@ -58,7 +83,8 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     appId: APP_ID,
     productName: PRODUCT_NAME,
     electronVersion,
-    directories: { output: "dist", buildResources: "resources" },
+    // apps/desktop/dist, or a beta release's own folder (output.ts).
+    directories: { output: packageOutput(env).label, buildResources: "resources" },
     // The main process, preload and renderer are bundled by electron-vite and
     // need no node_modules. Nothing else is shipped: not the web preview's or
     // the fixture mode's builds, and no source. resources/icon.png, generated

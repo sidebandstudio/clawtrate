@@ -498,6 +498,7 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     "Sort bots: Recent activity",
   );
 
+  let previewed = 0;
   for (const agent of bots) {
     const row = botRow(page, name(agent));
     // F-015: the gateway's default bot carries the star, and only it.
@@ -510,13 +511,19 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     const newest = sessions
       .filter((s) => s.agentId === agent.id && !s.archived)
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
-    const words = newest
-      .lastMessagePreview!.replace(/[*_`#|]/g, "")
-      .split(/\s+/)
-      .slice(0, 3);
-    await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+    // The gateway previews only a task with a message. One another check just made has none
+    // yet, and the row shows that task's title instead.
+    if (newest.lastMessagePreview) {
+      const words = newest.lastMessagePreview
+        .replace(/[*_`#|]/g, "")
+        .split(/\s+/)
+        .slice(0, 3);
+      await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+      previewed += 1;
+    }
     await expect(row.locator(".bot-time")).toHaveText(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/);
   }
+  expect(previewed).toBeGreaterThan(0);
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
@@ -1640,6 +1647,70 @@ test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, ea
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("reply-quote")).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+});
+
+test("F-067: on a real gateway, a progress row and two answers delivered as replies to different messages: each answer appears only in the thread of the message it answers, live and after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Answers in threads");
+  type Row = {
+    role: string;
+    content?: unknown;
+    openclawDelivery?: { replyToId?: string };
+    __openclaw?: { id?: string };
+  };
+  const rows = async () =>
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 50 }))
+      .messages;
+  const userRows = async () => (await rows()).filter((row) => row.role === "user").length;
+  // The outbox sends a message once write access is held, after Enter returns: idle means
+  // the turn is done only once the gateway holds the message.
+  const send = async (words: string) => {
+    const before = await userRows();
+    await composer(page).fill(words);
+    await page.keyboard.press("Enter");
+    await expect.poll(userRows, { timeout: 60_000 }).toBe(before + 1);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  };
+  const questions = ["The first question. #text", "The second question. #text"];
+  for (const words of questions) await send(words);
+  const parents = (await rows())
+    .filter((row) => row.role === "user")
+    .map((row) => row.__openclaw!.id!);
+  expect(parents).toHaveLength(2);
+  // Each turn: text beside a call, a row the gateway marks as no reply, then the answer it marks
+  // as a reply to one of the two messages.
+  for (const parent of parents) await send(`#reply-to ${parent}`);
+  const answers = (await rows()).filter((row) => row.openclawDelivery?.replyToId);
+  expect(answers.map((row) => row.openclawDelivery!.replyToId)).toEqual(parents);
+
+  const eachInItsThread = async () => {
+    for (const [index, parent] of parents.entries()) {
+      const message = page.locator(`[data-testid="message"][data-message="${parent}"]`);
+      const link = message.getByTestId("replies-link");
+      await expect(link).toHaveText("1 reply", { timeout: 30_000 });
+      await link.click();
+      const thread = page.getByRole("dialog", { name: "Thread" });
+      await expect(thread.getByTestId("thread-message")).toHaveText([
+        new RegExp(questions[index]!.replace(/[.#]/g, "\\$&")),
+        new RegExp(`This answers ${parent}\\.`),
+      ]);
+      await expect(thread.getByTestId("thread-message").last()).toHaveAttribute(
+        "data-role",
+        "assistant",
+      );
+      await expect(thread).not.toContainText("I will look first");
+      await page.keyboard.press("Escape");
+      await expect(thread).toHaveCount(0);
+    }
+  };
+  await eachInItsThread();
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await eachInItsThread();
 });
 
 test("F-071 F-070: / lists the bot's own skills by name and the gateway's commands, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({

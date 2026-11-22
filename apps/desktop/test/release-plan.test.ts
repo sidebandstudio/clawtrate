@@ -13,7 +13,7 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assemble, plan, runPlan, type Candidate } from "../packaging/release-plan.ts";
 import { feedAddresses, compiledAddresses } from "../packaging/candidate-addresses.ts";
 import { artifactName, sha512Base64 } from "../packaging/feed.ts";
@@ -27,6 +27,10 @@ const mac = "mac-arm64";
 const file = () => path(artifactName(c.version, mac));
 const read = (name: string) => JSON.parse(readFileSync(path(name), "utf8"));
 const write = (name: string, value: unknown) => writeFileSync(path(name), JSON.stringify(value));
+// These tests start python3 and node, which can take seconds each on a busy machine: one took
+// 3.4 s of the default 5 s with the load average at 6, and several ran out at 30 or more.
+vi.setConfig({ testTimeout: 30_000 });
+
 // Small structural fixtures. No fixture is executed or signed.
 function macZip(cpu: number, variant = ""): Buffer {
   return execFileSync(process.platform === "win32" ? "python" : "python3", [
@@ -196,7 +200,7 @@ it("binds the build receipt to its name, source, date, compiled feed address and
 it("checks version syntax, both track mismatches, commit, date and the HTTPS feed location", () => {
   for (const [version, track] of [
     ["0.1.0", "nightly"],
-    ["0.1.1-nightly.20261119.1", "stable"],
+    ["0.1.1-beta.20261119.1", "stable"],
     ["bad", "stable"],
     ["0.1.0", "bad"],
   ] as const)
@@ -366,22 +370,22 @@ it("compares the supplied track feeds offline, including stale, reused and super
   expect(check("0.2.1", "stable").issues).toContain(
     "stable: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.1-nightly.20261119.1", "nightly").issues).toContain(
+  expect(check("0.2.1-beta.20261119.1", "nightly").issues).toContain(
     "nightly: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.0-nightly.20261119.9", "nightly").comparison).toContain("supplied nightly");
-  const nightly = { ...c, track: "nightly", version: "0.2.0-nightly.20261119.9" };
+  expect(check("0.2.0-beta.20261119.9", "nightly").comparison).toContain("supplied nightly");
+  const nightly = { ...c, track: "nightly", version: "0.2.0-beta.20261119.9" };
   expect(check("0.2.0", "stable", nightly).issues).toContain(
     "stable: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.0-nightly.20261119.10", "nightly", nightly).issues).toContain(
+  expect(check("0.2.0-beta.20261119.10", "nightly", nightly).issues).toContain(
     "nightly: candidate must be newer than the supplied release.",
   );
   expect(plan({ ...c, currentFeed: path("missing") }).issues).toContain(
     "stable: invalid published comparison feed.",
   );
   expect(plan({ ...nightly, buildDate: "2026-11-20T00:00:00.000Z" }).issues).toContain(
-    "Nightly version day differs from the UTC build date.",
+    "Beta version day differs from the UTC build date.",
   );
 });
 

@@ -1,0 +1,97 @@
+name: Site
+
+# Deploys site/ to GitHub Pages with the newest published beta's feed under
+# updates/beta/. It deploys only from main: the github-pages environment allows
+# the main branch alone, with no tag rule, because a tag rule would let anyone
+# who can push a v* tag deploy that tag's own copy of this workflow. So a
+# release event does not start it; `pnpm release:beta --publish` and
+# `--withdraw` dispatch it on main once GitHub lists the release's new state,
+# and a release changed by hand needs `gh workflow run site.yml --ref main`.
+# The assembly step also fills the Mac download
+# page from the same beta and checks install.sh pins that beta's team. It
+# fails, so nothing deploys, without site/index.html, without a published beta,
+# while a template token is left or while install.sh pins another team or the
+# placeholder. docs/development/releases.md has the flow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      # The assembler and every file it loads (apps/desktop/test/site-workflow.test.ts).
+      - "apps/desktop/packaging/site-feed.ts"
+      - "apps/desktop/packaging/beta-files.ts"
+      - "apps/desktop/packaging/feed.ts"
+      - "apps/desktop/packaging/update-defines.ts"
+      - "apps/desktop/packaging/signing.ts"
+      - "apps/desktop/src/main/identity.ts"
+      - "apps/desktop/src/main/update/address.ts"
+      - "apps/desktop/src/main/update/feed.ts"
+      - "apps/desktop/src/main/update/version.ts"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keyed by ref: main's runs queue one after another, and a dispatch from another
+# ref, which deploys nothing, cannot replace a pending run on main.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Assemble the site
+    # A dispatch from another ref deploys nothing (apps/desktop/test/site-workflow.test.ts).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.assemble.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      # Node alone: the assembler loads no package, so nothing is installed.
+      - name: Copy the site, add the Beta feed and fill the download page
+        id: assemble
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node apps/desktop/packaging/site-feed.ts site _site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # The beta may have been withdrawn since the build job assembled it: GitHub
+      # answers 404 for a draft's tag, so a withdrawn beta fails here and the
+      # last deployment stays. The withdrawal's own run then deploys what is left.
+      - name: Check the assembled beta is still published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          state=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '"\(.draft) \(.prerelease)"')
+          if [ "$state" != "false true" ]; then
+            echo "::error::$TAG is no longer a published beta, so nothing deploys."
+            exit 1
+          fi
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

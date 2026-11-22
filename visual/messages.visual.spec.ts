@@ -297,10 +297,11 @@ test.describe("message actions", () => {
   }) => {
     await open(page, "message-thread-failed");
     await record(page);
-    await expect(page.getByTestId("replies-link")).toHaveText("1 reply");
+    // Yours and the bot's answer delivered as a reply; the refused one is not among them.
+    await expect(page.getByTestId("replies-link")).toHaveText("2 replies");
     await page.getByTestId("reply-quote").first().click();
     const thread = page.getByRole("dialog", { name: "Thread" });
-    await expect(thread.getByTestId("thread-count")).toHaveText("1 reply");
+    await expect(thread.getByTestId("thread-count")).toHaveText("2 replies");
     const failed = thread.getByTestId("outgoing");
     await expect(failed).toHaveAttribute("data-status", "failed");
     await expect(failed).toContainText("Failed to send");
@@ -311,7 +312,7 @@ test.describe("message actions", () => {
     });
   });
 
-  test("F-067: a thread holds the message and the user rows the gateway marks as replies to it, never a bot's answer", async ({
+  test("F-067: a thread holds the message and each row the gateway marks as a reply to it: yours, and a bot's bubble by its own row, never the rest of its turn", async ({
     page,
   }) => {
     await open(page, "message-thread-failed");
@@ -321,9 +322,12 @@ test.describe("message actions", () => {
     await expect(messages).toHaveText([
       /Nothing alarming that I can see from here\./,
       /Could you read the system log another way\?/,
+      /Otto\s*I can read it through the journal instead\./,
     ]);
-    // A bot's answer is not threaded until each of its rows carries its own reference.
-    await expect(thread).not.toContainText("I can read it through the journal instead.");
+    await expect(messages.last()).toHaveAttribute("data-role", "assistant");
+    await expect(thread.getByTestId("thread-count")).toHaveText("2 replies");
+    // The progress bubble of the same turn, and an answer with no reference of its own, stay out.
+    await expect(thread).not.toContainText("Let me see which logs I can reach.");
     await expect(thread).not.toContainText("Starting the nightly rotation now.");
   });
 
@@ -484,6 +488,65 @@ test.describe("message actions", () => {
     });
     await page.waitForTimeout(300);
     await expect(page.getByTestId("announcer")).not.toHaveText("Reply sent");
+  });
+
+  test("F-067: a reply is announced as sent once history holds the row the gateway stored under its key, and not for a look-alike", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await thread.getByTestId("thread-input").fill("Or ask me for a copy of it.");
+    await page.keyboard.press("Enter");
+    await expect(thread.getByTestId("outgoing")).toHaveAttribute("data-status", "sent");
+    const announcer = page.getByTestId("announcer");
+    await expect(announcer).not.toHaveText("Reply sent");
+    // History holds a row of the same words, replying to the same message, under another key.
+    const land = (own: boolean) =>
+      page.evaluate((own) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: {
+              setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+            };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => {
+          type Sent = { id: string; text: string; replyToId?: string };
+          const transcripts = state.transcripts as Record<
+            string,
+            { outbox: Sent[]; items: unknown[] }
+          >;
+          const key = "agent:otto:disk-space";
+          const transcript = transcripts[key]!;
+          const mine = transcript.outbox.find((each) => each.replyToId)!;
+          const row = {
+            id: `row-landed:${transcript.items.length}`,
+            role: "user",
+            timestamp: Date.now(),
+            blocks: [{ kind: "text", text: mine.text }],
+            model: null,
+            messageId: `row-landed-${transcript.items.length}`,
+            replyTo: { id: mine.replyToId, text: null, sender: null },
+            idempotencyKey: own ? `${mine.id}:user` : "another-client:user",
+          };
+          const outbox = own
+            ? transcript.outbox.filter((each) => each !== mine)
+            : transcript.outbox;
+          return {
+            ...state,
+            transcripts: {
+              ...transcripts,
+              [key]: { ...transcript, items: [...transcript.items, row], outbox },
+            },
+          };
+        });
+      }, own);
+    await land(false);
+    await page.waitForTimeout(300);
+    await expect(announcer).not.toHaveText("Reply sent");
+    await land(true);
+    await expect(announcer).toHaveText("Reply sent");
   });
 
   test("F-067: a reply's line says what it answers, and opens the thread on that message", async ({

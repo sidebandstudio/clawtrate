@@ -245,6 +245,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
+  // Each failed request's log policy; an entry lives only as long as that error object.
+  dispatchedQuiet: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
   // sign-ins Clawtrate started; what it set for each bot; bots whose empty fallback list did not land.
   // Keys and values are bounded where they enter (`prefProfileId`, `prefBotId`, `readIntent`).
@@ -402,8 +404,19 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
-/** The two strings in the desktop updater's private preference store. */
+/** The records in the desktop updater's private preference store. */
 export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  attempt: {
+    max: 1,
+    each: JSON.stringify({
+      target: "v".repeat(50),
+      from: "v".repeat(50),
+      track: "nightly",
+      time: "2000-01-01T00:00:00.000Z",
+      phase: "handoff",
+    }).length,
+    row: "updatePreferences",
+  },
   selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
   lastCheck: {
     max: 1,

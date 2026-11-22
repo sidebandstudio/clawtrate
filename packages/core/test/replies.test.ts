@@ -30,7 +30,7 @@ describe("replies", () => {
     client.stop();
   });
 
-  it("F-067: only a user row's own gateway reference makes it a reply; an assistant row's is not read until each bubble carries its own", () => {
+  it("F-067: a row is a reply only by its own gateway reference: a user row's makes the item one, an assistant row's only that row's bubbles", () => {
     const items = mapHistory([
       { role: "assistant", content: "The disk is fine.", __openclaw: { id: "a1", runId: "r1" } },
       {
@@ -38,6 +38,7 @@ describe("replies", () => {
         content: "Are you sure?",
         __openclaw: {
           id: "u2",
+          idempotencyKey: "send-1:user",
           replyToId: "a1",
           replyToMessage: {
             ok: true,
@@ -47,21 +48,47 @@ describe("replies", () => {
       },
       // The answer that follows the reply, with no reference: not a reply.
       { role: "assistant", content: "Checking again.", __openclaw: { id: "a3", runId: "r2" } },
-      // An answer the gateway delivered as a reply.
+      // One run: text beside a call, then an answer the gateway delivered as a reply, then one
+      // it delivered as a reply to another message.
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me look." },
+          { type: "toolCall", id: "c1", name: "ls", arguments: {} },
+        ],
+        __openclaw: { id: "a4", runId: "r3" },
+      },
+      { role: "toolResult", toolCallId: "c1", content: "notes/", __openclaw: { runId: "r3" } },
       {
         role: "assistant",
         content: "Yes: 61% used.",
         openclawDelivery: { replyToId: "u2" },
-        __openclaw: { id: "a4", runId: "r3" },
+        __openclaw: { id: "a5", runId: "r3" },
+      },
+      {
+        role: "assistant",
+        content: "And it was fine before too.",
+        openclawDelivery: { replyToId: "a1" },
+        __openclaw: { id: "a6", runId: "r3" },
       },
     ]);
     expect(items.map((item) => [item.messageId, item.replyTo?.id ?? null])).toEqual([
       ["a1", null],
       ["u2", "a1"],
       ["a3", null],
+      ["a6", null],
+    ]);
+    const bubbles = items[3]!.blocks.flatMap((block) =>
+      block.kind === "text" ? [[block.messageId, block.replyToId ?? null]] : [],
+    );
+    expect(bubbles).toEqual([
       ["a4", null],
+      ["a5", "u2"],
+      ["a6", "a1"],
     ]);
     // With no stored preview, the text is the message history attached to the reference.
     expect(items[1]!.replyTo).toEqual({ id: "a1", text: "The disk is fine.", sender: null });
+    // The key it was stored under ties it to the message this client sent.
+    expect(items[1]!.idempotencyKey).toBe("send-1:user");
   });
 });

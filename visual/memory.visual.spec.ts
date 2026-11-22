@@ -1,5 +1,6 @@
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 for (const size of SIZES.filter((size) => size.name === "1440" || size.phone)) {
   test.describe(size.name, () => {
@@ -80,4 +81,43 @@ test("F-211: replacing the gateway at the same address closes its note and reloa
     return clawtrateFixture.sent.filter((command) => command.type === "listMemory").length;
   });
   expect(listReads).toBeGreaterThan(1);
+});
+
+test("F-212: the memory page says admin access was granted when the reconnect that brings it reads the gateway's identity again", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=read`, "light");
+  // Paused, so the granted bar cannot time out before the check reads it, however slow the page.
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  const memory = page.getByTestId("memory-page");
+  const bar = memory.getByTestId("admin-bar");
+  await memory.getByRole("button", { name: "Request admin access" }).click();
+  await expect(bar).toContainText("Asking the gateway");
+
+  type Fixture = {
+    clawtrateFixture: {
+      getState(): ClawtrateState;
+      setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    };
+  };
+  const { gatewayId, upgrade } = await page.evaluate(
+    () => (window as unknown as Fixture).clawtrateFixture.getState().connection,
+  );
+  const patch = (change: Partial<ClawtrateState["connection"]>) =>
+    page.evaluate((change) => {
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, ...change },
+      }));
+    }, change);
+  // The client's order on a grant: the approval, then the reconnect's hello with admin while the
+  // gateway's id is cleared, then the identity read, each its own snapshot.
+  await patch({ upgrade: { ...upgrade, status: "approved" } });
+  await expect(bar).toContainText("Approved.");
+  await patch({ scopes: upgrade.scopes, canAdmin: true, gatewayId: null });
+  await expect(memory.getByRole("button", { name: "Edit", exact: true }).first()).toBeVisible();
+  await patch({ gatewayId });
+  await expect(bar).toContainText("Admin access granted.");
 });

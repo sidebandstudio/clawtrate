@@ -3,20 +3,45 @@
 // development gateway runs, the tests that need one are skipped.
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
-import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
+import { gatedSpawn, parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
+import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
+import { macSigningRequested, windowsSigningRequested } from "../apps/desktop/packaging/signing.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
-import { appEnv } from "./desktop-driver.ts";
-import { packagedExecutable } from "./global-setup.ts";
+import { recordSuccessor } from "../e2e/run-record.ts";
+import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { debuggingPort } from "./desktop-driver.ts";
+import { quitWithin } from "./quit.ts";
+import {
+  CHECKOUT,
+  bundleIdentifier,
+  launchArgs,
+  launchPlace,
+  packagedExecutable,
+  processesUsing,
+} from "./global-setup.ts";
 import {
   integrityLevels,
   mainWindowTitle,
@@ -31,6 +56,8 @@ const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
+const SANDBOX = process.env.CLAWTRATE_PACKAGED_SANDBOX!;
+const RECORD = process.env.CLAWTRATE_PACKAGED_RECORD ?? "";
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -86,7 +113,9 @@ function kernelSaysSandboxed(pid: number): number {
 let browser: Browser;
 let page: Page;
 
-test.describe.configure({ mode: "serial" });
+// No retries: the relaunch test quits the app global setup started, which a
+// retry's beforeAll would connect to again. A failed run is rerun whole.
+test.describe.configure({ mode: "serial", retries: 0 });
 
 test.beforeAll(async () => {
   browser = await chromium.connectOverCDP(process.env.CLAWTRATE_PACKAGED_CDP!);
@@ -112,8 +141,37 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(decodeURI(page.url())).toBe(bundled);
   await expect(page).toHaveTitle("Clawtrate");
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
+  // The first screen asks where OpenClaw runs; the address-and-token form is under Advanced.
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  await page.getByRole("button", { name: "Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+  // This checks the packaged build capability before a verified offer exists.
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  // The signing variables that configured the build, as in apps/desktop/packaging/update-defines.ts.
+  const signed = WINDOWS ? windowsSigningRequested(process.env) : macSigningRequested(process.env);
+  expect(updates).toMatchObject({
+    install: {
+      kind: "unavailable-in-this-build",
+      reason: !signed
+        ? "build-not-signed"
+        : WINDOWS
+          ? "windows-install-pending-trial"
+          : "no-verified-download",
+    },
+    lastAttempt: null,
+  });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.restart("absent"),
+    ),
+  ).toMatchObject({ outcome: "stale", snapshot: { lastAttempt: null } });
   // A packaged app does not look for the development gateway.
   await expect(page.getByRole("button", { name: "Use the development gateway" })).toHaveCount(0);
 
@@ -156,6 +214,28 @@ test("opens dark, with no theme chosen yet", async () => {
     ground: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
   }));
   expect(theme).toEqual({ stored: null, attribute: "dark", scheme: "dark", ground: "#101112" });
+});
+
+test("looks on this computer only in the sandbox the launch check gave it", async () => {
+  await page.getByRole("button", { name: "Back" }).click();
+  await page
+    .getByRole("list", { name: "Where does OpenClaw run?" })
+    .getByRole("button", { name: /This computer/ })
+    .click();
+  if (WINDOWS) {
+    await expect(page.getByRole("heading", { name: "Use Advanced on Windows" })).toBeVisible();
+  } else {
+    // The run's own instance, by its profile: the only one the sandbox lets the look see.
+    await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByTestId("setup-found").locator("dl > div").nth(1)).toHaveText(
+      `Profileclawtrate-dev-${INSTANCE}`,
+    );
+  }
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
 });
 
 test("starts with the update tracks compiled into the packaged app", async () => {
@@ -239,10 +319,18 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
 test("hands a second launch to the running app instead of starting another", async () => {
   // The same data folder, so the same single-instance lock. The second process
   // must exit by itself, successfully, and leave the first one and its one window.
-  const second = spawn(packagedExecutable(APP), [`--user-data-dir=${USER_DATA}`], {
-    env: appEnv(),
-    stdio: "ignore",
-  });
+  // Never a packaged app without a sandbox, even one that only hands over to the running app.
+  // The run's temporary home, temporary folder and working folder, as the first launch had.
+  const place = launchPlace(process.env.CLAWTRATE_PACKAGED_PLACE!);
+  const second = spawn(
+    packagedExecutable(APP),
+    [`--user-data-dir=${USER_DATA}`, `--clawtrate-setup-sandbox=${SANDBOX}`],
+    {
+      cwd: place.cwd,
+      env: place.env,
+      stdio: "ignore",
+    },
+  );
   const exited = new Promise<number | null>((resolve) => second.once("exit", resolve));
   const code = await Promise.race([
     exited,
@@ -304,8 +392,7 @@ test("keeps the fuses it was packaged with", async () => {
   expect(await fuseMismatches(packagedExecutable(APP), process.platform)).toEqual([]);
 });
 
-test("pairs with its own development gateway instance and shows the seeded bots", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+function runEndpoint() {
   expect(INSTANCE).toMatch(/^e2e-[0-9a-f]{8}$/);
   const endpoint = provenEndpoint({
     instance: INSTANCE,
@@ -315,6 +402,12 @@ test("pairs with its own development gateway instance and shows the seeded bots"
   });
   if ("refusal" in endpoint) throw new Error(endpoint.refusal);
   expect(endpoint.url).toMatch(/^ws:\/\/127\.0\.0\.1:(19[2-9]\d\d)$/);
+  return endpoint;
+}
+
+test("pairs with its own development gateway instance and shows the seeded bots", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
+  const endpoint = runEndpoint();
 
   await page.getByPlaceholder("Gateway address").fill(endpoint.url);
   await page.getByPlaceholder("Gateway token, for pairing").fill(endpoint.token);
@@ -372,12 +465,15 @@ test("sends a key typed into it to the gateway, and keeps it in none of its logs
     timeout: 20_000,
   });
   await page.keyboard.press("Escape");
-  // Nowhere the app writes: its output (its log) and every file in its data folder.
+  // Nowhere the app writes: its output (its log), every file in its data folder,
+  // and its logs folder, which `CFFIXED_USER_HOME` puts in the run's home.
   expect(APP_LOG, "the app's log").not.toBe("");
   expect(readFileSync(APP_LOG, "utf8").length, "the app's log has its output").toBeGreaterThan(0);
   expect(holds(APP_LOG, TYPED_KEY)).toEqual([]);
   expect(holds(USER_DATA, TYPED_KEY)).toEqual([]);
-  expect(holds(join(homedir(), "Library/Logs/Clawtrate"), TYPED_KEY)).toEqual([]);
+  expect(
+    holds(join(process.env.CLAWTRATE_PACKAGED_PLACE!, "home/Library/Logs/Clawtrate"), TYPED_KEY),
+  ).toEqual([]);
   expect(await page.content()).not.toContain(TYPED_KEY);
 });
 
@@ -405,6 +501,9 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 
 test("F-023: the dock badge counts the unread tasks, and follows what the gateway says of them", async () => {
   test.skip(WINDOWS, NO_GATEWAY);
+  // macOS shows an app's badge only while it may post notifications (Electron's
+  // setBadgeCount), a permission kept by bundle id that a check build never has.
+  test.skip(true, "a check build's bundle id has never been allowed notifications");
   const unread = async () =>
     (
       await gatewayCall<{ sessions: Array<{ key: string; unread?: boolean }> }>("sessions.list", {
@@ -458,4 +557,186 @@ test("stays on its own content", async () => {
   // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
   expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
+test("opens with the same pairing and tasks after a newer build takes its place", async () => {
+  // An update in place quits the app and starts a newer build of the same
+  // bundle id, name and data folder. Here the newer build is a copy of this
+  // one with only its version raised and an ad hoc signature, so this shows
+  // the paths a signed update keeps, not Squirrel's handoff itself.
+  test.skip(WINDOWS, NO_GATEWAY);
+  test.setTimeout(300_000);
+  const gateway = join(USER_DATA, "gateway");
+  const key = readFileSync(join(gateway, "device-key.pem"));
+  const state = () =>
+    JSON.parse(readFileSync(join(gateway, "state.json"), "utf8")) as Record<string, string>;
+  const before = state();
+  expect(before.connection).toBeTruthy();
+  expect(Object.keys(before).some((name) => name.startsWith("deviceToken:"))).toBe(true);
+
+  const running = packagedManifest(APP);
+  const [major, minor, patch] = parseVersion(running.version as string)!;
+  const newer = `${major}.${minor}.${patch + 1}`;
+  const run = process.env.CLAWTRATE_PACKAGED_PLACE!;
+  const place = launchPlace(run);
+  const updated = join(run, "updated", "Clawtrate.app");
+  mkdirSync(dirname(updated));
+  await newerCopy(APP, updated, newer, join(run, "newer-scratch"));
+  // Only the version differs, so the name the data folder is derived from does not.
+  expect({ ...packagedManifest(updated), version: running.version }).toEqual(running);
+  expect(bundleIdentifier(updated)).toBe(process.env.CLAWTRATE_PACKAGED_BUNDLE_ID);
+
+  // Quit the running app as an update does, and wait for it and its helpers,
+  // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
+  // Asked while the debugging client is attached, as the teardown asks; the
+  // 15 seconds start at SIGTERM, and closing that client runs alongside.
+  const firstGone = async () => {
+    for (const end = Date.now() + 20_000; Date.now() < end; await sleep(100)) {
+      // The runner that started the app reaps it; until then `ps` shows a zombie.
+      const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
+        encoding: "utf8",
+      }).stdout.trim();
+      if (!state || state.startsWith("Z")) return;
+    }
+    await new Promise(() => undefined);
+  };
+  const firstQuit = await quitWithin(
+    () => process.kill(APP_PID, "SIGTERM"),
+    firstGone,
+    () => browser.close(),
+    15_000,
+  );
+  expect(firstQuit, "the app quits within 15 seconds, as an update asks it").toBe(true);
+  // From the app's exit: its helpers' own 10 seconds.
+  await expect
+    .poll(() => processesUsing(USER_DATA), {
+      timeout: 10_000,
+      message: "the app's helpers end within 10 seconds of it",
+    })
+    .toEqual([]);
+
+  rmSync(join(USER_DATA, "DevToolsActivePort"), { force: true });
+  const logFd = openSync(join(run, "updated.log"), "a", 0o600);
+  // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+  const gated = gatedSpawn(
+    spawn,
+    packagedExecutable(updated),
+    launchArgs(USER_DATA, SANDBOX, CHECKOUT),
+    { cwd: place.cwd, env: place.env, stdio: ["ignore", logFd, logFd] },
+  );
+  const next = gated.child;
+  // A shell that cannot start emits `error` and may never emit `exit`: either ends the wait.
+  let spawnError: Error | undefined;
+  const exited = new Promise((resolve) => {
+    next.once("exit", resolve);
+    next.once("error", (error) => {
+      spawnError = error;
+      resolve(undefined);
+    });
+  });
+  // Until the record names it, a failure aborts the gate, so the app never starts.
+  try {
+    const found = processIdentity(next.pid!);
+    if (found.state !== "alive")
+      throw new Error(
+        `could not record the newer build's process${spawnError ? ` (${spawnError.message})` : ""}`,
+      );
+    recordSuccessor(RECORD, { pid: next.pid!, identity: found.identity });
+  } catch (error) {
+    gated.abort();
+    closeSync(logFd);
+    throw error;
+  }
+  gated.release();
+  let second: Browser | undefined;
+  try {
+    const port = await debuggingPort(USER_DATA, next);
+    second = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    await expect
+      .poll(() => second!.contexts().flatMap((context) => context.pages()).length)
+      .toBeGreaterThan(0);
+    const view = second.contexts().flatMap((context) => context.pages())[0]!;
+
+    // The sandbox requires an explicit connection. Check the saved settings before Connect
+    // can write them, then use the saved pairing with only this run's proven address.
+    await expect(view.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+    expect(state().connection).toBe(before.connection);
+    await view.getByRole("button", { name: "Advanced" }).click();
+    await view.getByPlaceholder("Gateway address").fill(runEndpoint().url);
+    await expect(view.getByPlaceholder("Gateway token, for pairing")).toHaveValue("");
+    await view.getByRole("button", { name: "Connect" }).click();
+    const bots = view.getByTestId("bot");
+    await expect(bots).toHaveCount(4, { timeout: 30_000 });
+    await expect(view.getByPlaceholder("Gateway address")).toHaveCount(0);
+    await expect(view.getByRole("heading", { name: "Approve this device" })).toHaveCount(0);
+    // The rail may remember Otto open from before the update; open it only if not.
+    const otto = view.getByRole("button", { name: /^Otto, \d+ tasks?/ });
+    if ((await otto.getAttribute("aria-expanded")) !== "true") await otto.click();
+    await expect(
+      view
+        .getByRole("list", { name: "Otto's tasks" })
+        .getByTestId("task")
+        .filter({ hasText: "Disk almost full on the media box" }),
+    ).toHaveCount(1);
+    const updates = await view.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.get(),
+    );
+    expect(updates.runningVersion).toBe(newer);
+
+    // The same device key and saved connection, and a device token still saved for each
+    // gateway: the gateway may reissue the token on connect, so its value is not compared.
+    expect(readFileSync(join(gateway, "device-key.pem")).equals(key)).toBe(true);
+    const after = state();
+    expect(after.connection).toBe(before.connection);
+    for (const name of Object.keys(before).filter((each) => each.startsWith("deviceToken:")))
+      expect(after[name], name).toBeTruthy();
+  } finally {
+    // Asked to quit while the debugging client is still attached, as the first
+    // app was: a SIGTERM right after that client leaves was seen to go unanswered.
+    // The 15 seconds start at SIGTERM; closing the client runs alongside.
+    const quit =
+      next.exitCode !== null || next.signalCode !== null
+        ? (await second?.close(), true)
+        : await quitWithin(
+            () => next.kill("SIGTERM"),
+            () => exited,
+            async () => second?.close(),
+            15_000,
+          );
+    const outcome = quit ? "exited" : "running";
+    if (outcome === "running") {
+      // Ended by its PID, and its helpers by theirs: nothing outlives the test.
+      next.kill("SIGKILL");
+      await exited;
+    }
+    // The quit asked for ends with code 0, as the run's teardown requires of the
+    // first app; a crash on the way out (SIGSEGV, another code) does not.
+    const status = { code: next.exitCode, signal: next.signalCode };
+    let left: number[];
+    const unsignalled: string[] = [];
+    try {
+      for (let i = 0; i < 50 && processesUsing(USER_DATA).length > 0; i += 1) await sleep(200);
+      left = processesUsing(USER_DATA);
+      for (const pid of left) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          // Gone since the listing: nothing to end.
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ESRCH") unsignalled.push(`${pid}: ${code ?? String(error)}`);
+        }
+      }
+    } finally {
+      closeSync(logFd);
+    }
+    expect(outcome, "the newer build quits within 15 seconds").not.toBe("running");
+    expect(
+      status.code === 0,
+      `the newer build quits cleanly, not with ${JSON.stringify(status)}`,
+    ).toBe(true);
+    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
+    expect(unsignalled, "every helper left could be ended").toEqual([]);
+  }
 });
