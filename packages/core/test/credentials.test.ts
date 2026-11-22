@@ -353,6 +353,94 @@ describe("a refused device token never removes a newer one", () => {
     }
   });
 
+  it("never sends a token refused and removed while its connect was being signed", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+    };
+    const host = testHost(otherGateway, storage);
+    const signed = deferred<void>();
+    let signs = 0;
+    host.signer.sign = async () => {
+      if ((signs += 1) === 1) await signed.promise;
+      return "signature";
+    };
+    const other = new ClawtrateClient(host, FAST);
+    try {
+      // The other client's plan has chosen token-A and is being signed.
+      await other.start();
+      await until(() => signs === 1);
+      gateway.connectReply = () => ({ ok: false, error: tokenMismatch });
+      gateway.dropAll();
+      await until(() => !storage.data.has(tokenKey(URL_A)));
+      signed.resolve();
+      await until(() => other.state.connection.status === "connected");
+      expect(otherGateway.connects.length).toBeGreaterThan(0);
+      for (let i = 0; i < otherGateway.connects.length; i += 1) {
+        expect(connectAuth(otherGateway, i)?.deviceToken).toBeUndefined();
+      }
+    } finally {
+      signed.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("skips every refused token while their removals wait, not only the last one refused", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (auth?.deviceToken !== "token-0")
+        return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+      return { ok: false, error: { ...tokenMismatch, details: { code: "AUTH_TOKEN_MISMATCH" } } };
+    };
+    const host = testHost(otherGateway, storage);
+    const arrive = deferred<void>();
+    let late = false;
+    host.createWebSocket = (url) => {
+      const socket = otherGateway.createWebSocket(url);
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        if (!data.includes('"token-0"')) return send(data);
+        late = true;
+        void arrive.promise.then(() => send(data));
+      };
+      return socket;
+    };
+    const held = deferred<void>();
+    const remove = storage.delete;
+    storage.delete = async (key) => {
+      if (key === tokenKey(URL_A)) await held.promise;
+      await remove(key);
+    };
+    const other = new ClawtrateClient(host, FAST);
+    try {
+      // The other client sends an older token-0, which reaches its gateway late.
+      storage.data.set(tokenKey(URL_A), savedToken("token-0"));
+      await other.start();
+      await until(() => late);
+      // Then token-A is saved and refused, and its removal waits.
+      storage.data.set(tokenKey(URL_A), savedToken("token-A"));
+      gateway.connectReply = () => ({ ok: false, error: tokenMismatch });
+      gateway.dropAll();
+      await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+      expect(connectAuth(gateway, 1)?.deviceToken).toBe("token-A");
+      // token-0's refusal comes last; the retry after it must still skip token-A.
+      arrive.resolve();
+      await until(() => otherGateway.connects.length >= 2);
+      expect(connectAuth(otherGateway, 0)?.deviceToken).toBe("token-0");
+      expect(connectAuth(otherGateway, 1)?.deviceToken).toBeUndefined();
+    } finally {
+      arrive.resolve();
+      held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("removes the saved token when the gateway refuses it", async () => {
     const { client, gateway, storage } = await pairedOnA();
     // Saved with surrounding whitespace: a connect sends it trimmed.

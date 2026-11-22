@@ -574,8 +574,8 @@ type ConnectionWrites = {
   pending: Promise<void>;
   /** For each token key, the connection that opened last: only it may save that token. */
   owners: Map<string, symbol>;
-  /** For each token key, the token a refusal named, until its removal has run. */
-  rejected: Map<string, string>;
+  /** For each token key, the tokens refusals named, each until its removal has run. */
+  rejected: Map<string, Set<string>>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -5637,6 +5637,13 @@ export class ClawtrateClient {
             this.pairingGone();
             throw new Error("the saved pairing is gone");
           }
+        } else if (plan.selectedAuth.usingStoredDeviceToken) {
+          // The saved token once signing is done: one refused or replaced meanwhile is never sent,
+          // and the next attempt plans again.
+          const saved = await this.loadToken(settings.url, identity.deviceId, "operator");
+          stillCurrent();
+          if (saved?.token.trim() !== plan.selectedAuth.storedToken)
+            throw new Error("the saved device token changed");
         }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
@@ -7461,7 +7468,7 @@ export class ClawtrateClient {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
-    if (!includeRejected && this.writes.rejected.get(key) === parsed.token.trim()) return null;
+    if (!includeRejected && this.writes.rejected.get(key)?.has(parsed.token.trim())) return null;
     return {
       token: parsed.token,
       // Earlier builds stored the grant as `scopes`.
@@ -7574,11 +7581,13 @@ export class ClawtrateClient {
         if (!current()) return;
         const key = this.tokenKey(url, deviceId, role);
         // Until the removal has run, loads skip the refused token, so a retry never sends it again.
-        this.writes.rejected.set(key, rejected);
+        this.writes.rejected.set(key, (this.writes.rejected.get(key) ?? new Set()).add(rejected));
         await this.changeConnection(async () => {
           const existing = await this.loadToken(url, deviceId, role, true);
           if (existing?.token.trim() === rejected) await this.host.storage.delete(key);
-          if (this.writes.rejected.get(key) === rejected) this.writes.rejected.delete(key);
+          const refused = this.writes.rejected.get(key);
+          refused?.delete(rejected);
+          if (refused?.size === 0) this.writes.rejected.delete(key);
         });
       },
     };
