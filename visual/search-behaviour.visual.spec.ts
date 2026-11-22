@@ -374,6 +374,41 @@ test("F-033: Try again on the selected task's failed history leaves that task op
   expect((await sessionsAfter(page, key)).at(-1)).toBe("openSession");
 });
 
+test("F-033: after a retry, choosing a message in another unloaded task leaves neither task open once search closes", async ({
+  page,
+}) => {
+  const first = "agent:otto:disk-space";
+  const second = "agent:otto:rotate-logs";
+  await search(page, "disk", `scene=main&bot=pip&task=agent:pip:week&search=on`);
+  const all = options(page, "messages").filter({ hasText: /^Show all \d+ messages$/ });
+  if (await all.count()) await all.click();
+  const a = options(page, "messages").filter({ hasText: "The disk is now at 61%" });
+  const b = options(page, "messages").filter({ hasText: "before the disks fill up again" });
+  await expect(a).toBeVisible();
+  await expect(b).toBeVisible();
+  // Neither task's history is loaded; search opens the first, and its read fails.
+  await unload(page, first);
+  await unload(page, second);
+  await a.click();
+  await expect(a).toContainText("Opening…");
+  await fail(page, first);
+  await expect(a).toContainText("Couldn't load this conversation");
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  await expect(a).toContainText("Opening…");
+  // Another unloaded task's message is chosen while the retry is unanswered; its read fails too.
+  await b.click();
+  await expect(b).toContainText("Opening…");
+  await fail(page, second);
+  await expect(b).toContainText("Couldn't load this conversation");
+  await release(page);
+  await page.keyboard.press("Escape");
+  await expect(palette(page)).toHaveCount(0);
+  expect((await sessionsAfter(page, first)).at(-1)).toBe("closeSession");
+  expect((await sessionsAfter(page, second)).at(-1)).toBe("closeSession");
+});
+
 test("F-033: a retry of the selected task's history doesn't reopen it once the shell has moved to another task", async ({
   page,
 }) => {

@@ -210,15 +210,12 @@ function dayAndTime(timestamp: number | null): string {
 export function SearchPalette({
   state,
   mac,
-  holds,
   onOpen,
   onClose,
 }: {
   state: ClawtrateState;
   /** ⌘ on a Mac, Ctrl elsewhere. */
   mac: boolean;
-  /** Whether the shell holds a task open now; asked when an answer comes, even after closing. */
-  holds: (key: string) => boolean;
   onOpen: (target: SearchTarget) => void;
   onClose: () => void;
 }) {
@@ -597,10 +594,14 @@ export function SearchPalette({
     if (opening?.status === "loading") finishOpening(opening);
   }, [opening, state.transcripts, finishOpening]);
 
-  /** Ask for a task's history; a refusal shows on the result that asked. */
+  /**
+   * Ask for a task's history; a refusal shows on the result that asked. A retry
+   * reads again for whoever holds the task and opens or closes nothing, so it
+   * never takes a hold from the shell, another view or another result.
+   */
   const load = useCallback(
     (open: Opening) => {
-      bridge.send({ type: "openSession", key: open.key }).then(
+      bridge.send({ type: open.reread ? "reloadSession" : "openSession", key: open.key }).then(
         () => {
           if (!open.reread) return;
           // States and answers come in order, so the next state holds the history asked for now.
@@ -1364,24 +1365,8 @@ export function SearchPalette({
                           line: null,
                           reread: true,
                         };
-                        // The bridge keeps one entry per task. The shell's task stays the shell's:
-                        // reopened only while the shell still holds it, even after search closes,
-                        // and never closed by search. Any other task search holds from here, as
-                        // when it opens one, and reopens only while this search is current.
-                        const shell = holds(opening.key);
-                        if (!shell && opened.current !== opening.key) {
-                          if (opened.current)
-                            void bridge.send({ type: "closeSession", key: opened.current });
-                          opened.current = opening.key;
-                        }
-                        void bridge
-                          .send({ type: "closeSession", key: opening.key })
-                          .then(
-                            () =>
-                              (shell ? holds(opening.key) : retry.gen === generation.current) &&
-                              load(retry),
-                          );
                         setOpening(retry);
+                        load(retry);
                       },
                     },
                   ]
@@ -1408,7 +1393,7 @@ export function SearchPalette({
       return { group, sections, actions };
     });
     return { groups: out, options };
-  }, [drawn, shown, opening, goneLine, onOpen, bridge, load, holds]);
+  }, [drawn, shown, opening, goneLine, onOpen, load]);
 
   const options = view.options;
   const active = options.find((row) => row.key === activeKey) ?? options[0] ?? null;

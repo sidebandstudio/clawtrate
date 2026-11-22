@@ -93,6 +93,8 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
+  /** Read a task this viewer holds again, as the retry of a failed history read. */
+  | { type: "reloadSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
@@ -1259,6 +1261,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
+    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
@@ -1599,6 +1602,9 @@ class ViewerSession implements BridgeSession {
       case "closeSession":
         if (this.open.delete(command.key)) client.closeSession(command.key);
         return;
+      case "reloadSession":
+        if (!this.open.has(command.key)) throw new Error("That task isn't open in this view.");
+        return client.reloadSession(command.key);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":

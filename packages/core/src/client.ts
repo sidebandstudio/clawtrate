@@ -1499,6 +1499,19 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
   }
 
+  /**
+   * Read an open task's history again, keeping every hold on it: the retry of a
+   * failed read. Closing and opening again would not read while another viewer
+   * holds the task, since only the first open reads.
+   */
+  reloadSession(key: string): void {
+    if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
+    const current = this.state.transcripts[key];
+    if (current?.status === "error")
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+    if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
+  }
+
   /** Keep only Raw entries that still belong to this task's retained state. */
   private retainTaskRaw(key: string, after: TaskActivity): void {
     this.raw.retainTask(

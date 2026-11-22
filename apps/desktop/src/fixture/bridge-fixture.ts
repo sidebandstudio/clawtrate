@@ -720,6 +720,7 @@ export function createFixtureBridge(
         setTimeout(() => set(caughtUp(state)), 700);
         return;
       }
+      case "reloadSession":
       case "openSession": {
         // A history the state no longer holds, or that failed since, is read again: loading at
         // once, as the engine shows it, then loaded as a delayed answer a test can hold.
