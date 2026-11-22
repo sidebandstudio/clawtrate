@@ -578,6 +578,14 @@ type StoredDeviceToken = {
   pairingHeld?: boolean;
 };
 
+/**
+ * A connection's token store. A rejection removes a token only through
+ * `forget`, which names the token the gateway rejected.
+ */
+type ConnectionTokenStore = GatewayBrowserDeviceTokenStore & {
+  forget(params: { deviceId: string; role: string }, rejected: string): Promise<void>;
+};
+
 /** The state with the host's setup slice, or without one. */
 function withSetup(state: ClawtrateState, setup: SetupState | undefined): ClawtrateState {
   if (setup) return { ...state, setup };
@@ -928,7 +936,7 @@ export class ClawtrateClient {
   private auth: {
     url: string;
     generation: number;
-    tokenStore: GatewayBrowserDeviceTokenStore;
+    tokenStore: ConnectionTokenStore;
     lifecycle: GatewayBrowserDeviceAuthLifecycle;
   } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
@@ -1258,8 +1266,9 @@ export class ClawtrateClient {
   }
 
   /**
-   * Run one change to the selected gateway and its saved settings after the
-   * previous one has settled, so each reads and writes what the last one left.
+   * Run one change to the selected gateway, its saved settings or its device
+   * token after the previous one has settled, so each reads and writes what the
+   * last one left.
    */
   private changeConnection<T>(change: () => Promise<T>): Promise<T> {
     const run = this.connectionChanges.then(change);
@@ -1712,31 +1721,33 @@ export class ClawtrateClient {
         clear: auth.tokenStore.clear,
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only.
-        store: async ({ deviceId, role, token, scopes }) => {
-          if (
-            generation !== this.generation ||
-            this.settings?.url !== url ||
-            this.scopeUpgrade !== upgrade
-          ) {
-            throw new Error("The gateway changed while access was being approved.");
-          }
-          // Only what the upgrade asked for, or what an asked scope implies, is kept: a
-          // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
-          const within = withinAsked(scopes, target);
-          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
-          const pairing = askedPairing && within.includes(PAIRING_SCOPE);
-          await this.writeToken(url, deviceId, role, {
-            token,
-            grantedScopes: within,
-            heldScopes: [
-              ...heldFromGrant(within),
-              ...(admin ? [ADMIN_SCOPE] : []),
-              ...(pairing ? [PAIRING_SCOPE] : []),
-            ],
-            ...(admin ? { adminHeld: true } : {}),
-            ...(pairing ? { pairingHeld: true } : {}),
-          });
-        },
+        // Queued with every other token change, so a late rejection cannot remove it.
+        store: ({ deviceId, role, token, scopes }) =>
+          this.changeConnection(async () => {
+            if (
+              generation !== this.generation ||
+              this.settings?.url !== url ||
+              this.scopeUpgrade !== upgrade
+            ) {
+              throw new Error("The gateway changed while access was being approved.");
+            }
+            // Only what the upgrade asked for, or what an asked scope implies, is kept: a
+            // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
+            const within = withinAsked(scopes, target);
+            const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
+            const pairing = askedPairing && within.includes(PAIRING_SCOPE);
+            await this.writeToken(url, deviceId, role, {
+              token,
+              grantedScopes: within,
+              heldScopes: [
+                ...heldFromGrant(within),
+                ...(admin ? [ADMIN_SCOPE] : []),
+                ...(pairing ? [PAIRING_SCOPE] : []),
+              ],
+              ...(admin ? { adminHeld: true } : {}),
+              ...(pairing ? { pairingHeld: true } : {}),
+            });
+          }),
       },
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
@@ -5740,17 +5751,22 @@ export class ClawtrateClient {
           }
           // The token stays a credential to take out of gateway text after its staging ends.
           this.heldToken = staged.token;
-          // A record saved meanwhile keeps what it holds, as a replacement token does.
-          const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
-          if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
-            return;
-          await this.writeToken(settings.url, staged.deviceId, staged.role, {
-            token: staged.token,
-            grantedScopes: [...staged.scopes],
-            heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
-            ...(existing?.adminHeld ? { adminHeld: true } : {}),
-            ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          // A record saved meanwhile keeps what it holds, as a replacement token does. Queued
+          // with every other token change, so a late rejection cannot remove it.
+          const written = await this.changeConnection(async () => {
+            const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
+            if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+              return false;
+            await this.writeToken(settings.url, staged.deviceId, staged.role, {
+              token: staged.token,
+              grantedScopes: [...staged.scopes],
+              heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
+              ...(existing?.adminHeld ? { adminHeld: true } : {}),
+              ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+            });
+            return true;
           });
+          if (!written) return;
           // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
           await this.changeConnection(async () => {
             const current = this.settings;
@@ -5814,8 +5830,15 @@ export class ClawtrateClient {
         }
         this.handleHello(hello, generation);
       },
-      onConnectFailure: async (error) =>
-        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore, generation),
+      onConnectFailure: async (error, context) =>
+        this.handleConnectFailure(
+          error,
+          identity.deviceId,
+          settings.url,
+          tokenStore,
+          generation,
+          context.plan,
+        ),
       resolveClose: (context) => {
         // A setup connection that ended before its hello is not retried and its code is
         // forgotten, unless the gateway is waiting for its owner to approve this device.
@@ -6007,8 +6030,9 @@ export class ClawtrateClient {
     error: GatewayProtocolRequestError,
     deviceId: string,
     url: string,
-    tokenStore: GatewayBrowserDeviceTokenStore,
+    tokenStore: ConnectionTokenStore,
     generation: number,
+    plan: Plan | undefined,
   ) {
     // A failure of an older connection says nothing about this one.
     if (generation !== this.generation)
@@ -6126,11 +6150,19 @@ export class ClawtrateClient {
     const refused = raw === "AUTH_TOKEN_MISMATCH" || raw === "AUTH_DEVICE_TOKEN_MISMATCH";
     if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
-      // next attempt can pair again with a bootstrap token. The gateway's refusal
-      // stays on screen whether or not the host could remove it.
-      void (async () => tokenStore.clear(this.tokenParams(deviceId)))().catch(() =>
-        this.log("warn", "Could not remove the rejected device token from this device."),
-      );
+      // next attempt can pair again with a bootstrap token, but only that token:
+      // one saved since this attempt was sent is newer, and stays. The gateway's
+      // refusal stays on screen whether or not the host could remove it.
+      const rejected = plan?.selectedAuth.usingStoredDeviceToken
+        ? plan.selectedAuth.storedToken
+        : undefined;
+      if (rejected) {
+        tokenStore
+          .forget(this.tokenParams(deviceId), rejected)
+          .catch(() =>
+            this.log("warn", "Could not remove the rejected device token from this device."),
+          );
+      }
     }
 
     const pause = setup || shouldPauseGatewayReconnect({ details: error.details });
@@ -7636,12 +7668,13 @@ export class ClawtrateClient {
   /**
    * A token store for one connection. Every operation names its gateway URL,
    * and a write is dropped once that connection is no longer current, checked
-   * after every wait, so a late write can never land after a switch.
+   * after every wait, so a late write can never land after a switch. Writes and
+   * removals run in the queue with the gateway's settings, one after another.
    */
   private connectionTokenStore(
     url: string,
     generation: number,
-  ): GatewayBrowserDeviceTokenStore & {
+  ): ConnectionTokenStore & {
     /** `store`, for one socket's hello: nothing is staged or written once that socket is retired. */
     save: (
       params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
@@ -7662,16 +7695,20 @@ export class ClawtrateClient {
       }
       // A replacement token is this socket's credential now: taken out of gateway text too.
       this.heldToken = token;
-      const existing = await this.loadToken(url, deviceId, role);
-      if (!current() || !live()) return;
-      const held = existing?.heldScopes ?? [...READ_SCOPES];
-      await this.writeToken(url, deviceId, role, {
-        token,
-        // A replacement token is held to what this client asks for, whatever it was granted.
-        grantedScopes: scopes.filter((scope) => held.includes(scope)),
-        heldScopes: held,
-        ...(existing?.adminHeld ? { adminHeld: true } : {}),
-        ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+      // Queued with every other token change, so a late rejection cannot remove it.
+      await this.changeConnection(async () => {
+        if (!current() || !live()) return;
+        const existing = await this.loadToken(url, deviceId, role);
+        if (!current() || !live()) return;
+        const held = existing?.heldScopes ?? [...READ_SCOPES];
+        await this.writeToken(url, deviceId, role, {
+          token,
+          // A replacement token is held to what this client asks for, whatever it was granted.
+          grantedScopes: scopes.filter((scope) => held.includes(scope)),
+          heldScopes: held,
+          ...(existing?.adminHeld ? { adminHeld: true } : {}),
+          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+        });
       });
     };
     return {
@@ -7688,9 +7725,21 @@ export class ClawtrateClient {
         };
       },
       store: (params) => save(params, () => true),
-      clear: async ({ deviceId, role }) => {
+      // A removal that names no token could take one saved after the rejection.
+      // This client removes a token only through `forget`.
+      clear: async () => {},
+      // Compare-and-delete, queued after every earlier token change: the token
+      // goes only while it is still the one the gateway rejected. A refusal of
+      // this connection is accepted now and removes its own gateway's token
+      // even if a switch queued first. A connect sends the saved token trimmed,
+      // so the comparison trims it too.
+      forget: async ({ deviceId, role }, rejected) => {
         if (!current()) return;
-        await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+        await this.changeConnection(async () => {
+          const existing = await this.loadToken(url, deviceId, role);
+          if (existing?.token.trim() !== rejected) return;
+          await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+        });
       },
     };
   }
