@@ -679,6 +679,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
               message={message}
               taskKey={env.taskKey}
               connected={env.connected}
+              announce={env.announce}
             />
           ),
         )}

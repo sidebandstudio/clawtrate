@@ -5,7 +5,9 @@
 // messages between bots are the cards' own (./cards).
 
 import {
+  botIdFromSessionKey,
   isTerminal,
+  TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
   type Bot,
   type OutgoingMessage,
@@ -14,8 +16,9 @@ import {
   type RunRawRead,
   type Transcript,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
+import { OpenTaskContext } from "./cards/context.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
@@ -27,16 +30,62 @@ export function OutgoingBubble({
   message,
   taskKey,
   connected,
+  announce,
 }: {
   message: OutgoingMessage;
   taskKey: string;
   connected: boolean;
+  /** The conversation's live region, which outlasts this task's transcript. */
+  announce: (text: string) => void;
 }) {
   const bridge = useBridge();
+  const openTask = useContext(OpenTaskContext);
+  const [starting, setStarting] = useState(false);
+  /** A new task took its words, and its files stay here. */
+  const [started, setStarted] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const retry = () =>
     void bridge.send({ type: "retryMessage", key: taskKey, messageId: message.id });
   const remove = () =>
     void bridge.send({ type: "deleteMessage", key: taskKey, messageId: message.id });
+  const botId = botIdFromSessionKey(taskKey);
+  // Only by the person's choice, as "Start as new task" does: a new task under the same bot with
+  // the words. It can't take files yet, and the message replied to stays in this task.
+  const startNew = async () => {
+    if (!botId) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      const { key } = await bridge.invoke({
+        type: "createTask",
+        botId,
+        text: message.text,
+        label: null,
+      });
+      if (message.attachments.length === 0) {
+        // The words were all of it: the message leaves this task, and the new one opens.
+        void bridge.send({ type: "deleteMessage", key: taskKey, messageId: message.id });
+        if (openTask) openTask(botId, key);
+        else void bridge.send({ type: "closeSession", key });
+      } else {
+        // Its files stay on it here, so this task stays open, and the new one runs on its own.
+        void bridge.send({ type: "closeSession", key });
+        setStarted(true);
+      }
+      announce("Started as a new task");
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStarting(false);
+    }
+  };
+  /** What a new task doesn't take from this message, said before it is chosen. */
+  const leftHere = [
+    message.attachments.length > 0 ? "A new task can't take files yet, so they stay here." : null,
+    message.replyToId ? "The new task won't show it as a reply." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   // Only a message the gateway accepted takes your colour.
   const accepted = message.status === "sent" || message.status === "unconfirmed";
   let caption: ReactNode = null;
@@ -82,13 +131,29 @@ export function OutgoingBubble({
       break;
     case "failed":
       caption =
-        message.error === TASK_DELETED_ELSEWHERE ? (
-          // Sent again it would be refused the same way: the gateway no longer has this task.
+        message.error === TASK_DELETED_ELSEWHERE || message.error === TASK_ARCHIVED_ELSEWHERE ? (
+          // Sent again it would be refused the same way: the gateway no longer takes work here.
           <>
-            <span>Not sent. {TASK_DELETED_ELSEWHERE}</span>
+            <span>
+              Not sent. {message.error}
+              {started
+                ? " Its words went to a new task, and its files stay here."
+                : leftHere && ` ${leftHere}`}
+            </span>
+            {botId && message.text && !started && (
+              <button
+                type="button"
+                className="link-button"
+                disabled={starting}
+                onClick={() => void startNew()}
+              >
+                Start a new task with this message
+              </button>
+            )}
             <button type="button" className="link-button" onClick={remove}>
               Delete
             </button>
+            {startError && <span role="alert">Couldn't start a new task: {startError}</span>}
           </>
         ) : (
           <>

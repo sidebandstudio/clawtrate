@@ -1,4 +1,5 @@
 import {
+  TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
   type Bot,
   type ClawtrateState,
@@ -145,7 +146,7 @@ describe("F-020 F-426: a bot row's state", () => {
   });
 });
 
-describe("F-278: a task deleted elsewhere while a message written in it is out", () => {
+describe("F-278 F-277: a task deleted or archived elsewhere while a message written in it is out", () => {
   const gone = task("gone", 100);
   const other = task("other", 200);
   const holding = (...messages: Array<Partial<OutgoingMessage>>) =>
@@ -157,6 +158,8 @@ describe("F-278: a task deleted elsewhere while a message written in it is out",
     }
     const refused = holding({ status: "failed", error: TASK_DELETED_ELSEWHERE });
     expect(keptOnScreen(gone, "otto", [other], refused)).toBe(gone);
+    const archived = holding({ status: "failed", error: TASK_ARCHIVED_ELSEWHERE });
+    expect(keptOnScreen(gone, "otto", [other], archived)).toBe(gone);
   });
 
   it("gives way otherwise: a task still listed, another bot's, one with nothing out, or one refused for another reason", () => {

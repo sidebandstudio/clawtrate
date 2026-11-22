@@ -245,7 +245,7 @@ function TranscriptView({
     }),
     [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
-  const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
+  const live = buildLive(bot, task, transcript, { ...liveOptions, reading, announce: onAnnounce });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
   const contentSize = `${itemCount}:${live.signature}`;
@@ -558,7 +558,12 @@ type LiveOptions = {
   leaving: { key: string; run: Run } | null;
 };
 
-function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOptions): LiveParts {
+function buildLive(
+  bot: Bot,
+  task: Task,
+  transcript: Transcript,
+  options: LiveOptions & { announce: (text: string) => void },
+): LiveParts {
   const active = currentRun(transcript);
   const foot: ReactNode[] = [];
   const placed = new Set<string>();
@@ -627,6 +632,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         message={message}
         taskKey={task.key}
         connected={options.connected}
+        announce={options.announce}
       />,
     );
   };
