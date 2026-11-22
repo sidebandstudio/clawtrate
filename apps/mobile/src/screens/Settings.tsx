@@ -22,7 +22,7 @@ import { Modal, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
-import { Cleartext } from "./Connect.tsx";
+import { Cleartext, UseAnotherGateway } from "./Connect.tsx";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
 import { DEVICE_NAME } from "../host/index.ts";
 import { useRuntime } from "../runtime.ts";
@@ -218,17 +218,11 @@ export function Settings({
                 />
               )}
               {actions.forget && connection.gatewayUrl !== null && (
-                <Button
+                <UseAnotherGateway
+                  gatewayUrl={connection.gatewayUrl}
                   label={W.useAnother}
-                  variant="quiet"
-                  large
                   testID="forget"
-                  onPress={() => {
-                    onClose();
-                    onForget();
-                    const { gatewayUrl } = connection;
-                    if (gatewayUrl !== null) void send({ type: "disconnect", gatewayUrl });
-                  }}
+                  onForgotten={onForget}
                 />
               )}
               {actions.forget && (

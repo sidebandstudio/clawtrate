@@ -52,25 +52,19 @@ function Screens() {
   const another = () => {
     setMismatch(null);
     setAddressOpen(true);
+    setSettingsOpen(false);
     setRoute(HOME);
   };
 
   if (!inShell(state, kept)) {
     const { connection } = state;
-    const chooseAnother = () => {
-      const { gatewayUrl } = connection;
-      if (gatewayUrl !== null) void startRuntime().send({ type: "disconnect", gatewayUrl });
-      another();
-    };
     switch (connectView(state, kept, addressOpen)) {
       case "protocol":
-        return <Protocol connection={connection} error={kept!} onAnother={chooseAnother} />;
+        return <Protocol connection={connection} error={kept!} onAnother={another} />;
       case "pairing":
-        return <Pairing connection={connection} onAnother={chooseAnother} />;
+        return <Pairing connection={connection} onAnother={another} />;
       case "setup":
-        return (
-          <Setup connection={connection} discovery={state.discovery} onAnother={chooseAnother} />
-        );
+        return <Setup connection={connection} discovery={state.discovery} onAnother={another} />;
       case "address":
         return <Address connection={connection} onBack={() => setAddressOpen(false)} />;
       case "welcome":

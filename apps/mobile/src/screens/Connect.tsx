@@ -43,6 +43,7 @@ import { addressAttemptInProgress, addressSubmission } from "../address.ts";
 import { Character } from "../components/Avatar.tsx";
 import { EyeIcon } from "../components/icons.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
+import { checkPairing, forgetGateway } from "../gateway-actions.ts";
 import { APP_VERSION } from "../host/index.ts";
 import { localNetworkHint } from "../local-network.ts";
 import { useRuntime } from "../runtime.ts";
@@ -175,22 +176,24 @@ function Foot({ children }: { children: string }) {
   );
 }
 
-/** A failure: a medium-weight title and one sentence, on the danger fill, with Try again. */
+/** A failure with an optional Try again button. */
 function Failure({
+  testID = "connect-error",
   title,
   message,
   code,
   onTryAgain,
 }: {
+  testID?: string;
   title: string;
   message: string;
-  code: string | null;
-  onTryAgain: () => void;
+  code?: string | null;
+  onTryAgain?: () => void;
 }) {
   const { c } = useTheme();
   return (
     <View
-      testID="connect-error"
+      testID={testID}
       accessibilityRole="alert"
       style={{
         backgroundColor: c["danger-soft"],
@@ -199,15 +202,15 @@ function Failure({
         gap: S["space-2"],
       }}
     >
-      <Txt testID="connect-error-title" weight="medium">
+      <Txt testID={`${testID}-title`} weight="medium">
         {title}
       </Txt>
-      <Txt testID="connect-error-message" size={S["text-md"]}>
+      <Txt testID={`${testID}-message`} size={S["text-md"]}>
         {message}
       </Txt>
       {code && (
         <Txt
-          testID="connect-error-code"
+          testID={`${testID}-code`}
           size={S["text-xs"]}
           color="text-faint"
           style={{ fontFamily: FONTS.mono }}
@@ -215,7 +218,48 @@ function Failure({
           {code}
         </Txt>
       )}
-      <Button label={W.tryAgain} onPress={onTryAgain} testID="try-again" />
+      {onTryAgain && <Button label={W.tryAgain} onPress={onTryAgain} testID="try-again" />}
+    </View>
+  );
+}
+
+export function UseAnotherGateway({
+  gatewayUrl,
+  onForgotten,
+  label = W.useAnother,
+  testID = "use-another",
+}: {
+  gatewayUrl: string | null;
+  onForgotten: () => void;
+  label?: string;
+  testID?: string;
+}) {
+  const { send } = useRuntime();
+  const [status, setStatus] = useState<"idle" | "forgetting" | "failed">("idle");
+  const pending = useRef(false);
+  const forget = async () => {
+    if (pending.current) return;
+    pending.current = true;
+    setStatus("forgetting");
+    const forgotten = await forgetGateway(send, gatewayUrl, onForgotten);
+    pending.current = false;
+    setStatus(forgotten ? "idle" : "failed");
+  };
+  const forgetting = status === "forgetting";
+  return (
+    <View style={{ gap: S["space-2"] }}>
+      {status === "failed" && (
+        <Failure testID="forget-error" title={W.forgetFailed} message={W.forgetAgain(label)} />
+      )}
+      <Button
+        label={forgetting ? W.forgetting : label}
+        variant="quiet"
+        large
+        disabled={forgetting}
+        busy={forgetting}
+        testID={testID}
+        onPress={() => void forget()}
+      />
     </View>
   );
 }
@@ -514,7 +558,7 @@ export function Setup({
           onTryAgain={() => void send({ type: "retry" })}
         />
       )}
-      <Button label={W.useAnother} variant="quiet" large onPress={onAnother} testID="use-another" />
+      <UseAnotherGateway gatewayUrl={connection.gatewayUrl} onForgotten={onAnother} />
       <Foot>{footWords("connect", connection, HOST)}</Foot>
     </Column>
   );
@@ -543,18 +587,24 @@ export function Pairing({
     await Clipboard.setStringAsync(command);
     setCopiedCommand(command);
   };
-  const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState(false);
+  const [checkStatus, setCheckStatus] = useState<"idle" | "checking" | "checked" | "failed">(
+    "idle",
+  );
+  const pending = useRef(false);
   const check = async () => {
-    if (checking) return;
-    setChecking(true);
-    try {
-      await send({ type: "retry" });
-    } finally {
-      setChecking(false);
-      setChecked(true);
-    }
+    if (pending.current) return;
+    pending.current = true;
+    setCheckStatus("checking");
+    const result = await checkPairing(send);
+    pending.current = false;
+    setCheckStatus(result);
   };
+  const checking = checkStatus === "checking";
+  const checkFailed = checkStatus === "failed";
+  const pairingText =
+    checking || checkFailed
+      ? W.waitingStep
+      : `${checkStatus === "checked" ? W.notYet : W.waiting}${countdownWords(connection.retryAt, now)}`;
   return (
     <Column testID="pairing">
       <Mark named />
@@ -562,7 +612,7 @@ export function Pairing({
         {W.approveTitle}
       </Txt>
       <Txt size={S["text-base"]} color="text-muted" style={{ textAlign: "center" }}>
-        {redact(pairingLede(connection.gatewayUrl))}
+        {redact(pairingLede(connection.gatewayUrl, !checking && !checkFailed))}
       </Txt>
       {pairing.approveNote && (
         <Txt size={S["text-sm"]} color="text-muted" testID="approve-note">
@@ -598,11 +648,7 @@ export function Pairing({
           </Txt>
         </View>
       )}
-      <Steps
-        connection={connection}
-        loadingBots={false}
-        pairingText={`${checked ? W.notYet : W.waiting}${countdownWords(connection.retryAt, now)}`}
-      />
+      <Steps connection={connection} loadingBots={false} pairingText={pairingText} />
       <View
         accessibilityLabel={W.scopesLabel}
         testID="scopes"
@@ -634,14 +680,18 @@ export function Pairing({
           {redact(scopesDifferWords(scopes.echoed))}
         </Txt>
       )}
+      {checkFailed && (
+        <Failure testID="pairing-check-error" title={W.checkFailed} message={W.checkAgain} />
+      )}
       <Button
         label={checking ? W.checking : W.checkNow}
         large
+        disabled={checking}
         busy={checking}
         onPress={() => void check()}
         testID="check-now"
       />
-      <Button label={W.useAnother} variant="quiet" large onPress={onAnother} testID="use-another" />
+      <UseAnotherGateway gatewayUrl={connection.gatewayUrl} onForgotten={onAnother} />
       <Foot>{redact(footWords("pairing", connection, HOST))}</Foot>
     </Column>
   );
@@ -681,11 +731,10 @@ export function Protocol({
         }}
         testID="protocol-retry"
       />
-      <Button
+      <UseAnotherGateway
+        gatewayUrl={connection.gatewayUrl}
         label={W.chooseAnother}
-        variant="quiet"
-        large
-        onPress={onAnother}
+        onForgotten={onAnother}
         testID="choose-another"
       />
       <Foot>{redact(footWords("protocol", connection, HOST))}</Foot>

@@ -22,12 +22,17 @@ export const CONNECT_WORDS = {
   },
   tryAgain: "Try again",
   useAnother: "Use another gateway",
+  forgetting: "Forgetting gateway…",
+  forgetFailed: "Could not forget this gateway",
+  forgetAgain: (label: string) => `Tap ${label} to try again.`,
   approveTitle: "Approve this device",
   copyApprove: "Copy approve command",
   copied: "Copied.",
   scopesLabel: "This device asks to",
   checkNow: "Check now",
   checking: "Checking…",
+  checkFailed: "Could not check for approval",
+  checkAgain: "Tap Check now to try again.",
   setupLabel: "Setting up",
   waitingStep: "Waiting for approval",
   waiting: "Waiting for approval, checking again",
@@ -108,8 +113,9 @@ export function scopeWords(scope: string): string {
 }
 
 /** The pairing screen's sentence under its title. */
-export function pairingLede(gatewayUrl: string | null): string {
-  return `${gatewayLabel(gatewayUrl)} requires approval for this device. Approve it on the gateway's machine and ${PRODUCT_NAME} will retry the connection.`;
+export function pairingLede(gatewayUrl: string | null, automatic = true): string {
+  const retry = automatic ? ` and ${PRODUCT_NAME} will retry the connection` : "";
+  return `${gatewayLabel(gatewayUrl)} requires approval for this device. Approve it on the gateway's machine${retry}.`;
 }
 
 /** The seconds until the host's next retry, after the waiting words: " in 4s", or " now". */

@@ -1,5 +1,15 @@
 import { createPrivateKey, createPublicKey, createHash, sign, verify } from "node:crypto";
+import { ClawtrateClient, createBridgeSession, type KeyValueStore } from "@clawtrate/core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  deferred,
+  FakeGateway,
+  helloOk,
+  testHost,
+  tokenKey,
+  until,
+} from "../../../packages/core/test/fake-gateway.ts";
+import { checkPairing, forgetGateway } from "../src/gateway-actions.ts";
 import {
   DEVICE_SERVICE,
   itemName,
@@ -39,6 +49,103 @@ function fakeKeychain() {
 }
 
 const ACCESSIBLE = 7;
+const GATEWAY = "wss://gateway.example";
+
+function fakePairingGateway() {
+  const gateway = new FakeGateway();
+  gateway.connectReply = () => ({
+    ok: false,
+    error: {
+      code: "NOT_PAIRED",
+      message: "pairing required",
+      details: { code: "PAIRING_REQUIRED", requestId: "req-123" },
+    },
+  });
+  return gateway;
+}
+
+function readOnlyClient(gateway: FakeGateway, storage: KeyValueStore) {
+  return new ClawtrateClient(
+    { ...testHost(gateway), storage },
+    { readOnly: true, reconnect: { initialMs: 60_000, maxMs: 60_000 } },
+  );
+}
+
+describe("gateway actions when the iOS Keychain is unavailable", () => {
+  it("reports a failed manual pairing check and lets the next check connect", async () => {
+    const keychain = fakeKeychain();
+    const gateway = fakePairingGateway();
+    const client = readOnlyClient(gateway, createKeychainStore(keychain, ACCESSIBLE));
+    const session = createBridgeSession(client);
+    const send = session.apply.bind(session);
+    const read = keychain.getItemAsync;
+    const get = vi.spyOn(keychain, "getItemAsync");
+    try {
+      await send({ type: "connect", url: GATEWAY });
+      await until(() => {
+        const connection = client.state.connection;
+        return connection.status === "pairing" && connection.retryAt !== null;
+      });
+      expect(gateway.connects).toHaveLength(1);
+      get.mockImplementation(async (key, options) => {
+        if (key === itemName(tokenKey(GATEWAY))) throw new Error("Keychain unavailable");
+        return read(key, options);
+      });
+
+      await expect(checkPairing(send)).resolves.toBe("failed");
+      expect(client.state.connection.status).toBe("pairing");
+      expect(gateway.connects).toHaveLength(1);
+
+      get.mockRestore();
+      gateway.connectReply = () => ({ ok: true, payload: helloOk() });
+      await expect(checkPairing(send)).resolves.toBe("checked");
+      await until(() => client.state.connection.status === "connected");
+      expect(gateway.connects).toHaveLength(2);
+    } finally {
+      session.dispose();
+      client.stop();
+    }
+  });
+
+  it.each(["pairing", "connected"] as const)(
+    "keeps the %s gateway until forgetting it succeeds",
+    async (status) => {
+      const keychain = fakeKeychain();
+      const storage = createKeychainStore(keychain, ACCESSIBLE);
+      const gateway = status === "pairing" ? fakePairingGateway() : new FakeGateway();
+      const client = readOnlyClient(gateway, storage);
+      const session = createBridgeSession(client);
+      const send = session.apply.bind(session);
+      const showAddress = vi.fn();
+      const deletion = deferred<void>();
+      const remove = vi.spyOn(keychain, "deleteItemAsync").mockReturnValueOnce(deletion.promise);
+      try {
+        await send({ type: "connect", url: GATEWAY });
+        await until(() => client.state.connection.status === status);
+        const saved = await storage.get("connection");
+        expect(saved).not.toBeNull();
+
+        const attempt = forgetGateway(send, GATEWAY, showAddress);
+        await until(() => remove.mock.calls.length > 0);
+        expect(showAddress).not.toHaveBeenCalled();
+        deletion.reject(new Error("Keychain unavailable"));
+        await expect(attempt).resolves.toBe(false);
+        expect(showAddress).not.toHaveBeenCalled();
+        expect(await storage.get("connection")).toBe(saved);
+        expect(client.state.connection).toMatchObject({ status, gatewayUrl: GATEWAY });
+
+        await expect(forgetGateway(send, GATEWAY, showAddress)).resolves.toBe(true);
+        expect(showAddress).toHaveBeenCalledTimes(1);
+        expect(await storage.get("connection")).toBeNull();
+        expect(client.state.connection.gatewayUrl).toBeNull();
+      } finally {
+        deletion.resolve();
+        session.dispose();
+        client.stop();
+      }
+    },
+  );
+});
 
 describe("the iOS host's store", () => {
   it("keeps every value core stores in the Keychain, one item per key, readable only on this device", async () => {
