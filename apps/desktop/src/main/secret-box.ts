@@ -74,3 +74,40 @@ export function usesSecureStorage(
 
 /** The switch that gives Chromium an in-memory stand-in for the Keychain. */
 export const MOCK_KEYCHAIN_SWITCH = "use-mock-keychain";
+
+/**
+ * What the app says when it can't start because of this device's credentials: fixed words
+ * for each case, never the error's own message, its cause or anything read from a file.
+ */
+export function startupFailure(error: unknown): { title: string; message: string } {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "SecureStorageUnavailableError")
+    return {
+      title: "Clawtrate couldn't open your keychain",
+      message:
+        "Clawtrate keeps this device's credentials in your keychain, and couldn't read them. Unlock your keychain, then open Clawtrate again.",
+    };
+  if (name === "CredentialRecordInvalidError")
+    return {
+      title: "Clawtrate couldn't use this device's credentials",
+      message:
+        "The file that holds this device's credentials is damaged or was changed, so Clawtrate didn't use it. Open Clawtrate again; if this comes back, remove this device from the gateway and pair it again.",
+    };
+  if (name === "SavedSettingsInvalidError")
+    return {
+      title: "Clawtrate couldn't read its saved settings",
+      message:
+        "This device's saved settings from an earlier version can't be read, so Clawtrate didn't use them. Open Clawtrate again; if this comes back, pair this device again.",
+    };
+  return {
+    title: "Clawtrate couldn't start",
+    message: "Something went wrong while Clawtrate was starting. Open Clawtrate again.",
+  };
+}
+
+/** Said once when secure storage couldn't be used before this device's credentials moved there. */
+export const SESSION_ONLY = {
+  title: "Clawtrate couldn't save this device securely",
+  message:
+    "Your keychain couldn't be used, so this session keeps changes to this device's pairing in memory only, and full control stays off. Unlock your keychain and open Clawtrate again to keep them.",
+};

@@ -35,6 +35,8 @@ import {
   KEYCHAIN_CHECK_SWITCH,
   MOCK_KEYCHAIN_SWITCH,
   safeStorageBox,
+  SESSION_ONLY,
+  startupFailure,
   usesSecureStorage,
 } from "./secret-box.ts";
 import {
@@ -374,21 +376,36 @@ async function main(): Promise<void> {
   }
 
   const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
-  runtime = await startHostRuntime({
-    kind: "desktop",
-    displayName: "Clawtrate Desktop",
-    dataDir: privateDataDir(),
-    // This device's credentials in the Keychain: a person's app on macOS, or a launch check's.
-    ...(usesSecureStorage(SETUP, process.platform, KEYCHAIN_CHECK, hasSwitch(MOCK_KEYCHAIN_SWITCH))
-      ? { secretBox: safeStorageBox(safeStorage, process.platform) }
-      : {}),
-    // A sandboxed or refused start (every development build and automated run) has no
-    // development gateway, doesn't auto-connect and never resumes a saved gateway.
-    devGateway: STARTUP.devGateway,
-    recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
-    autoConnectDev: STARTUP.autoConnectDev,
-    resume: STARTUP.resume,
-  });
+  try {
+    runtime = await startHostRuntime({
+      kind: "desktop",
+      displayName: "Clawtrate Desktop",
+      dataDir: privateDataDir(),
+      // This device's credentials in the Keychain: a person's app on macOS, or a launch check's.
+      ...(usesSecureStorage(
+        SETUP,
+        process.platform,
+        KEYCHAIN_CHECK,
+        hasSwitch(MOCK_KEYCHAIN_SWITCH),
+      )
+        ? { secretBox: safeStorageBox(safeStorage, process.platform) }
+        : {}),
+      // A sandboxed or refused start (every development build and automated run) has no
+      // development gateway, doesn't auto-connect and never resumes a saved gateway.
+      devGateway: STARTUP.devGateway,
+      recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
+      autoConnectDev: STARTUP.autoConnectDev,
+      resume: STARTUP.resume,
+    });
+  } catch (error) {
+    // Nothing has connected and no window is open: say so in fixed words, and leave.
+    const { title, message } = startupFailure(error);
+    dialog.showErrorBox(title, message);
+    app.exit(1);
+    return;
+  }
+  if ((await runtime.credentialStatus?.()) === "session")
+    void dialog.showMessageBox({ type: "warning", ...SESSION_ONLY });
   const { client, info, policy } = runtime;
   const userDir = app.getPath("userData");
   const updates = await startDesktopUpdates({
