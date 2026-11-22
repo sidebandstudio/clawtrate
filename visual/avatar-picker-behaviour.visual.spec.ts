@@ -782,10 +782,11 @@ for (const outcome of ["release", "release-failed"] as const)
     );
     await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
     await settled(page);
+    // Nothing is closed, selected or said: the dialog waits, as it does for a replaced gateway.
     await expect(page.getByTestId("new-bot")).toBeVisible();
-    await expect(page.getByTestId("new-bot").getByRole("status")).not.toHaveText(
-      /Could not create|Created/,
-    );
+    await expect(page.getByTestId("create-failed")).toHaveCount(0);
+    await expect(page.getByTestId("b-announcer")).not.toHaveText(/Could not create|Created/);
+    await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
     await page.getByRole("button", { name: "Back to the picture" }).click();
     await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("First");
   });
