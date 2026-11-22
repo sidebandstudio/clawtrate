@@ -196,6 +196,20 @@ const refused: [string, (dir: string) => Buffer][] = [
     () => edited((bytes, stored) => bytes.writeUInt32LE(0xffffffff, stored + 24)),
   ],
   [
+    "a ZIP64 compressed size in a local header",
+    () =>
+      edited((bytes, stored) =>
+        bytes.writeUInt32LE(0xffffffff, bytes.readUInt32LE(stored + 42) + 18),
+      ),
+  ],
+  [
+    "a ZIP64 uncompressed size in a local header",
+    () =>
+      edited((bytes, stored) =>
+        bytes.writeUInt32LE(0xffffffff, bytes.readUInt32LE(stored + 42) + 22),
+      ),
+  ],
+  [
     "a comment from zip -z",
     (dir) =>
       zipTool(dir, "comment", "/usr/bin/zip", ["-qrz", "out.zip", "Clawtrate.app"], "note\n"),
@@ -216,6 +230,10 @@ const refused: [string, (dir: string) => Buffer][] = [
   [
     "fewer records on this disk than in all",
     () => edited((bytes) => bytes.writeUInt16LE(3, endAt(bytes) + 8)),
+  ],
+  [
+    "a record on a second disk",
+    () => edited((bytes, stored) => bytes.writeUInt16LE(1, stored + 34)),
   ],
   [
     "an LZMA entry in the central header",

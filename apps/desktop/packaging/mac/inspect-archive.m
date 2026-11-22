@@ -139,10 +139,14 @@ static BOOL preflight(int fd) {
         if (le32(record + 20) == 0xffffffff || le32(record + 24) == 0xffffffff) return NO;
         const uint32_t method = le16(record + 10), offset = le32(record + 42);
         if (method != 0 && method != 8) return NO;
+        // The local offset counts from the entry's own disk, which must be this one.
+        if (le16(record + 34)) return NO;
         if ((off_t)offset + 30 > start || !readAt(fd, local, 30, offset) || le32(local) != 0x04034b50)
             return NO;
-        // libarchive decodes with the local header's method.
+        // libarchive decodes with the local header's method. A data descriptor's zero
+        // local sizes pass; ZIP64 sentinels don't.
         if (le16(local + 8) != 0 && le16(local + 8) != 8) return NO;
+        if (le32(local + 18) == 0xffffffff || le32(local + 22) == 0xffffffff) return NO;
         at += 46 + le16(record + 28) + le16(record + 30) + le16(record + 32);
     }
     return at == endAt && walked == count;
@@ -254,8 +258,8 @@ int main(int argc, char **argv) {
     // reads the archive, preflight() checks it with fixed buffers: one 32-bit end record
     // at EOF, with no comment and no ZIP64 locator, on one disk; a central directory of
     // at most 8 MiB that ends at that record and walks to its count, at most 32,768
-    // records; each local header before the directory; Store or Deflate only, in both
-    // headers. That bounds libarchive's index. Its early per-entry reads have fixed caps:
+    // records; each entry on disk 0, with its local header before the directory; no
+    // ZIP64 sizes and only Store or Deflate, in both headers. That bounds libarchive's index. Its early per-entry reads have fixed caps:
     // a symlink target of 64 KiB compressed, inflated into one 256 KiB buffer (no LZMA),
     // and __MACOSX metadata of 10 MiB. The reader then bounds entries seen and paths
     // created (32,768 each), regular-file bytes (2 GiB in all, streamed through a 64 KiB
