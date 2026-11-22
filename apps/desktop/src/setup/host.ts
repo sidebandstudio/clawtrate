@@ -44,6 +44,8 @@ export class SetupSlice {
 export class SetupRouter implements SetupHost {
   private readonly here: SetupController;
   private readonly remote: RemoteSetup | null;
+  /** Each request that moves setup (a Look here or there, Back, reset), numbered as it comes. */
+  private request = 0;
 
   constructor(here: SetupController, remote: RemoteSetup | null) {
     this.here = here;
@@ -56,11 +58,13 @@ export class SetupRouter implements SetupHost {
   }
 
   async look(): Promise<void> {
+    this.request += 1;
     this.remote?.reset();
     await this.here.look();
   }
 
   cancel(): void {
+    this.request += 1;
     if (this.remote?.active) this.remote.cancel();
     else this.here.cancel();
   }
@@ -71,6 +75,7 @@ export class SetupRouter implements SetupHost {
   }
 
   reset(): void {
+    this.request += 1;
     void this.here.reset();
     this.remote?.reset();
   }
@@ -78,8 +83,11 @@ export class SetupRouter implements SetupHost {
   async there(destination: string): Promise<void> {
     if (!this.remote) throw new Error("This host doesn't reach another computer over SSH.");
     // This computer's cleanup finishes first: a failure of it is said while its screens are the
-    // ones shown, never over another computer's that share the slice.
+    // ones shown, never over another computer's that share the slice. A request that came while
+    // it finished (Back, a reset, a Look here or another there) is the one that counts then.
+    const mine = (this.request += 1);
     await this.here.reset();
+    if (mine !== this.request) return;
     await this.remote.there(destination);
   }
 
@@ -96,6 +104,7 @@ export class SetupRouter implements SetupHost {
   }
 
   async retryRoute(): Promise<void> {
+    this.request += 1;
     await this.need().retryRoute();
   }
 

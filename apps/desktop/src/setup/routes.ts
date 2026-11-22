@@ -107,6 +107,16 @@ export const NO_SEAL: TokenSeal = {
 
 const FOLDER_NOT_PRIVATE = "The route store's folder isn't proven private.";
 
+/** What a `put` can take back, or settle once the record is the route's for good. */
+export type RoutePut = {
+  /** Everything the put replaced or let go, put back as it was, in place of its record. */
+  undo(): void;
+  /** Only the other routes it let go, put back; its own record stays unless one takes its key. */
+  restoreDisplaced(): void;
+  /** A provisional put's displaced routes, let go for good: the host forgets their pins. */
+  settle(): void;
+};
+
 /** The route file is there and couldn't be read: nothing is written over it. */
 export class RouteStoreUnreadable extends Error {
   override name = "RouteStoreUnreadable";
@@ -263,14 +273,12 @@ export class RouteStore {
     this.cache = next;
   }
 
-  /** Keeps `routes`, the newest first, and tells the host which records it let go. */
-  private keep(routes: Stored[], before: Stored[]): void {
-    routes.sort((a, b) => b.lastUsed - a.lastUsed);
-    const kept = routes.slice(0, MAX_ROUTES);
-    this.save({ version: 2, routes: kept });
-    for (const old of before) {
-      if (!kept.some((each) => each.id === old.id)) this.options.onEvict?.(withoutToken(old));
-    }
+  /** Tells the host of each of `displaced` the store no longer holds: its pin and files go too. */
+  private evict(displaced: Stored[]): void {
+    const now = this.load();
+    for (const each of displaced)
+      if (!now.routes.some((route) => route.id === each.id))
+        this.options.onEvict?.(withoutToken(each));
   }
 
   /** Every route, without its token. */
@@ -292,10 +300,12 @@ export class RouteStore {
    * Keeps `record`, replacing the route with its id. A route whose key changed
    * (another key pinned, another port, another profile) loses its token: a
    * token is offered only on the route it was issued for. Another record with
-   * the same key is let go, with its pin and files. Returns the undo: what this
-   * put replaced or let go, put back as it was, token included.
+   * the same key is let go, with its pin and files, as is the oldest past
+   * `MAX_ROUTES`. With `provisional` (a pairing not yet kept), the records it
+   * displaces are let go from the file only: the host isn't told, so their pins
+   * stay, until `settle`; `restoreDisplaced` and `undo` put them back.
    */
-  put(record: SshRouteRecord): () => void {
+  put(record: SshRouteRecord, { provisional = false }: { provisional?: boolean } = {}): RoutePut {
     if (!validRecord(record)) throw new Error("Not a route record.");
     const data = this.load(true);
     const old = data.routes.find((route) => route.id === record.id);
@@ -303,24 +313,37 @@ export class RouteStore {
       (route) => route.id !== record.id && route.key !== record.key,
     );
     const token = old && old.key === record.key ? old.token : null;
-    const replaced = data.routes.filter(
-      (route) => route.id === record.id || route.key === record.key,
-    );
     // Only the fields a record declares are kept, whatever else the caller's object carries.
-    this.keep([...others, { ...recordOf(record), token }], data.routes);
-    return () => this.restore(record, replaced);
+    const kept = [...others, { ...recordOf(record), token }]
+      .sort((a, b) => b.lastUsed - a.lastUsed)
+      .slice(0, MAX_ROUTES);
+    this.save({ version: 2, routes: kept });
+    // Other routes this put let go: one with the same key, or the oldest past the limit.
+    const displaced = data.routes.filter(
+      (route) => route.id !== record.id && !kept.some((each) => each.id === route.id),
+    );
+    if (!provisional) this.evict(displaced);
+    return {
+      undo: () => this.restore([record.id], [...(old ? [old] : []), ...displaced]),
+      restoreDisplaced: () => this.restore([], displaced),
+      settle: () => {
+        if (provisional) this.evict(displaced);
+      },
+    };
   }
 
-  /** In place of `record`, what its put replaced, with their tokens; nothing else changes. */
-  private restore(record: SshRouteRecord, replaced: Stored[]): void {
+  /**
+   * `entries` put back, tokens included, in place of the routes with the ids
+   * in `drop` and of any route holding an entry's id or key; nothing else changes.
+   */
+  private restore(drop: string[], entries: Stored[]): void {
+    if (drop.length === 0 && entries.length === 0) return;
     const data = this.load(true);
     const back = (route: Stored) =>
-      replaced.some((each) => each.id === route.id || each.key === route.key);
+      entries.some((each) => each.id === route.id || each.key === route.key);
     const routes = [
-      ...data.routes.filter(
-        (route) => route.id !== record.id && route.key !== record.key && !back(route),
-      ),
-      ...replaced,
+      ...data.routes.filter((route) => !drop.includes(route.id) && !back(route)),
+      ...entries,
     ].sort((a, b) => b.lastUsed - a.lastUsed);
     this.save({ version: 2, routes: routes.slice(0, MAX_ROUTES) });
   }

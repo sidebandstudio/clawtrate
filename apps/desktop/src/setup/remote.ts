@@ -55,7 +55,7 @@ import type { SshFailure } from "../main/ssh/ssh-output.ts";
 import type { HostKeyCheck, Route, SshTransport } from "../main/ssh/transport.ts";
 import { OPERATION_LIFETIME_MS, type Confirmation } from "./controller.ts";
 import { parseSetupCode } from "./parse.ts";
-import { sshRouteKey, type RouteStore, type SshRouteRecord } from "./routes.ts";
+import { sshRouteKey, type RoutePut, type RouteStore, type SshRouteRecord } from "./routes.ts";
 import { readOnlyLook, sshLook, type SshLook } from "./ssh-look.ts";
 
 export { sshRouteKey } from "./routes.ts";
@@ -216,8 +216,11 @@ export class RemoteSetup {
     channel: Channel | null;
     /** The client's selection this attempt's connect made, once it was asked for. */
     selection: number | null;
-    /** Puts back what this attempt's first write of its record replaced, token included. */
-    undo: (() => void) | null;
+    /**
+     * This attempt's first, provisional write of its record: what it replaced or displaced, put
+     * back if the pairing isn't kept, and let go (with their pins) only once it is.
+     */
+    put: RoutePut | null;
   } | null = null;
   private live: Live | null = null;
   /** The route the app's saved connection names while it isn't live: Remove and Review act on it. */
@@ -997,8 +1000,8 @@ export class RemoteSetup {
     // The route is recorded before its first token, which only the store keeps. A store that
     // can't be written ends the attempt here: its forward goes and nothing is sent.
     try {
-      const undo = this.options.routes.put(record);
-      if (this.pending) this.pending.undo = undo;
+      const put = this.options.routes.put(record, { provisional: true });
+      if (this.pending) this.pending.put = put;
     } catch {
       await this.letGoPending();
       if (attempt === this.attempt)
@@ -1068,7 +1071,7 @@ export class RemoteSetup {
       return null;
     }
     const forward = opened.forward;
-    this.pending = { forward, record, prior, channel: null, selection: null, undo: null };
+    this.pending = { forward, record, prior, channel: null, selection: null, put: null };
     const up = await this.waitUp(forward, attempt);
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
@@ -1262,14 +1265,20 @@ export class RemoteSetup {
     try {
       // A route this attempt recorded goes; what its record replaced (a route of the same id, on
       // another gateway port or profile, with its token) comes back as it was.
+      const put = pending.put;
       if (
         pending.prior === "no-record" &&
         (discardNewPairing || pending.record.identity === null)
       ) {
-        if (pending.undo) pending.undo();
+        if (put) put.undo();
         else this.options.routes.remove(id);
-      } else if (discardNewPairing && pending.prior === "unpaired") {
-        this.options.routes.deleteToken(pending.record.key);
+      } else {
+        if (discardNewPairing && pending.prior === "unpaired")
+          this.options.routes.deleteToken(pending.record.key);
+        // A pairing not kept gives back the routes its record displaced, with their tokens and
+        // pins; one the gateway accepted (Back while its bots load) lets them go now.
+        if (discardNewPairing || pending.record.identity === null) put?.restoreDisplaced();
+        else put?.settle();
       }
     } catch {
       this.log("Couldn't remove this setup attempt's pairing data.");
@@ -1301,6 +1310,12 @@ export class RemoteSetup {
       return;
     }
     this.pending = null;
+    // The pairing is kept: the routes its first write displaced are let go for good, pins too.
+    try {
+      pending.put?.settle();
+    } catch {
+      this.log("Couldn't let go of the routes a pairing displaced.");
+    }
     const old = this.live;
     if (old && old.record.id !== pending.record.id) await this.closeLive(old, { forget: false });
     const live: Live = {
@@ -1873,9 +1888,11 @@ export class RemoteSetup {
    */
   private async endForDisconnect(record: SshRouteRecord, attempt: number): Promise<void> {
     if (attempt !== this.attempt) return;
-    this.attempt += 1;
+    const mine = (this.attempt += 1);
     this.stopWatching();
     await this.letGoPending(false, true);
+    // Another attempt that began meanwhile owns the screen and the strip: nothing is said over it.
+    if (mine !== this.attempt || this.currentPending() || this.live) return;
     this.saved = record;
     this.options.publishRoute(statusOf(record, "disconnected"));
     this.publish(initialSetupState);
