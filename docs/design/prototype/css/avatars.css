@@ -1,0 +1,85 @@
+/* The avatars page (avatars.html). The rules under "Creatures" are the app's
+   own, from packages/ui/src/styles/avatars.css. */
+
+.av-board {
+  margin: 24px 0;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.av-board h2 {
+  margin: 0 0 12px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.av-board table {
+  border-spacing: 12px 8px;
+}
+
+.av-board th {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+  text-align: right;
+}
+
+.av-board thead th {
+  text-align: center;
+}
+
+.av-board td {
+  text-align: center;
+}
+
+.av-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 4px 0 16px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.av-parts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.av-parts .avatar {
+  width: 32px;
+  height: 32px;
+}
+
+/* Creatures ------------------------------------------------------------------ */
+
+.avatar {
+  container-type: size;
+}
+
+.creature {
+  overflow: visible;
+}
+
+.creature[data-muted] {
+  filter: saturate(0.4) brightness(0.85);
+}
+
+@container (max-width: 20.98px) {
+  .creature .av-fine {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creature .av-still {
+    rotate: var(--av-still) !important;
+  }
+}
+
+[data-motion="reduce"] .creature .av-still {
+  rotate: var(--av-still) !important;
+}

@@ -1330,10 +1330,17 @@ export class ClawtrateClient {
     update: (change) =>
       this.store.update((state) => ({ ...state, accounts: change(state.accounts) })),
     bots: () =>
-      this.state.bots.map((bot) => ({ id: bot.id, name: bot.name, isDefault: bot.isDefault })),
+      this.state.bots.map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+        isDefault: bot.isDefault,
+        avatarUrl: bot.avatarUrl,
+      })),
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
+    gateway: () => this.readGatewayIdentity(),
+    gatewayNow: () => this.state.connection.gatewayId,
     createMainTask: async (botId) => {
       const generation = this.generation;
       await this.request("sessions.create", {
@@ -1485,14 +1492,16 @@ export class ClawtrateClient {
   }
 
   /**
-   * Resume the saved gateway, if any and if allowed, unless the user
-   * disconnected from it. With `resume: false` (a development build, an
-   * automated run, the web host's setup look) nothing saved is opened: a
-   * connection starts only when one is chosen.
+   * Resume the saved gateway by default. With `resume: false`, skip reading
+   * the gateway settings. With `resume: "disconnected"`, load the saved
+   * gateway so the host can offer it as a choice without opening a socket.
    */
-  async start(options: { resume?: boolean } = {}): Promise<void> {
+  async start(options: { resume?: boolean | "disconnected" } = {}): Promise<void> {
     const stops = this.stops;
+    const selection = this.selectionApplied;
+    const prior = this.settings;
     const identity = await this.loadIdentity();
+    if (stops !== this.stops) return;
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
     if (this.options.turnLimitMs === undefined) {
@@ -1501,14 +1510,16 @@ export class ClawtrateClient {
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
+    // Startup needs to open the socket without waiting for another client's credential write.
     const settings = await this.savedSettings();
-    if (stops !== this.stops) return;
+    if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+      return;
     this.settings = settings;
-    if (this.settings?.suspended) {
-      this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
+    if (settings && (settings.suspended || options.resume === "disconnected")) {
+      this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
     }
-    if (this.settings) await this.open();
+    if (settings) await this.open();
   }
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
@@ -5131,13 +5142,25 @@ export class ClawtrateClient {
     return this.accounts.disconnect(profileId);
   }
 
-  createBot(input: CreateBotInput): Promise<CreatedBot> {
-    return this.accounts.createBot(input);
+  /**
+   * Create a bot. With `gatewayId` (the gateway the person was looking at, null when that
+   * gateway names none), nothing is sent unless it is still the gateway connected.
+   */
+  async createBot(input: CreateBotInput, gatewayId?: string | null): Promise<CreatedBot> {
+    if (gatewayId === undefined) return this.accounts.createBot(input);
+    await this.requireSameGateway(gatewayId);
+    // Checked there: known, and the connected gateway's. The whole write stays bound to it.
+    return this.accounts.createBot(input, gatewayId as string);
   }
 
-  /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
-  finishBot(botId: string): Promise<CreatedBot> {
-    return this.accounts.finishBot(botId);
+  /**
+   * Finish a bot whose creation is partial, by its id: what is missing, never a second bot. With
+   * `gatewayId`, as for `createBot`, nothing is sent unless it is still the gateway connected.
+   */
+  async finishBot(botId: string, gatewayId?: string | null): Promise<CreatedBot> {
+    if (gatewayId === undefined) return this.accounts.finishBot(botId);
+    await this.requireSameGateway(gatewayId);
+    return this.accounts.finishBot(botId, gatewayId as string);
   }
 
   dismissBotCreation(): void {
@@ -5160,6 +5183,42 @@ export class ClawtrateClient {
 
   removeBotFallbacks(botId: string): Promise<void> {
     return this.accounts.removeFallbacks(botId);
+  }
+
+  /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
+  async setBotPicture(
+    botId: string,
+    avatar: string,
+    gatewayId?: string | null,
+  ): Promise<{ confirmed: boolean }> {
+    if (gatewayId === undefined) return this.accounts.setBotPicture(botId, avatar);
+    await this.requireSameGateway(gatewayId);
+    return this.accounts.setBotPicture(botId, avatar, gatewayId as string);
+  }
+
+  /**
+   * Refuse a change unless it was made for the gateway connected now, as a check-in save does:
+   * both identities known and equal, and the same connection before and after reading this
+   * one's. A missing identity on either side is a refusal, never a match.
+   */
+  private async requireSameGateway(gatewayId: string | null): Promise<void> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.state.connection.status === "connected";
+    if (!alive()) throw new Error("Not connected to the gateway.");
+    if (gatewayId === null)
+      throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
+    const here = await this.readGatewayIdentity();
+    // A bot command can be the first to identify this connection after discovery got no ID.
+    this.confirmGatewayIdentity(here, alive);
+    if (!alive()) throw new Error("The connection changed before the change was sent.");
+    // `gatewayId` is known here, so a gateway that names none (null) never matches it.
+    if (here !== gatewayId)
+      throw new Error("This change was made for another gateway, so nothing was sent.");
   }
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
@@ -6925,6 +6984,13 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
   }
 
+  private confirmGatewayIdentity(id: string | null, current: () => boolean): void {
+    if (id === null || !current()) return;
+    this.accounts.onGateway(id);
+    // Clearing another gateway's creation can notify a host that stops the connection.
+    if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+  }
+
   private readGatewayIdentity(): Promise<string | null> {
     const known = this.gatewayIdentity;
     if (known?.epoch === this.epoch) return known.id;
@@ -6965,9 +7031,7 @@ export class ClawtrateClient {
     const gatewayId = this.readGatewayIdentity();
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
-    void gatewayId.then((id) => {
-      if (id !== null && sameSocket()) this.setConnection({ gatewayId: id });
-    });
+    void gatewayId.then((id) => this.confirmGatewayIdentity(id, sameSocket));
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;

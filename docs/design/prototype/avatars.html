@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: bot avatars</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <link rel="stylesheet" href="css/avatars.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/creatures.js"></script>
+    <script src="js/avatars.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-gallery">
+      <div class="gallery av-page">
+        <header>
+          <h1>Bot avatars</h1>
+          <p>
+            The three creature families of <code>visual-language.md</code>, section 5, drawn from the shared spec
+            (<code>packages/core/src/avatar.ts</code>; <code>js/creatures.js</code> is its copy). Each family in each
+            state at each size the app draws avatars at: 18 px in a card, 22 px in the title pill, 32 and 40 px in a
+            sidebar row, 56 px on a pinned tile. Dark first, as the app opens, then light. The bar's Motion switch shows
+            each state's still pose.
+          </p>
+        </header>
+        <div id="avatars"></div>
+      </div>
+    </main>
+  </body>
+</html>

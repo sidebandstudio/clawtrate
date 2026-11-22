@@ -15,6 +15,7 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &computer=control      the Work pane's Computer states (computer.ts), with &firstwatch=1,
 //                          &takerace=grant, &access=read
+//   ?sheet=avatars         every creature in every state at every size (avatars.tsx)
 //   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
 //   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
@@ -24,6 +25,7 @@
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { AvatarSheet } from "./avatars.tsx";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
@@ -119,10 +121,17 @@ if (params.get("uview") === "usage")
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge, releaseRoutineReads });
 
+// The sheet has no app around it to apply the theme from the address.
+if (params.get("sheet") === "avatars")
+  document.documentElement.dataset.theme = params.get("theme") ?? "dark";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BridgeProvider bridge={bridge}>
-      <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      {params.get("sheet") === "avatars" ? (
+        <AvatarSheet />
+      ) : (
+        <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      )}
     </BridgeProvider>
   </StrictMode>,
 );

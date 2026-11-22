@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient, MAX_SESSION_PAGES, REQUESTED_SCOPES } from "../src/client.ts";
 import {
+  deferred,
   FakeGateway,
   GatewayError,
   helloOk,
@@ -169,6 +170,62 @@ describe("pairing instructions (A3)", () => {
     );
     expect(client.state.connection.pairing?.approveNote).toMatch(/gateway's owner/);
     client.stop();
+  });
+});
+
+describe("a saved gateway at start", () => {
+  it("reopens by default and stays offline when offered as a choice", async () => {
+    const gateway = new FakeGateway();
+    const storage = memoryStorage();
+    const first = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await first.connect({ url: URL_A, token: "t" });
+    await until(() => first.state.connection.status === "connected");
+    first.stop();
+    const opened = gateway.sockets.length;
+
+    const kept = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await kept.start({ resume: "disconnected" });
+    expect(kept.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL_A });
+    await sleep(50);
+    expect(gateway.sockets).toHaveLength(opened);
+    // Reconnect is the person's choice: it opens the saved gateway.
+    await kept.retryNow();
+    await until(() => kept.state.connection.status === "connected");
+    expect(gateway.sockets.length).toBeGreaterThan(opened);
+    kept.stop();
+
+    const resumed = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await resumed.start();
+    await until(() => resumed.state.connection.status === "connected");
+    resumed.stop();
+  });
+
+  it("discards a late startup read once the person connects to another gateway", async () => {
+    const saved = JSON.stringify({ url: URL_A, token: "old" });
+    const storage = memoryStorage({ connection: saved });
+    const reading = deferred<void>();
+    const restore = deferred<string>();
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (key !== "connection") return get(key);
+      reading.resolve(undefined);
+      return restore.promise;
+    };
+    const gateway = new FakeGateway();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      const starting = client.start({ resume: "disconnected" });
+      await reading.promise;
+      await client.connect({ url: URL_B, token: "new" });
+      await until(() => client.state.connection.status === "connected");
+      restore.resolve(saved);
+      await starting;
+      expect(client.state.connection.gatewayUrl).toBe(URL_B);
+      expect(connectParams(gateway).auth?.token).toBe("new");
+    } finally {
+      restore.resolve(saved);
+      client.stop();
+    }
   });
 });
 
