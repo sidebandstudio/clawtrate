@@ -785,8 +785,12 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
-  for (const outcome of ["refused", "answered"] as const)
-    it(`retired by a reset, its last task ${outcome} late leaves the slow note of a Create begun since`, async () => {
+  for (const [caller, outcome] of [
+    ["bridge", "refused"],
+    ["bridge", "answered"],
+    ["host", "refused"],
+  ] as const)
+    it(`a ${caller} Create retired by a reset leaves the newer Create and timer alone when its last task is ${outcome}`, async () => {
       const { client, fake } = await accountsClient();
       const original = fake.gateway.handlers["sessions.create"]!;
       const task = deferred<void>();
@@ -795,19 +799,20 @@ describe("a bot write is bound to its gateway to the end", () => {
           if (outcome === "refused") throw new GatewayError({ code: "UNAVAILABLE", message: "no" });
           return original(params);
         });
-      const first = createBridgeSession(client)
-        .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
-        .then(
-          () => "settled",
-          (error: Error) => error.message,
-        );
+      const creating =
+        caller === "host"
+          ? client.createBot(input)
+          : createBridgeSession(client).apply({
+              type: "createBot",
+              ...input,
+              gatewayId: "gateway-a",
+            });
+      const first = creating.then(
+        () => "settled",
+        (error: Error) => error.message,
+      );
       await until(() => fake.gateway.calls("sessions.create").length === 1);
-      (client as unknown as { accounts: { reset(): void } }).accounts.reset();
-      (
-        client as unknown as {
-          store: { update(change: (state: typeof client.state) => typeof client.state): void };
-        }
-      ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+      resetCreation(client);
       const answer = deferred<void>();
       const made = fake.gateway.handlers["agents.create"]!;
       fake.gateway.handlers["agents.create"] = (params) => answer.promise.then(() => made(params));

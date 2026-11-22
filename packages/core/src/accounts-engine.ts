@@ -85,8 +85,8 @@ export type AccountsContext = {
   log(message: string): void;
 };
 
-/** One bot write bound to a gateway: the reset count it began on, and whether it was retired. */
-type WriteMark = { gatewayId: string; resets: number; retired: boolean };
+/** One bot write, its optional gateway identity, and the reset count it began on. */
+type WriteMark = { gatewayId: string | null; resets: number; retired: boolean };
 
 /** A bot write retired because its gateway is no longer the one connected. */
 class WriteRetired extends Error {
@@ -1163,15 +1163,16 @@ export class AccountsEngine {
    */
   private async boundTo<T>(
     gatewayId: string | undefined,
-    run: (ctx: AccountsContext, mark: WriteMark | null) => Promise<T>,
+    run: (ctx: AccountsContext, mark: WriteMark) => Promise<T>,
   ): Promise<T> {
     const base = this.ctx;
-    if (gatewayId === undefined) return run(base, null);
     // This write's own mark and context: another write, refused or not, never touches them.
-    const mark: WriteMark = { gatewayId, resets: this.resets, retired: false };
+    const mark: WriteMark = { gatewayId: gatewayId ?? null, resets: this.resets, retired: false };
     const live = () => !mark.retired && this.resets === mark.resets;
     const check = async () => {
       if (!live()) throw new WriteRetired();
+      // In-host callers can omit the identity. Their writes still end on reset.
+      if (mark.gatewayId === null) return;
       const here = await base.gateway();
       if (!live() || here === null || here !== mark.gatewayId) {
         const unknown = live() && here === null;
@@ -1194,7 +1195,8 @@ export class AccountsEngine {
         return base.createMainTask(botId);
       },
       update: (change) => {
-        if (live() && base.gatewayNow() === mark.gatewayId) base.update(change);
+        if (live() && (mark.gatewayId === null || base.gatewayNow() === mark.gatewayId))
+          base.update(change);
       },
     };
     try {
@@ -1249,7 +1251,7 @@ export class AccountsEngine {
   private async create(
     ctx: AccountsContext,
     input: CreateBotInput,
-    mark: WriteMark | null,
+    mark: WriteMark,
   ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const name = input.name.trim() || "New bot";
@@ -1281,7 +1283,7 @@ export class AccountsEngine {
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
     };
     this.creating = mark;
-    this.creationGateway = mark?.gatewayId ?? null;
+    this.creationGateway = mark.gatewayId;
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1303,7 +1305,7 @@ export class AccountsEngine {
       );
     }, SLOW_CREATE_MS);
     const assertCreating = () => {
-      if (mark && this.creating !== mark) throw new WriteRetired();
+      if (this.creating !== mark) throw new WriteRetired();
     };
     const failed = (error: unknown, uncertain: boolean): never => {
       assertCreating();
@@ -1377,7 +1379,7 @@ export class AccountsEngine {
     name: string,
     botId: string,
     steps: MissingStep[],
-    mark: WriteMark | null,
+    mark: WriteMark,
   ): Promise<CreatedBot> {
     const plan = this.planned?.botId === botId ? this.planned : null;
     const missing: MissingStep[] = [];
@@ -1470,11 +1472,11 @@ export class AccountsEngine {
     botId: string,
     missing: MissingStep[],
     errors: string[],
-    mark: WriteMark | null,
+    mark: WriteMark,
   ): Promise<CreatedBot> {
     // The timer is the Create's that owns the creation: one retired by a reset, settling late,
     // leaves the timer of a Create begun since.
-    if (mark === null || this.creating === mark) {
+    if (this.creating === mark) {
       if (this.slowTimer) clearTimeout(this.slowTimer);
       this.slowTimer = null;
     }
@@ -1535,11 +1537,7 @@ export class AccountsEngine {
     );
   }
 
-  private async finish(
-    ctx: AccountsContext,
-    botId: string,
-    mark: WriteMark | null,
-  ): Promise<CreatedBot> {
+  private async finish(ctx: AccountsContext, botId: string, mark: WriteMark): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const creation = ctx.get().creation;
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
