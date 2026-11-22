@@ -6,7 +6,8 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { avatarFor, pictureWithChoice } from "../src/avatar.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
-import { deferred, until } from "./fake-gateway.ts";
+import { GatewayError, deferred, until } from "./fake-gateway.ts";
+import { SLOW_CREATE_MS } from "../src/accounts.ts";
 
 /** A 2×2 PNG carrying a creature choice, as New bot and Edit picture send it. */
 const PICTURE = pictureWithChoice(
@@ -262,6 +263,23 @@ describe("a bot write is bound to its gateway to the end", () => {
     expect(sentSince(fake, from)).toEqual([]);
     expect(client.state.accounts.creation?.status).not.toBe("created");
     expect(client.state.accounts.creation?.status).not.toBe("partial");
+    // Nothing of the retired Create lingers: a new one for the gateway now connected goes through.
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    expect(client.state.accounts.creation?.status).not.toBe("checking");
+    expect(client.state.accounts.creation?.status).not.toBe("creating");
+    const forB = fake.gateway.calls("agents.create").length;
+    expect(
+      await createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        name: "Bee",
+        gatewayId: "gateway-b",
+      }),
+    ).toEqual({ botId: "bee", missing: [] });
+    expect(fake.gateway.calls("agents.create").slice(forB)).toEqual([
+      expect.objectContaining({ name: "Bee" }),
+    ]);
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "bee" });
     client.stop();
   });
 
@@ -339,6 +357,92 @@ describe("a bot write is bound to its gateway to the end", () => {
     ).toEqual({ confirmed: true });
     client.stop();
   });
+
+  it("retired by a reset, leaves a Create begun since alone: its plan, its state and its writes", async () => {
+    const { client, fake } = await accountsClient();
+    const releaseFirst = holdCreate(fake);
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    // The client forgets the gateway, as a switch does, and a new Create begins.
+    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
+    (
+      client as unknown as {
+        store: { update(change: (state: typeof client.state) => typeof client.state): void };
+      }
+    ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+    const releaseSecond = holdCreate(fake);
+    const second = createBridgeSession(client).apply({
+      type: "createBot",
+      ...input,
+      name: "Bee",
+      gatewayId: "gateway-a",
+    });
+    await until(() => fake.gateway.calls("agents.create").length === 2);
+    const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
+    releaseFirst();
+    expect(await first).toMatch("gateway changed");
+    // The retired Create sent nothing, and the one begun since is still under way.
+    expect(sentSince(fake, from)).toEqual([]);
+    expect(client.state.accounts.creation).toMatchObject({ name: "Bee", status: "creating" });
+    releaseSecond();
+    expect(await second).toEqual({ botId: "bee", missing: [] });
+    // Its own plan: the record of its account and its model are written for it.
+    expect(fake.gateway.calls("users.prefs.set")).toEqual([
+      expect.objectContaining({
+        entries: expect.objectContaining({ "clawtrate.bot-account.bee": expect.anything() }),
+      }),
+    ]);
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "bee" });
+    client.stop();
+  });
+
+  it("retired by a reset and then refused, leaves the slow note of a Create begun since", async () => {
+    const { client, fake } = await accountsClient();
+    const original = fake.gateway.handlers["agents.create"]!;
+    const refuse = deferred<void>();
+    fake.gateway.handlers["agents.create"] = () =>
+      refuse.promise.then(() => {
+        throw new GatewayError({ code: "INVALID_REQUEST", message: "no" });
+      });
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
+    (
+      client as unknown as {
+        store: { update(change: (state: typeof client.state) => typeof client.state): void };
+      }
+    ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+    const answer = deferred<void>();
+    fake.gateway.handlers["agents.create"] = (params) => {
+      const made = original(params);
+      return answer.promise.then(() => made);
+    };
+    const second = createBridgeSession(client).apply({
+      type: "createBot",
+      ...input,
+      name: "Bee",
+      gatewayId: "gateway-a",
+    });
+    await until(() => fake.gateway.calls("agents.create").length === 2);
+    refuse.resolve();
+    expect(await first).toMatch("gateway changed");
+    // The Create begun since keeps its timer: it is said to be slow when it is.
+    await until(() => client.state.accounts.creation?.slow === true, SLOW_CREATE_MS + 2_000);
+    expect(client.state.accounts.creation).toMatchObject({ name: "Bee", status: "creating" });
+    answer.resolve();
+    expect(await second).toEqual({ botId: "bee", missing: [] });
+    client.stop();
+  }, 15_000);
 
   it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
     const { client, fake } = await accountsClient();

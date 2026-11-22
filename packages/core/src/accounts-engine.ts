@@ -85,6 +85,9 @@ export type AccountsContext = {
   log(message: string): void;
 };
 
+/** One bot write bound to a gateway: the reset count it began on, and whether it was retired. */
+type WriteMark = { gatewayId: string; resets: number; retired: boolean };
+
 /** A bot write retired because its gateway is no longer the one connected. */
 class WriteRetired extends Error {
   constructor() {
@@ -147,6 +150,8 @@ export class AccountsEngine {
    * it; a reset since it began retires it.
    */
   private resets = 0;
+  /** The bound write whose Create the state's creation and the slow timer belong to. */
+  private creating: WriteMark | null = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -1143,12 +1148,12 @@ export class AccountsEngine {
    */
   private async boundTo<T>(
     gatewayId: string | undefined,
-    run: (ctx: AccountsContext) => Promise<T>,
+    run: (ctx: AccountsContext, mark: WriteMark | null) => Promise<T>,
   ): Promise<T> {
     const base = this.ctx;
-    if (gatewayId === undefined) return run(base);
+    if (gatewayId === undefined) return run(base, null);
     // This write's own mark and context: another write, refused or not, never touches them.
-    const mark = { gatewayId, resets: this.resets, retired: false };
+    const mark: WriteMark = { gatewayId, resets: this.resets, retired: false };
     const live = () => !mark.retired && this.resets === mark.resets;
     const check = async () => {
       if (!live()) throw new WriteRetired();
@@ -1177,24 +1182,41 @@ export class AccountsEngine {
       },
     };
     try {
-      const result = await run(ctx);
+      const result = await run(ctx, mark);
       if (!live()) throw new WriteRetired();
       return result;
     } catch (error) {
-      if (error instanceof WriteRetired || !live())
+      if (error instanceof WriteRetired || !live()) {
+        // Its Create, if still the one under way, ends with it: the gateway now connected can
+        // be asked for a bot. A Create begun since is another write's, and is left alone.
+        if (this.creating === mark) {
+          this.creating = null;
+          if (this.slowTimer) clearTimeout(this.slowTimer);
+          this.slowTimer = null;
+          base.update((a) =>
+            a.creation?.status === "creating" || a.creation?.status === "checking"
+              ? { ...a, creation: null }
+              : a,
+          );
+        }
         throw new Error(
           "The gateway changed before the bot was finished, so nothing more was sent.",
           { cause: error },
         );
+      }
       throw error;
     }
   }
 
   async createBot(input: CreateBotInput, gatewayId?: string): Promise<CreatedBot> {
-    return this.boundTo(gatewayId, (ctx) => this.create(ctx, input));
+    return this.boundTo(gatewayId, (ctx, mark) => this.create(ctx, input, mark));
   }
 
-  private async create(ctx: AccountsContext, input: CreateBotInput): Promise<CreatedBot> {
+  private async create(
+    ctx: AccountsContext,
+    input: CreateBotInput,
+    mark: WriteMark | null,
+  ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const name = input.name.trim() || "New bot";
     const previous = ctx.get().creation;
@@ -1224,6 +1246,7 @@ export class AccountsEngine {
       effort: input.effort,
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
     };
+    this.creating = mark;
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1244,6 +1267,12 @@ export class AccountsEngine {
           : a,
       );
     }, SLOW_CREATE_MS);
+    // A bound Create that no longer owns the creation (a reset retired it, and another may have
+    // begun) fails without touching what the creation keeps: its timer and its state.
+    const failed = (error: unknown, uncertain: boolean): never => {
+      if (mark && this.creating !== mark) throw new WriteRetired();
+      return this.creationFailed(ctx, error, uncertain);
+    };
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
     if (retrying) botId = await this.findMade(ctx, name);
@@ -1260,17 +1289,12 @@ export class AccountsEngine {
       } catch (error) {
         // Only a refusal that establishes nothing was written ends here. Anything else (no
         // answer, a dropped connection, "saved but not applied") may have made the bot.
-        if (isCertainRefusal(error)) return this.creationFailed(ctx, error, false);
+        if (isCertainRefusal(error)) return failed(error, false);
         botId = await this.findMade(ctx, name);
-        if (!botId) return this.creationFailed(ctx, error, true);
+        if (!botId) return failed(error, true);
       }
     }
-    if (!botId)
-      return this.creationFailed(
-        ctx,
-        new Error("The gateway did not say which bot it made."),
-        true,
-      );
+    if (!botId) return failed(new Error("The gateway did not say which bot it made."), true);
     this.planned = { ...this.planned, botId };
     return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"]);
   }
@@ -1671,6 +1695,7 @@ export class AccountsEngine {
   reset(): void {
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
     this.resets += 1;
+    this.creating = null;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();
