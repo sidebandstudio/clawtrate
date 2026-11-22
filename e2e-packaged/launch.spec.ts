@@ -46,6 +46,7 @@ import {
   processesUsing,
 } from "./global-setup.ts";
 import {
+  forceEnd,
   integrityLevels,
   mainWindowTitle,
   taskbarOverlayDescription,
@@ -368,7 +369,12 @@ test("hands a link from a second launch to the running app, which checks it", as
     exited,
     new Promise<"running">((resolve) => setTimeout(() => resolve("running"), 15_000)),
   ]);
-  if (code === "running") second.kill();
+  // A second launch that stays is ended, and the check waits for it to go.
+  if (code === "running") {
+    if (WINDOWS) forceEnd(second.pid!);
+    else second.kill("SIGKILL");
+    await Promise.race([exited, sleep(10_000)]);
+  }
   expect(code, "the second launch's exit code").toBe(0);
   const card = page.getByRole("alertdialog", { name: "Can't open link" });
   await expect(card).toHaveAccessibleDescription(

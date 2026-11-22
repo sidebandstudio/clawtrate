@@ -215,7 +215,11 @@ test.beforeAll(async () => {
   // First at the end: every app this file started, before the gateway and the folder go.
   cleanup.defer(async () => {
     await browser?.close().catch(() => {});
-    for (const child of [...started]) await stopElectron(child);
+    // Each one is asked to stop before any failure is reported.
+    const stopped = await Promise.allSettled([...started].map(stopElectron));
+    const failed = stopped.flatMap((each) => (each.status === "rejected" ? [each.reason] : []));
+    if (failed.length > 0)
+      throw new AggregateError(failed, "An app this check started did not stop.");
   });
   page = await launch();
   await connect();
