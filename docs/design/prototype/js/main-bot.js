@@ -302,11 +302,12 @@
       return renderChat();
     }
     chat.items.push({ kind: "user", text: FIRST.opening, caption: "Sent for you when setup finished." });
-    chat.items.push({ kind: "status", text: "main is writing…" });
+    const writing = { kind: "status", text: "main is writing…" };
+    chat.items.push(writing);
     renderChat();
     if (state.at === "start") return;
     await gateway.answer(1200, () => {});
-    chat.items.pop();
+    chat.items = chat.items.filter((item) => item !== writing);
     if (state.opening === "ambiguous") {
       chat.items.push({
         kind: "card",

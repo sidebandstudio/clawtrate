@@ -273,6 +273,7 @@
 
 .mb-bubble {
   max-width: min(560px, 85%);
+  overflow-wrap: anywhere;
   margin: 0;
   padding: 10px 14px;
   border-radius: var(--radius-lg);

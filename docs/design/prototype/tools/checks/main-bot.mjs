@@ -86,6 +86,18 @@ await check("MB-04 choosing opens the first run: opening, greeting, guided card,
   assert.equal(await page.locator("#mb-input").inputValue(), "");
   assert.equal(await page.locator("#g-name").inputValue(), "");
   await has(page, '[data-testid="guided"]', "Saves this name and role. Clawtrate shows them once the gateway confirms.");
+
+  // The composer is usable while the first reply is still pending.
+  await page.clock.install({ time: new Date("2030-01-01T09:00:00Z") });
+  await page.clock.pauseAt(new Date("2030-01-01T09:00:01Z"));
+  await open("view=first", "full");
+  const early = "I have a question while you get started.";
+  await page.locator("#mb-input").fill(early);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.clock.runFor(1200);
+  await page.getByTestId("guided").waitFor();
+  assert.equal(await page.locator(".mb-msg.is-user").getByText(early, { exact: true }).count(), 1);
+  assert.equal(await page.locator(".mb-status").count(), 0);
 });
 
 await check("MB-05 Save without a name writes nothing", async ({ page, open }) => {
@@ -165,6 +177,12 @@ await check("MB-19 a long answer in the composer is sent, clears the composer, a
   assert(fits, "the sent message wraps inside its bubble");
   await page.locator("#g-name").fill("Basil Leaf");
   assert.equal(await page.locator("#g-name").inputValue(), "Basil Leaf");
+
+  const unbroken = "a".repeat(1000);
+  await page.locator("#mb-input").fill(unbroken);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const bubble = page.getByText(unbroken, { exact: true });
+  assert(await bubble.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), "an unbroken word wraps inside its bubble");
 });
 
 await browser.close();
