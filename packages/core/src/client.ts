@@ -3149,15 +3149,14 @@ export class ClawtrateClient {
       }
       const named = this.state.transcripts[key]?.sessionId;
       if (message.sessionId === undefined) {
-        // The read names no session: the gateway has no task under the key.
-        if (!named) {
-          this.failDelivery(key, messageId, new TaskDeletedError(), true);
-          return;
+        // It goes to the session the read names. A key no read, list or creation ever named one
+        // for holds no task this client knew, and the send makes one, as a first message does.
+        if (named) {
+          this.updateActivity(key, (activity) =>
+            updateMessage(activity, messageId, { sessionId: named }),
+          );
+          message = this.outgoing(key, messageId)!;
         }
-        this.updateActivity(key, (activity) =>
-          updateMessage(activity, messageId, { sessionId: named }),
-        );
-        message = this.outgoing(key, messageId)!;
       } else if (message.mode === "steer" && message.sessionId !== named) {
         // The key holds another session now: the task the steer was written in is gone.
         this.failDelivery(key, messageId, new TaskDeletedError(), true);

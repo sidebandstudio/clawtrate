@@ -354,14 +354,31 @@ describe("a send before the task's session is known (F-278)", () => {
     client.stop();
   });
 
-  it("a history that names no session: the task is gone, and nothing is sent", async () => {
-    const { client, release, transcript, sends } = await opening(null, { sessionId: undefined });
+  it("listed, then deleted before its history is read: the send names the listed session, is refused, and makes nothing", async () => {
+    const { client, gateway, release, transcript, sends } = await opening(
+      { sessionId: "s-1" },
+      { sessionId: undefined },
+    );
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as Send).sessionId) throw new GatewayError(MOVED);
+      return { runId: "run-new", status: "started" };
+    };
     client.sendMessage(KEY, "first");
     release();
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]).toMatchObject({ text: "first", error: TASK_DELETED_ELSEWHERE });
-    await sleep(50);
-    expect(sends()).toHaveLength(0);
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0]).toMatchObject({ sessionId: "s-1" });
+    client.stop();
+  });
+
+  it("a key no session was ever named for holds no task this client knew: its first message goes as any first message does", async () => {
+    const { client, release, transcript, sends } = await opening(null, { sessionId: undefined });
+    client.sendMessage(KEY, "first");
+    release();
+    await until(() => sends().length === 1);
+    expect(sends()[0]).not.toHaveProperty("sessionId");
+    await until(() => transcript().outbox[0]?.status === "sent");
     client.stop();
   });
 
