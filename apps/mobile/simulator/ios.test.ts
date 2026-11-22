@@ -422,7 +422,7 @@ describe("the iOS app", () => {
       // The gateway's echo is what this device signed: nothing to point out.
       notSee({ id: "scopes-differ" }),
       tap({ id: "copy-command" }),
-      see({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }),
+      waitFor({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }, 30_000),
       waitFor(
         {
           id: "connect-foot",
@@ -435,7 +435,10 @@ describe("the iOS app", () => {
     await shoot("pairing");
     await steps("pairing-foot", ["scroll", "scroll"]);
     expect(await charactersAtFoot("pairing")).toBe(true);
-    await steps("pairing-top", [scrollTo({ id: "mark" }, "UP")]);
+    await steps("pairing-top", [
+      scrollTo({ id: "mark" }, "UP"),
+      see({ id: "copy-status", text: lit(CONNECT_WORDS.copied) }),
+    ]);
 
     // Expiry: nothing reaches the gateway, so nothing refreshes the request, and
     // the gateway lets it go. Back in reach, the app is told of another request.

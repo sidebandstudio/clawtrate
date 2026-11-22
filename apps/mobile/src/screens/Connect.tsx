@@ -537,15 +537,11 @@ export function Pairing({
       : null;
   const scopes = pairingScopes(connection);
   const now = useNow();
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(timer);
-  }, [copied]);
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const copied = command !== null && copiedCommand === command;
   const copy = async (command: string) => {
     await Clipboard.setStringAsync(command);
-    setCopied(true);
+    setCopiedCommand(command);
   };
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
@@ -591,11 +587,7 @@ export function Pairing({
               {command}
             </Txt>
           </View>
-          <Button
-            label={copied ? W.copied : W.copyApprove}
-            onPress={() => void copy(command)}
-            testID="copy-command"
-          />
+          <Button label={W.copyApprove} onPress={() => void copy(command)} testID="copy-command" />
           <Txt
             testID="copy-status"
             accessibilityLiveRegion="polite"
