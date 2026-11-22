@@ -1604,6 +1604,26 @@ async function must(inst: DevInstance, args: string[]): Promise<string> {
   return result.stdout;
 }
 
+/** A fixture RPC can take longer than the CLI's default on a loaded test runner. */
+export async function callGateway<T>(
+  inst: DevInstance,
+  method: string,
+  params: unknown,
+): Promise<T> {
+  return parseJsonOutput<T>(
+    await must(inst, [
+      "gateway",
+      "call",
+      method,
+      "--params",
+      JSON.stringify(params),
+      "--json",
+      "--timeout",
+      "60000",
+    ]),
+  );
+}
+
 type AgentRow = { id: string; workspace?: string };
 
 async function existingSessionKeys(inst: DevInstance, botId: string): Promise<Set<string>> {
@@ -1762,25 +1782,11 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
       const problem = checkTurnOutcome(output, turn);
       if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
     }
-    if (!alreadySeeded)
-      await must(inst, [
-        "gateway",
-        "call",
-        "sessions.patch",
-        "--params",
-        JSON.stringify({ key, label: task.label }),
-        "--json",
-      ]);
-    const history = parseJsonOutput<{ messages?: HistoryMessage[] }>(
-      await must(inst, [
-        "gateway",
-        "call",
-        "chat.history",
-        "--params",
-        JSON.stringify({ sessionKey: key, limit: 200 }),
-        "--json",
-      ]),
-    );
+    if (!alreadySeeded) await callGateway(inst, "sessions.patch", { key, label: task.label });
+    const history = await callGateway<{ messages?: HistoryMessage[] }>(inst, "chat.history", {
+      sessionKey: key,
+      limit: 200,
+    });
     const problems = checkHistory(history.messages ?? [], task);
     if (problems.length > 0) {
       const advice = alreadySeeded

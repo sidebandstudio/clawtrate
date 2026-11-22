@@ -16,7 +16,7 @@ import { createServer, Socket, type Server } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
-import { openInstance } from "../../../tools/dev-gateway/src/cli.ts";
+import { callGateway, openInstance } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
 
@@ -414,10 +414,8 @@ export async function openclaw(args: string[]): Promise<string> {
   return result.stdout;
 }
 
-export async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
-  return parseJsonOutput<T>(
-    await openclaw(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]),
-  );
+export function gatewayCall<T>(method: string, params: unknown): Promise<T> {
+  return callGateway<T>(openInstance(env.instance), method, params);
 }
 
 export type Device = {
