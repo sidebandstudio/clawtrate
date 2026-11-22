@@ -3647,9 +3647,11 @@ export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): 
     if (
       // Sent as a steer, by its key's alias; a Resend since may have changed its mode.
       Object.hasOwn(activity.steerAliases, message.id) &&
-      // Left and not settled by history: the gateway's word wins over what this client concluded
-      // meanwhile (a history read can mark it unconfirmed while the answer is on its way).
-      ["sending", "sent", "checking", "unconfirmed", "unknown"].includes(message.status) &&
+      // A retry may be queued or parked under the same key when the confirmation arrives.
+      // Keep that confirmation unless the steer is settled or the person cancelled the retry.
+      message.steer === undefined &&
+      message.status !== "cancelled" &&
+      message.status !== "handled" &&
       ids.includes(message.id)
     )
       next = {

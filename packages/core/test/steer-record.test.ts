@@ -230,6 +230,47 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     task.client.stop();
   }, 15_000);
 
+  it("F-097 F-468: Resend during Stop keeps the withdrawal and the next Send uses a fresh key", async () => {
+    const task = await steered(() => true, { requestTimeoutMs: 800 });
+    const withdrawal = deferred<unknown>();
+    try {
+      task.gateway.handlers["chat.history"] = () => ({
+        messages: [],
+        hasMore: false,
+        inFlightRun: { runId: RUN },
+      });
+      task.gateway.handlers["chat.send"] = () => new Promise(() => {});
+      const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+      const message = () => task.transcript().outbox.find((each) => each.id === id);
+      await until(() => message()?.status === "unknown");
+      const abort = task.gateway.handlers["chat.abort"]!;
+      task.gateway.handlers["chat.abort"] = (params) =>
+        (params as { runId: string }).runId === id ? withdrawal.promise : abort(params);
+      const stopping = task.client.stopRun(KEY, RUN);
+      await until(() =>
+        task.gateway.calls("chat.abort").some((call) => (call as { runId: string }).runId === id),
+      );
+      task.client.retryMessage(KEY, id);
+      expect(message()?.status).toBe("queued");
+      withdrawal.resolve({ ok: true, aborted: true, runIds: [id] });
+      await stopping;
+      await until(() => run(task)?.state === "stopped");
+      expect(message()).toMatchObject({ status: "not-sent", steer: "withdrawn" });
+      task.gateway.handlers["chat.send"] = (params) => ({
+        runId: (params as Send).idempotencyKey,
+        status: "started",
+      });
+      task.client.retryMessage(KEY, id);
+      await until(() => task.gateway.calls("chat.send").length === 3);
+      const sent = task.gateway.calls("chat.send")[2] as Send;
+      expect(sent.message).toBe("Skip the hidden files.");
+      expect(sent.idempotencyKey).not.toBe(id);
+    } finally {
+      withdrawal.resolve({});
+      task.client.stop();
+    }
+  });
+
   it("F-097 F-468: Stop withdraws a steer whose send got no answer in time, by the key recorded as it left", async () => {
     const task = await steered(() => true, { requestTimeoutMs: 300 });
     // The run goes on, as the gateway's history says while the client checks the send.
