@@ -152,14 +152,15 @@
     if (near && claw.art.dataset.state !== "done") {
       claw.notice?.cancel();
       claw.notice = claw.el.animate(
+        // Ease each step, as the CSS keyframes did, so the hop peaks on time.
         [
-          { offset: 0, translate: "0 0" },
-          { offset: 0.35, translate: "0 -10%" },
-          { offset: 0.6, translate: "0 0" },
-          { offset: 0.78, translate: "0 -3%" },
+          { offset: 0, translate: "0 0", easing: EASE },
+          { offset: 0.35, translate: "0 -10%", easing: EASE },
+          { offset: 0.6, translate: "0 0", easing: EASE },
+          { offset: 0.78, translate: "0 -3%", easing: EASE },
           { offset: 1, translate: "0 0" },
         ],
-        { duration: 520, easing: EASE },
+        { duration: 520 },
       );
     }
   }

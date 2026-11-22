@@ -57,9 +57,16 @@
       clearTimeout(timer);
       cancelAnimationFrame(burst);
       playing = true;
-      // Restart the bubbles on the next frame, even when pressed again mid-moment.
+      // Restart the bubbles two frames later, even when pressed again mid-moment:
+      // with one frame the browser can merge the removal and the re-add, and the
+      // bubbles keep their old timeline.
       zone.removeAttribute("data-burst");
-      burst = requestAnimationFrame(() => zone.setAttribute("data-burst", ""));
+      burst = requestAnimationFrame(() => {
+        burst = requestAnimationFrame(() => {
+          burst = 0;
+          zone.setAttribute("data-burst", "");
+        });
+      });
       play(0);
     });
     // A hidden page ends the moment where it is.
