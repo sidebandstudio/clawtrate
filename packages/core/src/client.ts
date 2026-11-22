@@ -1476,7 +1476,7 @@ export class ClawtrateClient {
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
     this.waitingConnect = { selection, url: gatewayUrlOrNull(options.url), cancelled: false };
-    return this.changeConnection(async () => {
+    return this.settleConnect(selection, async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
@@ -1516,7 +1516,7 @@ export class ClawtrateClient {
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
     this.waitingConnect = { selection, url: gatewayUrlOrNull(options.url), cancelled: false };
-    return this.changeConnection(async () => {
+    return this.settleConnect(selection, async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
@@ -1730,6 +1730,13 @@ export class ClawtrateClient {
       this.waitingConnect.cancelled = true;
     this.fullEligible = false;
     this.eligibilityEnds += 1;
+  }
+
+  /** A Connect's change, queued; whatever it ends with, it no longer waits. */
+  private settleConnect(selection: number, change: () => Promise<void>): Promise<void> {
+    return this.changeConnection(change).finally(() => {
+      if (this.waitingConnect?.selection === selection) this.waitingConnect = null;
+    });
   }
 
   /**
