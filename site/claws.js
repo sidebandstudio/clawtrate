@@ -1,7 +1,8 @@
 // The Claws and the logo row, on both pages. A Claw rests in one state,
 // reacts while the pointer or focus is in its zone, and plays a moment when
 // pressed. Under reduced motion each state is a still pose. Without this
-// script each Claw shows its resting pose and the logos show at once.
+// script each Claw shows its resting pose as a disabled button, and the logos
+// show at once.
 
 (function () {
   document.querySelectorAll("[data-claw]").forEach((claw) => {
@@ -51,15 +52,35 @@
       });
     }
 
+    let burst = 0;
     claw.addEventListener("click", () => {
       clearTimeout(timer);
+      cancelAnimationFrame(burst);
       playing = true;
-      // Restart the bubbles even when pressed again mid-moment.
+      // Restart the bubbles two frames later, even when pressed again mid-moment:
+      // with one frame the browser can merge the removal and the re-add, and the
+      // bubbles keep their old timeline.
       zone.removeAttribute("data-burst");
-      void zone.offsetWidth;
-      zone.setAttribute("data-burst", "");
+      burst = requestAnimationFrame(() => {
+        burst = requestAnimationFrame(() => {
+          burst = 0;
+          zone.setAttribute("data-burst", "");
+        });
+      });
       play(0);
     });
+    // A hidden page ends the moment where it is.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) return;
+      clearTimeout(timer);
+      cancelAnimationFrame(burst);
+      timer = 0;
+      playing = false;
+      zone.removeAttribute("data-burst");
+      settle();
+    });
+    claw.setAttribute("aria-label", `${claw.getAttribute("aria-label")} Press to play.`);
+    claw.disabled = false;
 
     // On the home page the Claw follows the approval demo: it celebrates an
     // allowed request and droops at a denied one, until the demo is reset.

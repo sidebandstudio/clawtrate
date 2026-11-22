@@ -386,7 +386,6 @@ export function Updates({
           }}
         />
       )}
-      {source && <p className="b-hint">Automatic restart is unavailable in this build.</p>}
       <span className="visually-hidden" role="status">
         {[saving ?? announcement, installNotice, !pending && notice, attempt, message]
           .filter(Boolean)

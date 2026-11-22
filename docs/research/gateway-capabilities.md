@@ -520,7 +520,9 @@ partial. Both rows use the same field list (row 14).
   injected into the active run (row 19, run behavior). With a real model, steering is meant to inject at tool
   boundaries (`<openclaw>/docs/concepts/queue-steering.md`). With the
   scripted model it interrupted. **Builders should cover steer with an e2e
-  test and not assume in-place injection.**
+  test and not assume in-place injection.** Where a steer went, how to
+  withdraw one the gateway holds, and what Stop reaches are in
+  [`steer-stop.md`](steer-stop.md).
 - **Status: available**, with the steer caveat.
 
 ### 6. Streaming

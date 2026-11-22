@@ -1,0 +1,13 @@
+{
+  "id": "clawtrate-bots",
+  "name": "Clawtrate bots",
+  "description": "Keeps bots' and agents' proposed changes to bots for a person to decide.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

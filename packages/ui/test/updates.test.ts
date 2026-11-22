@@ -280,6 +280,11 @@ it.each(restartFailures)("F-231: explains the installer refusal %s", (reason, li
   const spoken = unavailable.html.match(/role="status">([^<]*)</)?.[1];
   expect(spoken?.split(line)).toHaveLength(2);
 });
+it("doesn't call restart unavailable when it is offered or still possible", () => {
+  const install = { kind: "restart-available", offerId: "shown" } as const;
+  for (const html of [render(verified, { install }).html, render({ kind: "not-checked" }).html])
+    expect(html).not.toContain("Automatic restart is unavailable");
+});
 it("F-231: only the matching verified offer can open Restart", () => {
   const install = { kind: "restart-available", offerId: "shown" } as const;
   expect(render(verified, { install }).actions).toEqual(["Restart to Update"]);

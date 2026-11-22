@@ -4,18 +4,31 @@
 // Screens follow the theme through CSS, so the first paint is already right.
 
 (function () {
-  // Copy the install command.
+  // Copy the install command. The label says what happened, then goes back.
   document.querySelectorAll("[data-copy]").forEach((button) => {
+    let reset = 0;
+    const restore = () => {
+      clearTimeout(reset);
+      reset = 0;
+      button.textContent = "Copy";
+    };
     button.addEventListener("click", async () => {
+      let said;
       try {
         await navigator.clipboard.writeText(button.parentElement.querySelector("code").textContent);
-        button.textContent = "Copied";
+        said = "Copied";
       } catch {
         const code = button.parentElement.querySelector("code");
         window.getSelection().selectAllChildren(code);
-        button.textContent = "Selected";
+        said = "Selected";
       }
-      setTimeout(() => (button.textContent = "Copy"), 1800);
+      if (document.hidden) return;
+      clearTimeout(reset);
+      button.textContent = said;
+      reset = setTimeout(restore, 1800);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && reset) restore();
     });
   });
 

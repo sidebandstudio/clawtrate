@@ -301,6 +301,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
  * the host passed in, the official client package's objects, and the state.
  */
 export const CLIENT_NOT_WALKED: Record<string, string> = {
+  writes:
+    "shared by clients of the host store; one writer per live pairing, one token per unresolved refusal, one rotation count per token key an access request rotated and one grant (a flag and a number) per token key written, removed or read",
   host: "the host's own objects: its socket factory, storage and signer",
   protocol: "the official client package's protocol client; its requests time out",
   auth: "the official client package's device-auth lifecycle and this connection's token store",

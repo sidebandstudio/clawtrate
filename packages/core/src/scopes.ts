@@ -32,6 +32,13 @@ export const INTERACTIVE_SCOPES: readonly string[] = [
  */
 export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCOPE];
 
+/**
+ * What a first pairing asks for with full access on (`ClientOptions.fullAccess`), in this
+ * order (docs/decisions.md, "Scopes, once, at the first pairing"). Pairing is named although admin implies it:
+ * pairing events and the gateway's device rules check the named scope.
+ */
+export const FULL_SCOPES: readonly string[] = [...ADMIN_SCOPES, PAIRING_SCOPE];
+
 const IMPLIED_BY_WRITE = new Set([
   READ_SCOPE,
   "operator.talk",

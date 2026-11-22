@@ -430,6 +430,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
+  steer: ENUM,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
@@ -584,6 +585,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
   emoji: id(MAX_EMOJI_CHARS),

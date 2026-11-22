@@ -157,6 +157,10 @@ code {
   font-family: var(--mono);
   font-size: 0.86em;
 }
+/* Without script, controls that could not respond are left out. */
+html:not(.js) :is([data-theme-toggle], [data-copy], .demo .card-actions, .demo figcaption) {
+  display: none;
+}
 .skip {
   position: absolute;
   left: 16px;
@@ -380,9 +384,12 @@ code {
 .cmd-tabs button:hover {
   color: var(--text);
 }
+/* The chosen tab is underlined too, so it shows by shape as well as fill. */
 .cmd-tabs button[aria-selected="true"] {
   background: var(--bg-raised);
   color: var(--text);
+  text-decoration: underline 2px;
+  text-underline-offset: 0.22em;
   box-shadow: var(
     --shadow-raised
   ); /* taste-skill-ignore: the chosen tab, raised like the app's pills */
@@ -395,7 +402,7 @@ code {
   border-radius: 18px;
   background: var(--bg-bubble);
 }
-.cmd-box + .cmd-box {
+html:not(.js) .cmd-box + .cmd-box {
   margin-top: 8px;
 }
 .cmd-box[hidden] {
@@ -1061,7 +1068,7 @@ h3 {
   background: color-mix(in srgb, var(--close-ink) 12%, transparent);
 }
 .close .cmd-tabs button {
-  color: color-mix(in srgb, var(--close-ink) 78%, transparent);
+  color: var(--close-ink);
 }
 .close .cmd-tabs button:hover {
   color: var(--close-ink);
@@ -1107,8 +1114,10 @@ h3 {
   width: clamp(52px, 7vw, 104px);
   transform: translateY(var(--sink));
   pointer-events: auto;
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+.js .pc {
+  cursor: pointer;
 }
 .pc:nth-child(odd) {
   --sink: 11%;
@@ -1116,6 +1125,8 @@ h3 {
 }
 .pc .claw-art {
   display: block;
+  /* Where a Shellfolk squashes from as it ducks in or out (parade.js). */
+  transform-origin: 50% 88%;
 }
 /* The eyes: the pupils move toward the pointer, set by parade.js in grid units. */
 .pc [data-part="pupil"] {
@@ -1124,38 +1135,6 @@ h3 {
 }
 .pc .claw-art:not([data-state="idle"]) [data-part="pupil"] {
   translate: none;
-}
-/* Noticing the pointer: a small hop. */
-.pc.noticed {
-  animation: pc-notice 520ms cubic-bezier(0.3, 0, 0.2, 1);
-}
-@keyframes pc-notice {
-  0%,
-  100% {
-    translate: 0 0;
-  }
-  35% {
-    translate: 0 -10%;
-  }
-  60% {
-    translate: 0 0;
-  }
-  78% {
-    translate: 0 -3%;
-  }
-}
-/* Ducking into a shell, or out of it. */
-.pc.swap .claw-art {
-  animation: pc-squash 300ms cubic-bezier(0.3, 0, 0.2, 1);
-  transform-origin: 50% 88%;
-}
-@keyframes pc-squash {
-  0% {
-    scale: 1.06 0.9;
-  }
-  100% {
-    scale: 1 1;
-  }
 }
 /* A thinker's dots rise one after another. */
 .pc-dots circle {
@@ -1217,6 +1196,9 @@ h3 {
 .cast[data-paused] *,
 .cast[data-paused] {
   animation-play-state: paused !important;
+}
+.cast[data-paused] [data-part="pupil"] {
+  transition: none;
 }
 
 /* The footer: one quiet line. */
@@ -1477,6 +1459,10 @@ h3 {
   font-size: 13px;
   color: var(--text-muted);
 }
+/* Beta's stage is the deep sea in both themes, so its caption keeps a light ink. */
+.track-beta .claw-name {
+  color: #b6c7d1;
+}
 
 .track-beta {
   --text: #eef5f8;
@@ -1516,8 +1502,10 @@ h3 {
   width: clamp(150px, 14vw, 196px);
   margin-top: 8px;
 }
-.js .claw-lantern {
+/* The Lantern drifts inside its button, which stays put for the pointer. */
+.js .claw-lantern > .claw-art {
   animation: drift 7s ease-in-out infinite;
+  pointer-events: none;
 }
 @keyframes drift {
   0%,
@@ -1690,9 +1678,12 @@ h3 {
   padding: 0;
   border: 0;
   background: none;
+  color: inherit;
   border-radius: 20px;
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+.claw:enabled {
+  cursor: pointer;
 }
 .claw:focus-visible {
   outline-offset: 4px;
@@ -1954,7 +1945,6 @@ h3 {
 @media (prefers-reduced-motion: reduce) {
   .claw-art,
   .claw-art *,
-  .js .claw-lantern,
   .snow i,
   .fizz i {
     animation: none !important;
@@ -1963,8 +1953,7 @@ h3 {
   .claw-art .av-still {
     rotate: var(--av-still) !important;
   }
-  .pc,
-  .pc.swap .claw-art {
+  .pc {
     animation: none !important;
   }
   .pc [data-part="pupil"] {
@@ -2095,34 +2084,34 @@ h3 {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-/* Phones and small tablets: two columns from the left, MIT Lincoln Laboratory
-   on a row of its own. */
+/* Phones and small tablets: three rows. AWS, Amazon and Sonos; MIT Lincoln
+   Laboratory alone; Summit Partners and Philips. The ::before and ::after are
+   the two line breaks. The logos keep their own heights at a smaller scale. */
 @media (max-width: 720px) {
   .pedigree {
     --s: 0.72;
   }
   .pedigree-logos {
-    display: grid;
-    grid-template-columns: auto auto;
-    grid-auto-flow: row dense;
-    justify-content: start;
-    align-items: center;
-    gap: 24px 36px;
+    gap: 0 16px;
   }
-  .pedigree-logos::before {
-    content: none;
+  .pedigree-logos::before,
+  .pedigree-logos::after {
+    content: "";
+    flex: 0 0 100%;
+    height: 32px;
   }
-  .pedigree-logos li {
-    justify-content: flex-start;
+  .pedigree-logos::after {
+    order: 3;
   }
-  .pedigree-logos li:nth-child(n + 4) {
-    order: 0;
+  .pedigree-logos li:nth-child(n + 5) {
+    order: 4;
   }
   .pedigree-logos li:nth-child(4) {
-    grid-column: 1 / -1;
+    flex: 0 0 100%;
+    justify-content: flex-start;
   }
   .pedigree-logos .logo-mit-lincoln-laboratory {
-    width: min(100%, 280px);
+    width: min(100%, 340px);
     height: auto;
   }
   .track {

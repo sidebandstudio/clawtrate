@@ -321,6 +321,9 @@ function gatewayTurnText(message: RawRecord): string | null {
 export function mapHistory(messages: unknown): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   let currentRun: string | null = null;
+  // The user rows between two assistant rows can all join at the same tool boundary.
+  let precedingRun: string | null = null;
+  const pendingUsers: TranscriptItem[] = [];
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
   /** The item each pending call is in, so a cut result marks it. */
   const callItems = new Map<string, TranscriptItem>();
@@ -336,6 +339,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     const cutByGateway = info.truncated === true;
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
+      precedingRun = null;
+      pendingUsers.length = 0;
       items.push({
         id,
         role: "system",
@@ -353,6 +358,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         currentRun = null;
         const gatewayTurn = gatewayTurnText(message);
         if (gatewayTurn) {
+          precedingRun = null;
+          pendingUsers.length = 0;
           items.push({
             id,
             role: "system",
@@ -366,7 +373,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
-        items.push({
+        const user: TranscriptItem = {
           id,
           role: "user",
           timestamp,
@@ -376,7 +383,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
-        });
+        };
+        items.push(user);
+        if (precedingRun !== null) pendingUsers.push(user);
         return;
       }
       case "assistant": {
@@ -385,6 +394,11 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
         }
         const runId = str(info.runId);
+        if (runId !== null && runId === precedingRun) {
+          for (const user of pendingUsers) user.steered = true;
+        }
+        pendingUsers.length = 0;
+        precedingRun = runId;
         const previous = items.at(-1);
         let item: TranscriptItem;
         if (previous?.role === "assistant" && runId !== null && runId === currentRun) {

@@ -14,7 +14,7 @@ Every commit, pull request title and body, and issue is published the moment it 
 
 ### The user's gateway is theirs
 
-Clawtrate is a client, and the agent runtime is the user's OpenClaw gateway. Nothing in this repository may put that gateway at risk. Request the smallest operator scopes a feature needs, and keep a read-only connection useful. Provider credentials stay on the gateway. Clawtrate starts the gateway's own sign-in and never reads, stores or copies them.
+Clawtrate is a client, and the agent runtime is the user's OpenClaw gateway. Nothing in this repository may put that gateway at risk. First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway. Clawtrate starts the gateway's own sign-in and never reads, stores or copies them.
 
 ### Say only what the gateway established
 
@@ -61,6 +61,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - `packages/ui` (`@clawtrate/ui`) holds the React interface shared by the desktop app, the web preview and the fixture mode.
 - `apps/desktop` is the Electron app: the main process, the preload script, the renderer entry, the web preview host, the fixture mode and the packaging configuration. The same renderer also runs in a browser through the web preview host, for remote review and self-hosted web use.
 - The Expo iOS app will live in `apps/mobile` and consume `packages/core`. It is not on `main` yet.
+- `packages/relay-protocol` (`@clawtrate/relay-protocol`) holds the wire protocol for reaching a gateway through Clawtrate's relay: frames, relay messages, the connector's register proof and the Noise IK channel. Like shared core, it uses no Node or DOM APIs.
 - `plugins/` holds OpenClaw plugins that fill gateway gaps.
 - `tools/dev-gateway` starts, seeds and resets development gateways and runs the scripted model. `tools/brand` makes the icons from the logo.
 - `e2e/` holds the end-to-end tests, `e2e-packaged/` the launch check for a packaged app, `visual/` the visual tests and their macOS baselines, and `test/` the repository-wide unit tests, such as the parity check.
