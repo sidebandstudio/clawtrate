@@ -214,6 +214,12 @@ describe("the person's SSH configuration", () => {
     expect(resolveWith("Include config.d/*\nHost devbox\n  Port 2222\n")).toMatchObject({
       port: 2201,
     });
+    writeFileSync(
+      join(world.home, ".ssh", "config.d", ".team-prod.conf"),
+      "Host devbox\n  Port 2202\n",
+    );
+    expect(resolveWith("Include config.d/*.conf\n")).toMatchObject({ port: 22 });
+    expect(resolveWith("Include config.d/.team-*.conf\n")).toMatchObject({ port: 2202 });
     expect(resolveWith("Include ~/.ssh/config.d/10-dev\n")).toMatchObject({ port: 2201 });
     // A missing included file is skipped, as OpenSSH does.
     expect(resolveWith("Include config.d/none\n")).toMatchObject({ ok: true, port: 22 });

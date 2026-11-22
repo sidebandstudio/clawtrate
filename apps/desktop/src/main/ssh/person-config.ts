@@ -319,8 +319,10 @@ function includedFiles(raw: string, world: SshWorld): string[] {
     throw new Unreadable();
   }
   const files = names
-    // File names match as they are spelt, and a pattern matches no dotfile, as glob(3) does.
-    .filter((name) => globMatch(last, name, true) && !name.startsWith("."))
+    // glob(3) requires a literal leading dot to match a hidden file.
+    .filter(
+      (name) => (!name.startsWith(".") || last.startsWith(".")) && globMatch(last, name, true),
+    )
     .sort()
     .map((name) => `${dirname(path)}/${name}`);
   // Each match as the file system walks it: a link among them that leads out of home refuses all.
