@@ -293,6 +293,9 @@ jobs:
       # The Keychain test copies the pairing the pairing test makes, so both run.
       - name: Run the Keychain check
         env:
+          # The seeded `ls` result is in byte order, as Linux runners sort it; the macOS runner's
+          # en_US.UTF-8 would put `changes` before the capitalised files.
+          LC_ALL: C
           CLAWTRATE_CHECK_KEYCHAIN: "1"
           CLAWTRATE_CHECK_KEYCHAIN_PATH: ${{ steps.keychain.outputs.path }}
         run: pnpm check:packaged -g "pairs with its own development gateway instance|Keychain"
