@@ -17,7 +17,7 @@ const sorted = (value) => {
 
 export const canonical = (value) => JSON.stringify(sorted(value));
 export const digestOf = (value) => createHash("sha256").update(canonical(value)).digest("hex");
-export const newId = (prefix) => `${prefix}_${randomBytes(8).toString("hex")}`;
+export const newId = (prefix) => `${prefix}_${randomBytes(16).toString("hex")}`;
 /** The deciding device, hashed: records never hold a device id. */
 export const hashDevice = (id) =>
   typeof id === "string" && id

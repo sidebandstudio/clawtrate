@@ -23,10 +23,25 @@ export function memoryStore() {
     return JSON.stringify(value);
   };
   const mark = (key: string) => `${key}#${rows.get(key)?.rev ?? "absent"}`;
+  /** Holds writes of keys with a prefix until released; `reached` resolves when one is held. */
+  const gates: { prefix: string; reach: () => void; wait: Promise<void> }[] = [];
+  const faults = { failNextDelete: false, corrupt: new Set<string>() };
   return {
     rows,
+    faults,
+    hold(prefix: string) {
+      let reach = () => {};
+      let release = () => {};
+      const reached = new Promise<void>((resolve) => (reach = resolve));
+      const wait = new Promise<void>((resolve) => (release = resolve));
+      const gate = { prefix, reach, wait };
+      gates.push(gate);
+      return { reached, release: () => (gates.splice(gates.indexOf(gate), 1), release()) };
+    },
     async lookup(key: string) {
       await tick();
+      if (faults.corrupt.has(key))
+        throw Object.assign(new Error("corrupt"), { code: "PLUGIN_STATE_CORRUPT" });
       return read(key);
     },
     async observe(key: string) {
@@ -46,12 +61,20 @@ export function memoryStore() {
     },
     async registerIfAbsent(key: string, value: unknown) {
       await tick();
+      for (const gate of gates.filter((g) => key.startsWith(g.prefix))) {
+        gate.reach();
+        await gate.wait;
+      }
       if (rows.has(key)) return false;
       rows.set(key, { json: json(value), rev: ++rev });
       return true;
     },
     async delete(key: string) {
       await tick();
+      if (faults.failNextDelete) {
+        faults.failNextDelete = false;
+        throw new Error("the delete failed");
+      }
       return rows.delete(key);
     },
     async entriesInKeyRange(range: {
@@ -82,7 +105,7 @@ export function load(options: { store?: Store; now?: () => number; bots?: Json[]
   const handlers = new Map<string, { handler: (opts: Json) => Promise<void>; scope: string }>();
   const events: string[] = [];
   const dispatched: string[] = [];
-  const bots = options.bots ?? [
+  const bots: Json[] = options.bots ?? [
     { id: "main", createdAt: 1 },
     { id: "pip", createdAt: 2 },
   ];
@@ -105,17 +128,26 @@ export function load(options: { store?: Store; now?: () => number; bots?: Json[]
       },
     },
   });
-  async function call(name: string, params: Json = {}, device = "device-a"): Promise<Answer> {
+  /** A direct operator request by default; `inProcess` drops the host's socket flag, `synthetic` marks the client. */
+  async function call(
+    name: string,
+    params: Json = {},
+    { device = "device-a", inProcess = false, synthetic = false } = {},
+  ): Promise<Answer> {
     const entry = handlers.get(`clawtrate-bots.${name}`);
     if (!entry) throw new Error(`no method ${name}`);
     let answer: Answer = { ok: false };
     await entry.handler({
       params,
-      client: { connect: { device: { id: device } } },
+      ...(inProcess ? {} : { acceptsSerializedJson: true }),
+      client: {
+        connect: { role: "operator", device: { id: device } },
+        ...(synthetic ? { internal: { syntheticClient: true } } : {}),
+      },
       respond: (ok: boolean, payload?: Json, error?: Answer["error"]) =>
         (answer = { ok, payload, error }),
     });
     return answer;
   }
-  return { store, handlers, events, dispatched, call };
+  return { store, handlers, events, dispatched, call, bots };
 }

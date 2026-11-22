@@ -9,10 +9,21 @@
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
-// matching digest.
+// matching digest. Cleanup and publication exclude each other through the
+// ledger: a publisher checks, after each observation, that the version still
+// exists and isn't being swept; cleanup marks the one version it deletes in
+// the ledger first, deletes it, then clears the mark.
 
 import { canonical, digestOf } from "./canonical.js";
-import { EXPIRES_MS, ORPHAN_MS, emptyLedger, referenced, sweep, tombstone } from "./ledger.js";
+import {
+  ORPHAN_MS,
+  Refusal,
+  clearSweeping,
+  emptyLedger,
+  markSweeping,
+  referenced,
+  sweep,
+} from "./ledger.js";
 
 export const NAMESPACE = "records";
 const LEDGER = "ledger";
@@ -20,6 +31,7 @@ const VERSION = "v:";
 const PAGE = 500;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 export class Records {
   constructor(store, { now = Date.now, onChange = () => {} } = {}) {
@@ -29,6 +41,7 @@ export class Records {
     this.store = store;
     this.now = now;
     this.onChange = onChange;
+    this.sweepRunning = false;
   }
 
   /** @returns {Promise<ReturnType<typeof emptyLedger>>} */
@@ -38,28 +51,32 @@ export class Records {
 
   /**
    * Runs `change` on the current ledger after expiry and retention, and
-   * stores the result in one compareAndApply. A Refusal thrown by `change`
-   * writes nothing. On a conflict it starts again from what is stored.
+   * stores the result in one compareAndApply. `verify`, if given, runs after
+   * each observation and before the change. A Refusal from either writes
+   * nothing. On a conflict it starts again from what is stored.
    * @template R
    * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => R} change
+   * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => Promise<void>} [verify]
    * @returns {Promise<R>}
    */
-  async transact(change) {
+  async transact(change, verify) {
     for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
       const seen = await this.store.observe(LEDGER);
       const before = seen.value ?? emptyLedger();
       const ledger = structuredClone(before);
       const now = this.now();
-      const removed = sweep(ledger, now);
+      sweep(ledger, now);
+      if (verify) await verify(ledger, now);
       const result = change(ledger, now);
       if (digestOf(ledger) === digestOf(before) && seen.value) return result;
+      // A revision on every stored change: a mark and its clearing never restore an earlier row.
+      ledger.rev = (before.rev ?? 0) + 1;
       const out = await this.store.compareAndApply(LEDGER, seen.comparison, {
         operation: "update",
         action: "set",
         value: ledger,
       });
       if (out.status === "conflict") continue;
-      for (const id of removed) await this.store.delete(VERSION + id);
       this.onChange();
       return result;
     }
@@ -80,40 +97,72 @@ export class Records {
     return digest;
   }
 
-  /** A version, if it exists and matches the digest the ledger holds; null otherwise. */
+  /** A version, if it exists, reads and matches the digest the ledger holds; null otherwise. */
   async version(id, digest) {
-    const row = await this.store.lookup(VERSION + id);
-    if (!row || row.digest !== digest || digestOf(row.body) !== digest) return null;
-    return row.body;
+    let row;
+    try {
+      row = await this.store.lookup(VERSION + id);
+    } catch (error) {
+      if (error?.code === "PLUGIN_STATE_CORRUPT") return null;
+      throw error;
+    }
+    if (!isObject(row) || !isObject(row.body) || row.digest !== digest) return null;
+    return digestOf(row.body) === digest ? row.body : null;
+  }
+
+  /**
+   * Publishes a stored version with `change`, checking after each observation
+   * that cleanup hasn't taken it.
+   * @template R
+   * @param {string} id
+   * @param {string} digest
+   * @param {(ledger: ReturnType<typeof emptyLedger>, now: number) => R} change
+   * @returns {Promise<R>}
+   */
+  publish(id, digest, change) {
+    return this.transact(change, async (ledger) => {
+      if (ledger.sweeping === id || !(await this.version(id, digest)))
+        throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
+    });
   }
 
   /**
    * Reclaims versions nothing has referred to for an hour: never published,
-   * or replaced. Each is first marked swept in a ledger update, which a
-   * publisher's update would conflict with, so the two can't both land.
+   * replaced, or settled and removed. One sweep at a time; a deletion an
+   * earlier sweep left marked is finished first.
    */
   async sweepOrphans() {
-    const now = this.now();
-    let start = VERSION;
+    if (this.sweepRunning) return [];
+    this.sweepRunning = true;
     const removed = [];
-    for (;;) {
-      const page = await this.store.entriesInKeyRange({
-        keyStartInclusive: start,
-        keyEndExclusive: "v;",
-        limit: PAGE,
-      });
-      const ledger = await this.ledger();
-      const live = referenced(ledger);
-      for (const { key, value } of page) {
-        const id = key.slice(VERSION.length);
-        if (live.has(id) || !(value?.storedAt + ORPHAN_MS <= now)) continue;
-        if (await this.transact((l, at) => tombstone(l, id, at + EXPIRES_MS))) {
-          await this.store.delete(key);
-          removed.push(id);
+    try {
+      const pending = (await this.ledger()).sweeping;
+      if (pending) await this.reclaim(pending, removed);
+      const now = this.now();
+      let start = VERSION;
+      for (;;) {
+        const page = await this.store.entriesInKeyRange({
+          keyStartInclusive: start,
+          keyEndExclusive: "v;",
+          limit: PAGE,
+        });
+        const live = referenced(await this.ledger());
+        for (const { key, value } of page) {
+          const id = key.slice(VERSION.length);
+          if (live.has(id) || !(value?.storedAt + ORPHAN_MS <= now)) continue;
+          if (await this.transact((l) => markSweeping(l, id))) await this.reclaim(id, removed);
         }
+        if (page.length < PAGE) return removed;
+        start = `${page[page.length - 1].key}\u0000`;
       }
-      if (page.length < PAGE) return removed;
-      start = `${page[page.length - 1].key}\u0000`;
+    } finally {
+      this.sweepRunning = false;
     }
+  }
+
+  async reclaim(id, removed) {
+    await this.store.delete(VERSION + id);
+    await this.transact((l) => clearSweeping(l, id));
+    removed.push(id);
   }
 }

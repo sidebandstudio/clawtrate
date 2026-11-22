@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as L from "../lib/ledger.js";
 
 const T = 1_800_000_000_000;
-const bot = (n: number) => `b${n}`;
-const proposal = (id: string, source: object, b = "pip", fields = ["label"], at = T) => ({
+const bot = (n: number | string, createdAt = 1) => ({ id: `b${n}`, createdAt });
+const proposal = (id: string, source: object, b = bot("pip"), fields = ["label"], at = T) => ({
   id,
   digest: `d-${id}`,
   source,
@@ -13,7 +13,12 @@ const proposal = (id: string, source: object, b = "pip", fields = ["label"], at 
   expiresAt: at + L.EXPIRES_MS,
 });
 const fromBot = (b: string) => ({ kind: "bot", bot: b });
-const agent = (grant: string, generation: number) => ({ kind: "agent", grant, generation });
+const agent = (grant: string, generation: number, version = "gv1") => ({
+  kind: "agent",
+  grant,
+  generation,
+  version,
+});
 const reason = (fn: () => unknown) => {
   try {
     fn();
@@ -23,7 +28,12 @@ const reason = (fn: () => unknown) => {
   return "admitted";
 };
 const open = (l: ReturnType<typeof L.emptyLedger>) =>
-  Object.values(l.proposals).filter((e) => (e as { state: string }).state === "open").length;
+  Object.values(l.proposals).filter((e) => e.state === "open").length;
+const withGrant = (expiresAt = T + 1e9) => {
+  const l = L.emptyLedger();
+  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, null, T);
+  return l;
+};
 
 describe("admission", () => {
   it("refuses a source's 21st open proposal, and the gateway's 201st", () => {
@@ -41,85 +51,127 @@ describe("admission", () => {
     expect(open(l)).toBe(200);
   });
 
-  it("supersedes the open proposal for the same bot and field, from any source, only when admitted", () => {
+  it("supersedes the open proposal for the same bot incarnation and field, only when admitted", () => {
     const l = L.emptyLedger();
     L.admit(l, proposal("a", fromBot("pip")), T);
+    L.admit(l, proposal("other-life", fromBot("pip"), bot("pip", 2)), T);
     expect(
-      L.admit(l, proposal("b", fromBot("main"), "pip", ["label", "model"]), T).superseded,
+      L.admit(l, proposal("b", fromBot("main"), bot("pip"), ["label", "model"]), T).superseded,
     ).toEqual(["a"]);
     expect(l.proposals.a.state).toBe("superseded");
-    expect(open(l)).toBe(1);
+    expect(l.proposals["other-life"].state).toBe("open");
   });
 
-  it("checks the grant's generation inside admission", () => {
-    const l = L.emptyLedger();
-    L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt: T + 1e9 }, T);
+  it("checks the grant's generation and version inside admission, and refuses an expired request", () => {
+    const l = withGrant();
     expect(reason(() => L.admit(l, proposal("p0", agent("g", 0)), T))).toBe("grant-generation");
-    expect(reason(() => L.admit(l, proposal("p1", agent("g", 1)), T))).toBe("admitted");
-    expect(reason(() => L.admit(l, proposal("p2", agent("nope", 1), "main"), T))).toBe(
+    expect(reason(() => L.admit(l, proposal("p1", agent("g", 1, "gv-old")), T))).toBe(
+      "grant-generation",
+    );
+    expect(reason(() => L.admit(l, proposal("p2", agent("g", 1)), T))).toBe("admitted");
+    expect(reason(() => L.admit(l, proposal("p3", agent("nope", 1), bot("main")), T))).toBe(
       "grant-missing",
     );
+    expect(
+      reason(() =>
+        L.admit(l, proposal("p4", fromBot("pip"), bot(7), ["label"], T - L.EXPIRES_MS), T),
+      ),
+    ).toBe("expired");
+  });
+
+  it("looks up only its own keys", () => {
+    const l = L.emptyLedger();
+    expect(reason(() => L.revoke(l, "constructor", T))).toBe("grant-missing");
+    expect(reason(() => L.claim(l, "__proto__", "x", T))).toBe("unknown");
+    expect(reason(() => L.requireId("g", "toString", "id"))).toBe("invalid");
+    expect(reason(() => L.requireId("p", `p_${"a".repeat(32)}`, "id"))).toBe("admitted");
   });
 });
 
 describe("grants", () => {
   it("revoking moves the generation on and withdraws open suggestions in the same change", () => {
-    const l = L.emptyLedger();
-    L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt: T + 1e9 }, T);
+    const l = withGrant();
     L.admit(l, proposal("p", agent("g", 1)), T);
-    L.admit(l, proposal("q", fromBot("main"), "main"), T);
+    L.admit(l, proposal("q", fromBot("main"), bot("main")), T);
     expect(L.revoke(l, "g", T).generation).toBe(2);
-    expect(l.proposals.p.state).toBe("withdrawn");
-    expect(l.proposals.q.state).toBe("open");
+    expect([l.proposals.p.state, l.proposals.q.state]).toEqual(["withdrawn", "open"]);
     expect(reason(() => L.claim(l, "p", "d-p", T))).toBe("settled");
-    expect(reason(() => L.admit(l, proposal("r", agent("g", 2), "main", ["model"]), T))).toBe(
+    expect(reason(() => L.admit(l, proposal("r", agent("g", 2), bot("main"), ["model"]), T))).toBe(
       "grant-revoked",
     );
   });
 
-  it("a new version of a grant withdraws the old generation's suggestions; an expired grant is revoked", () => {
-    const l = L.emptyLedger();
-    L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt: T + 1000 }, T);
+  it("an update needs the generation it read, so it can't undo a revocation", () => {
+    const l = withGrant(T + 1000);
     L.admit(l, proposal("p", agent("g", 1)), T);
-    expect(
-      L.publishGrant(l, "g", { version: "gv2", digest: "y", expiresAt: T + 1000 }, T).generation,
-    ).toBe(2);
+    const next = { version: "gv2", digest: "y", expiresAt: T + 1000 };
+    expect(L.publishGrant(l, "g", next, 1, T).generation).toBe(2);
     expect(l.proposals.p.state).toBe("withdrawn");
-    L.admit(l, proposal("q", agent("g", 2), "main"), T);
+    L.revoke(l, "g", T);
+    expect(reason(() => L.publishGrant(l, "g", { ...next, version: "gv3" }, 2, T))).toBe(
+      "grant-generation",
+    );
+    expect(reason(() => L.publishGrant(l, "new", next, 1, T))).toBe("grant-missing");
+    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, null, T))).toBe(
+      "expired",
+    );
+  });
+
+  it("an expired grant is revoked, and a revoked grant leaves after 30 days", () => {
+    const l = withGrant(T + 1000);
+    L.admit(l, proposal("q", agent("g", 1), bot("main")), T);
     L.sweep(l, T + 1000);
-    expect(l.grants.g.revoked).toBe("expired");
-    expect(l.proposals.q.state).toBe("withdrawn");
+    expect([l.grants.g.revoked, l.proposals.q.state]).toEqual(["expired", "withdrawn"]);
+    L.sweep(l, T + 1000 + L.RETAIN_MS - 1);
+    expect(l.grants.g).toBeDefined();
+    L.sweep(l, T + 1000 + L.RETAIN_MS);
+    expect(l.grants.g).toBeUndefined();
   });
 });
 
-describe("decisions, expiry and retention", () => {
-  it("a decline needs the digest shown, and settles once", () => {
+describe("decisions, expiry and size", () => {
+  it("a decline needs the digest shown, an unexpired request, and settles once", () => {
     const l = L.emptyLedger();
     L.admit(l, proposal("p", fromBot("pip")), T);
+    L.admit(l, proposal("e", fromBot("pip"), bot(2)), T);
     expect(reason(() => L.decline(l, "p", "other", "dev", T))).toBe("digest");
     L.decline(l, "p", "d-p", "dev", T);
     expect(l.proposals.p).toMatchObject({ state: "declined", by: "dev" });
     expect(reason(() => L.decline(l, "p", "d-p", "dev", T))).toBe("settled");
+    expect(() => L.claim(l, "e", "d-e", T + L.EXPIRES_MS)).toThrow("already expired");
   });
 
-  it("expires at 24 hours and removes settled entries after 30 days", () => {
+  it("expires at 24 hours and removes settled entries after 30 days, however many", () => {
     const l = L.emptyLedger();
-    L.admit(l, proposal("p", fromBot("pip")), T);
+    for (let i = 0; i < 150; i += 1)
+      L.admit(l, proposal(`p${i}`, fromBot(`s${i % 10}`), bot(i)), T);
     L.sweep(l, T + L.EXPIRES_MS - 1);
-    expect(l.proposals.p.state).toBe("open");
+    expect(open(l)).toBe(150);
     L.sweep(l, T + L.EXPIRES_MS);
-    expect(l.proposals.p.state).toBe("expired");
-    expect(L.sweep(l, T + L.EXPIRES_MS + L.RETAIN_MS)).toEqual(["p"]);
-    expect(l.proposals.p).toBeUndefined();
+    expect(l.proposals.p0.state).toBe("expired");
+    L.sweep(l, T + L.EXPIRES_MS + L.RETAIN_MS - 1);
+    expect(Object.keys(l.proposals)).toHaveLength(150);
+    L.sweep(l, T + L.EXPIRES_MS + L.RETAIN_MS);
+    expect(Object.keys(l.proposals)).toHaveLength(0);
   });
 
-  it("a swept version can't be published, and a referenced one can't be swept", () => {
+  it("refuses a new request when the records would be full, and every open one can still settle", () => {
     const l = L.emptyLedger();
-    L.admit(l, proposal("p", fromBot("pip")), T);
-    expect(L.tombstone(l, "p", T + 1)).toBe(false);
-    expect(L.tombstone(l, "orphan", T + 1)).toBe(true);
-    expect(reason(() => L.admit(l, proposal("orphan", fromBot("main"), "main"), T))).toBe(
-      "unpublishable",
+    const budget = 20_000;
+    let admitted = 0;
+    for (
+      let i = 0;
+      i < 200 &&
+      reason(() => L.admit(l, proposal(`p${i}`, fromBot(`s${i % 10}`), bot(i)), T, budget)) ===
+        "admitted";
+      i += 1
+    )
+      admitted += 1;
+    expect(admitted).toBeLessThan(200);
+    expect(reason(() => L.admit(l, proposal("x", fromBot("x"), bot("x")), T, budget))).toBe(
+      "records-full",
     );
+    for (let i = 0; i < admitted; i += 1) L.decline(l, `p${i}`, `d-p${i}`, "0123456789abcdef", T);
+    expect(Buffer.byteLength(JSON.stringify({ ...l, rev: 1e12 }))).toBeLessThanOrEqual(budget);
   });
 });

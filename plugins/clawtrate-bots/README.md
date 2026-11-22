@@ -16,6 +16,10 @@ This is the first part: **the records**. It keeps proposals and agent grants, an
 | `.relay.grants.set`       | admin | Writes a grant's version (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`), then publishes it with a new generation. `{ id, revoke: true }` removes access |
 | `.relay.propose`          | admin | `{ grant, generation, bot, fields, reason? }`: records an agent's suggestion for a bot the grant covers. It only proposes, and records its source                               |
 
+Every method but the reads needs a person's own connection: a direct operator request over the gateway's socket. An in-process call, such as a turn with no operator (research finding R6), is refused with `operator-required`, even when it reuses a client.
+
+`relay.propose` trusts the authenticated admin connection that sends it to say which grant and generation it acts for. Another admin could send the same pair, and neither value proves which helper sent the request. So the app's relay must take the pair from the helper it authenticated, and keep its own gateway connection out of the helper's reach.
+
 The event `plugin.clawtrate-bots.changed` is empty, at `operator.read`, after every ledger change. The only gateway method the plugin calls is `agents.list`.
 
 ## Records

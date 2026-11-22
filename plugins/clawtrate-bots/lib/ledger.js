@@ -3,19 +3,22 @@
 // each changes a copy of the ledger, and lib/records.js stores the result in
 // one compareAndApply, so two decisions that race can't both win.
 //
-// A proposal's entry: { digest, state, source, grant?, bot, fields, createdAt,
-// expiresAt, settledAt?, by? }. A grant's entry: { version, digest,
-// generation, revoked, expiresAt }. `swept` holds the versions cleanup
-// removed, so a delayed publisher can't publish one afterwards.
+// A proposal's entry: { digest, state, source, grant?, bot: { id, createdAt },
+// fields, createdAt, expiresAt, settledAt?, by? }. A grant's entry: { version,
+// digest, generation, revoked, expiresAt, revokedAt? }. `sweeping` is the one
+// version cleanup is deleting, which no publisher may publish; `rev` counts
+// every stored change.
 
 export const LIMITS = Object.freeze({ open: 200, perSource: 20 });
 export const EXPIRES_MS = 24 * 60 * 60 * 1000;
 export const RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
-/** A version nothing refers to after this long was never published, and is reclaimed. */
+/** A version nothing has referred to for this long was never published, or was replaced. */
 export const ORPHAN_MS = 60 * 60 * 1000;
-/** Settled entries kept at most, so the one ledger row stays well under the store's 1 MiB. */
-export const SETTLED_MAX = 1000;
-export const TERMINAL = Object.freeze(["declined", "expired", "superseded", "withdrawn"]);
+/** The store's limit for one value, in UTF-8 bytes of JSON. */
+export const VALUE_MAX = 1024 * 1024;
+/** Room kept so every open proposal can settle and every grant can be revoked, whatever fills the rest. */
+const ROOM = { settle: 96, revoke: 64, ledger: 128 };
+const IDS = { p: /^p_[0-9a-f]{32}$/, g: /^g_[0-9a-f]{32}$/ };
 
 export class Refusal extends Error {
   constructor(reason, message, details = {}) {
@@ -25,11 +28,21 @@ export class Refusal extends Error {
   }
 }
 
-/** @returns {{ proposals: Record<string, any>, grants: Record<string, any>, swept: Record<string, number> }} */
-export const emptyLedger = () => ({ proposals: {}, grants: {}, swept: {} });
+/** Ids are checked before they index anything: a prefix and 32 lowercase hex digits. */
+export function requireId(kind, value, what) {
+  if (typeof value !== "string" || !IDS[kind].test(value))
+    throw new Refusal("invalid", `${what} isn't an id Clawtrate made.`);
+  return value;
+}
+const own = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
+
+/** @returns {{ rev: number, proposals: Record<string, any>, grants: Record<string, any>, sweeping: string | null }} */
+export const emptyLedger = () => ({ rev: 0, proposals: {}, grants: {}, sweeping: null });
 export const sourceKey = (source) =>
   source.kind === "agent" ? `agent:${source.grant}` : `bot:${source.bot}`;
 const isOpen = (entry) => entry.state === "open";
+const sameBot = (a, b) => a.id === b.id && a.createdAt === b.createdAt;
+const gone = (message) => new Refusal("grant-missing", message);
 
 function settle(entry, state, now, by) {
   entry.state = state;
@@ -42,35 +55,25 @@ function withdrawOpen(ledger, grant, now) {
     if (isOpen(entry) && entry.source === `agent:${grant}`) settle(entry, "withdrawn", now);
 }
 
-/**
- * Expiry, grant expiry and retention, run at the start of every transition.
- * Returns the ids of settled proposals removed, whose versions can go too.
- */
+/** Expiry and retention, run at the start of every transition. */
 export function sweep(ledger, now) {
-  for (const [id, grant] of Object.entries(ledger.grants))
+  for (const [id, grant] of Object.entries(ledger.grants)) {
     if (!grant.revoked && grant.expiresAt <= now) revoke(ledger, id, now, "expired");
-  for (const entry of Object.values(ledger.proposals))
+    if (grant.revoked && grant.revokedAt + RETAIN_MS <= now) delete ledger.grants[id];
+  }
+  for (const [id, entry] of Object.entries(ledger.proposals)) {
     if (isOpen(entry) && entry.expiresAt <= now) settle(entry, "expired", now);
-  const settled = Object.entries(ledger.proposals)
-    .filter(([, entry]) => !isOpen(entry))
-    .sort(([, a], [, b]) => a.settledAt - b.settledAt);
-  const removed = [];
-  settled.forEach(([id, entry], i) => {
-    if (entry.settledAt + RETAIN_MS <= now || settled.length - i > SETTLED_MAX) {
-      delete ledger.proposals[id];
-      removed.push(id);
-    }
-  });
-  for (const [id, until] of Object.entries(ledger.swept)) if (until <= now) delete ledger.swept[id];
-  return removed;
+    if (!isOpen(entry) && entry.settledAt + RETAIN_MS <= now) delete ledger.proposals[id];
+  }
 }
 
-function checkGrant(ledger, { grant, generation }, now) {
-  const entry = ledger.grants[grant];
-  if (!entry) throw new Refusal("grant-missing", "This agent's access to Clawtrate isn't set up.");
+/** Checks a grant as the ledger holds it: present, live, and the generation and version given. */
+export function checkGrant(ledger, { grant, generation, version }, now) {
+  const entry = own(ledger.grants, grant);
+  if (!entry) throw gone("This agent's access to Clawtrate isn't set up.");
   if (entry.revoked || entry.expiresAt <= now)
     throw new Refusal("grant-revoked", "This agent's access to Clawtrate was removed.");
-  if (entry.generation !== generation)
+  if (entry.generation !== generation || (version !== undefined && entry.version !== version))
     throw new Refusal(
       "grant-generation",
       "This agent's access to Clawtrate changed. Reconnect it.",
@@ -78,15 +81,30 @@ function checkGrant(ledger, { grant, generation }, now) {
   return entry;
 }
 
-/** Admits a proposal: the limits, the grant's generation and supersession, decided together. */
-export function admit(ledger, proposal, now) {
+/** Whether the ledger, with room for every open proposal to settle and every grant to be revoked, fits one stored value. */
+export function fits(ledger, budget = VALUE_MAX) {
+  const open = Object.values(ledger.proposals).filter(isOpen).length;
+  const live = Object.values(ledger.grants).filter((g) => !g.revoked).length;
+  const size = Buffer.byteLength(JSON.stringify(ledger));
+  return size + open * ROOM.settle + live * ROOM.revoke + ROOM.ledger <= budget;
+}
+const full = () =>
+  new Refusal(
+    "records-full",
+    "Clawtrate's request records on this gateway are full. Answer some requests, then try again.",
+  );
+
+/** Admits a proposal: the limits, the grant, supersession and the records' size, decided together. */
+export function admit(ledger, proposal, now, budget) {
   const { id, digest, source, bot, fields, createdAt, expiresAt } = proposal;
-  if (ledger.swept[id] || ledger.proposals[id])
+  if (own(ledger.proposals, id) || ledger.sweeping === id)
     throw new Refusal("unpublishable", "Clawtrate couldn't record this request. Try again.");
+  if (expiresAt <= now)
+    throw new Refusal("expired", "This request expired before it was recorded.");
   if (source.kind === "agent") checkGrant(ledger, source, now);
   const open = Object.entries(ledger.proposals).filter(([, entry]) => isOpen(entry));
   const superseded = open
-    .filter(([, entry]) => entry.bot === bot && entry.fields.some((f) => fields.includes(f)))
+    .filter(([, entry]) => sameBot(entry.bot, bot) && entry.fields.some((f) => fields.includes(f)))
     .map(([key]) => key);
   const key = sourceKey(source);
   const staying = open.filter(([other]) => !superseded.includes(other));
@@ -101,29 +119,28 @@ export function admit(ledger, proposal, now) {
   if (staying.length >= LIMITS.open)
     throw new Refusal("open-limit", "Too many open requests on this gateway. Wait for an answer.");
   for (const other of superseded) settle(ledger.proposals[other], "superseded", now);
+  const { grant, generation, version } = source;
   ledger.proposals[id] = {
     digest,
     state: "open",
     source: key,
-    ...(source.kind === "agent"
-      ? { grant: { grant: source.grant, generation: source.generation } }
-      : {}),
+    ...(source.kind === "agent" ? { grant: { grant, generation, version } } : {}),
     bot,
     fields,
     createdAt,
     expiresAt,
   };
+  if (!fits(ledger, budget)) throw full();
   return { superseded };
 }
 
-/** Claims an open proposal for a decision, checking its digest and its grant's generation. */
+/** Claims an open proposal for a decision: unexpired, the digest shown, and its grant's generation. */
 export function claim(ledger, id, digest, now) {
-  const entry = ledger.proposals[id];
+  const entry = own(ledger.proposals, id);
   if (!entry) throw new Refusal("unknown", "Clawtrate has no such request on this gateway.");
-  if (!isOpen(entry))
-    throw new Refusal("settled", `This request was already ${entry.state}.`, {
-      state: entry.state,
-    });
+  const state = isOpen(entry) && entry.expiresAt <= now ? "expired" : entry.state;
+  if (state !== "open")
+    throw new Refusal("settled", `This request was already ${state}.`, { state });
   if (entry.digest !== digest)
     throw new Refusal("digest", "This request isn't the one shown. Look at it again.");
   if (entry.grant) checkGrant(ledger, entry.grant, now);
@@ -134,20 +151,34 @@ export function decline(ledger, id, digest, by, now) {
   settle(claim(ledger, id, digest, now), "declined", now, by);
 }
 
-/** Publishes a grant's version: a new generation, and its open suggestions withdrawn. */
-export function publishGrant(ledger, id, { version, digest, expiresAt }, now) {
-  if (ledger.swept[version])
+/**
+ * Publishes a grant's version: a new grant (`expected` null), or a new
+ * version of the generation the caller read. It withdraws that grant's open
+ * suggestions in the same change.
+ */
+export function publishGrant(ledger, id, { version, digest, expiresAt }, expected, now, budget) {
+  if (expiresAt <= now) throw new Refusal("expired", "This access would already have expired.");
+  if (ledger.sweeping === version)
     throw new Refusal("unpublishable", "Clawtrate couldn't record this access. Try again.");
-  const generation = (ledger.grants[id]?.generation ?? 0) + 1;
+  const current = own(ledger.grants, id);
+  if (expected === null && current) throw new Refusal("invalid", "This grant already exists.");
+  if (expected !== null && !current) throw gone("This agent's access to Clawtrate isn't set up.");
+  if (current && current.generation !== expected)
+    throw new Refusal(
+      "grant-generation",
+      "This agent's access changed since it was read. Read it again.",
+    );
+  const generation = (current?.generation ?? 0) + 1;
   withdrawOpen(ledger, id, now);
   ledger.grants[id] = { version, digest, generation, revoked: false, expiresAt };
+  if (!fits(ledger, budget)) throw full();
   return { generation };
 }
 
 /** Removes access: the generation moves on and the open suggestions are withdrawn, together. */
 export function revoke(ledger, id, now, why = "removed") {
-  const grant = ledger.grants[id];
-  if (!grant) throw new Refusal("grant-missing", "This agent's access to Clawtrate isn't set up.");
+  const grant = own(ledger.grants, id);
+  if (!grant) throw gone("This agent's access to Clawtrate isn't set up.");
   if (!grant.revoked) {
     grant.generation += 1;
     grant.revoked = why;
@@ -163,9 +194,14 @@ export const referenced = (ledger) =>
     ...Object.values(ledger.grants).map((g) => g.version),
   ]);
 
-/** Marks an unreferenced version swept, under the same ledger update a publisher needs. */
-export function tombstone(ledger, version, until) {
+/** Marks one unreferenced version for deletion; only one at a time. */
+export function markSweeping(ledger, version) {
+  if (ledger.sweeping !== null && ledger.sweeping !== version) return false;
   if (referenced(ledger).has(version)) return false;
-  ledger.swept[version] = until;
+  ledger.sweeping = version;
   return true;
+}
+
+export function clearSweeping(ledger, version) {
+  if (ledger.sweeping === version) ledger.sweeping = null;
 }

@@ -1,8 +1,8 @@
 // The plugin's methods and service (index.js registers them).
 
 import { hashDevice, newId } from "./canonical.js";
-import * as ledgerOps from "./ledger.js";
-import { EXPIRES_MS, LIMITS, ORPHAN_MS, Refusal } from "./ledger.js";
+import * as L from "./ledger.js";
+import { EXPIRES_MS, LIMITS, ORPHAN_MS, Refusal, requireId } from "./ledger.js";
 import { NAMESPACE, Records } from "./records.js";
 
 export const PLUGIN_ID = "clawtrate-bots";
@@ -10,13 +10,13 @@ export const PLUGIN_VERSION = "0.1.0";
 const GRANT_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const EFFORT = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const AUTONOMY = ["hands-off", "ask"];
-const TEXT_MAX = 64 * 1024;
+const TEXT_MAX_BYTES = 64 * 1024;
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const bad = (message) => new Refusal("invalid", message);
 const str = (v, max, what) => {
-  if (typeof v !== "string" || v.trim().length === 0 || v.length > max)
-    throw bad(`${what} must be text of 1 to ${max} characters.`);
+  if (typeof v !== "string" || v.trim().length === 0 || Buffer.byteLength(v) > max)
+    throw bad(`${what} must be text of 1 to ${max} bytes.`);
   return v;
 };
 const hash = (v, what) => {
@@ -24,6 +24,19 @@ const hash = (v, what) => {
     throw bad(`${what} must be the file's hash, or null when the file is missing.`);
   return v;
 };
+const unreadable = () => new Refusal("unreadable", "Clawtrate couldn't read this request.");
+const incarnation = (bot) => ({ id: bot.id, createdAt: bot.createdAt });
+const hasIncarnation = (bot) => typeof bot?.id === "string" && Number.isSafeInteger(bot.createdAt);
+
+/**
+ * A ledger decision needs a person's own connection: a direct operator
+ * request over the gateway's socket, not an in-process call such as a turn
+ * with no operator (research finding R6), even one that reuses a client.
+ */
+export const isDirectOperator = (opts) =>
+  opts.acceptsSerializedJson === true &&
+  opts.client?.connect?.role === "operator" &&
+  !opts.client?.internal?.syntheticClient;
 
 /** An update proposal's fields, checked and in canonical form (section 6). */
 export function updateFields(input, { instructions }) {
@@ -37,7 +50,7 @@ export function updateFields(input, { instructions }) {
       const allowed = key === "effort" ? EFFORT : AUTONOMY;
       if (!allowed.includes(value)) throw bad(`${key} must be one of ${allowed.join(", ")}.`);
       out[key] = value;
-    } else if (key === "instructions" && isObject(value)) {
+    } else if (key === "instructions" && isObject(value) && Object.keys(value).length > 0) {
       if (!instructions)
         throw new Refusal("instructions", "This agent may not see or change instructions.");
       out.instructions = {};
@@ -45,7 +58,7 @@ export function updateFields(input, { instructions }) {
         if (!["agents", "soul"].includes(file) || !isObject(change))
           throw bad(`instructions.${file} isn't a file Clawtrate changes.`);
         out.instructions[file] = {
-          text: str(change.text, TEXT_MAX, file),
+          text: str(change.text, TEXT_MAX_BYTES, file),
           baseHash: hash(change.baseHash, `instructions.${file}.baseHash`),
         };
       }
@@ -87,18 +100,24 @@ export function createBots(api, options = {}) {
     return roster.payload.agents.filter((a) => a.kind !== "system");
   }
 
+  /** A proposal as read: expiry the sweep hasn't stored yet shown, and its body's own bot, gateway and tokens. */
   async function view(id, entry) {
-    const body = await records.version(id, entry.digest);
     const { grant, ...rest } = entry;
-    if (!body)
-      return { id, ...rest, unreadable: true, said: "Clawtrate couldn't read this request." };
+    const state = rest.state === "open" && rest.expiresAt <= now() ? "expired" : rest.state;
+    const body = await records.version(id, entry.digest);
+    if (!body) return { id, ...rest, state, unreadable: true, said: unreadable().message };
+    const { kind, payload, reason, bot, gateway, tokens } = body;
     return {
       id,
       ...rest,
+      state,
       generation: grant?.generation,
-      payload: body.payload,
-      reason: body.reason,
-      kind: body.kind,
+      kind,
+      payload,
+      reason,
+      bot,
+      gateway,
+      tokens,
     };
   }
 
@@ -106,14 +125,23 @@ export function createBots(api, options = {}) {
     const body = entry ? await records.version(entry.version, entry.digest) : null;
     if (!body) return null;
     const { version: _v, ...state } = entry;
+    if (!state.revoked && state.expiresAt <= now()) state.revoked = "expired";
     return { id, ...state, ...body.details };
   }
+
+  const proposal = async (id) => {
+    const { proposals } = await records.ledger();
+    const entry = Object.hasOwn(proposals, id) ? proposals[id] : null;
+    if (!entry) throw new Refusal("unknown", "Clawtrate has no such request on this gateway.");
+    return entry;
+  };
 
   const methods = {
     status: [
       "operator.read",
       async () => {
         const ledger = await records.ledger();
+        const at = now();
         return {
           plugin: PLUGIN_ID,
           version: PLUGIN_VERSION,
@@ -121,7 +149,9 @@ export function createBots(api, options = {}) {
           capabilities: { proposals: true, relay: true, onboarding: false },
           apply: { available: false, reason: "incarnation" },
           describe: { available: false, reason: "route-binding" },
-          open: Object.values(ledger.proposals).filter((e) => e.state === "open").length,
+          open: Object.values(ledger.proposals).filter(
+            (e) => e.state === "open" && e.expiresAt > at,
+          ).length,
           limits: { ...LIMITS },
         };
       },
@@ -138,26 +168,31 @@ export function createBots(api, options = {}) {
     ],
     "proposals.get": [
       "operator.read",
-      async ({ id }) => {
-        const entry = (await records.ledger()).proposals[id];
-        if (!entry) throw new Refusal("unknown", "Clawtrate has no such request on this gateway.");
-        return view(id, entry);
-      },
+      async ({ id }) => view(id, await proposal(requireId("p", id, "id"))),
     ],
+    // The claim is checked, then its version read, after every observation.
     "proposals.decline": [
       "operator.write",
       async ({ id, digest }, opts) => {
+        requireId("p", id, "id");
         const by = hashDevice(opts.client?.connect?.device?.id);
-        await records.transact((l, at) => ledgerOps.decline(l, id, digest, by, at));
+        await records.transact(
+          (l, at) => L.decline(l, id, digest, by, at),
+          async (l, at) => {
+            if (!(await records.version(id, L.claim(l, id, digest, at).digest))) throw unreadable();
+          },
+        );
         return { id, state: "declined" };
       },
     ],
     // Section 17: on 2026.10.6 no stored request can be applied. The claim's
-    // checks still run, so a request already settled says so.
+    // checks still run, so a request already settled, or expired, says so.
     "proposals.accept": [
       "operator.admin",
       async ({ id, digest }) => {
-        ledgerOps.claim(structuredClone(await records.ledger()), id, digest, now());
+        requireId("p", id, "id");
+        const entry = L.claim(await records.ledger(), id, digest, now());
+        if (!(await records.version(id, entry.digest))) throw unreadable();
         throw new Refusal(
           "apply-unavailable",
           "Clawtrate can't apply a saved request on this gateway. Review and save it yourself instead.",
@@ -167,7 +202,12 @@ export function createBots(api, options = {}) {
     "relay.grants.get": [
       "operator.read",
       async ({ id }) => {
-        const grant = await grantView(id, (await records.ledger()).grants[id]);
+        requireId("g", id, "id");
+        const ledger = await records.ledger();
+        const grant = await grantView(
+          id,
+          Object.hasOwn(ledger.grants, id) ? ledger.grants[id] : null,
+        );
         if (!grant)
           throw new Refusal("grant-missing", "This agent's access to Clawtrate isn't set up.");
         return grant;
@@ -177,12 +217,16 @@ export function createBots(api, options = {}) {
       "operator.admin",
       async (params) => {
         if (params.revoke === true) {
-          const { generation } = await records.transact((l, at) =>
-            ledgerOps.revoke(l, params.id, at),
-          );
-          return { id: params.id, generation, revoked: true };
+          const id = requireId("g", params.id, "id");
+          const { generation } = await records.transact((l, at) => L.revoke(l, id, at));
+          return { id, generation, revoked: true };
         }
-        const id = params.id === undefined ? newId("g") : str(params.id, 40, "id");
+        // A new grant gets a fresh id; an update names the generation it read.
+        const update = params.id !== undefined;
+        const id = update ? requireId("g", params.id, "id") : newId("g");
+        const expected = update ? params.expectedGeneration : null;
+        if (update && !Number.isSafeInteger(expected))
+          throw bad("An update names the expectedGeneration it read.");
         if (!["see", "suggest"].includes(params.scope)) throw bad("scope must be see or suggest.");
         const all = params.bots === "all";
         if (
@@ -195,53 +239,75 @@ export function createBots(api, options = {}) {
           Number.isSafeInteger(params.expiresAt) && params.expiresAt > at
             ? params.expiresAt
             : at + GRANT_DAYS_MS;
-        const known = (await bots()).map((b) => b.id);
+        // Bots are their incarnations: an id and the time the gateway created it.
+        const roster = (await bots()).filter(hasIncarnation);
+        const chosen = all
+          ? roster
+          : [...new Set(params.bots)].map((b) => roster.find((r) => r.id === b));
+        if (chosen.includes(undefined))
+          throw new Refusal(
+            "bot",
+            "A chosen bot isn't on this gateway, or has no creation record.",
+          );
+        const includeFuture = all && params.includeFuture === true;
         const details = {
           scope: params.scope,
-          bots: all ? (params.includeFuture === true ? "all" : known) : [...new Set(params.bots)],
+          bots: includeFuture ? "all" : chosen.map(incarnation),
           includeInstructions: params.includeInstructions === true,
-          includeFuture: all && params.includeFuture === true,
+          includeFuture,
           expiresAt,
         };
         const version = newId("gv");
-        const digest = await records.persist(version, {
-          kind: "grant",
-          grant: id,
-          gateway: await gatewayId(),
-          details,
-        });
-        if (!(await records.version(version, digest)))
-          throw new Error("The grant's record didn't read back.");
-        const { generation } = await records.transact((l, t) =>
-          ledgerOps.publishGrant(l, id, { version, digest, expiresAt }, t),
+        const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
+        const digest = await records.persist(version, body);
+        const { generation } = await records.publish(version, digest, (l, t) =>
+          L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
         );
         return { id, generation, ...details };
       },
     ],
+    // Records an agent's suggestion. The permissions checked are the grant
+    // version of the generation given, and the ledger admits only if that is
+    // still the grant's current version.
     "relay.propose": [
       "operator.admin",
       async (params) => {
+        const grantId = requireId("g", params.grant, "grant");
         const ledger = await records.ledger();
-        const grant = await grantView(params.grant, ledger.grants[params.grant]);
-        if (!grant)
-          throw new Refusal("grant-missing", "This agent's access to Clawtrate isn't set up.");
-        // The ledger decides the generation again when it admits.
-        if (grant.scope !== "suggest") throw new Refusal("scope", "This agent may only see bots.");
+        const entry = L.checkGrant(
+          ledger,
+          { grant: grantId, generation: params.generation },
+          now(),
+        );
+        const grant = await records.version(entry.version, entry.digest);
+        if (!grant) throw unreadable();
+        if (grant.details.scope !== "suggest")
+          throw new Refusal("scope", "This agent may only see bots.");
         const bot = (await bots()).find((b) => b.id === params.bot);
-        if (!bot || (grant.bots !== "all" && !grant.bots.includes(bot.id)))
+        if (!hasIncarnation(bot))
+          throw new Refusal("bot", "This bot isn't on this gateway, or has no creation record.");
+        const scoped = grant.details.bots;
+        if (
+          scoped !== "all" &&
+          !scoped.some((b) => b.id === bot.id && b.createdAt === bot.createdAt)
+        )
           throw new Refusal("bot", "This agent can't suggest changes to that bot.");
-        const payload = updateFields(params.fields, { instructions: grant.includeInstructions });
+        const payload = updateFields(params.fields, {
+          instructions: grant.details.includeInstructions,
+        });
         const reason = params.reason === undefined ? undefined : str(params.reason, 200, "reason");
         const at = now();
         const id = newId("p");
-        const source = { kind: "agent", grant: params.grant, generation: params.generation };
+        const source = {
+          kind: "agent",
+          grant: grantId,
+          generation: entry.generation,
+          version: entry.version,
+        };
         const body = {
           id,
           gateway: await gatewayId(),
-          bot: {
-            id: bot.id,
-            createdAt: Number.isSafeInteger(bot.createdAt) ? bot.createdAt : null,
-          },
+          bot: incarnation(bot),
           kind: "update",
           payload,
           tokens: Object.fromEntries(
@@ -256,13 +322,11 @@ export function createBots(api, options = {}) {
           expiresAt: at + EXPIRES_MS,
         };
         const digest = await records.persist(id, body);
-        if (!(await records.version(id, digest)))
-          throw new Error("The request's record didn't read back.");
         const fields = fieldNames(payload);
-        const { superseded } = await records.transact((l, t) =>
-          ledgerOps.admit(
+        const { superseded } = await records.publish(id, digest, (l, t) =>
+          L.admit(
             l,
-            { id, digest, source, bot: bot.id, fields, createdAt: at, expiresAt: at + EXPIRES_MS },
+            { id, digest, source, bot: body.bot, fields, createdAt: at, expiresAt: body.expiresAt },
             t,
           ),
         );
@@ -270,6 +334,7 @@ export function createBots(api, options = {}) {
           status: "proposed",
           proposalId: id,
           digest,
+          bot: body.bot,
           fields,
           superseded,
           said: "Nothing changes until a person saves it in Clawtrate.",
@@ -283,6 +348,11 @@ export function createBots(api, options = {}) {
       `${PLUGIN_ID}.${name}`,
       async (opts) => {
         try {
+          if (scope !== "operator.read" && !isDirectOperator(opts))
+            throw new Refusal(
+              "operator-required",
+              "Only a person's own Clawtrate connection can decide this.",
+            );
           opts.respond(true, await handler(isObject(opts.params) ? opts.params : {}, opts));
         } catch (error) {
           if (!(error instanceof Refusal)) throw error;
@@ -310,7 +380,7 @@ export function createBots(api, options = {}) {
           .catch((error) =>
             api.logger?.warn?.(`${PLUGIN_ID}: couldn't sweep its records: ${error.message}`),
           );
-      // At start (recovery before retention), then hourly.
+      // At start, then hourly.
       await tick();
       const timer = setInterval(tick, options.sweepIntervalMs ?? ORPHAN_MS);
       timer.unref?.();
