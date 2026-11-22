@@ -71,13 +71,15 @@ export class SetupRouter implements SetupHost {
   }
 
   reset(): void {
-    this.here.reset();
+    void this.here.reset();
     this.remote?.reset();
   }
 
   async there(destination: string): Promise<void> {
     if (!this.remote) throw new Error("This host doesn't reach another computer over SSH.");
-    this.here.reset();
+    // This computer's cleanup finishes first: a failure of it is said while its screens are the
+    // ones shown, never over another computer's that share the slice.
+    await this.here.reset();
     await this.remote.there(destination);
   }
 

@@ -491,6 +491,12 @@ export type ConnectionSettings = {
 /** A route's key: its kind and 24 hex digits of the host's digest of what identifies it. */
 export const ROUTE_KEY = /^(?:ssh|here)-[0-9a-f]{24}$/;
 
+/**
+ * A route channel's address: it resolves nowhere, so only its host's own
+ * private socket ever carries it, never a socket of the host's built-in kind.
+ */
+export const ROUTE_CHANNEL_URL = /^ws:\/\/c[0-9a-f]{16}\.ssh\.invalid$/;
+
 /** What a device token is kept for: the gateway URL, or a route. */
 const credentialOf = (settings: Pick<ConnectionSettings, "url" | "route">) =>
   settings.route ? `route:${settings.route}` : settings.url;
@@ -1473,6 +1479,8 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       if (stops !== this.stops) return;
       const setup = options.setup ?? (options.code ? {} : null);
+      // A route the person disconnected meanwhile isn't reopened by a reconnect asked before.
+      if (!setup && this.settings?.route === options.route && this.settings.suspended) return;
       const next: ConnectionSettings = { url, token: null, route: options.route };
       // An ordinary reconnect of a route is saved before anything changes here: one that can't
       // be saved leaves the connection that stays open, and its selection, as they are. A
@@ -1644,7 +1652,15 @@ export class ClawtrateClient {
    */
   async suspend(): Promise<void> {
     return this.changeConnection(async () => {
-      if (!this.settings) return;
+      if (!this.settings) {
+        // A route its host is still opening at launch is saved though not loaded here: it is the
+        // one disconnected, and stays chosen for Reconnect.
+        const saved = await this.savedSettings();
+        if (!saved?.route) return;
+        await this.saveSettings({ ...saved, suspended: true });
+        this.setConnection({ status: "disconnected", gatewayUrl: saved.url, retryAt: null });
+        return;
+      }
       // Saved, so a restart does not reconnect by itself.
       await this.saveSettings({ ...this.settings, suspended: true });
       // The connection stops: writes waiting for access fail, as on any lost connection.

@@ -82,6 +82,7 @@ export {
   ROUTE_IDENTITY_UNREAD,
   ROUTE_IDENTITY_CHANGED,
   ROUTE_KEY,
+  ROUTE_CHANNEL_URL,
   validateGatewayUrl,
   type SetupEndpointCheck,
   type ClientOptions,

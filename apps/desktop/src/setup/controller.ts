@@ -276,14 +276,16 @@ export class SetupController implements SetupHost {
     }
   }
 
-  reset(): void {
+  /** Back to the first screen; resolves once the connection setup opened is let go (or couldn't be). */
+  reset(): Promise<void> {
     this.attempt += 1;
     this.clearSlow();
     this.stopWatching();
     this.options.stopPrograms();
     this.found = null;
-    void this.closeOwned();
+    const closed = this.closeOwned();
     this.publish(initialSetupState);
+    return closed.then(() => undefined);
   }
 
   /**

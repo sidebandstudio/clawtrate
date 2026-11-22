@@ -11,6 +11,7 @@ import {
 } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { ROUTE_CHANNEL_URL } from "../client.ts";
 import type {
   ClawtrateHost,
   ClientIdentity,
@@ -135,8 +136,14 @@ export type NodeHostOptions = {
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
   return {
-    createWebSocket: (url) =>
-      options.routeSocket?.(url) ?? (new WebSocket(url) as unknown as WebSocketLike),
+    createWebSocket: (url) => {
+      const routed = options.routeSocket?.(url);
+      if (routed) return routed;
+      // A route channel's address goes only over its host's private socket: with none, refused.
+      if (ROUTE_CHANNEL_URL.test(url))
+        throw new Error("That route's channel has no private socket here.");
+      return new WebSocket(url) as unknown as WebSocketLike;
+    },
     storage: (options.wrapStorage ?? ((store) => store))(
       createFileStore(join(options.dataDir, "state.json")),
     ),

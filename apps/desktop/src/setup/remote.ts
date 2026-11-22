@@ -30,6 +30,7 @@ import {
   initialSetupState,
   MAX_SSH_CHANNELS,
   MAX_SSH_REMEMBERED_IDS,
+  ROUTE_CHANNEL_URL,
   ROUTE_IDENTITY_CHANGED,
   ROUTE_IDENTITY_UNREAD,
   SETUP_ENDPOINT_CHANGED,
@@ -105,8 +106,7 @@ const MAX_REMEMBERED_IDS = MAX_SSH_REMEMBERED_IDS;
 const MAX_CHANNELS = MAX_SSH_CHANNELS;
 
 /** A channel's address: resolves nowhere, so only this host's own socket ever carries it. */
-const CHANNEL_URL = /^ws:\/\/c[0-9a-f]{16}\.ssh\.invalid$/;
-export const isChannelUrl = (url: string) => CHANNEL_URL.test(url);
+export const isChannelUrl = (url: string) => ROUTE_CHANNEL_URL.test(url);
 
 const emptyThere = (destination: string): SshSetup => ({
   destination,
@@ -727,6 +727,9 @@ export class RemoteSetup {
       if (record.id === route.id) this.options.routes.deleteToken(record.key);
     }
     if (this.live?.record.id === route.id) await this.closeLive(this.live, { forget: false });
+    // A Back or another Look while the old route closed: this replacement is over, and looks at
+    // nothing through a route it no longer holds.
+    if (attempt !== this.attempt || this.route !== route) return;
     this.fingerprint = replaced.fingerprint;
     await this.lookThere(attempt);
   }
@@ -1008,18 +1011,41 @@ export class RemoteSetup {
     const selection = client.nextSelection();
     if (this.pending) this.pending.selection = selection;
     this.watchConnect(attempt, key, channel.url, selection);
-    await client.connectRoute({
-      url: channel.url,
-      route: key,
-      identity: record.identity,
-      ...(code ? { code } : {}),
-      setup: {
-        // Every socket, retries included: this attempt's, on its own channel while current.
-        check: () => attempt === this.attempt && this.route === route && this.isCurrent(channel),
-        // The dialog's consent, asked again just before the first frame with a credential.
-        consent: () => this.stillHolds(consent, attempt),
-      },
-    });
+    const pending = this.pending;
+    try {
+      await client.connectRoute({
+        url: channel.url,
+        route: key,
+        identity: record.identity,
+        ...(code ? { code } : {}),
+        setup: {
+          // Every socket, retries included: this attempt's, on its own channel while current.
+          check: () => attempt === this.attempt && this.route === route && this.isCurrent(channel),
+          // The dialog's consent, asked again just before the first frame with a credential.
+          consent: () => this.stillHolds(consent, attempt),
+        },
+      });
+    } catch {
+      // Refused before it was selected (its channel went meanwhile): this attempt alone ends, and
+      // what it wrote goes.
+      await this.connectRefused(attempt, pending, true);
+    }
+  }
+
+  /**
+   * A route's connect refused before the client selected it: the attempt's
+   * watcher stops, its own forward goes, and with `discard` what it wrote; the
+   * screen says the connection stopped. Nothing of a later attempt is touched.
+   */
+  private async connectRefused(
+    attempt: number,
+    pending: RemoteSetup["pending"],
+    discard: boolean,
+  ): Promise<void> {
+    if (attempt !== this.attempt) return;
+    this.stopWatching();
+    if (pending && this.pending === pending) await this.letGoPending(discard);
+    if (attempt === this.attempt) this.failThere({ kind: "ssh-stopped", cause: null, exit: null });
   }
 
   /** The forward for a setup attempt, up, and its channel; null when it failed (and says so). */
@@ -1090,6 +1116,12 @@ export class RemoteSetup {
       // This attempt's own route and selection only: another choice since, even of this route,
       // says nothing about it, and nothing is kept for it.
       if (attempt !== this.attempt || client.route !== key || !client.isSelected(selection)) return;
+      // Disconnect during the attempt: it ends, keeping the route chosen and disconnected.
+      if (client.suspended) {
+        const record = this.pending?.record;
+        if (record?.key === key) void this.endForDisconnect(record, attempt);
+        return;
+      }
       const { connection, discovery } = state;
       // Only this channel's connection: what the store still says of the one it replaces (another
       // route, connected) is not this attempt's.
@@ -1133,7 +1165,8 @@ export class RemoteSetup {
             this.pending === pending ? this.letGoPending() : undefined,
           );
         else void this.letGoPending();
-        if (this.saved)
+        // The saved route's strip says so only when it is the route this attempt paired.
+        if (this.saved?.key === key)
           this.options.publishRoute(
             statusOf(this.saved, identity ? "different-gateway" : "failed"),
           );
@@ -1193,14 +1226,16 @@ export class RemoteSetup {
   }
 
   /** Release this attempt. Roll back its new pairing as well when the final save fails. */
-  private async letGoPending(discardNewPairing = false): Promise<void> {
+  private async letGoPending(discardNewPairing = false, keepClient = false): Promise<void> {
     const pending = this.pending;
     this.pending = null;
     if (!pending) return;
     const client = this.options.client;
     // Only the connection this attempt made, by its own selection and on its own channel: a
-    // gateway chosen since, even while this disconnect waits in the queue, stays as it is.
+    // gateway chosen since, even while this disconnect waits in the queue, stays as it is. One
+    // the person disconnected (`keepClient`) stays chosen, disconnected.
     if (
+      !keepClient &&
       pending.selection !== null &&
       pending.channel &&
       this.live?.record.key !== pending.record.key
@@ -1537,9 +1572,12 @@ export class RemoteSetup {
     this.attempt += 1;
     this.stopWatching();
     await this.letGoPending();
-    if (live) await this.closeLive(live, { forget: false });
-    if (!(await this.forgetRecord(target))) {
-      // The pinned key is still in Clawtrate's file: Remove didn't finish, and says so.
+    // The forward closes whatever else fails; a step that fails keeps the route, for a retry that
+    // carries on from where this one stopped.
+    const closed = live ? await this.closeLive(live, { forget: false }) : true;
+    if (!closed || !(await this.forgetRecord(target))) {
+      // Something of the route is still kept (its pinned key, its saved connection, its record):
+      // Remove didn't finish, and says so.
       this.saved = target;
       this.options.publishRoute(statusOf(target, "failed"));
       this.publish({
@@ -1584,10 +1622,15 @@ export class RemoteSetup {
    */
   private async forgetRecord(record: SshRouteRecord): Promise<boolean> {
     const transport = this.transport();
+    // A pin already gone (an earlier Remove got that far) is no failure: the rest carries on.
     if (!("refused" in transport) && !transport.forgetId(record.id).ok) return false;
     const client = this.options.client;
-    await client.forgetRoute(record.key);
-    this.options.routes.remove(record.id);
+    try {
+      await client.forgetRoute(record.key);
+      this.options.routes.remove(record.id);
+    } catch {
+      return false;
+    }
     await client.dropRouteToken(record.key).catch(() => undefined);
     this.options.publishRoute(null);
     return true;
@@ -1600,16 +1643,29 @@ export class RemoteSetup {
     if (transport && !("refused" in transport)) transport.forgetId(record.id);
   }
 
+  /**
+   * Lets the live route go: its watchers, its connection (unless `keepClient`)
+   * and its forward, which closes whether or not the disconnect could forget
+   * the saved connection. False when that disconnect failed.
+   */
   private async closeLive(
     live: Live,
     { forget, keepClient = false }: { forget: boolean; keepClient?: boolean },
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (this.live === live) this.live = null;
     for (const stop of live.stop) stop();
     live.stop = [];
     if (live.restoredTimer) clearTimeout(live.restoredTimer);
     const client = this.options.client;
-    if (!keepClient && client.route === live.record.key) await client.disconnect();
+    let disconnected = true;
+    if (!keepClient && client.route === live.record.key) {
+      try {
+        await client.disconnect();
+      } catch {
+        disconnected = false;
+        this.log("Couldn't forget the saved connection of a route let go.");
+      }
+    }
     await live.forward.close();
     if (forget) {
       const transport = this.transport();
@@ -1617,7 +1673,9 @@ export class RemoteSetup {
       this.options.routes.remove(live.record.id);
       await client.dropRouteToken(live.record.key).catch(() => undefined);
     }
-    this.options.publishRoute(null);
+    // The strip is this route's to clear only while no other route has taken it meanwhile.
+    if (!this.live && !this.pending) this.options.publishRoute(null);
+    return disconnected;
   }
 
   // Launch and Reconnect -------------------------------------------------------
@@ -1656,7 +1714,23 @@ export class RemoteSetup {
    */
   private async restore(record: SshRouteRecord): Promise<void> {
     const transport = this.transport();
-    if ("refused" in transport) return;
+    if ("refused" in transport) {
+      // No SSH here (its folder isn't proven private, or no usable ssh): said as it is, and the
+      // saved route stays in the strip, failed, with its Remove. Nothing is opened.
+      this.options.publishRoute(statusOf(record, "failed"));
+      this.publish({
+        ...initialSetupState,
+        phase: "failed",
+        there: {
+          ...emptyThere(record.destination),
+          account: record.account,
+          name: record.name,
+          port: record.sshPort,
+          failure: { kind: transport.refused, cause: null, exit: null },
+        },
+      });
+      return;
+    }
     const attempt = (this.attempt += 1);
     this.stopWatching();
     await this.letGoPending();
@@ -1760,15 +1834,51 @@ export class RemoteSetup {
         failRoute(this.state.there?.failure?.kind === "unreachable" ? "unreachable" : "failed");
       return;
     }
+    // Disconnect while the forward opened: the restore ends there, and its forward goes.
+    if (this.disconnected(record)) {
+      await this.endForDisconnect(record, attempt);
+      return;
+    }
     this.publish({ ...this.state, step: 2 });
-    const selection = this.options.client.nextSelection();
+    const client = this.options.client;
+    const selection = client.nextSelection();
     if (this.pending) this.pending.selection = selection;
     this.watchConnect(attempt, record.key, channel.url, selection);
-    await this.options.client.connectRoute({
-      url: channel.url,
-      route: record.key,
-      identity: record.identity,
-    });
+    const pending = this.pending;
+    try {
+      await client.connectRoute({
+        url: channel.url,
+        route: record.key,
+        identity: record.identity,
+      });
+    } catch {
+      if (attempt === this.attempt) failRoute();
+      await this.connectRefused(attempt, pending, false);
+      return;
+    }
+    // Disconnect queued before the connect, which then opened nothing: the same.
+    if (attempt === this.attempt && this.disconnected(record))
+      await this.endForDisconnect(record, attempt);
+  }
+
+  /** Whether the person chose Disconnect for `record`'s route. */
+  private disconnected(record: SshRouteRecord): boolean {
+    const client = this.options.client;
+    return client.suspended && client.route === record.key;
+  }
+
+  /**
+   * A restore Disconnect ended: its watcher stops, its forward goes, and the
+   * client keeps the route chosen and disconnected, for Reconnect.
+   */
+  private async endForDisconnect(record: SshRouteRecord, attempt: number): Promise<void> {
+    if (attempt !== this.attempt) return;
+    this.attempt += 1;
+    this.stopWatching();
+    await this.letGoPending(false, true);
+    this.saved = record;
+    this.options.publishRoute(statusOf(record, "disconnected"));
+    this.publish(initialSetupState);
   }
 
   // Back, reset and quit --------------------------------------------------------
