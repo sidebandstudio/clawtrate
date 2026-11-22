@@ -330,7 +330,7 @@ describe("this device's credentials in secure storage", () => {
       // Clear text an interrupted removal left beside the record.
       writeFileSync(
         join(dir, STATE_FILE),
-        JSON.stringify({ [TOKEN_KEY]: RECORD.replace(DEVICE, "stale") }),
+        JSON.stringify({ connection: NO_TOKEN, [TOKEN_KEY]: RECORD.replace(DEVICE, "stale") }),
       );
       const before = readFileSync(join(dir, STATE_FILE), "utf8");
       fsHooks.failFolderSyncs = 1;
@@ -359,37 +359,6 @@ describe("this device's credentials in secure storage", () => {
     expectNowhere(dir, SECRETS);
   });
 
-  it("forgetting the gateway removes its settings and an earlier build's token together, or neither", async () => {
-    const { dir } = legacyFolder();
-    // The settings write fails: the gateway, its earlier token included, stays.
-    const one = open(dir, fakeBox().box);
-    expect(await one.storage.get("connection")).toBe(CONNECTION);
-    let refuse = true;
-    fsHooks.failRename = (to) => {
-      if (!refuse || !to.endsWith(STATE_FILE)) return false;
-      refuse = false;
-      return true;
-    };
-    await expect(one.storage.delete("connection")).rejects.toThrow();
-    expect(await one.storage.get("connection")).toBe(CONNECTION);
-    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
-    // The sealed record's change fails: the saved gateway stays.
-    let reads = 0;
-    const two = open(
-      dir,
-      fakeBox({
-        decrypt: async (data) => {
-          if ((reads += 1) > 1) throw new Error("locked");
-          return fakeBox().box.decrypt(data);
-        },
-      }).box,
-    );
-    expect(await two.storage.get("connection")).toBe(CONNECTION);
-    await expect(two.storage.delete("connection")).rejects.toThrow();
-    expect(JSON.parse(state(dir).connection!)).toEqual({ url: URL, token: null });
-    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
-  });
-
   it("a host given secure storage makes its missing data folder, private, before it reads it", async () => {
     const parent = emptyFolder();
     const dir = join(parent, "not", "yet");
@@ -398,40 +367,6 @@ describe("this device's credentials in secure storage", () => {
     expect((await host.signer.loadIdentity()).deviceId).toMatch(/^[0-9a-f]{64}$/);
     expect(await host.secureCredentials?.()).toBe(true);
     if (process.platform !== "win32") expect(statSync(dir).mode & 0o077).toBe(0);
-  });
-
-  it("a gateway switch that fails at either file changes neither the live nor the saved gateway", async () => {
-    const { dir, pem } = legacyFolder();
-    // This device is paired at A, so switching to B retires A's earlier token too.
-    const setup = open(dir, fakeBox().box);
-    await setup.storage.set(await ownTokenKey(pem), RECORD);
-    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
-    // The sealed change fails.
-    let reads = 0;
-    const one = open(
-      dir,
-      fakeBox({
-        decrypt: async (data) => {
-          if ((reads += 1) > 1) throw new Error("locked");
-          return fakeBox().box.decrypt(data);
-        },
-      }).box,
-    );
-    expect(await one.storage.get("connection")).toBe(CONNECTION);
-    await expect(one.storage.set("connection", b)).rejects.toThrow();
-    expect(await one.storage.get("connection")).toBe(CONNECTION);
-    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
-    // The settings write fails.
-    const two = open(dir, fakeBox().box);
-    let refuse = true;
-    fsHooks.failRename = (to) => {
-      if (!refuse || !to.endsWith(STATE_FILE)) return false;
-      refuse = false;
-      return true;
-    };
-    await expect(two.storage.set("connection", b)).rejects.toThrow();
-    expect(await two.storage.get("connection")).toBe(CONNECTION);
-    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
   });
 
   it("a settings change while the old key file can't be removed changes nothing, live or at the next start", async () => {
@@ -443,6 +378,81 @@ describe("this device's credentials in secure storage", () => {
     expect(await credentials.storage.get("turn-limit-minutes")).toBe("30");
     expect(state(dir)["turn-limit-minutes"]).toBe("30");
     expect(await open(dir, fakeBox().box).storage.get("turn-limit-minutes")).toBe("30");
+  });
+
+  it("a gateway switch commits at its settings write: before it, nothing changes; after it, the switch is whole", async () => {
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    const reopened = async (dir: string) => open(dir, fakeBox().box).storage.get("connection");
+    // The settings write fails, and so does every rename after it: the old gateway, with its token.
+    {
+      const { dir } = legacyFolder();
+      const one = open(dir, fakeBox().box);
+      expect(await one.storage.get("connection")).toBe(CONNECTION);
+      fsHooks.failRename = (to) => to.endsWith(STATE_FILE) || to.endsWith(CREDENTIALS_FILE);
+      await expect(one.storage.set("connection", b)).rejects.toThrow();
+      expect(await one.storage.get("connection")).toBe(CONNECTION);
+      fsHooks.failRename = null;
+      expect(await reopened(dir)).toBe(CONNECTION);
+    }
+    // The settings are kept, and the earlier token's removal fails, as if the process had
+    // stopped between the two: the switch has committed, and the old token is never used.
+    {
+      const { dir } = legacyFolder();
+      let reads = 0;
+      const two = open(
+        dir,
+        fakeBox({
+          decrypt: async (data) => {
+            if ((reads += 1) > 1) throw new Error("locked");
+            return fakeBox().box.decrypt(data);
+          },
+        }).box,
+      );
+      expect(await two.storage.get("connection")).toBe(CONNECTION);
+      await two.storage.set("connection", b);
+      expect(await two.storage.get("connection")).toBe(b);
+      expect(await reopened(dir)).toBe(
+        JSON.stringify({ url: "ws://127.0.0.1:19003", token: null }),
+      );
+      // That start removed the copy left behind: back at the old address, it gives no token.
+      writeFileSync(join(dir, STATE_FILE), JSON.stringify({ connection: NO_TOKEN }));
+      expect(await reopened(dir)).toBe(NO_TOKEN);
+    }
+  });
+
+  it("forgetting the gateway commits at its settings write, and an earlier build's token left behind is never used", async () => {
+    const reopened = async (dir: string) => open(dir, fakeBox().box).storage.get("connection");
+    // The settings write fails: the gateway stays, with its earlier token.
+    {
+      const { dir } = legacyFolder();
+      const one = open(dir, fakeBox().box);
+      expect(await one.storage.get("connection")).toBe(CONNECTION);
+      fsHooks.failRename = (to) => to.endsWith(STATE_FILE);
+      await expect(one.storage.delete("connection")).rejects.toThrow();
+      expect(await one.storage.get("connection")).toBe(CONNECTION);
+      fsHooks.failRename = null;
+      expect(await reopened(dir)).toBe(CONNECTION);
+    }
+    // The settings are kept and the token's removal fails: forgotten, and the token isn't revived.
+    {
+      const { dir } = legacyFolder();
+      let reads = 0;
+      const two = open(
+        dir,
+        fakeBox({
+          decrypt: async (data) => {
+            if ((reads += 1) > 1) throw new Error("locked");
+            return fakeBox().box.decrypt(data);
+          },
+        }).box,
+      );
+      expect(await two.storage.get("connection")).toBe(CONNECTION);
+      await two.storage.delete("connection");
+      expect(await two.storage.get("connection")).toBe(null);
+      expect(await reopened(dir)).toBe(null);
+      writeFileSync(join(dir, STATE_FILE), JSON.stringify({ connection: NO_TOKEN }));
+      expect(await reopened(dir)).toBe(NO_TOKEN);
+    }
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {

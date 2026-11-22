@@ -297,6 +297,31 @@ async function replaceDurably(
   }
 }
 
+/** Whether the device whose key the record holds has its own operator token for the address. */
+function hasOwnToken(credentials: Credentials, url: string): boolean {
+  if (credentials.deviceKey === null) return false;
+  const raw = createPublicKey(createPrivateKey(credentials.deviceKey))
+    .export({ type: "spki", format: "der" })
+    .subarray(-32);
+  const deviceId = createHash("sha256").update(raw).digest("hex");
+  return (
+    credentials.values[`deviceToken:${encodeURIComponent(url)}:${deviceId}:operator`] !== undefined
+  );
+}
+
+/**
+ * The earlier build's saved gateway token, while it still belongs to the saved settings: the
+ * same address, and no device token of this device's own for it yet. A copy left behind after
+ * settings that replaced it were kept is never used, and the next start removes it.
+ */
+function earlierToken(credentials: Credentials, saved: Settings | null): string | null {
+  const kept = credentials.values[SETTINGS_KEY];
+  const earlier = kept === undefined ? null : parseSettings(kept);
+  if (!earlier || !saved || earlier.url !== saved.url || hasOwnToken(credentials, earlier.url))
+    return null;
+  return earlier.token;
+}
+
 export function createSecureCredentials(options: {
   dataDir: string;
   box: SecretBox;
@@ -406,6 +431,21 @@ export function createSecureCredentials(options: {
               ? error
               : new SecureStorageUnavailableError(),
         };
+      }
+      // An earlier gateway token the saved settings no longer use (a removal that failed, or a
+      // stop between the two writes) is removed now; if that fails it stays unused.
+      if (
+        sealed.credentials.values[SETTINGS_KEY] !== undefined &&
+        earlierToken(sealed.credentials, savedSettings) === null
+      ) {
+        const { [SETTINGS_KEY]: _stale, ...values } = sealed.credentials.values;
+        const reconciled = { ...sealed, credentials: { ...sealed.credentials, values } };
+        try {
+          await commit(reconciled);
+          sealed = reconciled;
+        } catch {
+          // Kept unused: reads never take a token from it.
+        }
       }
       const mode: Mode = { kind: "secure", sealed, swept: !earlier };
       if (earlier)
@@ -523,15 +563,15 @@ export function createSecureCredentials(options: {
     settings = next;
   };
 
-  /** Whether this device, by its own key, has a device token saved for the address. */
-  const thisDeviceHasToken = async (url: string) => {
-    const { deviceKey, values } = await credentials();
-    if (deviceKey === null) return false;
-    const raw = createPublicKey(createPrivateKey(deviceKey))
-      .export({ type: "spki", format: "der" })
-      .subarray(-32);
-    const deviceId = createHash("sha256").update(raw).digest("hex");
-    return values[`deviceToken:${encodeURIComponent(url)}:${deviceId}:operator`] !== undefined;
+  /** Removes an earlier build's saved token once the settings no longer use it; a failure leaves an unused copy. */
+  const retireEarlier = async () => {
+    if ((await mode()).kind === "locked") return;
+    if ((await credentials()).values[SETTINGS_KEY] === undefined) return;
+    await change(withoutValue(SETTINGS_KEY)).catch(() =>
+      warn(
+        "Could not remove an earlier copy of the gateway token. Clawtrate removes it at its next start.",
+      ),
+    );
   };
 
   const withoutValue = (key: string) => (current: Credentials) => {
@@ -550,13 +590,8 @@ export function createSecureCredentials(options: {
           settings[SETTINGS_KEY] === undefined ? null : parseSettings(settings[SETTINGS_KEY]);
         if (!saved) return null;
         let token = typed?.url === saved.url ? typed.token : null;
-        if (token === null) {
-          const current = await mode();
-          const kept =
-            current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
-          const earlier = kept === undefined ? null : parseSettings(kept);
-          if (earlier?.url === saved.url) token = earlier.token;
-        }
+        if (token === null && (await mode()).kind !== "locked")
+          token = earlierToken(await credentials(), saved);
         return JSON.stringify({ ...saved, token });
       },
       set: async (key, value) => {
@@ -573,9 +608,11 @@ export function createSecureCredentials(options: {
         if (!next) throw new Error("not gateway settings");
         // An earlier build's saved token goes once these settings replace it: another address,
         // another token, or this device's own token saved for it. Settings that merely drop a
-        // typed token, at a Disconnect or a refusal, keep it. Like a removal, the two files
-        // change together or not at all: the sealed copy first, put back if the settings can't
-        // then be written, so a call that fails changes neither the live nor the saved gateway.
+        // typed token, at a Disconnect or a refusal, keep it. The settings write is the commit:
+        // until it is kept nothing has changed and the call fails; once it is, the call has
+        // committed, and the earlier sealed copy is removed after it. A copy left by a failed
+        // removal or a stop in between no longer matches the settings, so it is never used, and
+        // the next start removes it.
         const current = await mode();
         const kept =
           current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
@@ -584,26 +621,17 @@ export function createSecureCredentials(options: {
           earlier !== null &&
           (earlier.url !== next.url ||
             (next.token !== null && earlier.token !== next.token) ||
-            (await thisDeviceHasToken(earlier.url)));
-        if (replaced) await change(withoutValue(SETTINGS_KEY));
-        try {
-          await queued(async () => {
-            await mode();
-            await keepSettings({
-              ...settings,
-              [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
-            });
-            // A typed token stays in this process, for its address only, once its settings are kept.
-            typed = next.token === null ? null : { url: next.url, token: next.token };
+            hasOwnToken(await credentials(), earlier.url));
+        await queued(async () => {
+          await mode();
+          await keepSettings({
+            ...settings,
+            [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
           });
-        } catch (error) {
-          if (replaced && kept !== undefined)
-            await change((now) => ({
-              ...now,
-              values: { ...now.values, [SETTINGS_KEY]: kept },
-            })).catch(() => {});
-          throw error;
-        }
+          // A typed token stays in this process, for its address only, once its settings are kept.
+          typed = next.token === null ? null : { url: next.url, token: next.token };
+        });
+        if (replaced) await retireEarlier();
       },
       delete: async (key) => {
         if (isCredentialKey(key)) return change(withoutValue(key));
@@ -613,27 +641,15 @@ export function createSecureCredentials(options: {
             const { [key]: _removed, ...rest } = settings;
             await keepSettings(rest);
           });
-        // The saved gateway and an earlier build's token for it go together or not at all: the
-        // sealed copy first, and put back if the settings can't then be written.
-        const current = await mode();
-        const kept =
-          current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
-        if (kept !== undefined) await change(withoutValue(SETTINGS_KEY));
-        try {
-          await queued(async () => {
-            await mode();
-            const { [SETTINGS_KEY]: _removed, ...rest } = settings;
-            await keepSettings(rest);
-            typed = null;
-          });
-        } catch (error) {
-          if (kept !== undefined)
-            await change((now) => ({
-              ...now,
-              values: { ...now.values, [SETTINGS_KEY]: kept },
-            })).catch(() => {});
-          throw error;
-        }
+        // As for a switch, the settings write is the commit, and an earlier build's token for the
+        // gateway is removed after it: left behind, it matches no saved settings and isn't used.
+        await queued(async () => {
+          await mode();
+          const { [SETTINGS_KEY]: _removed, ...rest } = settings;
+          await keepSettings(rest);
+          typed = null;
+        });
+        await retireEarlier();
       },
     },
     signer: createPemSigner(async () => {
