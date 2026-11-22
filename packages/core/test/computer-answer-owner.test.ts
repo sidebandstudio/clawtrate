@@ -131,6 +131,29 @@ describe("Give back control and answer: the answer is the viewer's that chose it
     });
   }
 
+  it("F-145: an answer arriving after the viewer leaves keeps the original release and the open question", async () => {
+    const release = deferred<unknown>();
+    const gateway = computerGateway(() => release.promise);
+    const { client, transcript, viewer, other } = await inControl(gateway);
+    const id = viewer.computerViewer()!;
+    try {
+      await viewer.apply({ type: "computerLeave" });
+      await until(() => gateway.calls("clawtrate-computer.control.release").length === 1);
+      await viewer.apply({ type: "computerRelease", answer: ANSWER });
+      expect(client.state.computer?.panes[id]?.control.answerQueued).toBe(false);
+      release.resolve(released);
+      await until(() => client.state.computer?.panes[id]?.control.released === true);
+      expect(gateway.calls("clawtrate-computer.control.release")).toHaveLength(1);
+      expect(gateway.calls("question.resolve")).toEqual([]);
+      expect(transcript().questions[0]?.status).toBe("pending");
+    } finally {
+      release.resolve(released);
+      viewer.dispose();
+      other.dispose();
+      client.stop();
+    }
+  });
+
   it("F-145: a viewer that stays sends the answer once the release is confirmed", async () => {
     const gateway = computerGateway(() => released);
     const { client, viewer, other } = await inControl(gateway);

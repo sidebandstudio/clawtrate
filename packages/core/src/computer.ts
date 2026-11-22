@@ -1669,6 +1669,7 @@ export class ComputerViews {
     const pane = this.pane(viewer);
     const lease = live?.lease;
     if (!live || !lease || !pane) return;
+    if (options.answer && !live.shown) return;
     const status = pane.control.status;
     if (
       status !== "granted" &&
