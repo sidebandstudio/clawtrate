@@ -136,6 +136,9 @@ function question(overrides: Partial<QuestionCard> = {}): QuestionCard {
   };
 }
 
+/** Every engine a test made: their viewers are disposed after it, before real timers return. */
+const harnesses: Array<{ views: ComputerViews; state: () => ComputerState }> = [];
+
 function harness(handlers: Record<string, Handler> = {}, options: { write?: boolean } = {}) {
   let state: ComputerState = initialComputerState;
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -208,7 +211,7 @@ function harness(handlers: Record<string, Handler> = {}, options: { write?: bool
   const pane = () => state.panes[viewer]!;
   const calls = (method: string) =>
     requests.filter((r) => r.method === method).map((r) => r.params);
-  return {
+  const made = {
     views,
     viewer,
     pane,
@@ -221,6 +224,8 @@ function harness(handlers: Record<string, Handler> = {}, options: { write?: bool
     answered,
     ctx,
   };
+  harnesses.push(made);
+  return made;
 }
 
 async function ready(h: ReturnType<typeof harness>) {
@@ -244,6 +249,9 @@ async function granted(h: ReturnType<typeof harness>) {
 }
 
 afterEach(() => {
+  // Each viewer shown, the competing takes' too: its renewals and timers end with it.
+  for (const h of harnesses.splice(0))
+    for (const viewer of Object.keys(h.state().panes)) h.views.dispose(viewer);
   vi.useRealTimers();
 });
 

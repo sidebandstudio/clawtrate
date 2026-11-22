@@ -3,11 +3,12 @@
 // was sent takes it with it, while the release goes on; the question stays open for another
 // viewer of the same task.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import type { ComputerViews } from "../src/computer.ts";
 import type { FakeGateway } from "./fake-gateway.ts";
 import { grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { deferred, helloOk, sleep, until } from "./fake-gateway.ts";
+import { deferred, helloOk, until } from "./fake-gateway.ts";
 
 const GEN = "d".repeat(32);
 const TAB = "TAB0000000000000000000000000000B";
@@ -77,32 +78,53 @@ describe("Give back control and answer: the answer is the viewer's that chose it
       const release = deferred<unknown>();
       const gateway = computerGateway(() => release.promise);
       const { client, transcript, viewer, other } = await inControl(gateway);
-      await viewer.apply({ type: "computerRelease", answer: ANSWER });
-      await until(() => gateway.calls("clawtrate-computer.control.release").length === 1);
-      await go(viewer);
-      release.resolve(released);
-      await sleep(50);
-      expect(gateway.calls("question.resolve")).toEqual([]);
-      expect(transcript().questions[0]).toMatchObject({ status: "pending" });
-      other.dispose();
-      client.stop();
+      // The engine's own step once the release is confirmed: an answer would start there.
+      const confirmed = vi.spyOn(
+        (client as unknown as { computer: ComputerViews }).computer as unknown as {
+          confirmed: (...args: unknown[]) => void;
+        },
+        "confirmed",
+      );
+      try {
+        await viewer.apply({ type: "computerRelease", answer: ANSWER });
+        await until(() => gateway.calls("clawtrate-computer.control.release").length === 1);
+        await go(viewer);
+        release.resolve(released);
+        await until(() => confirmed.mock.calls.length === 1);
+        // An answer started would be submitting until its request ended.
+        await until(() => transcript().questions[0]?.submitting === false);
+        expect(gateway.calls("question.resolve")).toEqual([]);
+        expect(transcript().questions[0]).toMatchObject({ status: "pending" });
+      } finally {
+        release.resolve(released);
+        viewer.dispose();
+        other.dispose();
+        client.stop();
+      }
     });
 
     it(`F-145: a viewer that ${what} while the answer reads the question sends no answer; the question stays open`, async () => {
       const gateway = computerGateway(() => released);
       const { client, transcript, viewer, other } = await inControl(gateway);
       const list = deferred<unknown>();
-      const listed = gateway.calls("question.list").length;
-      gateway.handlers["question.list"] = () => list.promise;
-      await viewer.apply({ type: "computerRelease", answer: ANSWER });
-      await until(() => gateway.calls("question.list").length > listed);
-      await go(viewer);
-      list.resolve({ questions: [questionRecord("ask_1", "run-1")] });
-      await sleep(50);
-      expect(gateway.calls("question.resolve")).toEqual([]);
-      expect(transcript().questions[0]).toMatchObject({ status: "pending", submitting: false });
-      other.dispose();
-      client.stop();
+      const settle = () => list.resolve({ questions: [questionRecord("ask_1", "run-1")] });
+      try {
+        const listed = gateway.calls("question.list").length;
+        gateway.handlers["question.list"] = () => list.promise;
+        await viewer.apply({ type: "computerRelease", answer: ANSWER });
+        await until(() => gateway.calls("question.list").length > listed);
+        await go(viewer);
+        settle();
+        // The answer's attempt is over: withdrawn, or sent and answered.
+        await until(() => transcript().questions[0]?.submitting === false);
+        expect(gateway.calls("question.resolve")).toEqual([]);
+        expect(transcript().questions[0]).toMatchObject({ status: "pending", submitting: false });
+      } finally {
+        settle();
+        viewer.dispose();
+        other.dispose();
+        client.stop();
+      }
     });
 
     it(`F-145: a viewer that ${what} while the answer waits for question access sends no answer; the question stays open`, async () => {
@@ -114,20 +136,32 @@ describe("Give back control and answer: the answer is the viewer's that chose it
         "operator.read",
         "operator.write",
       ]);
-      await viewer.apply({ type: "computerRelease", answer: ANSWER });
-      await until(() => client.state.connection.upgrade.status === "pending");
-      await go(viewer);
-      wait.resolve({
-        status: "approved",
-        requestId: "up-1",
-        deviceToken: "rotated",
-        scopes: ["operator.read", "operator.write", "operator.questions"],
-      });
-      await sleep(50);
-      expect(gateway.calls("question.resolve")).toEqual([]);
-      expect(transcript().questions[0]).toMatchObject({ status: "pending", submitting: false });
-      other.dispose();
-      client.stop();
+      const approve = () =>
+        wait.resolve({
+          status: "approved",
+          requestId: "up-1",
+          deviceToken: "rotated",
+          scopes: ["operator.read", "operator.write", "operator.questions"],
+        });
+      try {
+        await viewer.apply({ type: "computerRelease", answer: ANSWER });
+        await until(() => client.state.connection.upgrade.status === "pending");
+        await go(viewer);
+        approve();
+        // Access arrived, and the answer's attempt, if any was left, is over.
+        await until(
+          () =>
+            client.state.connection.scopes.includes("operator.questions") &&
+            transcript().questions[0]?.submitting === false,
+        );
+        expect(gateway.calls("question.resolve")).toEqual([]);
+        expect(transcript().questions[0]).toMatchObject({ status: "pending", submitting: false });
+      } finally {
+        approve();
+        viewer.dispose();
+        other.dispose();
+        client.stop();
+      }
     });
   }
 
@@ -157,11 +191,14 @@ describe("Give back control and answer: the answer is the viewer's that chose it
   it("F-145: a viewer that stays sends the answer once the release is confirmed", async () => {
     const gateway = computerGateway(() => released);
     const { client, viewer, other } = await inControl(gateway);
-    await viewer.apply({ type: "computerRelease", answer: ANSWER });
-    await until(() => gateway.calls("question.resolve").length === 1);
-    expect(gateway.calls("question.resolve")[0]).toMatchObject({ id: "ask_1" });
-    viewer.dispose();
-    other.dispose();
-    client.stop();
+    try {
+      await viewer.apply({ type: "computerRelease", answer: ANSWER });
+      await until(() => gateway.calls("question.resolve").length === 1);
+      expect(gateway.calls("question.resolve")[0]).toMatchObject({ id: "ask_1" });
+    } finally {
+      viewer.dispose();
+      other.dispose();
+      client.stop();
+    }
   });
 });
