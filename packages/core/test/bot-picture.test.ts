@@ -442,6 +442,13 @@ describe("a bot write is bound to its gateway to the end", () => {
     const { client, fake } = await accountsClient();
     const original = fake.gateway.handlers["agents.create"]!;
     const refuse = deferred<void>();
+    const answer = deferred<void>();
+    onTestFinished(() => {
+      fake.gateway.handlers["agents.create"] = original;
+      refuse.resolve();
+      answer.resolve();
+      client.stop();
+    });
     fake.gateway.handlers["agents.create"] = () =>
       refuse.promise.then(() => {
         throw new GatewayError({ code: "INVALID_REQUEST", message: "no" });
@@ -454,17 +461,13 @@ describe("a bot write is bound to its gateway to the end", () => {
       );
     await until(() => fake.gateway.calls("agents.create").length === 1);
     resetCreation(client);
-    const answer = deferred<void>();
     fake.gateway.handlers["agents.create"] = (params) => {
       const made = original(params);
       return answer.promise.then(() => made);
     };
-    const second = createBridgeSession(client).apply({
-      type: "createBot",
-      ...input,
-      name: "Bee",
-      gatewayId: "gateway-a",
-    });
+    const second = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, name: "Bee", gatewayId: "gateway-a" })
+      .catch((error: Error) => error);
     await until(() => fake.gateway.calls("agents.create").length === 2);
     refuse.resolve();
     expect(await first).toMatch("gateway changed");
@@ -473,7 +476,6 @@ describe("a bot write is bound to its gateway to the end", () => {
     expect(client.state.accounts.creation).toMatchObject({ name: "Bee", status: "creating" });
     answer.resolve();
     expect(await second).toEqual({ botId: "bee", missing: [] });
-    client.stop();
   }, 15_000);
 
   /** Start Create A and hold its last step, the first task, until its connection drops. */
