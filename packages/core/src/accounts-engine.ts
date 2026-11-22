@@ -1172,6 +1172,7 @@ export class AccountsEngine {
       if (error instanceof WriteRetired || !live())
         throw new Error(
           "The gateway changed before the bot was finished, so nothing more was sent.",
+          { cause: error },
         );
       throw error;
     } finally {
