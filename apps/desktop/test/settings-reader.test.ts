@@ -207,8 +207,7 @@ describe.skipIf(platform !== "darwin")("the macOS helper's ACL checks", () => {
     expect(await openIn(path)).toMatchObject({ kind: "read" });
   });
 
-  it("refuses a file that grew past 1 MiB after its size was checked", () => {
-    const { file } = home();
+  it("refuses a file over 1 MiB by its size, and one that grew past it by the bytes read", () => {
     const harness = join(scratch, "grow.c");
     writeFileSync(
       harness,
@@ -219,14 +218,14 @@ int main(int argc, char **argv) {
   (void)argc;
   int fd = open(argv[1], O_RDONLY);
   const char *why = checkOpened(fd, 0);
-  if (why) { puts(why); return 0; }
+  if (why) { printf("checked: %s\\n", why); return 0; }
   FILE *grow = fopen(argv[1], "a");
   for (int i = 0; i <= SETTINGS_LIMIT; ++i) fputc('x', grow);
   fclose(grow);
   size_t length;
   char *buffer = malloc(SETTINGS_LIMIT + 1);
   why = readBounded(fd, buffer, &length);
-  puts(why ? why : "ok");
+  printf("read: %s\\n", why ? why : "ok");
   return 0;
 }`,
     );
@@ -240,7 +239,11 @@ int main(int argc, char **argv) {
       "-o",
       binary,
     ]);
-    expect(execFileSync(binary, [file], { encoding: "utf8" }).trim()).toBe("large");
+    const run = (file: string) => execFileSync(binary, [file], { encoding: "utf8" }).trim();
+    const large = home().file;
+    writeFileSync(large, "x".repeat(SETTINGS_LIMIT + 1));
+    expect(run(large)).toBe("checked: large");
+    expect(run(home().file)).toBe("read: large");
   });
 
   // Only on a discarded hosted runner, where sudo needs no password: a file root owns that
@@ -343,12 +346,29 @@ describe("the parse worker", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  const write = (name: string, body: string) => {
+    const path = join(scratch, name);
+    writeFileSync(path, body);
+    return new URL(`file://${path}`);
+  };
+
+  it("runs with resource limits and an empty environment", async () => {
+    const report = `import { parentPort, resourceLimits } from "node:worker_threads";
+const token = JSON.stringify({ resourceLimits, env: Object.keys(process.env) });
+parentPort.postMessage({ kind: "found", token, port: 1 });\n`;
+    const answer = await parseInWorker("", write("report.mjs", report));
+    if (answer.kind !== "found") throw new Error("the worker didn't answer");
+    expect(JSON.parse(answer.token)).toEqual({
+      resourceLimits: expect.objectContaining({
+        maxOldGenerationSizeMb: 32,
+        maxYoungGenerationSizeMb: 8,
+        stackSizeMb: 4,
+      }) as unknown,
+      env: [],
+    });
+  });
+
   it("refuses a worker that fails, runs out of memory or answers with another shape", async () => {
-    const write = (name: string, body: string) => {
-      const path = join(scratch, name);
-      writeFileSync(path, body);
-      return new URL(`file://${path}`);
-    };
     const failed = { kind: "refused", reason: "unreadable", why: "worker" };
     expect(await parseInWorker("", write("throws.mjs", "throw new Error('x');\n"))).toEqual(failed);
     const grow = "const a = []; for (;;) a.push(new Array(1e6).fill(1));\n";
