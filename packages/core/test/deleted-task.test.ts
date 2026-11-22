@@ -1,12 +1,14 @@
-// A message written in a task that was deleted elsewhere (parity F-278). OpenClaw 2026.10.6
-// starts a new, empty task under the deleted task's key for a plain `chat.send`; a send that
-// names the session its history came from (`sessionId` with `expectedLeafEntryId: null`) is
-// refused instead ("active branch changed; review and retry"). The refused message fails with
-// the reason and keeps its words; nothing is sent again into whatever the key holds now.
+// A message written in a task that was deleted elsewhere (parity F-278), or archived elsewhere
+// (F-277). OpenClaw 2026.10.6 starts a new, empty task under the deleted task's key for a plain
+// `chat.send`; a send that names the session its history came from (`sessionId` with
+// `expectedLeafEntryId: null`) is refused instead ("active branch changed; review and retry").
+// Every send to an archived task is refused with a message and no reason of its own. The refused
+// message fails with the reason and keeps its words; nothing is sent again into whatever the key
+// holds now.
 import { describe, expect, it } from "vitest";
-import { TaskDeletedError } from "../src/client.ts";
-import { TASK_DELETED_ELSEWHERE } from "../src/task-actions.ts";
-import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { TaskArchivedError, TaskDeletedError } from "../src/client.ts";
+import { TASK_ARCHIVED_ELSEWHERE, TASK_DELETED_ELSEWHERE } from "../src/task-actions.ts";
+import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const MOVED = {
@@ -17,8 +19,13 @@ const MOVED = {
 
 type Send = { sessionId?: string; expectedLeafEntryId?: null; idempotencyKey: string };
 
+const ARCHIVED = {
+  code: "INVALID_REQUEST",
+  message: `Session "${KEY}" is archived. Restore it before starting new work.`,
+};
+
 /** A task whose history came from session `s-1`; the gateway's row for it is `now`. */
-async function shown(now: { session: { sessionId: string } | null }) {
+async function shown(now: { session: { sessionId: string; archived?: boolean } | null }) {
   const gateway = grantingGateway();
   const history = { sessionId: "s-1" as string | undefined };
   gateway.handlers["chat.history"] = () => ({
@@ -122,15 +129,67 @@ describe("a task deleted elsewhere (F-278)", () => {
   });
 
   it("any other refusal of a guarded send stands as the gateway gave it", async () => {
-    const { client, gateway, transcript, sends } = await shown({ session: null });
+    const { client, gateway, transcript, sends } = await shown({ session: { sessionId: "s-1" } });
     gateway.handlers["chat.send"] = () => {
       throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
     };
     client.sendMessage(KEY, "hello");
     await until(() => transcript().outbox[0]?.status === "failed");
     expect(transcript().outbox[0]?.error).toBe("budget exhausted");
-    expect(gateway.calls("sessions.describe")).toEqual([]);
+    expect(gateway.calls("sessions.describe")).toHaveLength(1);
     expect(sends()).toHaveLength(1);
+    client.stop();
+  });
+});
+
+describe("a task archived elsewhere (F-277)", () => {
+  it("a send refused while the task's row says archived fails as archived elsewhere, keeps its words and is not sent again", async () => {
+    const { client, gateway, transcript, sends } = await shown({
+      session: { sessionId: "s-1", archived: true },
+    });
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(ARCHIVED);
+    };
+    const id = client.sendMessage(KEY, "One more thing");
+    await until(() => transcript().outbox[0]?.status === "failed");
+    await sleep(50);
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      text: "One more thing",
+      error: TASK_ARCHIVED_ELSEWHERE,
+    });
+    expect(new TaskArchivedError().message).toBe(TASK_ARCHIVED_ELSEWHERE);
+    expect(sends()).toHaveLength(1);
+    expect(transcript().runs.find((run) => run.id === id)?.error?.kind).toBe("not-started");
+    client.stop();
+  });
+
+  it("a steer refused the same way says so too", async () => {
+    const { client, gateway, transcript, sends } = await shown({
+      session: { sessionId: "s-1", archived: true },
+    });
+    gateway.emit("agent", agentEvent("run-on", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(ARCHIVED);
+    };
+    client.sendMessage(KEY, "And this");
+    expect(transcript().outbox[0]?.mode).toBe("steer");
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_ARCHIVED_ELSEWHERE);
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0]).toMatchObject({ queueMode: "steer" });
+    client.stop();
+  });
+
+  it("a task the gateway shows not archived keeps the refusal as it came", async () => {
+    const { client, gateway, transcript } = await shown({ session: { sessionId: "s-1" } });
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(ARCHIVED);
+    };
+    client.sendMessage(KEY, "hello");
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(ARCHIVED.message);
     client.stop();
   });
 });

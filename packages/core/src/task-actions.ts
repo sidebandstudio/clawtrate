@@ -12,6 +12,8 @@ import { asRecord, mapSessionRow, plainPreview, type RawRecord } from "./mapping
 
 /** A message the gateway did not take because the task it was written in is gone (F-278). */
 export const TASK_DELETED_ELSEWHERE = "This task was deleted elsewhere.";
+/** A message the gateway did not take because the task it was written in was archived (F-277). */
+export const TASK_ARCHIVED_ELSEWHERE = "This task was archived elsewhere.";
 /** The longest label the gateway takes (`SESSION_LABEL_MAX_LENGTH`). */
 export const MAX_TASK_LABEL_CHARS = 512;
 /** Archived tasks one read lists; past it `more` is true. */

@@ -298,6 +298,7 @@ import {
   pinTask,
   renameTask,
   restoreTask,
+  TASK_ARCHIVED_ELSEWHERE,
   TASK_DELETED_ELSEWHERE,
   type ArchivedList,
   type ArchiveResult,
@@ -887,6 +888,14 @@ export class TaskDeletedError extends Error {
   constructor() {
     super(TASK_DELETED_ELSEWHERE);
     this.name = "TaskDeletedError";
+  }
+}
+
+/** The gateway refused a send because the task it was for was archived. */
+export class TaskArchivedError extends Error {
+  constructor() {
+    super(TASK_ARCHIVED_ELSEWHERE);
+    this.name = "TaskArchivedError";
   }
 }
 
@@ -3064,7 +3073,6 @@ export class ClawtrateClient {
     }
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
-
     // A pending question holds every send, whatever run it was meant for and whether or not
     // a run is still shown as active: the question's own state is the guard.
     {
@@ -3160,6 +3168,7 @@ export class ClawtrateClient {
       if (
         error instanceof GatewayProtocolRequestError ||
         error instanceof TaskDeletedError ||
+        error instanceof TaskArchivedError ||
         error instanceof SendTooLargeError ||
         error instanceof NotSentError
       ) {
@@ -3253,13 +3262,15 @@ export class ClawtrateClient {
   }
 
   /**
-   * A send that named its session, refused as no longer for it (`active-leaf-changed`, "active
-   * branch changed; review and retry"). What the gateway has under the key now says why. No
-   * session, or another one, means the task was deleted and nothing was sent: OpenClaw 2026.10.6
-   * keeps a task's session through `sessions.reset`, `/new` and `/reset`. The same session means
-   * the refusal was not about the task. A stop command ("stop", "/stop") is checked against the
-   * task's latest message, which a guard naming none matches only in an empty task. Such a send
-   * goes again as before, unguarded, under the same idempotency key. Any other refusal stands.
+   * A send the gateway refused. What it has under the key now says why. A send that named its
+   * session, refused as no longer for it (`active-leaf-changed`, "active branch changed; review
+   * and retry"), finding no session there, or another one, means the task was deleted and nothing
+   * was sent: OpenClaw 2026.10.6 keeps a task's session through `sessions.reset`, `/new` and
+   * `/reset`. An archived task is refused with a message and no reason of its own, a steer too, so
+   * its row says so. The same session, not archived, means the refusal was not about the task. A
+   * stop command ("stop", "/stop") is checked against the task's latest message, which a guard
+   * naming none matches only in an empty task. Such a send goes again as before, unguarded, under
+   * the same idempotency key. Any other refusal stands.
    */
   private async afterSessionRefusal(
     key: string,
@@ -3267,22 +3278,20 @@ export class ClawtrateClient {
     error: unknown,
     again: () => Promise<unknown>,
   ): Promise<unknown> {
-    if (
-      params.sessionId === undefined ||
-      !(error instanceof GatewayProtocolRequestError) ||
-      asRecord(error.details)?.reason !== "active-leaf-changed"
-    )
+    if (!(error instanceof GatewayProtocolRequestError) || error.gatewayCode !== "INVALID_REQUEST")
       throw error;
-    let now: unknown;
+    const moved =
+      params.sessionId !== undefined && asRecord(error.details)?.reason === "active-leaf-changed";
+    let row: RawRecord | null;
     try {
-      now = asRecord(
-        asRecord(await this.request("sessions.describe", { key }))?.session,
-      )?.sessionId;
+      row = asRecord(asRecord(await this.request("sessions.describe", { key }))?.session);
     } catch {
       // What the gateway has under the key is not known: its refusal stands as it came.
       throw error;
     }
-    if (now !== params.sessionId) throw new TaskDeletedError();
+    if (moved && row?.sessionId !== params.sessionId) throw new TaskDeletedError();
+    if (row?.archived === true) throw new TaskArchivedError();
+    if (!moved) throw error;
     return again();
   }
 
