@@ -47,28 +47,39 @@ function standInGateway(initial) {
 }
 
 /** The plugin's contract, as the design draws it. */
-function standInPlugin(gw, { managers }) {
-  const ledger = { open: new Map(), grants: new Map() }; // the one authoritative row
+function standInPlugin(gw, { managers, grants = [] }) {
+  const ledger = {
+    open: new Map(),
+    grants: new Map(grants.map((id) => [id, { generation: 1, active: true }])),
+  };
+  const mayTarget = (bot, target) => bot === target || managers.includes(bot);
   const journal = [];
   const conditional = new Set(["label", "instructions", "model", "effort", "autonomy"]); // no "name": gated
   let seq = 0;
   return {
     journal,
-    ledger,
     // A bot's tool. ctx comes from the tool context, never from arguments.
     tool(ctx, args) {
       const target = args.bot ?? ctx.agentId;
-      if (target !== ctx.agentId && !managers.includes(ctx.agentId)) return { status: "refused" };
-      const changes = args.changes;
-      const tokens = Object.fromEntries(Object.keys(changes).map((f) => [f, gw.read(f).token]));
-      const before = Object.fromEntries(Object.keys(changes).map((f) => [f, gw.read(f).value]));
+      if (!mayTarget(ctx.agentId, target)) return { status: "refused" };
+      let source = { kind: "bot", bot: ctx.agentId };
+      if (ctx.grant !== undefined) {
+        const grant = ledger.grants.get(ctx.grant);
+        if (!grant?.active) return { status: "refused" };
+        source = { kind: "agent", bot: ctx.agentId, grant: ctx.grant, generation: grant.generation };
+      }
+      // Keep the approved JSON bytes, including nested values, apart from the caller's objects.
+      const payload = JSON.stringify(args.changes);
+      const changes = JSON.parse(payload);
+      const bases = Object.fromEntries(Object.keys(changes).map((field) => [field, gw.read(field)]));
       const id = `p${++seq}`;
-      const source = ctx.grant ? { kind: "agent", grant: ctx.grant, generation: ledger.grants.get(ctx.grant) } : { kind: "bot", bot: ctx.agentId };
-      ledger.open.set(id, { state: "open", target, changes, tokens, before, digest: digest(changes), source });
+      ledger.open.set(id, { state: "open", target, payload, bases, digest: digest(changes), source });
       return { status: "proposed", proposalId: id };
     },
     revoke(grant) {
-      ledger.grants.set(grant, (ledger.grants.get(grant) ?? 0) + 1);
+      const current = ledger.grants.get(grant);
+      if (!current?.active) return;
+      ledger.grants.set(grant, { generation: current.generation + 1, active: false });
       for (const p of ledger.open.values())
         if (p.state === "open" && p.source.kind === "agent" && p.source.grant === grant) p.state = "withdrawn";
     },
@@ -77,16 +88,25 @@ function standInPlugin(gw, { managers }) {
       const p = ledger.open.get(id);
       if (!p || p.state !== "open") return { outcome: p?.state ?? "missing" };
       if (!caller.authenticated || !caller.scopes.includes(ADMIN)) return { outcome: "below-admin" };
-      if (shownDigest !== p.digest) return { outcome: "changed" };
-      if (p.source.kind === "agent" && ledger.grants.get(p.source.grant) !== p.source.generation) return { outcome: "withdrawn" };
+      const changes = JSON.parse(p.payload);
+      if (shownDigest !== p.digest || digest(changes) !== p.digest) return { outcome: "changed" };
+      if (p.source.kind === "agent") {
+        const grant = ledger.grants.get(p.source.grant);
+        if (!grant?.active || grant.generation !== p.source.generation) return { outcome: "withdrawn" };
+      }
       p.state = "committing"; // the claim
       const result = {};
-      for (const [field, value] of Object.entries(p.changes)) {
+      for (const [field, value] of Object.entries(changes)) {
         if (!conditional.has(field)) {
           result[field] = "gated";
           continue;
         }
-        const w = gw.conditionalWrite(caller, field, value, p.tokens[field]);
+        if (!mayTarget(p.source.bot, p.target)) {
+          p.state = Object.values(result).includes("applied") ? "partial" : "withdrawn";
+          result[field] = "not-applied";
+          return { outcome: p.state, result };
+        }
+        const w = gw.conditionalWrite(caller, field, value, p.bases[field].token);
         if (!w.ok) {
           result[field] = "not-applied";
           break;
@@ -94,7 +114,7 @@ function standInPlugin(gw, { managers }) {
         journal.push({
           id: `j${journal.length + 1}`,
           field,
-          before: { value: p.before[field], token: p.tokens[field] },
+          before: p.bases[field],
           after: { value, token: w.token },
         });
         result[field] = "applied";
@@ -141,6 +161,48 @@ check("only a manager proposes for another bot", () => {
   assert.equal(plugin.tool({ agentId: "main" }, { bot: "otto", changes: { label: "y" } }).status, "proposed");
 });
 
+check("Apply uses the proposal the person saw", () => {
+  const gw = standInGateway({ model: { primary: "small" } });
+  const plugin = standInPlugin(gw, { managers: [] });
+  const changes = { model: { primary: "medium" } };
+  const shown = digest(changes);
+  const { proposalId } = plugin.tool({ agentId: "otto" }, { changes });
+  changes.model.primary = "large";
+  assert.equal(plugin.accept(admin, proposalId, digest(changes)).outcome, "changed");
+  assert.equal(gw.writes.length, 0);
+  assert.equal(plugin.accept(admin, proposalId, shown).result.model, "applied");
+  assert.deepEqual(gw.read("model").value, { primary: "medium" });
+});
+
+check("removing a manager before Apply withdraws its cross-bot proposal", () => {
+  const gw = standInGateway({ label: "x" });
+  const managers = ["main"];
+  const plugin = standInPlugin(gw, { managers });
+  const changes = { label: "y" };
+  const { proposalId } = plugin.tool({ agentId: "main" }, { bot: "otto", changes });
+  managers.pop();
+  assert.equal(plugin.accept(admin, proposalId, digest(changes)).outcome, "withdrawn");
+  assert.equal(gw.writes.length, 0);
+});
+
+check("removing a manager after the first field stops the remaining writes", () => {
+  const gw = standInGateway({ label: "x", effort: "low" });
+  const managers = ["main"];
+  const plugin = standInPlugin(gw, { managers });
+  const changes = { label: "y", effort: "high" };
+  const { proposalId } = plugin.tool({ agentId: "main" }, { bot: "otto", changes });
+  const write = gw.conditionalWrite;
+  gw.conditionalWrite = (...args) => {
+    const result = write(...args);
+    managers.pop();
+    return result;
+  };
+  assert.deepEqual(plugin.accept(admin, proposalId, digest(changes)), {
+    outcome: "partial", result: { label: "applied", effort: "not-applied" },
+  });
+  assert.deepEqual(gw.writes, [{ field: "label", value: "y" }]);
+});
+
 check("below admin can't apply; an admin applies once, under the precondition", () => {
   const gw = standInGateway({ label: "x" });
   const plugin = standInPlugin(gw, { managers: [] });
@@ -173,12 +235,16 @@ check("a name has no conditional write, so it isn't applied", () => {
 
 check("a revoked agent's suggestion can't be applied on any device", () => {
   const gw = standInGateway({ label: "x" });
-  const plugin = standInPlugin(gw, { managers: [] });
-  plugin.ledger.grants.set("g1", 1);
-  const { proposalId } = plugin.tool({ agentId: "pip", grant: "g1" }, { changes: { label: "y" } });
+  const plugin = standInPlugin(gw, { managers: [], grants: ["g1"] });
+  const ctx = { agentId: "pip", grant: "g1" };
+  const first = plugin.tool(ctx, { changes: { label: "first" } });
+  assert.equal(plugin.accept(admin, first.proposalId, digest({ label: "first" })).result.label, "applied");
+  const { proposalId } = plugin.tool(ctx, { changes: { label: "y" } });
   plugin.revoke("g1");
+  assert.equal(plugin.tool({ agentId: "pip", grant: "g1" }, { changes: { label: "z" } }).status, "refused");
+  assert.equal(plugin.tool({ agentId: "pip", grant: "unknown" }, { changes: { label: "z" } }).status, "refused");
   assert.equal(plugin.accept(admin, proposalId, digest({ label: "y" })).outcome, "withdrawn");
-  assert.equal(gw.writes.length, 0);
+  assert.deepEqual(gw.writes, [{ field: "label", value: "first" }]);
 });
 
 check("Undo restores the journaled before-value when nothing changed since", () => {
