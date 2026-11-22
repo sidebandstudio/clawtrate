@@ -62,7 +62,7 @@
   }
 }
 
-.s-top {
+.s-head {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -90,7 +90,7 @@
 .s-field:focus {
   outline: none;
 }
-.s-palette:focus-within .s-top {
+.s-palette:focus-within .s-head {
   box-shadow: inset 0 -2px 0 var(--accent-line);
 }
 .s-cancel {
@@ -287,13 +287,13 @@
 .s-note[data-tone="danger"] {
   color: var(--danger);
 }
-.s-hint {
+.s-row-hint {
   flex: none;
   display: none;
   font-size: var(--text-xs);
   color: var(--text-faint);
 }
-.s-row[aria-selected="true"] .s-hint {
+.s-row[aria-selected="true"] .s-row-hint {
   display: inline;
 }
 /* A link's full canonical address, on a line that breaks anywhere; at most two lines. */
@@ -365,7 +365,7 @@
     background: var(--bg);
     animation: none;
   }
-  .s-top {
+  .s-head {
     position: relative;
     padding: 12px 12px 10px;
     gap: 8px;
@@ -381,7 +381,7 @@
     background: var(--bg-bubble);
     font-size: 17px;
   }
-  .s-palette:focus-within .s-top {
+  .s-palette:focus-within .s-head {
     box-shadow: none;
   }
   .s-field:focus-visible {
@@ -410,7 +410,7 @@
     font-size: 17px;
     line-height: 22px;
   }
-  .s-hint {
+  .s-row-hint {
     display: none !important;
   }
   .s-action {

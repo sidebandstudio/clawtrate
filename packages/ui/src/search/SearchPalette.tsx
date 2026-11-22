@@ -1524,7 +1524,7 @@ export function SearchPalette({
     >
       <div className="s-scrim" onClick={onClose} />
       <div className="s-palette" onKeyDown={onKey}>
-        <div className="s-top">
+        <div className="s-head">
           <span className="s-glass">
             <SearchIcon />
           </span>
@@ -1701,7 +1701,7 @@ function Option({
         )}
       </span>
       {row.hint && (
-        <span className="s-hint" aria-hidden="true">
+        <span className="s-row-hint" aria-hidden="true">
           {row.hint}
         </span>
       )}
