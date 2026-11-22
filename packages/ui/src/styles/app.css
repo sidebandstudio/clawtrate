@@ -1534,6 +1534,20 @@ textarea {
   height: var(--avatar-hero);
 }
 
+/* new: on admin the picture is a button that opens Edit picture (bots.md section 8). */
+.work-picture {
+  display: inline-grid;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+}
+
+.work-picture:hover {
+  background: var(--bg-hover);
+}
+
 .work-hero h2 {
   margin: 8px 0 0;
   font-size: var(--text-lg);
@@ -2159,24 +2173,6 @@ textarea {
   height: 100%;
 }
 
-.presence > .avatar svg {
-  transform-origin: 50% 85%;
-}
-
-.presence[data-state="working"] > .avatar svg {
-  animation: bob calc(var(--loop-work) / 2) var(--ease-in-out) infinite alternate;
-}
-
-.presence[data-state="waiting"] > .avatar svg {
-  transform-origin: 50% 50%;
-  animation: lean var(--loop-nudge) var(--ease-in-out) infinite;
-}
-
-.presence[data-state="blocked"] > .avatar svg,
-.presence[data-state="failed"] > .avatar svg {
-  transform: translateY(5%) rotate(5deg);
-}
-
 .presence::before {
   content: "";
   position: absolute;
@@ -2233,25 +2229,6 @@ textarea {
 
 .bot[aria-current="true"] .presence {
   --presence-surface: color-mix(in srgb, var(--bg-rail), var(--text) 8%);
-}
-
-@keyframes bob {
-  from {
-    transform: translateY(3%);
-  }
-  to {
-    transform: translateY(-6%);
-  }
-}
-
-@keyframes lean {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
 }
 
 /* The states the conversation components bring, as 12 px marks. */

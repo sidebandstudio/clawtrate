@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -18,7 +18,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { Avatar } from "./Avatar.tsx";
+import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
@@ -106,6 +106,13 @@ function useMinuteClock(): number {
   return now;
 }
 
+/** The creature's pose for a row's state: done with failures is done, a queued task idle. */
+function faceFor(state: RunState | null): FaceState {
+  if (state === "done-with-failures") return "done";
+  if (state === null || state === "queued") return "idle";
+  return state;
+}
+
 /** The 12 px mark for a state. Done with failures shows the failed mark. */
 function StateMark({ state }: { state: RunState | null }) {
   if (!state) return null;
@@ -123,10 +130,10 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
     <span
       className="presence"
       data-state={state ?? "idle"}
-      data-kind={bot.avatarUrl ? "image" : "character"}
+      data-kind={avatarFor(bot).kind === "image" ? "image" : "character"}
       aria-hidden="true"
     >
-      <Avatar bot={bot} />
+      <Avatar bot={bot} state={faceFor(state)} />
       {state && state !== "working" && <StateMark state={state} />}
       {primary && (
         <span className="primary-star" data-testid="primary-star">

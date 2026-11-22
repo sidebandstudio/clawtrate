@@ -8,6 +8,7 @@ import type {
 } from "@clawtrate/core";
 import { useCallback, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { EditPicture } from "./bots/EditPicture.tsx";
 import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon, ScreenIcon } from "./icons.tsx";
@@ -97,6 +98,7 @@ export function WorkPanel({
   const name = bot?.name ?? "This bot";
   // The pane's announcements, polite, as the conversation's live region speaks.
   const [announcement, setAnnouncement] = useState("");
+  const [editingPicture, setEditingPicture] = useState(false);
   const announce = useCallback((text: string) => {
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));
@@ -123,7 +125,20 @@ export function WorkPanel({
       </button>
       {bot && (
         <div className="work-hero">
-          <Avatar bot={bot} />
+          {connection.canAdmin && online ? (
+            <button
+              type="button"
+              className="work-picture"
+              aria-label={`Change ${bot.name}'s picture`}
+              title="Change picture"
+              onClick={() => setEditingPicture(true)}
+            >
+              <Avatar bot={bot} />
+            </button>
+          ) : (
+            <Avatar bot={bot} />
+          )}
+          {editingPicture && <EditPicture bot={bot} onClose={() => setEditingPicture(false)} />}
           <h2>{bot.name}</h2>
           {bot.theme && <p>{bot.theme}</p>}
         </div>

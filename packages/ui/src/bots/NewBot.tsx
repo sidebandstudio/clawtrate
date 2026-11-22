@@ -4,11 +4,12 @@
 // and a request for access; Create clears it.
 
 import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { firstChoice } from "@clawtrate/core";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
 import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
+import { AvatarPicker, PicturePreview, pictureFor, type PictureDraft } from "./AvatarPicker.tsx";
 import { Connect } from "./Connect.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, Note, useAnnouncer, useGranted } from "./parts.tsx";
@@ -16,22 +17,9 @@ import { ModelPair } from "./ModelPair.tsx";
 import { recall, remember } from "./memory.ts";
 import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } from "./words.ts";
 
-export const BODIES: BodyName[] = [
-  "pebble",
-  "block",
-  "arch",
-  "bloom",
-  "disc",
-  "hex",
-  "drop",
-  "gem",
-];
-const COLOR_NAMES = ["Green", "Blue", "Orange", "Violet", "Yellow", "Pink", "Sky", "Lime"];
-
 type Draft = {
   name: string;
-  body: BodyName;
-  color: string;
+  picture: PictureDraft;
   /** An account id, `GATEWAY_CHOICE`, or null: nothing chosen. */
   account: string | null;
   model: string | null;
@@ -40,8 +28,7 @@ type Draft = {
 
 const freshDraft = (): Draft => ({
   name: "",
-  body: "drop",
-  color: "#ff6f9c",
+  picture: { choice: firstChoice("clawling", "blue"), upload: null },
   account: null,
   model: null,
   effort: null,
@@ -50,53 +37,6 @@ const freshDraft = (): Draft => ({
 /** Kept until the app quits: closing the dialog does not lose what was entered. */
 type Kept = { draft: Draft; step: "look" | "account" | "connect" };
 const KEPT = "new-bot";
-
-/** The size of the picture New bot sends: the drawn character, rasterised. */
-const PICTURE_PX = 128;
-
-/**
- * The picture of a drawn character, as a PNG data URL the gateway keeps with
- * the bot. A raster, because the app shows only raster pictures from the
- * gateway (`safeAvatarUrl`). Null when it cannot be drawn: the bot then gets
- * the character its id gives.
- */
-async function pictureOf(svg: SVGElement | null | undefined): Promise<string | null> {
-  if (!svg) return null;
-  let markup = svg.outerHTML;
-  if (!markup.includes("xmlns="))
-    markup = markup.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
-  try {
-    const image = new Image(PICTURE_PX, PICTURE_PX);
-    image.src = `data:image/svg+xml;base64,${btoa(markup)}`;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = PICTURE_PX;
-    canvas.height = PICTURE_PX;
-    canvas.getContext("2d")?.drawImage(image, 0, 0, PICTURE_PX, PICTURE_PX);
-    return canvas.toDataURL("image/png");
-  } catch {
-    return null;
-  }
-}
-
-/** A radio group of one tab stop: arrows move and choose, Home and End go to the ends. */
-function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => void) {
-  return (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = values.indexOf(current);
-    let next: number | null = null;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % values.length;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp")
-      next = (index - 1 + values.length) % values.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = values.length - 1;
-    if (next === null) return;
-    event.preventDefault();
-    // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
-    // radio it reached, and this handler leaves no focus move for a later frame.
-    event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
-    choose(values[next]!);
-  };
-}
 
 export function NewBot({
   accounts,
@@ -198,7 +138,7 @@ export function NewBot({
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
-        avatar: await pictureOf(previewRef.current?.querySelector("svg")),
+        avatar: await pictureFor(draft.picture, previewRef.current?.querySelector("svg")),
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
         provider,
         model: draft.model,
@@ -262,9 +202,7 @@ export function NewBot({
     );
     body = (
       <>
-        <span className="b-preview" role="img" aria-label={`${name}'s picture`} ref={previewRef}>
-          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-        </span>
+        <PicturePreview draft={draft.picture} label={`${name}'s picture`} previewRef={previewRef} />
         <label className="visually-hidden" htmlFor="b-name">
           Name
         </label>
@@ -284,59 +222,10 @@ export function NewBot({
             }
           }}
         />
-        <p className="b-label" id="b-shape-label">
-          Shape
-        </p>
-        <div
-          className="b-shapes"
-          role="radiogroup"
-          aria-labelledby="b-shape-label"
-          onKeyDown={onRadioKeys(BODIES, draft.body, (body) =>
-            setDraft((was) => ({ ...was, body })),
-          )}
-        >
-          {BODIES.map((body) => (
-            <button
-              key={body}
-              type="button"
-              className="b-shape"
-              role="radio"
-              aria-checked={body === draft.body}
-              tabIndex={body === draft.body ? 0 : -1}
-              aria-label={body}
-              onClick={() => setDraft((was) => ({ ...was, body }))}
-            >
-              <Character spec={{ body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-            </button>
-          ))}
-        </div>
-        <p className="b-label" id="b-color-label">
-          Colour
-        </p>
-        <div
-          className="b-colors"
-          role="radiogroup"
-          aria-labelledby="b-color-label"
-          onKeyDown={onRadioKeys(
-            CHARACTER_COLORS,
-            draft.color as (typeof CHARACTER_COLORS)[number],
-            (color) => setDraft((was) => ({ ...was, color })),
-          )}
-        >
-          {CHARACTER_COLORS.map((color, index) => (
-            <button
-              key={color}
-              type="button"
-              className="b-color"
-              role="radio"
-              aria-checked={color === draft.color}
-              tabIndex={color === draft.color ? 0 : -1}
-              aria-label={COLOR_NAMES[index]}
-              style={{ ["--swatch" as string]: color }}
-              onClick={() => setDraft((was) => ({ ...was, color }))}
-            />
-          ))}
-        </div>
+        <AvatarPicker
+          draft={draft.picture}
+          onChange={(picture) => setDraft((was) => ({ ...was, picture }))}
+        />
       </>
     );
     foot = (
@@ -366,14 +255,7 @@ export function NewBot({
     const who = provider ? providerName(provider) : null;
     body = (
       <>
-        <span
-          className="b-preview"
-          style={{ ["--avatar-create" as string]: "56px", marginBottom: 10 }}
-          aria-hidden="true"
-          ref={previewRef}
-        >
-          <Character spec={{ body: draft.body, color: draft.color, tilt: 0, look: [0.6, 0] }} />
-        </span>
+        <PicturePreview draft={draft.picture} label={null} previewRef={previewRef} small />
         <p className="b-lead">
           Choose the account {name} runs on. The sign-in stays on your gateway.
         </p>

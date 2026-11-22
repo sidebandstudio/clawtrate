@@ -1,4 +1,5 @@
 import type {
+  AvatarChoice,
   ConnectionError,
   ConnectionState,
   DiscoveryState,
@@ -15,7 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import logoUrl from "./assets/logo-mark.png";
-import { Character, type CharacterSpec } from "./Avatar.tsx";
+import { Creature } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
@@ -456,48 +457,76 @@ function ProtocolNotice({
   );
 }
 
-/** The characters along the foot of the connection screens. Decoration only. */
-const ENSEMBLE: Array<CharacterSpec & { size: number; sink: number; lean: number }> = [
+/** The creatures along the foot of the connection screens. Decoration only. */
+const ENSEMBLE: Array<{
+  choice: AvatarChoice;
+  gaze: [number, number];
+  size: number;
+  sink: number;
+  lean: number;
+}> = [
   {
-    body: "drop",
-    color: "#45bdf5",
-    tilt: 3,
-    look: [0.3, 0.5],
-    lift: 1,
+    choice: { family: "lantern", body: "round", lure: "hook", eyes: "two", color: "sky" },
+    gaze: [0.3, 0.5],
     size: 132,
     sink: -0.3,
     lean: -8,
   },
   {
-    body: "arch",
-    color: "#ff8552",
-    tilt: 5,
-    look: [-0.7, 0.3],
-    lift: -1.5,
+    choice: { family: "clawling", body: "dome", eyes: "pair", claws: "even", color: "blue" },
+    gaze: [-0.7, 0.3],
     size: 176,
     sink: -0.26,
     lean: 5,
   },
-  { body: "disc", color: "#f6bd3b", tilt: 6, look: [0.8, 0], size: 118, sink: -0.2, lean: -4 },
-  { body: "block", color: "#5b8dff", tilt: 0, look: [0.9, 0.2], size: 204, sink: -0.3, lean: 3 },
   {
-    body: "pebble",
-    color: "#58c26f",
-    tilt: -7,
-    look: [0.6, -0.3],
+    choice: { family: "shellfolk", shell: "dome", color: "yellow" },
+    gaze: [0.8, 0],
+    size: 118,
+    sink: -0.2,
+    lean: -4,
+  },
+  {
+    choice: { family: "clawling", body: "tall", eyes: "splayed", claws: "fiddler", color: "green" },
+    gaze: [0.82, 0.2],
+    size: 204,
+    sink: -0.3,
+    lean: 3,
+  },
+  {
+    choice: { family: "lantern", body: "bell", lure: "flick", eyes: "one", color: "lime" },
+    gaze: [0.6, -0.3],
     size: 160,
     sink: -0.24,
     lean: -6,
   },
-  { body: "hex", color: "#ff6f9c", tilt: -4, look: [-0.8, 0.2], size: 124, sink: -0.26, lean: 7 },
-  { body: "bloom", color: "#a98bff", tilt: -5, look: [0, -0.5], size: 186, sink: -0.28, lean: -3 },
-  { body: "gem", color: "#a5d955", tilt: 0, look: [-0.4, -0.4], size: 122, sink: -0.24, lean: 4 },
+  {
+    choice: { family: "shellfolk", shell: "spotted", color: "pink" },
+    gaze: [-0.8, 0.2],
+    size: 124,
+    sink: -0.26,
+    lean: 7,
+  },
+  {
+    choice: { family: "clawling", body: "round", eyes: "single", claws: "big", color: "violet" },
+    gaze: [0, -0.5],
+    size: 186,
+    sink: -0.28,
+    lean: -3,
+  },
+  {
+    choice: { family: "clawling", body: "wide", eyes: "short", claws: "even", color: "orchid" },
+    gaze: [-0.4, -0.4],
+    size: 122,
+    sink: -0.24,
+    lean: 4,
+  },
 ];
 
 function Ensemble() {
   return (
     <div className="ensemble" aria-hidden="true">
-      {ENSEMBLE.map(({ size, sink, lean, ...spec }, index) => (
+      {ENSEMBLE.map(({ size, sink, lean, choice, gaze }, index) => (
         <span
           key={index}
           className="avatar"
@@ -509,7 +538,7 @@ function Ensemble() {
             } as CSSProperties
           }
         >
-          <Character spec={spec} />
+          <Creature choice={choice} variation={{ gaze, blink: index * 700 }} />
         </span>
       ))}
     </div>

@@ -1,0 +1,39 @@
+/* Creatures (visual-language.md, section 5). Each part's pose and motion come
+   from the shared spec as inline styles; the keyframes are added once by
+   `Avatar.tsx`. This file holds what the spec leaves to the page. */
+
+/* The avatar's own size decides how much detail it shows. */
+.avatar {
+  container-type: size;
+}
+
+.creature {
+  overflow: visible;
+}
+
+/* Blocked and failed: the creature loses its colour a little. */
+.creature[data-muted] {
+  filter: saturate(0.4) brightness(0.85);
+}
+
+/* Below 21 px the mouths, the glint in waiting eyes and the lines on shells go:
+   they are under a pixel wide there and read as noise. */
+@container (max-width: 20.98px) {
+  .creature .av-fine {
+    display: none;
+  }
+}
+
+/* Reduced motion, or a lost connection: every animation stops (app.css), and a
+   part whose motion is the point holds a still pose that says the same thing,
+   such as a claw raised to wave, never a frame from the middle of the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .creature .av-still {
+    rotate: var(--av-still) !important;
+  }
+}
+
+[data-motion="reduce"] .creature .av-still,
+[data-connection="lost"] .creature .av-still {
+  rotate: var(--av-still) !important;
+}
