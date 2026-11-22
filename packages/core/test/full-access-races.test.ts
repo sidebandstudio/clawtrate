@@ -565,4 +565,39 @@ describe("full access under interleavings", () => {
     expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
     client.stop();
   });
+
+  it("an upgrade's reply that volunteers pairing, unasked, widens neither what is saved nor what is asked for", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    expect(wanted).not.toContain("operator.pairing");
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: [...wanted, "operator.pairing"],
+    });
+    await until(() => saved(storage)?.token === "token-U");
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({ fullGrant: true });
+    expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
+    // The next reconnect asks for what is held, without it.
+    const before = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects.at(-1) as ConnectParams).scopes).not.toContain("operator.pairing");
+    client.stop();
+  });
 });
