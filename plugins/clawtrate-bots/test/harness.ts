@@ -112,17 +112,26 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
       }
       return rows.delete(key);
     },
+    /**
+     * As the pinned SDK does: the range must increase and the limit be
+     * positive; the limit applies first, then each returned row is decoded,
+     * and an unreadable one throws PLUGIN_STATE_CORRUPT with no key.
+     */
     async entriesInKeyRange(range: {
       keyStartInclusive: string;
       keyEndExclusive: string;
       limit: number;
     }) {
       await tick();
-      return [...rows.keys()]
+      if (!(range.limit >= 1) || !(range.keyStartInclusive < range.keyEndExclusive))
+        throw Object.assign(new Error("invalid range"), { code: "PLUGIN_STATE_INVALID_INPUT" });
+      const keys = [...rows.keys()]
         .filter((k) => k >= range.keyStartInclusive && k < range.keyEndExclusive)
         .sort()
-        .slice(0, range.limit)
-        .map((key) => ({ key, value: read(key), createdAt: 0 }));
+        .slice(0, range.limit);
+      if (keys.some((k) => faults.corrupt.has(k)))
+        throw Object.assign(new Error("corrupt"), { code: "PLUGIN_STATE_CORRUPT" });
+      return keys.map((key) => ({ key, value: read(key), createdAt: 0 }));
     },
     /** A bounded namespace with overflowPolicy "reject-new" refuses new keys at its limit. */
     async registerIfAbsent(key: string, value: unknown) {

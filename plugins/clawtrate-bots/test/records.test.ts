@@ -259,6 +259,55 @@ describe("the records", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("an unreadable row on the first page doesn't stop cleanup: later orphans go after the hour, through the same Records or a fresh one", async () => {
+    for (const via of ["same", "fresh"] as const) {
+      const [store, versions] = [memoryStore(), memoryStore()];
+      const first = on(store, versions);
+      await first.records.persist("a-unreadable", { id: "a-unreadable" });
+      versions.faults.corrupt.add("v:a-unreadable");
+      const orphans = Array.from({ length: 20 }, (_, n) => `orphan-${String(n).padStart(2, "0")}`);
+      for (const id of orphans) await first.records.persist(id, { id });
+      const { k, records } = via === "same" ? first : on(store, versions);
+      expect(await records.sweepOrphans()).toEqual([]);
+      k.c.mono += ORPHAN_MS;
+      expect((await records.sweepOrphans()).sort()).toEqual(["a-unreadable", ...orphans]);
+      expect(versions.rows.size).toBe(0);
+    }
+  });
+
+  it("an unreadable row the ledger refers to is never deleted; reads and publication behave as before", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    await propose(records, "a-referenced", { kind: "bot", bot: "pip" }, "pip");
+    const { digest } = (await records.ledger()).proposals["a-referenced"];
+    versions.faults.corrupt.add("v:a-referenced");
+    for (const id of ["orphan-1", "orphan-2"]) await records.persist(id, { id });
+    await records.sweepOrphans();
+    k.c.mono += ORPHAN_MS;
+    expect((await records.sweepOrphans()).sort()).toEqual(["orphan-1", "orphan-2"]);
+    expect(versions.rows.has("v:a-referenced")).toBe(true);
+    expect(await records.version("a-referenced", digest)).toBeNull();
+    k.c.mono += 10 * ORPHAN_MS;
+    expect(await records.sweepOrphans()).toEqual([]);
+    await expect(
+      propose(records, "newer", { kind: "bot", bot: "main" }, "otto"),
+    ).resolves.toBeTruthy();
+    expect((await records.ledger()).proposals["a-referenced"].state).toBe("open");
+  });
+
+  it("an unreadable row nothing refers to is reclaimed like any orphan: after its hour, not before", async () => {
+    const [store, versions] = [memoryStore(), memoryStore()];
+    const { k, records } = on(store, versions);
+    await records.persist("unreadable", { id: "unreadable" });
+    versions.faults.corrupt.add("v:unreadable");
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += ORPHAN_MS - 1;
+    expect(await records.sweepOrphans()).toEqual([]);
+    k.c.mono += 1;
+    expect(await records.sweepOrphans()).toEqual(["unreadable"]);
+    expect([versions.rows.size, (await records.ledger()).sweeping]).toEqual([0, null]);
+  });
+
   it("a full store of 512 versions is reclaimed page by page, and takes new records again", async () => {
     const [store, versions] = [memoryStore(), memoryStore({ maxEntries: 512 })];
     const { k, records } = on(store, versions);

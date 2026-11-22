@@ -43,6 +43,9 @@ const VERSION = "v:";
  * at most 16 MiB of JSON however large the bodies are.
  */
 const PAGE = 16;
+/** The end of the versions' key range, and the longest key the store takes. */
+const END = "v;";
+const KEY_MAX = 512;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -211,23 +214,87 @@ export class Records {
       if (pending) await this.reclaim(pending, removed);
       let start = VERSION;
       for (;;) {
-        const page = await this.versions.entriesInKeyRange({
-          keyStartInclusive: start,
-          keyEndExclusive: "v;",
-          limit: PAGE,
-        });
+        const { page, unreadable } = await this.scan(start);
         const live = referenced(await this.ledger());
-        const ids = page.map(({ key }) => key.slice(VERSION.length)).filter((id) => !live.has(id));
+        const keys = [...page.map(({ key }) => key), ...(unreadable ? [unreadable] : [])];
+        const ids = keys.map((key) => key.slice(VERSION.length)).filter((id) => !live.has(id));
         if (ids.length) await this.transact((l) => recordAges(l, ids, ages()));
         for (const id of ids)
           if (await this.transact((l) => markSweeping(l, id, ages())))
             await this.reclaim(id, removed);
-        if (page.length < PAGE) return removed;
-        start = `${page[page.length - 1].key}\u0000`;
+        if (!unreadable && page.length < PAGE) return removed;
+        start = `${unreadable ?? page[page.length - 1].key}\u0000`;
       }
     } finally {
       this.sweepRunning = false;
     }
+  }
+
+  /**
+   * A page of versions from `start`. The store decodes each row it returns
+   * and throws PLUGIN_STATE_CORRUPT, with no key, when one doesn't read; it
+   * applies the limit first. So on that error the page is the readable rows
+   * before the bad one, and `unreadable` is the bad row's key, found by range
+   * probes, so the sweep goes on past it. An unreadable row nothing refers to
+   * is reclaimed like any other after its hour (it can never be published:
+   * version() can't read it); one the ledger refers to is never marked.
+   */
+  async scan(start) {
+    const range = (lo, hi, limit) =>
+      this.versions.entriesInKeyRange({ keyStartInclusive: lo, keyEndExclusive: hi, limit });
+    const unreadableRow = (error) => {
+      if (error?.code !== "PLUGIN_STATE_CORRUPT") throw error;
+      return null;
+    };
+    const page = await range(start, END, PAGE).catch(unreadableRow);
+    if (page) return { page, unreadable: null };
+    // The longest readable run before the bad row: the largest limit that reads.
+    let good = [];
+    for (let low = 0, high = PAGE; high - low > 1;) {
+      const mid = (low + high) >> 1;
+      const rows = await range(start, END, mid).catch(unreadableRow);
+      if (rows) [good, low] = [rows, mid];
+      else high = mid;
+    }
+    const from = good.length ? `${good[good.length - 1].key}\u0000` : start;
+    return { page: good, unreadable: await this.firstKeyFrom(from) };
+  }
+
+  /**
+   * The first key at or after `from`, when its row can't be read. A range
+   * [from, hi) holds that row exactly when hi is past its key, so the key is
+   * found a character at a time (keys are ASCII: "v:" and generated ids).
+   */
+  async firstKeyFrom(from) {
+    const holds = async (hi) => {
+      if (hi <= from) return false;
+      try {
+        return (
+          (
+            await this.versions.entriesInKeyRange({
+              keyStartInclusive: from,
+              keyEndExclusive: hi,
+              limit: 1,
+            })
+          ).length > 0
+        );
+      } catch (error) {
+        if (error?.code !== "PLUGIN_STATE_CORRUPT") throw error;
+        return true;
+      }
+    };
+    let key = "";
+    while (key.length <= KEY_MAX) {
+      if (await holds(`${key}\u0000`)) return key;
+      let low = 0;
+      for (let high = 128; high - low > 1;) {
+        const mid = (low + high) >> 1;
+        if (await holds(key + String.fromCharCode(mid))) high = mid;
+        else low = mid;
+      }
+      key += String.fromCharCode(low);
+    }
+    throw new Error("clawtrate-bots couldn't find the unreadable version's key.");
   }
 
   async reclaim(id, removed) {
