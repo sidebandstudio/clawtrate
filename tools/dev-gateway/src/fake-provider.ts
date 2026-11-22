@@ -2,7 +2,7 @@
 // The development gateway registers it as a custom `openai-completions` provider.
 // Replies are deterministic: the same conversation always streams the same chunks.
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { MODEL_ID } from "./env.ts";
@@ -53,6 +53,8 @@ export type FakeProviderOptions = {
   dumpPath?: string;
   /** The scripted pages' origin, for the browser scenarios. */
   pagesOrigin?: string;
+  /** The iOS checks write their task key here while they need its stream to stay open. */
+  streamHoldFile?: string;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -91,12 +93,22 @@ function completionId(messages: ChatMessage[]): string {
   return `chatcmpl-scripted-${messages.length}`;
 }
 
+function heldSession(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 async function streamSteps(
   res: ServerResponse,
   model: string,
   id: string,
   steps: ReplyStep[],
   delayMs: number,
+  held?: () => boolean,
 ): Promise<void> {
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -152,6 +164,16 @@ async function streamSteps(
       finish = "tool_calls";
     }
   }
+  const deadline = Date.now() + 15 * 60_000;
+  while (!res.destroyed && held?.()) {
+    if (Date.now() >= deadline) {
+      res.destroy(new Error("The iOS check did not release the scripted stream"));
+      return;
+    }
+    send({});
+    await sleep(1_000);
+  }
+  if (res.destroyed) return;
   send({}, finish);
   const usage = { prompt_tokens: 120, completion_tokens: 80, total_tokens: 200 };
   res.write(
@@ -361,7 +383,15 @@ export function startFakeProvider(options: FakeProviderOptions) {
           sendJson(res, 200, nonStreamingBody(model, id, steps));
           return;
         }
-        await streamSteps(res, model, id, steps, delayMs);
+        const holdFile = options.streamHoldFile;
+        await streamSteps(
+          res,
+          model,
+          id,
+          steps,
+          delayMs,
+          holdFile && session ? () => heldSession(holdFile) === session : undefined,
+        );
         return;
       }
       if (url.pathname.startsWith("/scripted/") && (await accounts.handle(req, res, url))) return;

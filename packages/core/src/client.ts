@@ -1485,14 +1485,16 @@ export class ClawtrateClient {
   }
 
   /**
-   * Resume the saved gateway, if any and if allowed, unless the user
-   * disconnected from it. With `resume: false` (a development build, an
-   * automated run, the web host's setup look) nothing saved is opened: a
-   * connection starts only when one is chosen.
+   * Resume the saved gateway by default. With `resume: false`, skip reading
+   * the gateway settings. With `resume: "disconnected"`, load the saved
+   * gateway so the host can offer it as a choice without opening a socket.
    */
-  async start(options: { resume?: boolean } = {}): Promise<void> {
+  async start(options: { resume?: boolean | "disconnected" } = {}): Promise<void> {
     const stops = this.stops;
+    const selection = this.selectionApplied;
+    const prior = this.settings;
     const identity = await this.loadIdentity();
+    if (stops !== this.stops) return;
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
     if (this.options.turnLimitMs === undefined) {
@@ -1501,14 +1503,16 @@ export class ClawtrateClient {
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
+    // Startup needs to open the socket without waiting for another client's credential write.
     const settings = await this.savedSettings();
-    if (stops !== this.stops) return;
+    if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+      return;
     this.settings = settings;
-    if (this.settings?.suspended) {
-      this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
+    if (settings && (settings.suspended || options.resume === "disconnected")) {
+      this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
     }
-    if (this.settings) await this.open();
+    if (settings) await this.open();
   }
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
