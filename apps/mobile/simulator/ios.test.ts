@@ -170,27 +170,49 @@ function expectSwitcherCover({
   // UIKit rounds the 56-point mark with a 16-point corner radius.
   const radius = (16 / 56) * mark.width;
   let backgroundMismatch = 0;
+  let edgeMismatch = 0;
   let markMismatch = 0;
   for (let i = 0; i < data.length; i += 4) {
     const color = [data[i]!, data[i + 1]!, data[i + 2]!];
     const x = ((i / 4) % width) - left;
     const y = Math.floor(i / 4 / width) - top;
+    if (data[i + 3] !== 255) {
+      backgroundMismatch += 1;
+      continue;
+    }
     if (x < 0 || y < 0 || x >= mark.width || y >= mark.height) {
-      if (data[i + 3] !== 255 || !near(color, bg, 4)) backgroundMismatch += 1;
+      if (!near(color, bg, 4)) backgroundMismatch += 1;
       continue;
     }
     const offset = (y * mark.width + x) * 4;
     const cornerX = Math.max(radius - x - 0.5, x + 0.5 - (mark.width - radius), 0);
     const cornerY = Math.max(radius - y - 0.5, y + 0.5 - (mark.height - radius), 0);
-    const coverage = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(cornerX, cornerY)));
-    const alpha = (mark.data[offset + 3]! / 255) * coverage;
-    const blended = bg.map(
-      (background, channel) => mark.data[offset + channel]! * alpha + background * (1 - alpha),
-    );
-    if (data[i + 3] !== 255 || !near(color, blended, 16)) markMismatch += 1;
+    const distance = Math.hypot(cornerX, cornerY) - radius;
+    if (distance >= 2) {
+      if (!near(color, bg, 4)) backgroundMismatch += 1;
+      continue;
+    }
+    const delta = bg.map((background, channel) => mark.data[offset + channel]! - background);
+    const alpha = mark.data[offset + 3]! / 255;
+    if (distance > -2) {
+      // UIKit varies the coverage of antialiased edges. Fit one alpha for all
+      // three channels and allow only a blend of the mark and its background.
+      const contrast = delta.reduce((sum, channel) => sum + channel * channel, 0);
+      const projection = delta.reduce(
+        (sum, channel, index) => sum + (color[index]! - bg[index]!) * channel,
+        0,
+      );
+      const coverage = contrast === 0 ? 0 : Math.max(0, Math.min(alpha, projection / contrast));
+      const blended = bg.map((background, channel) => background + delta[channel]! * coverage);
+      if (!near(color, blended, 16)) edgeMismatch += 1;
+      continue;
+    }
+    const blended = bg.map((background, channel) => background + delta[channel]! * alpha);
+    if (!near(color, blended, 16)) markMismatch += 1;
   }
   expect(backgroundMismatch).toBe(0);
-  // UIKit and the PNG decoder can round a few edge pixels differently.
+  expect(edgeMismatch).toBe(0);
+  // The snapshot's colour conversion can change a few pixels inside the mark.
   expect(markMismatch).toBeLessThan(mark.width * mark.height * 0.002);
 }
 
