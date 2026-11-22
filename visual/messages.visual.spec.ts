@@ -870,6 +870,74 @@ for (const width of [320, 390]) {
   });
 }
 
+/** One reaction each of the six the react button offers. */
+const SIX: MessageReaction[] = ["👍", "❤️", "😂", "🎉", "👀", "🙏"].map((emoji) => ({
+  emoji,
+  count: 1,
+  mine: false,
+}));
+
+for (const width of [320, 390, 430]) {
+  test.describe(`held actions on a ${width}px phone`, () => {
+    test.use(contextFor({ ...PHONE, width }, "light"));
+
+    // Yours, and Otto's first answer, with a replies link under its reactions.
+    for (const [whose, row] of [
+      ["your", "row-6"],
+      ["Otto's", "row-2"],
+    ] as const)
+      test(`F-066 F-283: ${whose} message held just under the header shows its actions clear of its reactions and replies link, each control with its 44 px hit area`, async ({
+        page,
+      }) => {
+        await open(page);
+        await react(page, { [row]: SIX });
+        const message = page.locator(`[data-message="${row}"]`);
+        // Its top 10 px under the header: the bar has no room above it.
+        const header = (await page.locator(".conversation-header").boundingBox())!;
+        await message
+          .locator(".msg > .bubble")
+          .last()
+          .evaluate(
+            (el, top) => {
+              el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+            },
+            header.y + header.height + 10,
+          );
+        await settle(page);
+        await holdOn(message);
+        const buttons = message.getByTestId("message-actions").getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        await expect(message.getByTestId("reaction")).toHaveCount(6);
+        const controls = message.locator('[data-testid="reaction"], [data-testid="replies-link"]');
+        for (const control of [...(await buttons.all()), ...(await controls.all())])
+          expect(await unreached(control)).toEqual([]);
+      });
+
+    test("F-066 F-067: a held reply shows its actions clear of the quote over it, each button with its 44 px hit area", async ({
+      page,
+    }) => {
+      await open(page);
+      const message = page.locator('[data-message="row-reply"]');
+      await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      await holdOn(message);
+      const buttons = message.getByTestId("message-actions").getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      // The quote heads the reply's turn, just over its bubble, which lies over the foot of the
+      // quote's 44 px area with the bar shut too: there, only the bar is looked for.
+      const quote = page
+        .getByTestId("transcript-turn")
+        .filter({ has: message })
+        .getByTestId("reply-quote");
+      const onBar = (await unreached(quote)).filter((point) =>
+        / (Add a reaction|Reply in a thread|More)$/.test(point),
+      );
+      expect(onBar).toEqual([]);
+    });
+  });
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test.describe(`messages ${size.name} ${theme}`, () => {
