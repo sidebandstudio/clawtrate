@@ -37,3 +37,23 @@
 [data-connection="lost"] .creature .av-still {
   rotate: var(--av-still) !important;
 }
+
+/* A rail presence moves only while it is in the bot list's view and the page is
+   shown (Rail.tsx marks it). Elsewhere its creature, ring and badge hold still,
+   and a part with a still pose keeps it, so a waiting claw stays raised. */
+.bot-list .presence:not([data-onscreen]) [data-motion-part],
+.bot-list .presence:not([data-onscreen])::before,
+.bot-list .presence:not([data-onscreen]) .glyph,
+.bot-list .presence:not([data-onscreen]) .glyph::before,
+[data-page-hidden] .creature [data-motion-part],
+[data-page-hidden] .presence::before,
+[data-page-hidden] .glyph,
+[data-page-hidden] .glyph::before,
+[data-connection="lost"] .creature [data-motion-part] {
+  animation: none !important;
+}
+
+.bot-list .presence:not([data-onscreen]) .av-still,
+[data-page-hidden] .creature .av-still {
+  rotate: var(--av-still) !important;
+}

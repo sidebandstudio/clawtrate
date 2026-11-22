@@ -79,6 +79,8 @@ function Shape({ shape, clip }: { shape: AvatarShape; clip: string }): ReactElem
     ...(className ? { className } : {}),
     ...(Object.keys(style).length > 0 ? { style } : {}),
     ...(shape.part ? { "data-part": shape.part } : {}),
+    // Marks what moves, so the page can hold it still where nobody sees it.
+    ...(shape.motion ? { "data-motion-part": "" } : {}),
     ...(shape.fill ? { fill: shape.fill } : {}),
     ...(shape.stroke ? { stroke: shape.stroke } : {}),
     ...(shape.strokeWidth !== undefined ? { strokeWidth: shape.strokeWidth } : {}),

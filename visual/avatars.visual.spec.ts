@@ -4,7 +4,7 @@
 // per state, never a frame from the middle, when motion is reduced.
 import { expect, test, type Page } from "@playwright/test";
 import { SHEET_SIZES } from "../apps/desktop/src/fixture/avatar-sizes.ts";
-import { NOW, THEMES } from "./fixture.ts";
+import { NOW, openFixture, OTTO_DISK, THEMES } from "./fixture.ts";
 
 async function openSheet(page: Page, theme: string) {
   await page.clock.setFixedTime(NOW);
@@ -108,4 +108,93 @@ test("with motion reduced, nothing moves and each state holds its still pose", a
   expect(raised.length).toBeGreaterThan(0);
   expect(new Set(raised)).toEqual(new Set(["-54deg"]));
   await reduced.close();
+});
+
+/** Thirty more bots, every other one waiting for you, so most rows sit below the rail's view. */
+async function crowd(page: Page) {
+  await page.evaluate(() => {
+    type Task = { key: string; status: string; title: string };
+    type State = { bots: Array<Record<string, unknown>>; tasksByBot: Record<string, Task[]> };
+    const fixture = (
+      window as unknown as { clawtrateFixture: { setState(f: (s: State) => State): void } }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const template = state.tasksByBot.otto![0]!;
+      const bots = [...state.bots];
+      const tasksByBot = { ...state.tasksByBot };
+      for (let i = 0; i < 30; i++) {
+        const id = `crowd-${i}`;
+        bots.push({ ...state.bots[1], id, name: `Crowd ${i}`, avatarUrl: null, isDefault: false });
+        tasksByBot[id] = [
+          {
+            ...template,
+            key: `agent:${id}:main`,
+            title: "Main",
+            status: i % 2 ? "waiting" : "idle",
+          },
+        ];
+      }
+      return { ...state, bots, tasksByBot };
+    });
+  });
+  await expect(page.getByTestId("bot")).toHaveCount(35);
+}
+
+/** Running animations inside rail presences, in view and out of it. */
+const railMotion = (page: Page) =>
+  page.evaluate(() => {
+    const count = { onscreen: 0, offscreen: 0 };
+    for (const animation of document.getAnimations()) {
+      const target = (animation.effect as KeyframeEffect | null)?.target;
+      const presence = target?.closest(".bot-list .presence");
+      if (!presence || animation.playState !== "running") continue;
+      if (presence.hasAttribute("data-onscreen")) count.onscreen += 1;
+      else count.offscreen += 1;
+    }
+    return count;
+  });
+
+test("rail creatures move only while in the bot list's view and the page is shown", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 700 } });
+  const page = await context.newPage();
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "dark");
+  await crowd(page);
+  const last = page.getByTestId("bot").last().locator(".presence");
+  await expect(last).not.toHaveAttribute("data-onscreen", "");
+  await expect.poll(async () => (await railMotion(page)).onscreen).toBeGreaterThan(0);
+  expect((await railMotion(page)).offscreen).toBe(0);
+  // A waiting claw out of view holds its still pose, raised.
+  const offscreenClaw = page
+    .locator('.bot-list .presence:not([data-onscreen]) svg[data-state="waiting"] .av-still')
+    .first();
+  expect(await offscreenClaw.evaluate((el) => getComputedStyle(el).rotate)).toBe("-54deg");
+  // Scrolled into view, the last row starts moving; the first ones, now out of view, stop.
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toHaveAttribute("data-onscreen", "");
+  await expect(page.getByTestId("bot").first().locator(".presence")).not.toHaveAttribute(
+    "data-onscreen",
+    "",
+  );
+  expect((await railMotion(page)).offscreen).toBe(0);
+  // A hidden page moves nothing at all.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(async () => (await railMotion(page)).onscreen).toBe(0);
+  await context.close();
+});
+
+test("with motion reduced, no rail creature moves, in view or out of it", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 700 },
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "dark");
+  await crowd(page);
+  expect(await railMotion(page)).toEqual({ onscreen: 0, offscreen: 0 });
+  await context.close();
 });
