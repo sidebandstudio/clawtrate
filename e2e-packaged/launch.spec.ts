@@ -746,6 +746,26 @@ test("opens with the same pairing and tasks after a newer build takes its place"
 
 /** The Keychain check runs where the release check asks for it, in a desktop session with the login keychain. */
 const KEYCHAIN_CHECK = process.env.CLAWTRATE_CHECK_KEYCHAIN === "1";
+/** The disposable default login keychain of the test account the Keychain check runs as. */
+const KEYCHAIN_PATH = process.env.CLAWTRATE_CHECK_KEYCHAIN_PATH ?? "";
+
+/**
+ * Whether the item is in that keychain, from its metadata only: `security` exits 44 when
+ * there is no such item, and anything else but 0 is a failure, never taken as absent.
+ */
+function keychainHolds(service: string, account: string): boolean {
+  const found = spawnSync("security", [
+    "find-generic-password",
+    "-s",
+    service,
+    "-a",
+    account,
+    KEYCHAIN_PATH,
+  ]);
+  if (found.status === 0) return true;
+  if (found.status === 44) return false;
+  throw new Error(`security find-generic-password failed with ${found.status ?? found.signal}`);
+}
 
 /**
  * Launches the packaged app on a data folder under its own Keychain name, reads the
@@ -756,6 +776,7 @@ async function deviceIdUnderKeychainCheck(
   sandbox: string,
   hex: string,
   dir: string,
+  act: (view: Page) => Promise<void> = async () => {},
 ): Promise<string | null> {
   const place = launchPlace(dir);
   const logFd = openSync(join(dir, "app.log"), "a", 0o600);
@@ -793,7 +814,9 @@ async function deviceIdUnderKeychainCheck(
         return state.connection.deviceId ?? null;
       });
     await expect.poll(read, { timeout: 30_000 }).not.toBe(null);
-    return await read();
+    const deviceId = await read();
+    await act(view);
+    return deviceId;
   } finally {
     const quit = await quitWithin(
       () => child.kill("SIGTERM"),
@@ -812,17 +835,22 @@ async function deviceIdUnderKeychainCheck(
   }
 }
 
-test("keeps this device's credentials in the Keychain: a fresh build moves them out of its files once, and a relaunch reads them back", async () => {
+test("keeps this device's credentials in the Keychain: a fresh build moves them out of its files once, and a relaunch reads them back and reconnects", async () => {
   test.skip(WINDOWS, "Windows keeps credentials in its files until DPAPI is turned on");
   test.skip(
-    !KEYCHAIN_CHECK,
-    "the release check runs it with CLAWTRATE_CHECK_KEYCHAIN=1, in a desktop session whose login keychain is unlocked",
+    !KEYCHAIN_CHECK || !KEYCHAIN_PATH,
+    "run by hand with CLAWTRATE_CHECK_KEYCHAIN=1 and CLAWTRATE_CHECK_KEYCHAIN_PATH, as a test account whose default login keychain is that disposable one",
   );
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
+  // Only ever a disposable keychain: the account's default must be the one named.
+  const defaultKeychain = spawnSync("security", ["default-keychain"], { encoding: "utf8" });
+  expect(defaultKeychain.status).toBe(0);
+  expect(defaultKeychain.stdout.trim().replace(/^"|"$/g, "")).toBe(KEYCHAIN_PATH);
   // The app's name for this run alone: safeStorage keeps its key in "<name> Safe Storage".
   const hex = randomBytes(8).toString("hex");
   const name = `Clawtrate Check ${hex}`;
   const service = `${name} Safe Storage`;
+  expect(keychainHolds(service, name), "no item of this run's exists before it").toBe(false);
   const run = process.env.CLAWTRATE_PACKAGED_PLACE!;
   const parent = join(run, "keychain");
   mkdirSync(parent);
@@ -830,50 +858,66 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
   const userData = realpathSync.native(sandbox.appData);
   const folder = join(userData, "gateway");
   mkdirSync(folder, { mode: 0o700 });
-  // The files as an earlier build left them: a key, a device token and a saved gateway token.
-  const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
-  writeFileSync(join(folder, "device-key.pem"), pem, { mode: 0o600 });
-  const shared = `shared-${hex}`;
-  const device = `device-${hex}`;
-  const url = "ws://127.0.0.1:9";
-  writeFileSync(
-    join(folder, "state.json"),
-    JSON.stringify({
-      connection: JSON.stringify({ url, token: shared }),
-      [`deviceToken:${encodeURIComponent(url)}:device:operator`]: JSON.stringify({
-        token: device,
-        grantedScopes: ["operator.read"],
-        heldScopes: ["operator.read"],
-      }),
-      "turn-limit-minutes": "30",
-    }),
-    { mode: 0o600 },
-  );
+  // An earlier build's files with a pairing that works: the app this run paired, in clear text.
+  for (const file of ["device-key.pem", "state.json"])
+    writeFileSync(join(folder, file), readFileSync(join(USER_DATA, "gateway", file)), {
+      mode: 0o600,
+    });
+  const before = JSON.parse(readFileSync(join(folder, "state.json"), "utf8")) as Record<
+    string,
+    string
+  >;
+  const tokens = Object.entries(before)
+    .filter(([key]) => key.startsWith("deviceToken:"))
+    .map(([, value]) => (JSON.parse(value) as { token: string }).token);
+  expect(tokens.length).toBeGreaterThan(0);
+  const pem = readFileSync(join(folder, "device-key.pem"), "utf8");
   const raw = createPublicKey(pem).export({ type: "spki", format: "der" }).subarray(-32);
   const deviceId = createHash("sha256").update(raw).digest("hex");
-  const state = () => JSON.parse(readFileSync(join(folder, "state.json"), "utf8")) as unknown;
-  const inKeychain = () =>
-    spawnSync("security", ["find-generic-password", "-s", service, "-a", name]).status === 0;
+  const state = () =>
+    JSON.parse(readFileSync(join(folder, "state.json"), "utf8")) as Record<string, string>;
+  const secrets = [...tokens, "PRIVATE KEY"];
 
   try {
     expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"))).toBe(
       deviceId,
     );
-    // Moved: the protected record, and the files without a credential or the key.
+    // Moved: the sealed record, and the files without a credential or the key.
     expect(readdirSync(folder).sort()).toEqual(["credentials.bin", "state.json"]);
-    expect(state()).toEqual({ "turn-limit-minutes": "30" });
-    for (const secret of [shared, device, "PRIVATE KEY"]) expect(holds(folder, secret)).toEqual([]);
-    expect(inKeychain(), `safeStorage keeps its key in "${service}"`).toBe(true);
-    const sealed = readFileSync(join(folder, "credentials.bin"));
+    expect(Object.keys(state()).some((key) => key.startsWith("deviceToken:"))).toBe(false);
+    for (const secret of secrets) expect(holds(folder, secret)).toEqual([]);
+    expect(keychainHolds(service, name), `safeStorage keeps its key in "${service}"`).toBe(true);
 
-    // Relaunched: the same identity, read back from the record, which nothing rewrote.
-    expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-2"))).toBe(
-      deviceId,
-    );
-    expect(readFileSync(join(folder, "credentials.bin")).equals(sealed)).toBe(true);
-    expect(state()).toEqual({ "turn-limit-minutes": "30" });
+    // Relaunched: the same identity read back, and the saved pairing reconnects with no approval.
+    const reconnect = async (view: Page) => {
+      await view.getByRole("button", { name: "Advanced" }).click();
+      await view.getByPlaceholder("Gateway address").fill(runEndpoint().url);
+      await view.getByRole("button", { name: "Connect" }).click();
+      await expect(view.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+      await expect(view.getByRole("heading", { name: "Approve this device" })).toHaveCount(0);
+    };
+    expect(
+      await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-2"), reconnect),
+    ).toBe(deviceId);
+    for (const secret of secrets) {
+      expect(holds(folder, secret)).toEqual([]);
+      for (const log of ["kc-1", "kc-2"])
+        expect(holds(join(run, log, "app.log"), secret)).toEqual([]);
+    }
   } finally {
-    // This run's own item, by its exact name and account.
-    spawnSync("security", ["delete-generic-password", "-s", service, "-a", name]);
+    // This run's own item, by its exact name, account and keychain, and checked gone.
+    const removed = spawnSync("security", [
+      "delete-generic-password",
+      "-s",
+      service,
+      "-a",
+      name,
+      KEYCHAIN_PATH,
+    ]);
+    if (removed.status !== 0 && removed.status !== 44)
+      throw new Error(
+        `security delete-generic-password failed with ${removed.status ?? removed.signal}`,
+      );
+    expect(keychainHolds(service, name), "this run's item is gone after it").toBe(false);
   }
 });
