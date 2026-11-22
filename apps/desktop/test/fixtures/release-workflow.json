@@ -6,12 +6,12 @@
         "track": {
           "type": "choice",
           "description": "Update track",
-          "options": ["stable", "nightly"],
+          "options": ["stable", "beta"],
           "required": true
         },
         "version": {
           "type": "string",
-          "description": "Stable version (leave blank to calculate a nightly)",
+          "description": "Stable version (leave blank to calculate a beta)",
           "required": false
         }
       }
@@ -21,7 +21,7 @@
     "contents": "read"
   },
   "env": {
-    "TRACK": "${{ inputs.track }}",
+    "TRACK": "${{ inputs.track == 'beta' && 'nightly' || inputs.track }}",
     "CLAWTRATE_UPDATE_FEED_URL": "https://updates.example/stable/feed.json",
     "CLAWTRATE_NIGHTLY_UPDATE_FEED_URL": "https://updates.example/nightly/feed.json"
   },
