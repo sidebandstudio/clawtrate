@@ -779,12 +779,17 @@ async function deviceIdUnderKeychainCheck(
   act: (view: Page) => Promise<void> = async () => {},
 ): Promise<string | null> {
   const place = launchPlace(dir);
+  // The account's own home for the Security framework, so the app finds the default keychain,
+  // which the test requires to be the disposable one. Under the run's home it finds none and
+  // macOS stops the app with a "keychain cannot be found" dialog.
+  const env = { ...place.env };
+  delete env.CFFIXED_USER_HOME;
   const logFd = openSync(join(dir, "app.log"), "a", 0o600);
   const gated = gatedSpawn(
     spawn,
     packagedExecutable(APP),
     [...launchArgs(userData, sandbox, CHECKOUT), `--clawtrate-keychain-check=${hex}`],
-    { cwd: place.cwd, env: place.env, stdio: ["ignore", logFd, logFd] },
+    { cwd: place.cwd, env, stdio: ["ignore", logFd, logFd] },
   );
   const child = gated.child;
   const exited = new Promise((resolve) => {
