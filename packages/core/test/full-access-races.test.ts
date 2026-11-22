@@ -3,7 +3,7 @@
 // and its narrowed grant are one write, a narrowing that waited never lands for a socket
 // another took over from, and a typed gateway token ends with its attempt.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { ClawtrateClient, type ClientOptions } from "../src/client.ts";
 import type { ClawtrateHost, KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -746,11 +746,6 @@ describe("full access under interleavings", () => {
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     // The test process's own: this package's tests have no Node types.
     const proc = (globalThis as unknown as { process: NodeEvents }).process;
-    proc.on("unhandledRejection", onUnhandled);
-    const done = () => {
-      proc.off("unhandledRejection", onUnhandled);
-      expect(unhandled).toEqual([]);
-    };
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),
       [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
@@ -761,6 +756,14 @@ describe("full access under interleavings", () => {
       payload: helloOk([...(params as ConnectParams).scopes]),
     });
     const client = new ClawtrateClient(host(gateway, storage), FAST);
+    onTestFinished(() => {
+      try {
+        client.stop();
+      } finally {
+        proc.off("unhandledRejection", onUnhandled);
+      }
+    });
+    proc.on("unhandledRejection", onUnhandled);
     await client.start();
     await until(() => client.state.connection.status === "connected");
     void client.requestAccess().catch(() => {});
@@ -795,11 +798,11 @@ describe("full access under interleavings", () => {
     expect(saved(storage)?.token).toBe("token-U");
     const tries = reads.failed;
     await until(() => reads.failed > tries);
-    return { client, gateway, storage, reads, before, done };
+    return { client, gateway, reads, before, unhandled };
   };
 
   it("a reconnect after a saved rotation whose read of the record fails shows an error and retries until it reconnects with the rotated token", async () => {
-    const { client, gateway, reads, before, done } = await rotationWithFailingReads();
+    const { client, gateway, reads, before, unhandled } = await rotationWithFailingReads();
     // Reads come back: the retry reconnects to the same gateway with the rotated token.
     reads.fail = false;
     await until(() => gateway.connects.length > before);
@@ -807,12 +810,11 @@ describe("full access under interleavings", () => {
     await until(() => client.state.connection.status === "connected");
     expect(client.state.connection.error).toBeNull();
     expect(client.state.connection.gatewayUrl).toBe(URL);
-    client.stop();
-    done();
+    expect(unhandled).toEqual([]);
   });
 
   it("a host that stops the client when it receives a retry notification stays stopped", async () => {
-    const { client, gateway, reads, done } = await rotationWithFailingReads();
+    const { client, gateway, reads, unhandled } = await rotationWithFailingReads();
     const priorRetry = client.state.connection.retryAt;
     const stopped = deferred<void>();
     const connects = gateway.connects.length;
@@ -824,20 +826,34 @@ describe("full access under interleavings", () => {
       reads.fail = false;
       stopped.resolve();
     });
-    try {
-      await stopped.promise;
-      await sleep(150);
-      expect(gateway.connects.length).toBe(connects);
-    } finally {
-      unsubscribe();
-      client.stop();
-      done();
-    }
+    onTestFinished(unsubscribe);
+    await stopped.promise;
+    await sleep(150);
+    expect(gateway.connects.length).toBe(connects);
+    expect(unhandled).toEqual([]);
   });
 
-  it("a reconnect after a saved rotation that keeps failing stops retrying at Disconnect or Forget", async () => {
-    for (const end of ["suspend", "disconnect"] as const) {
-      const { client, gateway, reads, done } = await rotationWithFailingReads();
+  it("does not open a socket when the host stops a recovered retry from its connecting notification", async () => {
+    const { client, gateway, reads, unhandled } = await rotationWithFailingReads();
+    const sockets = gateway.sockets.length;
+    const stopped = deferred<void>();
+    const unsubscribe = client.store.subscribe(({ connection }) => {
+      if (connection.error || !["connecting", "reconnecting"].includes(connection.status)) return;
+      unsubscribe();
+      client.stop();
+      stopped.resolve();
+    });
+    onTestFinished(unsubscribe);
+    reads.fail = false;
+    await stopped.promise;
+    expect(gateway.sockets).toHaveLength(sockets);
+    expect(unhandled).toEqual([]);
+  });
+
+  it.each(["suspend", "disconnect"] as const)(
+    "a reconnect after a saved rotation that keeps failing stops retrying after %s",
+    async (end) => {
+      const { client, gateway, reads, unhandled } = await rotationWithFailingReads();
       await client[end]();
       const stopped = reads.failed;
       const connects = gateway.connects.length;
@@ -845,10 +861,9 @@ describe("full access under interleavings", () => {
       expect(reads.failed, end).toBe(stopped);
       expect(gateway.connects.length, end).toBe(connects);
       expect(client.state.connection.status, end).toBe(end === "suspend" ? "disconnected" : "idle");
-      client.stop();
-      done();
-    }
-  });
+      expect(unhandled).toEqual([]);
+    },
+  );
 
   it("an approved rotation whose reads fail keeps pairing another client on the store was granted meanwhile", async () => {
     const storage = memoryStorage({

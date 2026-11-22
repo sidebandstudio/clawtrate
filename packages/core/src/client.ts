@@ -5803,6 +5803,9 @@ export class ClawtrateClient {
           ),
     }));
 
+    // A host can stop or replace this connection from the state notification above.
+    if (generation !== this.generation) return;
+
     const owner = Symbol();
     const key = this.tokenKey(settings.url, identity.deviceId, "operator");
     const tokenStore = this.connectionTokenStore(settings.url, generation, owner);
