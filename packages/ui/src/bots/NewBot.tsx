@@ -66,6 +66,29 @@ export function NewBot({
   const [announcer, announce] = useAnnouncer();
   const [pictureFailed, setPictureFailed] = useState(false);
   const [pictureBusy, setPictureBusy] = useState(false);
+  // This opening of the dialog: whether it still stands, the gateway it was opened on, the draft
+  // as it is now, and whether a Create is being prepared or sent.
+  const open = useRef(true);
+  const [gateway] = useState(() => connection.gatewayId ?? connection.gatewayUrl);
+  const now$ = useRef(connection);
+  const latest = useRef(draft);
+  const pending = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    now$.current = connection;
+    latest.current = draft;
+  });
+  const stands = () =>
+    open.current &&
+    now$.current.status === "connected" &&
+    (now$.current.gatewayId ?? now$.current.gatewayUrl) === gateway &&
+    latest.current === draft;
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -141,27 +164,46 @@ export function NewBot({
   const busy = creation?.status === "creating" || creation?.status === "checking";
   const create = async () => {
     if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
-    // A picture the person chose must be drawn to be sent; if it can't be, nothing is created.
-    const avatar = draft.picture
-      ? await pictureFor(draft.picture, previewRef.current?.querySelector("svg"))
-      : null;
-    if (draft.picture && !avatar) {
-      setPictureFailed(true);
-      announce(PICTURE_FAILED);
-      return;
+    // One Create at a time, for this opening of the dialog and the gateway it was opened on.
+    if (pending.current) return;
+    pending.current = true;
+    setPreparing(true);
+    const sent = draft;
+    try {
+      // A picture the person chose must be drawn to be sent; if it can't be, nothing is created.
+      const avatar = sent.picture
+        ? await pictureFor(sent.picture, previewRef.current?.querySelector("svg"))
+        : null;
+      // Checked again right before sending: a dialog closed, or a gateway changed, while the
+      // picture was drawn sends nothing.
+      if (!stands()) return;
+      if (sent.picture && !avatar) {
+        setPictureFailed(true);
+        announce(PICTURE_FAILED);
+        return;
+      }
+      setPictureFailed(false);
+      announce("Creating the bot");
+      await send(sent, avatar);
+    } finally {
+      pending.current = false;
+      if (open.current) setPreparing(false);
     }
-    setPictureFailed(false);
-    announce("Creating the bot");
+  };
+  const send = async (sent: Draft, avatar: string | null) => {
+    if (!sent.account || !provider || !sent.model) return;
     try {
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
-        name: draft.name.trim(),
+        name: sent.name.trim(),
         avatar,
-        account: draft.account === GATEWAY_CHOICE ? null : draft.account,
+        account: sent.account === GATEWAY_CHOICE ? null : sent.account,
         provider,
-        model: draft.model,
-        effort: draft.effort,
+        model: sent.model,
+        effort: sent.effort,
       });
+      // An answer for an opening that has gone, or a draft changed since, closes and clears nothing.
+      if (!open.current || latest.current !== sent) return;
       remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
@@ -172,7 +214,7 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce("Could not create the bot");
+      if (open.current) announce("Could not create the bot");
     }
   };
   const partial = creation?.status === "partial" ? creation : null;
@@ -446,11 +488,13 @@ export function NewBot({
           className="button"
           data-variant="primary"
           data-size="lg"
-          disabled={busy || partial !== null || !draft.account || !listedChoice || !draft.model}
+          disabled={
+            busy || preparing || partial !== null || !draft.account || !listedChoice || !draft.model
+          }
           onClick={() => void create()}
           data-testid="create"
         >
-          {busy ? "Creating…" : "Create"}
+          {busy || preparing ? "Creating…" : "Create"}
         </button>
         {!draft.account && !busy && (
           <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>

@@ -481,3 +481,73 @@ test("F-037: a new connection to the gateway, still connected, closes the editor
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Change Otto's picture" })).toBeVisible();
 });
+
+test("F-034: a New bot draft closed while its picture was being drawn is never created, and Create waits", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.evaluate(() => {
+    const w = window as unknown as { releaseDecode: () => void };
+    const real = HTMLImageElement.prototype.decode;
+    HTMLImageElement.prototype.decode = function (this: HTMLImageElement) {
+      return new Promise<void>((resolve, reject) => {
+        w.releaseDecode = () => real.call(this).then(resolve, reject);
+      });
+    };
+  });
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("radio", { name: "Shellfolk" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  // While the picture is drawn, one Create at a time.
+  await expect(page.getByTestId("create")).toBeDisabled();
+  await expect(page.getByTestId("create")).toHaveText("Creating…");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
+  await page.waitForTimeout(300);
+  expect((await sent(page)).map((each) => each.type)).not.toContain("createBot");
+});
+
+test("F-034: a Create answered after its dialog closed doesn't close or clear the draft opened since", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=release`, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("First");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "createBot").length)
+    .toBe(1);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Back to the picture" }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Newer");
+  await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+  await expect(row(page, "First").first()).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Newer");
+});
+
+test("F-037: while a picture is being saved its choices are frozen, so what is saved is what was shown", async ({
+  page,
+}) => {
+  const dialog = await openEdit(page, "&picturesave=release");
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("radio", { name: "Shellfolk" })).toBeDisabled();
+  await dialog.getByRole("radio", { name: "Shellfolk" }).click({ force: true });
+  await expect(dialog.getByRole("radio", { name: "Lanterns" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.evaluate(() =>
+    (window as unknown as { releasePictureSave: () => void }).releasePictureSave(),
+  );
+  await expect(dialog).toHaveCount(0);
+  await expect(row(page, "Otto").locator('svg.creature[data-family="lantern"]')).toBeVisible();
+});

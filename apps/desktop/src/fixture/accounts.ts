@@ -1027,8 +1027,13 @@ export function accountCommand(
         );
         return new Promise(() => {});
       }
+      // create=release: the answer comes when the page calls `releaseCreate()`.
+      const answer = (run: () => void) =>
+        params.create === "release"
+          ? ((globalThis as unknown as { releaseCreate: () => void }).releaseCreate = run)
+          : later(500, run);
       return new Promise((resolve, reject) =>
-        later(500, () => {
+        answer(() => {
           if (params.create === "failed") {
             put((a) =>
               a.creation
