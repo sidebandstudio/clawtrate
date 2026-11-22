@@ -176,6 +176,10 @@ const refused: [string, (dir: string) => Buffer][] = [
     () => edited((bytes, _, last) => bytes.writeUInt32LE(0x04034b50, last)),
   ],
   [
+    "a record that runs into the end record",
+    () => edited((bytes, _, last) => bytes.writeUInt16LE(1, last + 32)),
+  ],
+  [
     "a ZIP64 archive from zip -fz",
     (dir) => zipTool(dir, "zip64", "/usr/bin/zip", ["-qr", "-fz", "out.zip", "Clawtrate.app"]),
   ],
