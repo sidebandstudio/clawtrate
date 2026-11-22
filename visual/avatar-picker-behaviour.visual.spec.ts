@@ -218,6 +218,15 @@ test("F-037: Save waits for a change, says Saving… while the gateway hasn't an
   await dropAdmin(page);
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Change Otto's picture" })).toHaveCount(0);
+  // Admin granted again does not bring back the editor that was closed, or its unsaved draft.
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...(state.connection as object), canAdmin: true },
+    })),
+  );
+  await expect(page.getByRole("button", { name: "Change Otto's picture" })).toBeVisible();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("F-037: a refused save says so in fixed words and keeps the changes; an unconfirmed one says the gateway hasn't confirmed it", async ({
