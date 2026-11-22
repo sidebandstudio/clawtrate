@@ -40,6 +40,11 @@ function canFocus(element: HTMLElement | null): element is HTMLElement {
   );
 }
 
+/** A native modal dialog is open: what is behind it is inert, its shortcuts too. */
+function dialogOpen(): boolean {
+  return document.querySelector("dialog[open]") !== null;
+}
+
 /** How long "Access granted" stays on the strip. */
 export const GRANTED_FOR_MS = 4000;
 
@@ -210,6 +215,7 @@ export function Shell({
   useEffect(() => {
     if (!interactive || inert) return;
     const onKey = (event: KeyboardEvent) => {
+      if (dialogOpen()) return;
       if (
         (event.metaKey || event.ctrlKey) &&
         !event.shiftKey &&
@@ -225,6 +231,8 @@ export function Shell({
   }, [interactive, inert]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Escape and Tab belong to the dialog then, not the drawer behind it.
+      if (dialogOpen()) return;
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
         event.preventDefault();
         setShortcuts((open) => !open);

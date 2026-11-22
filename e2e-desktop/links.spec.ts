@@ -104,6 +104,8 @@ const note = () => page.getByTestId("link-note");
 const shell = () => page.locator(".shell");
 const botButton = (name: string) =>
   page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name},`) });
+const choice = () => page.getByRole("alertdialog", { name: "Replace your draft?" });
+const refusal = () => page.getByRole("alertdialog", { name: "Can't open link" });
 
 async function expectCaretAtEnd(locator: Locator) {
   const [start, end, length] = await locator.evaluate((element: HTMLTextAreaElement) => [
@@ -115,7 +117,7 @@ async function expectCaretAtEnd(locator: Locator) {
 }
 
 async function expectCantOpen(reason: string) {
-  const card = page.getByRole("alertdialog", { name: "Can't open link" });
+  const card = refusal();
   await expect(card).toBeVisible();
   await expect(card).toHaveAccessibleDescription(reason);
   await expect(card.getByRole("button")).toHaveText(["Close"]);
@@ -123,6 +125,12 @@ async function expectCantOpen(reason: string) {
   await page.keyboard.press("Enter");
   await expect(card).toHaveCount(0);
 }
+
+/** Two frames: what a key press changed has rendered. */
+const frames = () =>
+  page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
 
 /** The gateway calls that would mark this chat read. */
 const reads = (key: string) =>
@@ -204,13 +212,12 @@ test("F-248: a link handed over by a second launch opens the bot's chat with its
 
 test("F-248: a link into a chat with a draft asks before replacing it", async () => {
   const draft = "Review the intro.\nKeep it short. Thanks.";
-  const choice = page.getByRole("alertdialog", { name: "Replace your draft?" });
-  const keep = choice.getByRole("button", { name: "Keep draft" });
-  const replace = choice.getByRole("button", { name: "Replace draft" });
+  const keep = choice().getByRole("button", { name: "Keep draft" });
+  const replace = choice().getByRole("button", { name: "Replace draft" });
 
   await deliver(link("marlow", "Start over."));
-  await expect(choice).toBeVisible();
-  await expect(choice).toHaveAccessibleDescription(
+  await expect(choice()).toBeVisible();
+  await expect(choice()).toHaveAccessibleDescription(
     "You already have a draft in this chat with Marlow. Replacing it discards that draft.",
   );
   await expect(keep).toBeFocused();
@@ -220,25 +227,39 @@ test("F-248: a link into a chat with a draft asks before replacing it", async ()
   await expect(keep).toBeFocused();
   // Escape keeps the draft, as Keep draft does.
   await page.keyboard.press("Escape");
-  await expect(choice).toHaveCount(0);
+  await expect(choice()).toHaveCount(0);
   await expect(field()).toHaveValue(draft);
   await expect(field()).toBeFocused();
   await expect(note()).toHaveText("");
 
   await deliver(link("marlow", "Start over."));
   await keep.click();
-  await expect(choice).toHaveCount(0);
+  await expect(choice()).toHaveCount(0);
   await expect(field()).toHaveValue(draft);
   await expect(field()).toBeFocused();
 
   await deliver(link("marlow", "Start over."));
   await replace.click();
-  await expect(choice).toHaveCount(0);
+  await expect(choice()).toHaveCount(0);
   await expect(field()).toHaveValue("Start over.");
   await expect(note()).toHaveText(ADDED);
   await expect(field()).toBeFocused();
   await expectCaretAtEnd(field());
   expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: while a link asks about a draft, the composer's shortcuts behind it do nothing", async () => {
+  await deliver(link("marlow", "Other words."));
+  await expect(choice()).toBeVisible();
+  // ⌘↵ or Ctrl+Enter would send the draft from anywhere else in the window.
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await frames();
+  await expect(field()).toHaveValue("Start over.");
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+  await expect(choice()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(choice()).toHaveCount(0);
+  await expect(field()).toHaveValue("Start over.");
 });
 
 test("F-248: a link that cannot open says why, and leaves the chat and its draft as they were", async () => {
@@ -303,6 +324,20 @@ test("F-248: a link reads no chat on the gateway and saves no layout", async () 
   await expect(field()).toHaveValue("Look at the review.");
   await expect.poll(() => reads("agent:wren:review").length).toBeGreaterThan(0);
   expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: Escape on a link's card closes the card and leaves the Work drawer open", async () => {
+  await field().focus();
+  await page.keyboard.press("ControlOrMeta+Backslash");
+  await expect(shell()).toHaveAttribute("data-panel", "open");
+  await deliver(`${link("wren", "Hi")}&send=1`);
+  await expect(refusal()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(refusal()).toHaveCount(0);
+  await expect(shell()).toHaveAttribute("data-panel", "open");
+  // With no card over it, Escape closes the drawer.
+  await page.keyboard.press("Escape");
+  await expect(shell()).toHaveAttribute("data-panel", "closed");
 });
 
 test("F-248: a link Windows split in two is invalid, and its second half is no switch", async () => {

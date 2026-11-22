@@ -1121,14 +1121,15 @@ export function Composer({
 
 /**
  * Whether the window's shortcuts may act on this conversation: it is shown,
- * not inert behind a drawer, and no modal dialog is open over it.
+ * not inert behind a drawer, and no modal dialog is open over it, a native
+ * `<dialog>` included.
  */
 export function reachable(element: Element | null): boolean {
   if (!element || !element.isConnected) return false;
   if (element.closest("[inert]")) return false;
   if (!element.checkVisibility()) return false;
-  const modal = document.querySelector('[aria-modal="true"]');
-  return !modal || modal.contains(element);
+  const modals = document.querySelectorAll('[aria-modal="true"], dialog[open]');
+  return [...modals].every((modal) => modal.contains(element));
 }
 
 function isLive(run: Run): boolean {
