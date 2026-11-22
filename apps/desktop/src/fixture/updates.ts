@@ -10,7 +10,7 @@ import {
 /** A fixed host reading for the screenshot fixture. No transfer or clock runs here. */
 export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const runningTrack = params.get("buildTrack") === "nightly" ? "nightly" : "stable";
-  const runningVersion = runningTrack === "nightly" ? "0.1.0-nightly.20261115.1" : "0.1.0";
+  const runningVersion = runningTrack === "nightly" ? "0.1.0-beta.20261115.1" : "0.1.0";
   const selection = params.get("track") ?? runningTrack;
   const selectedTrack =
     params.get("tracks") === "nightly"
@@ -21,7 +21,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           ? "nightly"
           : "stable";
   const versionFor = (track: UpdateTrack | null) =>
-    track === "nightly" ? "0.2.0-nightly.20261116.1" : "0.2.0";
+    track === "nightly" ? "0.2.0-beta.20261116.1" : "0.2.0";
   const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
@@ -103,7 +103,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       track,
       source: params.has("longhost")
         ? "a".repeat(63) + ".example.test"
-        : track + ".updates.example",
+        : (track === "nightly" ? "beta" : track) + ".updates.example",
     })),
     lastCheck: ["nothing-newer", "history"].includes(kind)
       ? {

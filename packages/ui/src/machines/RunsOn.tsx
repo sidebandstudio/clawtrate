@@ -234,11 +234,27 @@ export function RunsOnPage({
       />
     </div>
   ) : null;
+  // A save's outcome stays shown when the read after it fails.
+  const saveLines = (
+    <>
+      {error && (
+        <p className="b-field-error" role="alert" data-testid="runs-on-error-line">
+          {error}
+        </p>
+      )}
+      {note && (
+        <p className="b-hint" data-testid="runs-on-save-note">
+          {note}
+        </p>
+      )}
+    </>
+  );
 
   if (read.status !== "ready") {
     return (
       <div className="b-tab m-page" data-testid="runs-on-page">
         {head}
+        {saveLines}
         {read.status === "loading" ? (
           <div
             aria-busy="true"
@@ -287,6 +303,21 @@ export function RunsOnPage({
         baseHash: placement.configHash,
       });
       if (!mounted.current) return;
+      if (saved.status === "refused") {
+        setError(`Nothing was saved. The gateway answered: ${saved.message}`);
+        announce("Couldn't save");
+        return;
+      }
+      if (saved.status === "unknown") {
+        setError(`The save couldn't be confirmed: ${saved.message}`);
+        setNote(
+          saved.place
+            ? `Read back afterwards, ${botName}'s command machine setting is ${hostWords(saved.place)}.`
+            : "The setting couldn't be read back either.",
+        );
+        announce("Save not confirmed");
+        return;
+      }
       const where = `${botName}'s command machine setting: ${hostWords(saved.place)}`;
       if (saved.active !== "failed" && saved.message)
         setNote(`The gateway answered: ${saved.message}`);
@@ -300,7 +331,7 @@ export function RunsOnPage({
     } catch (failure) {
       if (!mounted.current) return;
       setError(failure instanceof Error ? failure.message : String(failure));
-      // A refusal and a reply that never came both end here: neither confirms a save.
+      // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
       if (mounted.current) setSaving(false);
@@ -373,16 +404,7 @@ export function RunsOnPage({
         }}
         testId="runs-on-machine"
       />
-      {error && (
-        <p className="b-field-error" role="alert" data-testid="runs-on-error-line">
-          {error}
-        </p>
-      )}
-      {note && (
-        <p className="b-hint" data-testid="runs-on-save-note">
-          {note}
-        </p>
-      )}
+      {saveLines}
       <p className="m-sentence">
         {origin}
         {onNode && commands.nodeInherited
