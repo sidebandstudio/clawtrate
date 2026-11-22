@@ -465,7 +465,7 @@ Undo exists only on the plugin's apply path, so on 2026.10.6 there is no Undo fr
 
 ### Proposal records
 
-Two kinds of storage, in one retained store with `overflowPolicy: "reject-new"` (R22):
+Two kinds of storage, in one retained keyed store (R22). On OpenClaw 2026.10.6 a retained store has no eviction and rejects `maxEntries`, `overflowPolicy` and TTLs (`docs/plugins/sdk-runtime/state-and-system.md`, lines 162 and 174), so the ledger enforces the limits below and the plugin's own sweep does expiry and retention:
 
 - **Immutable versions**, written once and never changed: a proposal's details, an Undo's details, a grant's details, and each journal entry.
 - **One ledger row per gateway**, the only mutable record that decides anything. It references versions by id and digest.
@@ -687,6 +687,13 @@ On a development gateway, against the plugin and the real app, each named for it
 - **F-537**: a grant used; revoked mid-call (the admitted call's outcome recorded, its answer withheld); refused after; another device trying to apply the revoked grant's suggestion; a reconnect with a new generation refused; instructions withheld without the permission.
 - **F-538**: each denied tool absent in an interactive and a scheduled turn; ACP refused; a `full` session task shown as not under the limits; a worker-turn bot shown as not fully managed.
 - The plugin missing; a gateway switch mid-proposal.
+
+Where these run, as the records PR (step 1) found them:
+
+- **Restarts.** The development gateway never reuses state (`tools/dev-gateway/src/cli.ts`, "State is never reused"), so F-536's restart cases are unit tests over the store until a gateway restart that keeps state exists.
+- **F-537's withheld answer** belongs to the relay (step 8). The records PR checks that an admitted call's outcome is recorded and that the next call is refused.
+- **F-535's refusals** need a bot's tool, so they are contract tests in step 2; step 1's second part unit-tests the rule and checks `managers.set` on a gateway.
+- **F-536 once the plugin may apply** runs as unit tests in step 1's second part; its gateway checks wait for the primitives in "Gated on missing gateway primitives".
 
 ### Not yet established
 
