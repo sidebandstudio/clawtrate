@@ -45,6 +45,8 @@ const fsHooks = vi.hoisted(() => ({
   failSyncsAfterRename: null as null | ((to: string) => number),
   /** Called once, right after the next rename onto a matching path completes. */
   onRenamed: null as null | { match: (to: string) => boolean; run: () => void },
+  /** Called once, when the next folder handle closes (after its sync). */
+  onFolderClose: null as null | (() => void),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -54,6 +56,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     const folder = args[1] === "r" && (await handle.stat()).isDirectory();
     return new Proxy(handle, {
       get(target, prop, receiver) {
+        if (prop === "close" && folder && fsHooks.onFolderClose) {
+          const hook = fsHooks.onFolderClose;
+          fsHooks.onFolderClose = null;
+          return async () => {
+            await target.close();
+            hook();
+          };
+        }
         if (prop === "sync" && folder && fsHooks.failFolderSyncs > 0)
           return () => {
             fsHooks.failFolderSyncs -= 1;
@@ -133,6 +143,7 @@ const SECRETS = [SHARED, DEVICE, "PRIVATE KEY"];
 
 const dirs: string[] = [];
 afterEach(() => {
+  fsHooks.onFolderClose = null;
   fsHooks.written.length = 0;
   fsHooks.failRename = null;
   fsHooks.failFolderSyncs = 0;
@@ -749,6 +760,39 @@ describe("this device's credentials in secure storage", () => {
     expect(seen[0]).toBe(a);
     expect(seen.filter((value) => value !== a && value !== b)).toEqual([]);
     expect(seen.at(-1)).toBe(b);
+  });
+
+  it("readers right after the settings' write finishes see the new settings with their typed token, never the settings alone", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    const a = JSON.stringify({ url: URL, token: "typed-A" });
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    await credentials.storage.set("connection", a);
+    // The write's last step is the folder sync after the rename, or the rename itself on
+    // Windows, where folders aren't synced. From there a read starts on each of the next
+    // microtasks: across the settings' publication and the continuation of the call that
+    // wrote them, so a typed token assigned in that continuation is seen missing.
+    const reads: Array<Promise<string | null>> = [];
+    const burst = () => {
+      let left = 40;
+      const next = () => {
+        reads.push(credentials.storage.get("connection"));
+        if ((left -= 1) > 0) queueMicrotask(next);
+      };
+      queueMicrotask(next);
+    };
+    fsHooks.onRenamed = {
+      match: (to) => to.endsWith(STATE_FILE),
+      run: () => {
+        if (process.platform === "win32") burst();
+        else fsHooks.onFolderClose = burst;
+      },
+    };
+    await credentials.storage.set("connection", b);
+    await until(() => reads.length === 40);
+    const seen = await Promise.all(reads);
+    expect(seen.filter((value) => value !== a && value !== b)).toEqual([]);
+    expect(seen).toContain(b);
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
