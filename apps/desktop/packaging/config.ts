@@ -105,8 +105,8 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     publish: null,
     afterPack: afterPack(env),
     artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
-    // Clawtrate links: declared in the macOS app's Info.plist. The Windows installer
-    // declares nothing, so the app registers itself at startup (src/main/index.ts).
+    // Clawtrate links: declared in the macOS app's Info.plist. electron-builder's NSIS
+    // installer ignores this, so packaging/installer.nsh registers them on Windows.
     protocols: [{ name: PRODUCT_NAME, schemes: [CHAT_LINK_SCHEME] }],
     mac: {
       category: "public.app-category.productivity",

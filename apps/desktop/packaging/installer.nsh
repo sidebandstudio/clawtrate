@@ -5,12 +5,22 @@
 ; after the package with "-updater". electron-builder's uninstaller removes the
 ; app, its shortcuts and its registry keys but not that copy. The app has no
 ; updater, so an uninstall that is not part of an update removes the copy and
-; then its folder, if nothing else is in it. It also removes the app's own
-; registration for Clawtrate links, which the app writes for this user when it
-; starts, so no link is handed to a program that is gone.
+; then its folder, if nothing else is in it.
+;
+; electron-builder registers no URL scheme on Windows, so this installation
+; registers Clawtrate links (docs/design/links.md) for its own scope, this user
+; or every user, and its uninstaller removes that entry only while it still
+; opens this installation. The command puts `--` before the link, so nothing
+; Windows splits from a link reaches Chromium as a switch (src/main/links.ts).
 
 ; The folder, from the file's path; the build fails if electron-builder ever names the file otherwise.
 !searchparse "${APP_INSTALLER_STORE_FILE}" "" CLAWTRATE_UPDATER_DIR "\installer.exe"
+
+!macro customInstall
+  WriteRegStr SHELL_CONTEXT "Software\Classes\clawtrate" "" "URL:clawtrate"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\clawtrate" "URL Protocol" ""
+  WriteRegStr SHELL_CONTEXT "Software\Classes\clawtrate\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
+!macroend
 
 !macro customUnInstall
   ${ifNot} ${isUpdated}
@@ -23,7 +33,13 @@
     ${if} $installMode == "all"
       SetShellVarContext all
     ${endif}
-    DeleteRegKey HKCU "Software\Classes\clawtrate"
+    ; A link entry another copy of the app wrote since stays.
+    Push $0
+    ReadRegStr $0 SHELL_CONTEXT "Software\Classes\clawtrate\shell\open\command" ""
+    ${if} $0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
+      DeleteRegKey SHELL_CONTEXT "Software\Classes\clawtrate"
+    ${endif}
+    Pop $0
   ${endif}
 !macroend
 

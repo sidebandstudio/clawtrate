@@ -2,7 +2,6 @@
 
 import {
   batchSnapshots,
-  CHAT_LINK_SCHEME,
   createBridgeSession,
   type BridgeSession,
   parseBridgeCommand,
@@ -552,12 +551,9 @@ async function main(): Promise<void> {
     if (window && !window.isDestroyed()) window.webContents.send("clawtrate:state", state);
   });
 
+  // The app registers no scheme itself: the macOS app's Info.plist declares it, and the
+  // Windows installer registers it for the install's scope (packaging/installer.nsh).
   ipcMain.handle("clawtrate:link:take", () => links.take());
-  // macOS reads the scheme from the app's Info.plist (packaging/config.ts). Windows has no
-  // such declaration, so the packaged app registers itself for this user. A development
-  // build never does.
-  if (app.isPackaged && process.platform !== "darwin")
-    app.setAsDefaultProtocolClient(CHAT_LINK_SCHEME);
 
   started = true;
   window = createWindow();
@@ -619,7 +615,7 @@ if (app.requestSingleInstanceLock()) {
     if (link === null) bringForward();
     else openLink(link);
   });
-  // Windows and Linux: the link the app was started with.
+  // Windows: the link the app was started with.
   const launchLink = linkArgument(process.argv);
   if (launchLink !== null) links.receive(launchLink);
   void main();

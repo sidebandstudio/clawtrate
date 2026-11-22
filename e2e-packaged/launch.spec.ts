@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, dirname, join, win32 } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
@@ -349,11 +349,12 @@ test("hands a second launch to the running app instead of starting another", asy
 });
 
 test("hands a link from a second launch to the running app, which checks it", async () => {
-  // As Windows and Linux open a Clawtrate link while the app runs. An invalid
-  // link needs no gateway: the running app says so, and nothing else happens.
+  // As Windows opens a Clawtrate link while the app runs, with the command the
+  // installer registers. An invalid link needs no gateway: the running app says
+  // so, and nothing else happens.
   const second = spawn(
     packagedExecutable(APP),
-    [`--user-data-dir=${USER_DATA}`, "clawtrate://chat?bot=marlow&send=1"],
+    [`--user-data-dir=${USER_DATA}`, "--", "clawtrate://chat?bot=marlow&send=1"],
     { env: appEnv(), stdio: "ignore" },
   );
   const exited = new Promise<number | null>((resolve) => second.once("exit", resolve));
@@ -371,22 +372,15 @@ test("hands a link from a second launch to the running app, which checks it", as
   await expect(card).toHaveCount(0);
 });
 
-test("registers its links with the system", () => {
-  if (WINDOWS) {
-    // The installer declares nothing; the packaged app registers itself for this user.
-    const key = win32.join("HKCU", "Software", "Classes", "clawtrate", "shell", "open", "command");
-    const command = execFileSync("reg.exe", ["query", key, "/ve"], { encoding: "utf8" });
-    expect(command).toContain(`"${packagedExecutable(APP)}" "%1"`);
-  } else {
-    // macOS reads the scheme from the app's Info.plist.
-    const plist = join(APP, "Contents", "Info.plist");
-    const types = JSON.parse(
-      execFileSync("plutil", ["-extract", "CFBundleURLTypes", "json", "-o", "-", plist], {
-        encoding: "utf8",
-      }),
-    ) as Array<{ CFBundleURLSchemes?: string[] }>;
-    expect(types.map((type) => type.CFBundleURLSchemes)).toEqual([["clawtrate"]]);
-  }
+test("declares its links in the macOS app's Info.plist", () => {
+  test.skip(WINDOWS, "the Windows installer registers links; the Windows job checks its entries");
+  const plist = join(APP, "Contents", "Info.plist");
+  const types = JSON.parse(
+    execFileSync("plutil", ["-extract", "CFBundleURLTypes", "json", "-o", "-", plist], {
+      encoding: "utf8",
+    }),
+  ) as Array<{ CFBundleURLSchemes?: string[] }>;
+  expect(types.map((type) => type.CFBundleURLSchemes)).toEqual([["clawtrate"]]);
 });
 
 test("runs its renderer in the operating system's sandbox", () => {

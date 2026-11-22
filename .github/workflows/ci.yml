@@ -194,6 +194,13 @@ jobs:
           foreach ($link in $startMenu, $desktop) {
             if (-not (Test-Path -LiteralPath $link)) { throw "the installer did not make $link" }
           }
+          # Clawtrate links open the installed app, with `--` before the link (packaging/installer.nsh).
+          $links = 'HKCU:\Software\Classes\clawtrate'
+          if ((Get-ItemProperty -LiteralPath $links).'URL Protocol' -ne '') { throw "$links is not marked as a URL scheme" }
+          $command = (Get-ItemProperty -LiteralPath "$links\shell\open\command").'(default)'
+          $expected = '"' + (Join-Path $dir 'Clawtrate.exe') + '" -- "%1"'
+          if ($command -ne $expected) { throw "links open '$command', not '$expected'" }
+          "links open: $command"
           # The silent install must not start the app; the check starts its own.
           $running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$dir\*" }
           if ($running) { throw "the installer left the app running: $($running.ProcessId -join ', ')" }
@@ -233,11 +240,12 @@ jobs:
         run: |
           $run = Start-Process (Join-Path $env:DIR 'Uninstall Clawtrate.exe') -ArgumentList '/S' -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "the uninstaller exited with $($run.ExitCode)" }
-          # Everything the installer made: the app's folder, the copy of itself, its shortcuts and its two keys.
+          # Everything the installer made: the app's folder, the copy of itself, its shortcuts and its three keys.
           $owned = @(
             $env:DIR, $env:CACHE, $env:START_MENU, $env:DESKTOP,
             "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$env:GUID",
-            "HKCU:\Software\$env:GUID"
+            "HKCU:\Software\$env:GUID",
+            'HKCU:\Software\Classes\clawtrate'
           )
           # The uninstaller carries on from a copy of itself in the temporary folder, so wait for it.
           $deadline = (Get-Date).AddSeconds(60)

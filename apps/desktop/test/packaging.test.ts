@@ -46,15 +46,32 @@ describe("packaging configuration", () => {
     expect(() => output("custom-dist")).toThrow("must be an absolute path");
   });
 
-  it("F-248: declares the link scheme for macOS; the Windows uninstaller removes the app's own registration", () => {
+  it("F-248: declares the link scheme for macOS; the Windows installer registers it and removes only its own", () => {
     const config = builderConfig({}, "45.3.2");
     expect(config.protocols).toEqual([{ name: "Clawtrate", schemes: ["clawtrate"] }]);
     const script = readFileSync(join(APP, config.nsis!.include!), "utf8");
-    const uninstall = script.slice(
-      script.indexOf("!macro customUnInstall"),
-      script.indexOf("!macroend"),
+    const macro = (name: string) => {
+      const start = script.indexOf(`!macro ${name}\n`);
+      expect(start, name).toBeGreaterThanOrEqual(0);
+      return script.slice(start, script.indexOf("!macroend", start));
+    };
+    const key = '"Software\\Classes\\clawtrate"';
+    const command = '\'"$INSTDIR\\${APP_EXECUTABLE_FILENAME}" -- "%1"\'';
+    // At the install's scope, with `--` before the link (src/main/links.ts).
+    const install = macro("customInstall");
+    expect(install).toContain(`WriteRegStr SHELL_CONTEXT ${key} "URL Protocol" ""`);
+    expect(install).toContain(
+      `WriteRegStr SHELL_CONTEXT "Software\\Classes\\clawtrate\\shell\\open\\command" "" ${command}`,
     );
-    expect(uninstall).toContain('DeleteRegKey HKCU "Software\\Classes\\clawtrate"');
+    // Removed only when not updating, at the install's scope again, and only while it
+    // opens this installation.
+    const uninstall = macro("customUnInstall");
+    const guard = uninstall.indexOf("${if} $0 == " + command);
+    const removal = uninstall.indexOf(`DeleteRegKey SHELL_CONTEXT ${key}`);
+    expect(guard).toBeGreaterThan(uninstall.indexOf("${ifNot} ${isUpdated}"));
+    expect(guard).toBeGreaterThan(uninstall.lastIndexOf("SetShellVarContext all"));
+    expect(removal).toBeGreaterThan(guard);
+    expect(script.match(/DeleteRegKey/g)).toHaveLength(1);
   });
 
   it.each(["1.2.0", "1.2.0-beta.20261104.10"])(

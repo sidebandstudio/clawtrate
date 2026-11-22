@@ -2,8 +2,8 @@
 // Windows app gives itself the bundle id as its AppUserModelID before it
 // creates any window, so its taskbar button is the installer's shortcuts'
 // from the first window on. Other platforms and development builds do not.
-// A packaged app on Windows or Linux registers itself for Clawtrate links;
-// macOS reads the scheme from the app's Info.plist.
+// No app registers itself for Clawtrate links: the macOS app's Info.plist and
+// the Windows installer do.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,19 +143,10 @@ describe("the AppUserModelID at startup", () => {
 });
 
 describe("Clawtrate links at startup", () => {
-  it("F-248: a packaged app registers for them on Windows and Linux, before its window", async () => {
-    for (const os of ["win32", "linux"] as const) {
-      recorded.calls.length = 0;
-      vi.resetModules();
-      const calls = await startUp(os, true);
-      const registered = calls.indexOf("setAsDefaultProtocolClient clawtrate");
-      expect(registered, os).toBeGreaterThanOrEqual(0);
-      expect(registered, os).toBeLessThan(calls.indexOf("window"));
-    }
-  });
-
-  it("F-248: macOS and development builds leave the system's registration alone", async () => {
+  it("F-248: no build registers itself for them; the Info.plist and the installer do", async () => {
     for (const [os, packaged] of [
+      ["win32", true],
+      ["linux", true],
       ["darwin", true],
       ["darwin", false],
       ["win32", false],
@@ -164,6 +155,7 @@ describe("Clawtrate links at startup", () => {
       recorded.calls.length = 0;
       vi.resetModules();
       const calls = await startUp(os, packaged);
+      expect(calls, `${os}, packaged: ${packaged}`).toContain("window");
       expect(
         calls.some((call) => call.startsWith("setAsDefaultProtocolClient")),
         `${os}, packaged: ${packaged}`,
