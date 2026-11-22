@@ -255,12 +255,13 @@ int main(int argc, char **argv) {
     // at EOF, with no comment and no ZIP64 locator, on one disk; a central directory of
     // at most 8 MiB that ends at that record and walks to its count, at most 32,768
     // records; each local header before the directory; Store or Deflate only, in both
-    // headers. That bounds libarchive's index, and its symlink reads (64 KiB at most,
-    // with no LZMA). The reader then bounds entries seen and paths created (32,768
-    // each), regular-file bytes (2 GiB in all, streamed through a 64 KiB buffer, so a
-    // large valid Deflate stream costs time, not memory), Info.plist (1 MiB), names
-    // (1,024 characters, 48 parts) and time (the 120 s alarm). A helper that dies
-    // prints nothing, which the app reads as inspection-failed.
+    // headers. That bounds libarchive's index. Its early per-entry reads have fixed caps:
+    // a symlink target of 64 KiB compressed, inflated into one 256 KiB buffer (no LZMA),
+    // and __MACOSX metadata of 10 MiB. The reader then bounds entries seen and paths
+    // created (32,768 each), regular-file bytes (2 GiB in all, streamed through a 64 KiB
+    // buffer, so a large valid Deflate stream costs time, not memory), Info.plist
+    // (1 MiB), names (1,024 characters, 48 parts) and time (the 120 s alarm). A helper
+    // that dies prints nothing, which the app reads as inspection-failed.
     @autoreleasepool {
         if (classify) puts(inspect(nil, @(argv[2]), nil, nil));
         else if (!preflight(3)) puts("mac-archive");

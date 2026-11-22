@@ -210,6 +210,14 @@ const refused: [string, (dir: string) => Buffer][] = [
   ],
   ["a second disk", () => edited((bytes) => bytes.writeUInt16LE(1, endAt(bytes) + 4))],
   [
+    "a directory on a second disk",
+    () => edited((bytes) => bytes.writeUInt16LE(1, endAt(bytes) + 6)),
+  ],
+  [
+    "fewer records on this disk than in all",
+    () => edited((bytes) => bytes.writeUInt16LE(3, endAt(bytes) + 8)),
+  ],
+  [
     "an LZMA entry in the central header",
     () => edited((bytes, stored) => bytes.writeUInt16LE(14, stored + 10)),
   ],
@@ -392,6 +400,15 @@ int main(int argc, char **argv) {
           "--keepParent",
           "Clawtrate.app",
           "out.zip",
+        ]),
+    ],
+    [
+      // The release script's path when it staples again: extended attributes go to __MACOSX.
+      "a ditto --sequesterRsrc archive with extended attributes",
+      (dir) =>
+        zipTool(dir, "sequester", "/bin/sh", [
+          "-c",
+          "xattr -w dev.clawtrate.test 1 Clawtrate.app/Contents/a.txt && ditto -c -k --sequesterRsrc --keepParent Clawtrate.app out.zip",
         ]),
     ],
     [
