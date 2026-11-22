@@ -25,6 +25,7 @@ import {
 import { open } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../packaging/config.ts";
@@ -630,7 +631,7 @@ describe("the parse worker", () => {
   const write = (name: string, body: string) => {
     const path = join(scratch, name);
     writeFileSync(path, body);
-    return new URL(`file://${path}`);
+    return pathToFileURL(path);
   };
   /** A worker that answers with exactly this message. */
   const answering = (name: string, message: unknown) =>
@@ -748,7 +749,7 @@ parentPort.postMessage({ kind: "found", token, port: 1 });\n`;
   });
 
   it("takes a worker's literal token that only looks like a reference", async () => {
-    const answer = answering("token-literal.mjs", { kind: "found", token: "$cost-2026", port: 1 });
+    const answer = answering("token#literal.mjs", { kind: "found", token: "$cost-2026", port: 1 });
     expect(await parseInWorker("", "default", answer)).toEqual({
       kind: "found",
       token: "$cost-2026",
