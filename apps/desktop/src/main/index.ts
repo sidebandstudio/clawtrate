@@ -30,7 +30,7 @@ import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
-import { LinkInbox, linkArgument } from "./links.ts";
+import { givesSwitch, LinkInbox, linkArgument } from "./links.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   keychainCheckName,
@@ -110,12 +110,9 @@ const links = new LinkInbox(() => {
   if (window && !window.isDestroyed()) window.webContents.send("clawtrate:link");
 });
 
-/** Whether a command-line switch was given, to Chromium or to the app. */
+/** Whether a command-line switch was given, to Chromium or to the app, before any `--`. */
 function hasSwitch(name: string): boolean {
-  return (
-    app.commandLine?.hasSwitch(name) === true ||
-    process.argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`))
-  );
+  return app.commandLine?.hasSwitch(name) === true || givesSwitch(process.argv, name);
 }
 
 /** A switch's value, given to Chromium or to the app; empty when it has none. */

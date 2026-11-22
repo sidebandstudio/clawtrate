@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { LinkInbox, linkArgument } from "../src/main/links.ts";
+import { givesSwitch, LinkInbox, linkArgument } from "../src/main/links.ts";
 import type { DesktopHostApi } from "../src/preload/index.ts";
 
 const GATEWAY = "ab".repeat(32);
@@ -39,6 +39,28 @@ describe("links from the operating system", () => {
     expect(inbox.take()).toEqual({ id: 1, status: "invalid" });
     // Only the first `--` ends the switches; a later one is part of the link.
     expect(linkArgument(["/app/Clawtrate", "--", LINK, "--", "x"])).toBe(`${LINK} -- x`);
+  });
+
+  it("F-248: a piece of a split link that looks like a switch does not make the launch automated", () => {
+    const split = ["/app/Clawtrate", "--", LINK, "--remote-debugging-port=0", "--inspect"];
+    expect(givesSwitch(split, "remote-debugging-port")).toBe(false);
+    expect(givesSwitch(split, "inspect")).toBe(false);
+    expect(
+      givesSwitch(
+        ["/app/Clawtrate", "--", "--clawtrate-setup-sandbox=/tmp/x"],
+        "clawtrate-setup-sandbox",
+      ),
+    ).toBe(false);
+    // Before `--`, with or without a value, it is one.
+    expect(
+      givesSwitch(
+        ["/app/Clawtrate", "--remote-debugging-port=0", "--", LINK],
+        "remote-debugging-port",
+      ),
+    ).toBe(true);
+    expect(givesSwitch(["/app/Clawtrate", "--inspect"], "inspect")).toBe(true);
+    // Another switch that starts the same is not it.
+    expect(givesSwitch(["/app/Clawtrate", "--inspect-brk"], "inspect")).toBe(false);
   });
 
   it("F-248: holds the latest link, validated, until the window takes it once", () => {

@@ -23,6 +23,19 @@ export function linkArgument(argv: readonly string[]): string | null {
   return given.join(" ");
 }
 
+/**
+ * Whether a launch's arguments give the switch `--<name>`, read as Chromium and
+ * Electron's Node read them: only before the first `--`. A switch after it opens no
+ * debugging port or inspector (checked with Electron 45.3.2), so a piece of a link
+ * Windows split does not count as one either.
+ */
+export function givesSwitch(argv: readonly string[], name: string): boolean {
+  const end = argv.indexOf("--");
+  return (end === -1 ? argv : argv.slice(0, end)).some(
+    (arg) => arg === `--${name}` || arg.startsWith(`--${name}=`),
+  );
+}
+
 /** The one link waiting for the window: a later link replaces it. */
 export class LinkInbox {
   private next = 1;
