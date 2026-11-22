@@ -283,6 +283,63 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  it("isn't disturbed by another session's Create, refused as busy while it is out", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    const created = createBridgeSession(client).apply({
+      type: "createBot",
+      ...input,
+      gatewayId: "gateway-a",
+    });
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    await expect(
+      createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        name: "Other",
+        gatewayId: "gateway-a",
+      }),
+    ).rejects.toThrow("A bot is already being created.");
+    release();
+    expect(await created).toEqual({ botId: "viral", missing: [] });
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("isn't disturbed by another session's picture saved while it is out, and leaves no guard behind", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    const created = createBridgeSession(client).apply({
+      type: "createBot",
+      ...input,
+      gatewayId: "gateway-a",
+    });
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    // Another session's save starts and finishes while the Create is out.
+    expect(
+      await createBridgeSession(client).apply({
+        type: "setBotPicture",
+        botId: "otto",
+        avatar: PICTURE,
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ confirmed: true });
+    release();
+    expect(await created).toEqual({ botId: "viral", missing: [] });
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    // Both over: a later write on the same gateway goes through as any other.
+    expect(
+      await createBridgeSession(client).apply({
+        type: "setBotPicture",
+        botId: "viral",
+        avatar: PICTURE,
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ confirmed: true });
+    client.stop();
+  });
+
   it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
     const { client, fake } = await accountsClient();
     const release = holdCreate(fake);

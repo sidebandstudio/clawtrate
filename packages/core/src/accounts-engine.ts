@@ -140,12 +140,13 @@ export class AccountsEngine {
     effort: string | null;
     intent: BindingIntent;
   } | null = null;
-  private ctx: AccountsContext;
+  private readonly ctx: AccountsContext;
   /**
-   * The gateway the bot write under way was asked of. Every request, recovery read and change
-   * to the state it makes is checked against it; a reset retires it.
+   * How many times the engine has been reset. A bot write under way is bound to the gateway it
+   * was asked of and checks its own requests, recovery reads and changes to the state against
+   * it; a reset since it began retires it.
    */
-  private bound: { gatewayId: string } | null = null;
+  private resets = 0;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -873,13 +874,17 @@ export class AccountsEngine {
   }
 
   /** Record what Clawtrate set for a bot; the write's error, or null when it landed or isn't kept. */
-  private async recordIntent(botId: string, intent: BindingIntent): Promise<unknown> {
+  private async recordIntent(
+    botId: string,
+    intent: BindingIntent,
+    ctx: AccountsContext = this.ctx,
+  ): Promise<unknown> {
     // An id too long to be one Clawtrate keeps is not recorded.
     if (!prefBotId(botId) || (intent.mode === "account" && !prefProfileId(intent.account)))
       return null;
     this.remember(this.intents, botId, intent, MAX_ACCOUNTS);
     try {
-      await this.ctx.request("users.prefs.set", {
+      await ctx.request("users.prefs.set", {
         entries: { [`${INTENT_PREF_PREFIX}${botId}`]: intent },
       });
       return null;
@@ -1008,24 +1013,28 @@ export class AccountsEngine {
    * One merge patch of the gateway's config (`config.patch`, admin), then the
    * gateway applying it: `config.get` reports the new revision as applied.
    */
-  private async patch(patch: RawRecord, replacePaths: string[] = []): Promise<void> {
-    const before = asRecord(await this.ctx.request("config.get", {}));
+  private async patch(
+    patch: RawRecord,
+    replacePaths: string[] = [],
+    ctx: AccountsContext = this.ctx,
+  ): Promise<void> {
+    const before = asRecord(await ctx.request("config.get", {}));
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
-    await this.ctx.request("config.patch", {
+    await ctx.request("config.patch", {
       raw: JSON.stringify(patch),
       ...(baseHash ? { baseHash } : {}),
       ...(replacePaths.length > 0 ? { replacePaths } : {}),
     });
     // A gateway that reports no revisions has nothing to wait for.
     if (before?.configRevisionHash === undefined) return;
-    const started = this.ctx.now();
+    const started = ctx.now();
     // At most 20 seconds, and at most 100 reads whatever the clock says.
-    for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
-      const now = asRecord(await this.ctx.request("config.get", {}));
+    for (let reads = 0; reads < 100 && ctx.now() - started < 20_000; reads += 1) {
+      const now = asRecord(await ctx.request("config.get", {}));
       const revised = now?.configRevisionHash !== before.configRevisionHash;
       if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
       // A patch that changed nothing leaves the revision as it was.
-      if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return;
+      if (!revised && (ctx.now() - started > 3_000 || reads >= 15)) return;
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
   }
@@ -1132,21 +1141,24 @@ export class AccountsEngine {
    * across a reconnect to the same gateway. Another gateway, an unknown identity, or a reset,
    * retires it: nothing more is sent or published.
    */
-  private async boundTo<T>(gatewayId: string | undefined, run: () => Promise<T>): Promise<T> {
-    if (gatewayId === undefined) return run();
-    const mark = { gatewayId };
+  private async boundTo<T>(
+    gatewayId: string | undefined,
+    run: (ctx: AccountsContext) => Promise<T>,
+  ): Promise<T> {
     const base = this.ctx;
-    const live = () => this.bound === mark;
+    if (gatewayId === undefined) return run(base);
+    // This write's own mark and context: another write, refused or not, never touches them.
+    const mark = { gatewayId, resets: this.resets, retired: false };
+    const live = () => !mark.retired && this.resets === mark.resets;
     const check = async () => {
       if (!live()) throw new WriteRetired();
       const here = await base.gateway();
       if (!live() || here === null || here !== mark.gatewayId) {
-        if (live()) this.bound = null;
+        mark.retired = true;
         throw new WriteRetired();
       }
     };
-    this.bound = mark;
-    this.ctx = {
+    const ctx: AccountsContext = {
       ...base,
       request: async (method, params, options) => {
         await check();
@@ -1165,7 +1177,7 @@ export class AccountsEngine {
       },
     };
     try {
-      const result = await run();
+      const result = await run(ctx);
       if (!live()) throw new WriteRetired();
       return result;
     } catch (error) {
@@ -1175,19 +1187,15 @@ export class AccountsEngine {
           { cause: error },
         );
       throw error;
-    } finally {
-      this.ctx = base;
-      if (live()) this.bound = null;
     }
   }
 
   async createBot(input: CreateBotInput, gatewayId?: string): Promise<CreatedBot> {
-    return this.boundTo(gatewayId, () => this.create(input));
+    return this.boundTo(gatewayId, (ctx) => this.create(ctx, input));
   }
 
-  private async create(input: CreateBotInput): Promise<CreatedBot> {
+  private async create(ctx: AccountsContext, input: CreateBotInput): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
-    const { ctx } = this;
     const name = input.name.trim() || "New bot";
     const previous = ctx.get().creation;
     if (previous?.status === "creating" || previous?.status === "checking")
@@ -1238,7 +1246,7 @@ export class AccountsEngine {
     }, SLOW_CREATE_MS);
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
-    if (retrying) botId = await this.findMade(name);
+    if (retrying) botId = await this.findMade(ctx, name);
     if (!botId) {
       try {
         const answer = asRecord(
@@ -1252,15 +1260,19 @@ export class AccountsEngine {
       } catch (error) {
         // Only a refusal that establishes nothing was written ends here. Anything else (no
         // answer, a dropped connection, "saved but not applied") may have made the bot.
-        if (isCertainRefusal(error)) return this.creationFailed(error, false);
-        botId = await this.findMade(name);
-        if (!botId) return this.creationFailed(error, true);
+        if (isCertainRefusal(error)) return this.creationFailed(ctx, error, false);
+        botId = await this.findMade(ctx, name);
+        if (!botId) return this.creationFailed(ctx, error, true);
       }
     }
     if (!botId)
-      return this.creationFailed(new Error("The gateway did not say which bot it made."), true);
+      return this.creationFailed(
+        ctx,
+        new Error("The gateway did not say which bot it made."),
+        true,
+      );
     this.planned = { ...this.planned, botId };
-    return this.complete(name, botId, ["preference", "fallbacks", "listed", "task"]);
+    return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"]);
   }
 
   /**
@@ -1273,20 +1285,24 @@ export class AccountsEngine {
     avatar: string,
     gatewayId?: string,
   ): Promise<{ confirmed: boolean }> {
-    return this.boundTo(gatewayId, () => this.writePicture(botId, avatar));
+    return this.boundTo(gatewayId, (ctx) => this.writePicture(ctx, botId, avatar));
   }
 
-  private async writePicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
+  private async writePicture(
+    ctx: AccountsContext,
+    botId: string,
+    avatar: string,
+  ): Promise<{ confirmed: boolean }> {
     this.requireAdmin("Changing a bot's picture");
     if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
-    await this.ctx.request("agents.update", { agentId: botId, avatar });
+    await ctx.request("agents.update", { agentId: botId, avatar });
     // The gateway took the picture. A list that can't be read now leaves it unconfirmed, not unsaved.
     try {
-      await this.ctx.refreshBots();
+      await ctx.refreshBots();
     } catch {
       return { confirmed: false };
     }
-    return { confirmed: this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl === avatar };
+    return { confirmed: ctx.bots().find((bot) => bot.id === botId)?.avatarUrl === avatar };
   }
 
   /**
@@ -1295,8 +1311,12 @@ export class AccountsEngine {
    * effort, the bot list read back showing it, the first task. What does not
    * land is reported, and finished by the bot's id.
    */
-  private async complete(name: string, botId: string, steps: MissingStep[]): Promise<CreatedBot> {
-    const { ctx } = this;
+  private async complete(
+    ctx: AccountsContext,
+    name: string,
+    botId: string,
+    steps: MissingStep[],
+  ): Promise<CreatedBot> {
     const plan = this.planned?.botId === botId ? this.planned : null;
     const missing: MissingStep[] = [];
     const errors: string[] = [];
@@ -1307,18 +1327,20 @@ export class AccountsEngine {
       this.log(`${botId}: ${words}${why}`);
     };
     if (steps.includes("preference") && plan) {
-      const error = await this.recordIntent(botId, plan.intent);
+      const error = await this.recordIntent(botId, plan.intent, ctx);
       if (error instanceof WriteRetired) throw error;
       if (error !== null)
         failed("preference", "Clawtrate's record of its account was not saved", error);
     }
     if (steps.includes("fallbacks")) {
       try {
-        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false);
+        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false, ctx);
         else
-          await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
-            `agents.entries.${botId}.model.fallbacks`,
-          ]);
+          await this.patch(
+            { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
+            [`agents.entries.${botId}.model.fallbacks`],
+            ctx,
+          );
         this.unwritten.delete(botId);
       } catch (error) {
         if (error instanceof WriteRetired) throw error;
@@ -1362,11 +1384,12 @@ export class AccountsEngine {
         failed("task", "its first task was not made", error);
       }
     }
-    return this.settleCreation(name, botId, missing, errors);
+    return this.settleCreation(ctx, name, botId, missing, errors);
   }
 
   /** The creation's end: created, or partial with what it lacks. */
   private async settleCreation(
+    ctx: AccountsContext,
     name: string,
     botId: string,
     missing: MissingStep[],
@@ -1374,7 +1397,7 @@ export class AccountsEngine {
   ): Promise<CreatedBot> {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
-    this.ctx.update((a) => ({
+    ctx.update((a) => ({
       ...a,
       creation: {
         name,
@@ -1398,8 +1421,7 @@ export class AccountsEngine {
    * bot of that name that was not there before the first Create of it. Never
    * one that was: without what was there before, nothing is found.
    */
-  private async findMade(name: string): Promise<string | null> {
-    const { ctx } = this;
+  private async findMade(ctx: AccountsContext, name: string): Promise<string | null> {
     ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
     const before = new Set(this.before);
     // Until a read of the list succeeds, within the deadline: an answer lost to a dropped
@@ -1433,14 +1455,14 @@ export class AccountsEngine {
     this.ctx.update((a) =>
       a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
     );
-    return this.complete(creation.name, botId, creation.missing);
+    return this.complete(this.ctx, creation.name, botId, creation.missing);
   }
 
-  private creationFailed(error: unknown, uncertain: boolean): never {
+  private creationFailed(ctx: AccountsContext, error: unknown, uncertain: boolean): never {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
-    const name = this.ctx.get().creation?.name ?? "the bot";
-    this.ctx.update((a) => ({
+    const name = ctx.get().creation?.name ?? "the bot";
+    ctx.update((a) => ({
       ...a,
       creation: a.creation
         ? {
@@ -1476,13 +1498,16 @@ export class AccountsEngine {
     ref: ModelRef,
     effort: string | null,
     creating: boolean,
+    ctx: AccountsContext = this.ctx,
   ): Promise<void> {
     const entry: RawRecord = { model: { primary: formatModelRef(ref), fallbacks: [] } };
     if (effort) entry.thinkingDefault = effort;
     try {
-      await this.patch({ agents: { entries: { [botId]: entry } } }, [
-        `agents.entries.${botId}.model.fallbacks`,
-      ]);
+      await this.patch(
+        { agents: { entries: { [botId]: entry } } },
+        [`agents.entries.${botId}.model.fallbacks`],
+        ctx,
+      );
       this.unwritten.delete(botId);
     } catch (error) {
       if (!creating) throw error;
@@ -1645,7 +1670,7 @@ export class AccountsEngine {
   /** Another gateway: nothing read from this one is kept. */
   reset(): void {
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
-    this.bound = null;
+    this.resets += 1;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();
