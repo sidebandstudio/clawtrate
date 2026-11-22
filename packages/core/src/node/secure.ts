@@ -316,8 +316,8 @@ export function createSecureCredentials(options: {
   };
 
   /** Rewrites `state.json` without any credential, in one write. */
-  const writeSettings = () =>
-    replaceDurably(statePath, Buffer.from(`${JSON.stringify(settings, null, 2)}\n`));
+  const writeSettings = (next: Record<string, string>) =>
+    replaceDurably(statePath, Buffer.from(`${JSON.stringify(next, null, 2)}\n`));
 
   /** An earlier build's temporary files whose writer has ended: a live or unknown writer's are left. */
   const earlierTemps = async () =>
@@ -348,8 +348,11 @@ export function createSecureCredentials(options: {
   };
 
   /** Once the record is committed: the files without credentials, then the key file, then earlier temporary files. */
-  const sweep = async (mode: Extract<Mode, { kind: "secure" }>) => {
-    await writeSettings();
+  const sweep = async (
+    mode: Extract<Mode, { kind: "secure" }>,
+    next: Record<string, string> = settings,
+  ) => {
+    await writeSettings(next);
     await rm(keyPath, { force: true });
     await syncFolder(dataDir);
     // Done only once no earlier temporary file is left: one a live writer still holds keeps it open.
@@ -485,11 +488,17 @@ export function createSecureCredentials(options: {
     });
 
   /** Keeps a change to the settings: never while the file still holds credentials it would copy. */
-  const keepSettings = async () => {
+  /**
+   * Keeps `next` as the settings: written first, and only once that write is kept does it become
+   * what reads return. A write that fails leaves the settings as they were, so no later change
+   * carries it to disk. While the file still holds credentials it would copy, `next` is kept in
+   * memory for the session and not written.
+   */
+  const keepSettings = async (next: Record<string, string>) => {
     const current = await mode();
-    if (current.kind === "session" && current.holdSettings) return;
-    if (current.kind === "secure" && !current.swept) return sweep(current);
-    await writeSettings();
+    if (current.kind === "secure" && !current.swept) await sweep(current, next);
+    else if (!(current.kind === "session" && current.holdSettings)) await writeSettings(next);
+    settings = next;
   };
 
   const withoutValue = (key: string) => (current: Credentials) => {
@@ -525,17 +534,18 @@ export function createSecureCredentials(options: {
         if (key !== SETTINGS_KEY)
           return queued(async () => {
             await mode();
-            settings = { ...settings, [key]: value };
-            await keepSettings();
+            await keepSettings({ ...settings, [key]: value });
           });
         const next = parseSettings(value);
         if (!next) throw new Error("not gateway settings");
         await queued(async () => {
           await mode();
-          // A typed token stays in this process, for its address only.
+          await keepSettings({
+            ...settings,
+            [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
+          });
+          // A typed token stays in this process, for its address only, once its settings are kept.
           typed = next.token === null ? null : { url: next.url, token: next.token };
-          settings = { ...settings, [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }) };
-          await keepSettings();
         });
         // An earlier build's saved token goes once these settings no longer carry it.
         const current = await mode();
@@ -557,10 +567,9 @@ export function createSecureCredentials(options: {
         if (isCredentialKey(key)) return change(withoutValue(key));
         await queued(async () => {
           await mode();
-          if (key === SETTINGS_KEY) typed = null;
           const { [key]: _removed, ...rest } = settings;
-          settings = rest;
-          await keepSettings();
+          await keepSettings(rest);
+          if (key === SETTINGS_KEY) typed = null;
         });
         if (key === SETTINGS_KEY && (await mode()).kind !== "locked")
           await change(withoutValue(SETTINGS_KEY));

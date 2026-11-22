@@ -257,6 +257,31 @@ describe("this device's credentials in secure storage", () => {
     expectNowhere(dir, [...SECRETS, "stale"]);
   });
 
+  it("a settings write that fails changes nothing, and a later unrelated save doesn't carry it to disk", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.secure()).toBe(true);
+    // The next settings replacement fails at its rename, once.
+    let refuse = true;
+    fsHooks.failRename = (to) => {
+      if (!refuse || !to.endsWith(STATE_FILE)) return false;
+      refuse = false;
+      return true;
+    };
+    await expect(credentials.storage.set("turn-limit-minutes", "45")).rejects.toThrow();
+    // Not what reads return...
+    expect(await credentials.storage.get("turn-limit-minutes")).toBe("30");
+    // ...and not written by the next change, which is kept.
+    await credentials.storage.set("sidebar", "wide");
+    expect(state(dir)).toEqual({
+      connection: NO_TOKEN,
+      "turn-limit-minutes": "30",
+      sidebar: "wide",
+    });
+    expect(await credentials.storage.get("turn-limit-minutes")).toBe("30");
+    expect(await open(dir, fakeBox().box).storage.get("turn-limit-minutes")).toBe("30");
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
