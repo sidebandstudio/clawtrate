@@ -15,7 +15,9 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -31,6 +33,7 @@ import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
 import { macSigningRequested, windowsSigningRequested } from "../apps/desktop/packaging/signing.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { recordSuccessor } from "../e2e/run-record.ts";
+import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
@@ -738,5 +741,139 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     ).toBe(true);
     expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
     expect(unsignalled, "every helper left could be ended").toEqual([]);
+  }
+});
+
+/** The Keychain check runs where the release check asks for it, in a desktop session with the login keychain. */
+const KEYCHAIN_CHECK = process.env.CLAWTRATE_CHECK_KEYCHAIN === "1";
+
+/**
+ * Launches the packaged app on a data folder under its own Keychain name, reads the
+ * device id the host loaded, and quits it, with its helpers, within the teardown's bounds.
+ */
+async function deviceIdUnderKeychainCheck(
+  userData: string,
+  sandbox: string,
+  hex: string,
+  dir: string,
+): Promise<string | null> {
+  const place = launchPlace(dir);
+  const logFd = openSync(join(dir, "app.log"), "a", 0o600);
+  const gated = gatedSpawn(
+    spawn,
+    packagedExecutable(APP),
+    [...launchArgs(userData, sandbox, CHECKOUT), `--clawtrate-keychain-check=${hex}`],
+    { cwd: place.cwd, env: place.env, stdio: ["ignore", logFd, logFd] },
+  );
+  const child = gated.child;
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.once("error", resolve);
+  });
+  try {
+    const found = processIdentity(child.pid!);
+    if (found.state !== "alive") throw new Error("could not record the app's process");
+    recordSuccessor(RECORD, { pid: child.pid!, identity: found.identity });
+  } catch (error) {
+    gated.abort();
+    closeSync(logFd);
+    throw error;
+  }
+  gated.release();
+  let cdp: Browser | undefined;
+  try {
+    cdp = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(userData, child)}`);
+    await expect.poll(() => cdp!.contexts().flatMap((context) => context.pages()).length).toBe(1);
+    const view = cdp.contexts().flatMap((context) => context.pages())[0]!;
+    const read = () =>
+      view.evaluate(async () => {
+        const host = (window as unknown as { clawtrateHost: { hello(): Promise<unknown> } })
+          .clawtrateHost;
+        const { state } = (await host.hello()) as { state: { connection: { deviceId: string } } };
+        return state.connection.deviceId ?? null;
+      });
+    await expect.poll(read, { timeout: 30_000 }).not.toBe(null);
+    return await read();
+  } finally {
+    const quit = await quitWithin(
+      () => child.kill("SIGTERM"),
+      () => exited,
+      async () => cdp?.close(),
+      15_000,
+    );
+    if (!quit) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+    for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
+    closeSync(logFd);
+    expect(quit, "the app quits within 15 seconds").toBe(true);
+    expect(processesUsing(userData), "the app's helpers end with it").toEqual([]);
+  }
+}
+
+test("keeps this device's credentials in the Keychain: a fresh build moves them out of its files once, and a relaunch reads them back", async () => {
+  test.skip(WINDOWS, "Windows keeps credentials in its files until DPAPI is turned on");
+  test.skip(
+    !KEYCHAIN_CHECK,
+    "the release check runs it with CLAWTRATE_CHECK_KEYCHAIN=1, in a desktop session whose login keychain is unlocked",
+  );
+  test.setTimeout(240_000);
+  // The app's name for this run alone: safeStorage keeps its key in "<name> Safe Storage".
+  const hex = randomBytes(8).toString("hex");
+  const name = `Clawtrate Check ${hex}`;
+  const service = `${name} Safe Storage`;
+  const run = process.env.CLAWTRATE_PACKAGED_PLACE!;
+  const parent = join(run, "keychain");
+  mkdirSync(parent);
+  const sandbox = writeSandbox({ instance: INSTANCE, parent });
+  const userData = realpathSync.native(sandbox.appData);
+  const folder = join(userData, "gateway");
+  mkdirSync(folder, { mode: 0o700 });
+  // The files as an earlier build left them: a key, a device token and a saved gateway token.
+  const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+  writeFileSync(join(folder, "device-key.pem"), pem, { mode: 0o600 });
+  const shared = `shared-${hex}`;
+  const device = `device-${hex}`;
+  const url = "ws://127.0.0.1:9";
+  writeFileSync(
+    join(folder, "state.json"),
+    JSON.stringify({
+      connection: JSON.stringify({ url, token: shared }),
+      [`deviceToken:${encodeURIComponent(url)}:device:operator`]: JSON.stringify({
+        token: device,
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+      "turn-limit-minutes": "30",
+    }),
+    { mode: 0o600 },
+  );
+  const raw = createPublicKey(pem).export({ type: "spki", format: "der" }).subarray(-32);
+  const deviceId = createHash("sha256").update(raw).digest("hex");
+  const state = () => JSON.parse(readFileSync(join(folder, "state.json"), "utf8")) as unknown;
+  const inKeychain = () =>
+    spawnSync("security", ["find-generic-password", "-s", service, "-a", name]).status === 0;
+
+  try {
+    expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-1"))).toBe(
+      deviceId,
+    );
+    // Moved: the protected record, and the files without a credential or the key.
+    expect(readdirSync(folder).sort()).toEqual(["credentials.bin", "state.json"]);
+    expect(state()).toEqual({ "turn-limit-minutes": "30" });
+    for (const secret of [shared, device, "PRIVATE KEY"]) expect(holds(folder, secret)).toEqual([]);
+    expect(inKeychain(), `safeStorage keeps its key in "${service}"`).toBe(true);
+    const sealed = readFileSync(join(folder, "credentials.bin"));
+
+    // Relaunched: the same identity, read back from the record, which nothing rewrote.
+    expect(await deviceIdUnderKeychainCheck(userData, sandbox.file, hex, join(run, "kc-2"))).toBe(
+      deviceId,
+    );
+    expect(readFileSync(join(folder, "credentials.bin")).equals(sealed)).toBe(true);
+    expect(state()).toEqual({ "turn-limit-minutes": "30" });
+  } finally {
+    // This run's own item, by its exact name and account.
+    spawnSync("security", ["delete-generic-password", "-s", service, "-a", name]);
   }
 });
