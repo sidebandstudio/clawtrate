@@ -6,12 +6,102 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { exitedWithin, launchArgs, launchPlace, recordExit } from "../e2e-packaged/global-setup.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  exitedWithin,
+  launchArgs,
+  launchPlace,
+  recordExit,
+  withCheckBundle,
+} from "../e2e-packaged/global-setup.ts";
+import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 
 describe("the packaged app's launches", () => {
+  it("refuses a person's Clawtrate, or any bundle not built for the check, before touching preferences", () => {
+    const use = vi.fn();
+    const check = `${APP_ID}.check.0123456789abcdef`;
+    for (const refused of [
+      APP_ID,
+      `${APP_ID}.check`,
+      `${APP_ID}.check.0123456789ABCDEF`,
+      `${check}0`,
+      check.slice(0, -1),
+      `${check}\n`,
+      `x${check}`,
+      check.replace("dev.", "devX"),
+    ]) {
+      expect(() => withCheckBundle(refused, use), refused).toThrow(/only a check build/);
+    }
+    expect(use).not.toHaveBeenCalled();
+  });
+
+  it("hands the preference work a check build's identifier and no other", () => {
+    const use = vi.fn(() => "ran");
+    const check = `${APP_ID}.check.0123456789abcdef`;
+    expect(withCheckBundle(check, use)).toBe("ran");
+    expect(use.mock.calls).toEqual([[check]]);
+  });
+
+  it("starts the Mac run, the only code that touches preferences, through that guard alone", () => {
+    const source = readFileSync(join(ROOT, "e2e-packaged/global-setup.ts"), "utf8");
+    expect(source.match(/\bmacSetup\(/g)).toHaveLength(2);
+    expect(source).toContain(
+      "withCheckBundle(bundleIdentifier(app), (domain) => macSetup(app, domain))",
+    );
+    expect(source.match(/\bpreferencesForgetter\(/g)).toHaveLength(2);
+    expect(source.indexOf("preferencesForgetter(domain)")).toBeGreaterThan(
+      source.indexOf("async function macSetup("),
+    );
+    for (const file of readdirSync(join(ROOT, "e2e-packaged"))) {
+      const text = readFileSync(join(ROOT, "e2e-packaged", file), "utf8");
+      const uses = (text.match(/"defaults"|Library\/Preferences/g) ?? []).length;
+      expect(uses, file).toBe(file === "global-setup.ts" ? 2 : 0);
+    }
+  });
+
+  it("on Windows, replaces the inherited profile, AppData and temporary folders whatever their case", () => {
+    const names = ["Home", "UserProfile", "HomeDrive", "HomePath", "AppData", "LocalAppData"];
+    const inherited = {
+      Path: "C:\\Windows",
+      ...Object.fromEntries(names.map((name) => [name, "C:\\inherited"])),
+      ...Object.fromEntries(["tmpdir", "temp", "tmp"].map((name) => [name, "C:\\Temp"])),
+    };
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-windows-place-"));
+    try {
+      const { env } = launchPlace(dir, "win32", inherited);
+      const home = join(dir, "home");
+      const tmp = join(dir, "tmp");
+      expect(env).toEqual({
+        Path: "C:\\Windows",
+        HOME: home,
+        USERPROFILE: home,
+        HOMEDRIVE: expect.any(String),
+        HOMEPATH: expect.any(String),
+        APPDATA: join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: join(home, "AppData", "Local"),
+        TMPDIR: tmp,
+        TEMP: tmp,
+        TMP: tmp,
+      });
+      expect(env.HOMEDRIVE! + env.HOMEPATH!).toBe(home);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("on macOS, points the app's Library at the run's home, which HOME alone does not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-mac-place-"));
+    try {
+      const { env } = launchPlace(dir, "darwin", { CFFIXED_USER_HOME: "/inherited/home" });
+      expect(env.CFFIXED_USER_HOME).toBe(join(dir, "home"));
+      expect(env.HOME).toBe(join(dir, "home"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("always carry the sandbox switch, beside the data folder and the debugging port", () => {
     expect(launchArgs("/data", "/tmp/run/sandbox.json", "/checkout")).toEqual([
       "--user-data-dir=/data",

@@ -1,5 +1,5 @@
-// The launch check for the packaged desktop app (`pnpm check:packaged`), after
-// `pnpm package:mac`. Global setup starts this run's own development gateway
+// The launch check for the packaged desktop app (`pnpm check:packaged`).
+// Global setup starts this run's own development gateway
 // instance and the packaged app with a temporary data folder; the tests drive
 // the app's window over the Chrome DevTools protocol.
 import { defineConfig } from "@playwright/test";
