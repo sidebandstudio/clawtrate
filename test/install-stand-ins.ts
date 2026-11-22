@@ -132,8 +132,9 @@ export function runPiped(
 
 /**
  * The installer piped into `shell` inside a pseudo-terminal (script(1)), so
- * its stdout and stderr are a terminal. `before` runs first in the terminal's
- * shell, such as `stty cols 40`. When `interrupt` is given, the terminal's
+ * its stdout and stderr are a terminal of 24 rows and 80 columns, whatever size
+ * a new pseudo-terminal reports. `before` runs next in the terminal's shell,
+ * such as `stty cols 40`. When `interrupt` is given, the terminal's
  * foreground process group gets SIGINT, as from Ctrl-C, once the output
  * contains it.
  */
@@ -144,7 +145,7 @@ export function runInTerminal(
 ): Promise<Run> {
   const pidFile = join(env.TMPDIR ?? tmpdir(), "terminal-shell.pid");
   // The shell in the terminal leads its own process group, and exec keeps its pid.
-  const command = `echo $$ >"$2"; ${options.before ?? ":"}; exec "$0" <"$1"`;
+  const command = `echo $$ >"$2"; /bin/stty rows 24 cols 80; ${options.before ?? ":"}; exec "$0" <"$1"`;
   // script(1) needs a stdin it can query, which a Node pipe is not.
   const child = spawn(
     "script",
