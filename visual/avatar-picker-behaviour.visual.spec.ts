@@ -790,3 +790,63 @@ for (const outcome of ["release", "release-failed"] as const)
     await page.getByRole("button", { name: "Back to the picture" }).click();
     await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("First");
   });
+
+/** Set the connection's identity, and with `reconnect` make it a new connection at the same address. */
+const identify = (page: Page, gatewayId: string | null, reconnect = false) =>
+  page.evaluate(
+    ([gatewayId, reconnect]) =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...(state.connection as object),
+          gatewayId,
+          ...(reconnect ? { connectedAt: Date.now() + 60_000 } : {}),
+        },
+      })),
+    [gatewayId, reconnect] as const,
+  );
+
+for (const [then, landsOn] of [
+  ["another gateway", "gateway-b"],
+  ["the same gateway", "gateway-a"],
+] as const)
+  test(`F-034: New bot keeps the identity it first sees: a reconnect to ${then} while its picture is drawn`, async ({
+    page,
+  }) => {
+    await openFixture(page, ADMIN, "dark");
+    await page.evaluate(() => {
+      const w = window as unknown as { releaseDecode: () => void };
+      const real = HTMLImageElement.prototype.decode;
+      HTMLImageElement.prototype.decode = function (this: HTMLImageElement) {
+        return new Promise<void>((resolve, reject) => {
+          w.releaseDecode = () => real.call(this).then(resolve, reject);
+        });
+      };
+    });
+    // Opened before the gateway has said which gateway it is; then it says, on the same connection.
+    await identify(page, null);
+    await page.keyboard.press("ControlOrMeta+n");
+    await identify(page, "gateway-a");
+    await page.getByRole("textbox", { name: "Name" }).fill("First");
+    await page.getByRole("radio", { name: "Shellfolk" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+    await page.getByTestId("create").click();
+    await expect(page.getByTestId("create")).toHaveText("Creating…");
+    // While the picture is drawn, a new connection at the same address names its gateway.
+    await identify(page, landsOn, true);
+    await page.evaluate(() =>
+      (window as unknown as { releaseDecode: () => Promise<void> }).releaseDecode(),
+    );
+    await settled(page);
+    const creates = (await sent(page)).filter((each) => each.type === "createBot");
+    if (landsOn === "gateway-b") {
+      expect(creates).toHaveLength(0);
+      await expect(page.getByTestId("new-bot")).toBeVisible();
+    } else {
+      expect(creates).toHaveLength(1);
+      expect(creates[0]).toMatchObject({ name: "First", gatewayId: "gateway-a" });
+      await expect(page.getByTestId("new-bot")).toHaveCount(0);
+      await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
+    }
+  });
