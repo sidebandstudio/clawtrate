@@ -381,4 +381,60 @@ describe("full access under interleavings", () => {
     expect((gateway.connects[before] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
     client.stop();
   });
+
+  it("an ordinary reconnect granted nothing narrows the full pairing's record to nothing, and asks for no more", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A"),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    gateway.connectReply = () => ({ ok: true, payload: helloOk([]) });
+    gateway.dropAll();
+    await until(() => saved(storage)?.heldScopes.length === 0);
+    const before = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).scopes).toEqual([]);
+    client.stop();
+  });
+
+  it("an approved upgrade of a full pairing keeps its exact grant, so it stays bound to secure storage", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk(
+        [...(params as ConnectParams).scopes],
+        (params as ConnectParams).auth?.deviceToken,
+      ),
+    });
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    wait.resolve({ status: "approved", requestId: "up-1", deviceToken: "token-B", scopes: wanted });
+    await until(() => saved(storage)?.token === "token-B");
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({
+      token: "token-B",
+      fullGrant: true,
+      heldScopes: FULL_SCOPES.filter((scope) => wanted.includes(scope)),
+    });
+    client.stop();
+  });
 });
