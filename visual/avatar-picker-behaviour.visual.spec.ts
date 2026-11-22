@@ -755,3 +755,37 @@ test("F-034: a reconnect to the same gateway, as an access grant makes, doesn't 
   await expect(page.getByTestId("new-bot")).toHaveCount(0);
   await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
 });
+
+for (const outcome of ["release", "release-failed"] as const)
+  test(`F-034: a Create ${outcome === "release" ? "success" : "refusal"} that lands while the gateway's identity is unknown again changes nothing`, async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&create=${outcome}`, "dark");
+    await page.keyboard.press("ControlOrMeta+n");
+    await page.getByRole("textbox", { name: "Name" }).fill("First");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+    await page.getByTestId("create").click();
+    await expect
+      .poll(async () => (await sent(page)).filter((each) => each.type === "createBot").length)
+      .toBe(1);
+    // A new connection at the same address, which hasn't said which gateway it is yet.
+    await page.evaluate(() =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...(state.connection as object),
+          connectedAt: Date.now() + 60_000,
+          gatewayId: null,
+        },
+      })),
+    );
+    await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+    await settled(page);
+    await expect(page.getByTestId("new-bot")).toBeVisible();
+    await expect(page.getByTestId("new-bot").getByRole("status")).not.toHaveText(
+      /Could not create|Created/,
+    );
+    await page.getByRole("button", { name: "Back to the picture" }).click();
+    await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("First");
+  });

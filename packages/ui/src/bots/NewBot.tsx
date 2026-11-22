@@ -69,10 +69,12 @@ export function NewBot({
   // This opening of the dialog: whether it still stands, the gateway it was opened on, the draft
   // as it is now, and whether a Create is being prepared or sent.
   const open = useRef(true);
-  // The gateway it was opened on: its address, and its identity when that is known. A reconnect
-  // to the same gateway, such as the one that grants admin access, keeps the dialog's work; an
-  // identity that arrives after the dialog opens is taken as the one it was opened on.
+  // The gateway it was opened on: its address, and the first identity seen for it on the
+  // connection the dialog opened on. Results are acted on only while the connected gateway's
+  // identity positively matches that one, so a reconnect to the same gateway, such as the one
+  // that grants admin access, keeps the dialog's work, and an unknown identity never counts.
   const [gateway] = useState(() => connection.gatewayUrl);
+  const [firstConnection] = useState(() => connection.connectedAt);
   const openedOn = useRef(connection.gatewayId);
   const now$ = useRef(connection);
   const latest = useRef(draft);
@@ -88,13 +90,23 @@ export function NewBot({
   useLayoutEffect(() => {
     now$.current = connection;
     latest.current = draft;
+    if (
+      openedOn.current === null &&
+      connection.gatewayUrl === gateway &&
+      connection.connectedAt === firstConnection
+    )
+      openedOn.current = connection.gatewayId;
   });
-  /** Still this opening, connected to the gateway it was opened on. */
+  /** Still this opening, connected to a gateway whose identity is positively the one it opened on. */
   const onItsConnection = () => {
     const now = now$.current;
-    if (!open.current || now.status !== "connected" || now.gatewayUrl !== gateway) return false;
-    openedOn.current ??= now.gatewayId;
-    return now.gatewayId === null || now.gatewayId === openedOn.current;
+    return (
+      open.current &&
+      now.status === "connected" &&
+      now.gatewayUrl === gateway &&
+      now.gatewayId !== null &&
+      now.gatewayId === openedOn.current
+    );
   };
   const stands = () => onItsConnection() && latest.current === draft;
   const shown = draft.picture ?? STARTER;
