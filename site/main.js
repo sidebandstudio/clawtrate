@@ -82,20 +82,20 @@
   const demo = document.querySelector(".demo");
   const tag = demo.querySelector("[data-tag]");
   const live = demo.querySelector(".demo-live");
-  const pill = demo.querySelector(".pill img");
+  const pill = demo.querySelector(".pill .claw-art");
   const states = {
-    pending: { tag: "Needs approval", face: "bots/otto.svg", say: "" },
+    pending: { tag: "Needs approval", face: "waiting", say: "" },
     allowed: {
       tag: "Allowed once",
-      face: "bots/otto-done.svg",
+      face: "done",
       say: "Allowed once. Otto ran the command.",
     },
-    denied: { tag: "Denied", face: "bots/otto-blocked.svg", say: "Denied. Otto changed nothing." },
+    denied: { tag: "Denied", face: "blocked", say: "Denied. Otto changed nothing." },
   };
   function show(state, focus) {
     demo.dataset.state = state;
     tag.textContent = states[state].tag;
-    pill.src = states[state].face;
+    pill.dataset.state = states[state].face;
     live.textContent = states[state].say;
     if (focus) focus.focus();
   }

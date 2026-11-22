@@ -458,6 +458,11 @@ code {
 .pill span {
   color: var(--text-muted);
 }
+.pill .claw-art {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
 .pill-task {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1071,33 +1076,125 @@ h3 {
   overflow: hidden;
   pointer-events: none;
 }
-.cast img {
+/* The parade: Claws from the avatar spec peek over the band's lower edge, each
+   with its own habit (parade.js). Their eyes follow the pointer while it is
+   near the page's end. */
+.pc {
+  --sink: 16%;
+  flex: none;
   width: clamp(52px, 7vw, 104px);
-  height: auto;
-  transform: translateY(var(--sink, 34%));
+  transform: translateY(var(--sink));
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.cast img:nth-child(even) {
-  width: clamp(44px, 5.6vw, 84px);
-  --sink: 24%;
+.pc:nth-child(odd) {
+  --sink: 11%;
+  width: clamp(46px, 5.8vw, 88px);
 }
-.js .cast img {
-  animation: bob 5.6s ease-in-out infinite;
+.pc .claw-art {
+  display: block;
 }
-.js .cast img:nth-child(2n) {
-  animation-delay: -1.4s;
+/* The eyes: the pupils move toward the pointer, set by parade.js in grid units. */
+.pc [data-part="pupil"] {
+  translate: var(--look-x, 0px) var(--look-y, 0px);
+  transition: translate 260ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
-.js .cast img:nth-child(3n) {
-  animation-delay: -2.8s;
-  animation-duration: 6.4s;
+.pc .claw-art:not([data-state="idle"]) [data-part="pupil"] {
+  translate: none;
 }
-@keyframes bob {
+/* Noticing the pointer: a small hop. */
+.pc.noticed {
+  animation: pc-notice 520ms cubic-bezier(0.3, 0, 0.2, 1);
+}
+@keyframes pc-notice {
   0%,
   100% {
-    transform: translateY(var(--sink, 34%));
+    translate: 0 0;
   }
-  50% {
-    transform: translateY(calc(var(--sink, 34%) - 8px));
+  35% {
+    translate: 0 -10%;
   }
+  60% {
+    translate: 0 0;
+  }
+  78% {
+    translate: 0 -3%;
+  }
+}
+/* Ducking into a shell, or out of it. */
+.pc.swap .claw-art {
+  animation: pc-squash 300ms cubic-bezier(0.3, 0, 0.2, 1);
+  transform-origin: 50% 88%;
+}
+@keyframes pc-squash {
+  0% {
+    scale: 1.06 0.9;
+  }
+  100% {
+    scale: 1 1;
+  }
+}
+/* A thinker's dots rise one after another. */
+.pc-dots circle {
+  opacity: 0;
+  animation: pc-dot 1500ms ease-in-out infinite;
+}
+.pc-dots circle:nth-child(2) {
+  animation-delay: 200ms;
+}
+.pc-dots circle:nth-child(3) {
+  animation-delay: 400ms;
+}
+@keyframes pc-dot {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  30%,
+  70% {
+    opacity: 1;
+  }
+}
+/* A doze: lids down, a slow breath and drifting Zs, until the pointer comes near. */
+.pc-zs {
+  display: none;
+}
+.pc [data-doze] .pc-zs {
+  display: inline;
+}
+.pc [data-doze] .pc-zs path {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: pc-z 2600ms ease-out infinite;
+}
+.pc [data-doze] .pc-zs path:nth-child(2) {
+  animation-delay: 1300ms;
+}
+@keyframes pc-z {
+  0% {
+    opacity: 0;
+    translate: 0 1px;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    translate: 1.5px -3px;
+  }
+}
+.pc [data-doze] [data-part="lid"] {
+  animation: none !important;
+  translate: 0 5.4px;
+}
+.pc [data-doze] [data-s="idle"] > [data-part="creature"] {
+  animation: av-lean 4200ms cubic-bezier(0.45, 0, 0.55, 1) infinite !important;
+}
+/* Off screen or in a hidden tab, nothing moves. */
+.cast[data-paused] *,
+.cast[data-paused] {
+  animation-play-state: paused !important;
 }
 
 /* The footer: one quiet line. */
@@ -1151,9 +1248,6 @@ h3 {
     transform: none;
     transition: none;
   }
-  .js .cast img {
-    animation: none;
-  }
   *,
   *::before,
   *::after {
@@ -1197,7 +1291,7 @@ h3 {
   .win {
     padding: 16px 14px 20px;
   }
-  .cast img:nth-child(n + 6) {
+  .pc[data-wide] {
     display: none;
   }
   .faq-q {
@@ -1809,6 +1903,13 @@ h3 {
   /* A part whose motion is the point holds a still pose, such as a claw raised to wave. */
   .claw-art .av-still {
     rotate: var(--av-still) !important;
+  }
+  .pc,
+  .pc.swap .claw-art {
+    animation: none !important;
+  }
+  .pc [data-part="pupil"] {
+    translate: none !important;
   }
   .lantern .ping,
   .snow {
