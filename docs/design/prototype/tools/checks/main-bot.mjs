@@ -143,6 +143,18 @@ await check("MB-06 the rail and header wait for the gateway's answer", async ({ 
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
   if (width !== "phone") assert.equal(await railName(page, "main", width), "main");
   await has(page, '[data-testid="guided"]', "Saving…");
+
+  const name = page.locator("#g-name");
+  const role = page.locator("#g-role");
+  const submittedRole = await role.inputValue();
+  assert(await name.isDisabled());
+  const message = "Call yourself Basil. Help me plan the garden.";
+  await page.locator("#mb-input").fill(message);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  assert.equal(await page.locator(".mb-msg.is-user").getByText(message, { exact: true }).count(), 1);
+  assert.equal(await name.inputValue(), "Maple");
+  assert.equal(await role.inputValue(), submittedRole);
+  assert.equal(await page.getByTestId("proposed-note").count(), 0);
 });
 
 await check("MB-07 Save writes exactly the card's name and role, read back; the Claw is a separate explicit edit", async ({ page, open, width }) => {

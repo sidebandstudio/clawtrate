@@ -486,7 +486,7 @@
       if (!text) return;
       composer.value = "";
       chat.items.push({ kind: "user", text });
-      if (guidedCard && !guidedCard.done) {
+      if (guidedCard && !guidedCard.done && !guidedCard.saving) {
         // With the plugin, the bot proposes the values and they fill the card;
         // without it, nothing fills the card for the person.
         const m = /call\s+(?:yourself|you)\s+([\p{L}][\p{L}\p{N} '-]{0,63}?)(?:[.,!]\s*|$)([\s\S]*)/iu.exec(text);
