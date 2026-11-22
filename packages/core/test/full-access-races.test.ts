@@ -704,6 +704,149 @@ describe("full access under interleavings", () => {
     client.stop();
   });
 
+  /** Fails every read of the token key until the rotated token-U is saved. */
+  const failGrantReads = (storage: KeyValueStore & { data: Map<string, string> }) => {
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (key === tokenKey(URL) && saved(storage)?.token !== "token-U")
+        throw new Error("read failed");
+      return get(key);
+    };
+  };
+
+  /** Client A, connected on a full record, with an access request waiting for its approval. */
+  const waitingApproval = async (
+    storage: KeyValueStore & { data: Map<string, string> },
+    tiers: Array<"interactive" | "pairing">,
+  ) => {
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    for (const tier of tiers) void client.requestAccess(tier).catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const wanted = () =>
+      (gateway.calls("device.scopes.requestUpgrade").at(-1) as { scopes: string[] }).scopes;
+    return { client, gateway, approval, wanted };
+  };
+
+  it("an approved rotation whose reads fail keeps pairing another client on the store was granted meanwhile", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const a = await waitingApproval(storage, ["interactive"]);
+    expect(a.wanted()).not.toContain("operator.pairing");
+    // Client B on the same store is granted pairing, and saves it.
+    const bGateway = new FakeGateway();
+    bGateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk(
+        [...(params as ConnectParams).scopes],
+        (params as ConnectParams).auth?.deviceToken,
+      ),
+    });
+    bGateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-B" });
+    bGateway.handlers["device.scopes.waitUpgrade"] = () => ({
+      status: "approved",
+      requestId: "up-B",
+      deviceToken: "token-B",
+      scopes: ["operator.read", "operator.pairing"],
+    });
+    const b = new ClawtrateClient(host(bGateway, storage), FAST);
+    try {
+      await b.start();
+      await until(() => b.state.connection.status === "connected");
+      void b.requestAccess("pairing").catch(() => {});
+      await until(() => b.state.connection.scopes.includes("operator.pairing"));
+      expect(saved(storage)?.heldScopes).toContain("operator.pairing");
+      // A's reads of the saved grant fail; its approval arrives.
+      failGrantReads(storage);
+      const writes = tokenWrites(storage);
+      a.approval.resolve({
+        status: "approved",
+        requestId: "up-2",
+        deviceToken: "token-U",
+        scopes: a.wanted(),
+      });
+      await until(() => writes.some((write) => write.token === "token-U"));
+      const first = writes.find((write) => write.token === "token-U")!;
+      expect(first.fullGrant).toBe(true);
+      expect(first.heldScopes).toContain("operator.pairing");
+    } finally {
+      b.stop();
+      a.client.stop();
+    }
+  });
+
+  it("an approved rotation whose reads fail leaves out a scope another client on the store narrowed away", async () => {
+    // Held: read and admin; the request is for the interactive tier and pairing, so admin is
+    // outside it and kept only while the record holds it.
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", ["operator.read", "operator.admin"]),
+    });
+    const a = await waitingApproval(storage, ["pairing", "interactive"]);
+    expect(a.wanted()).not.toContain("operator.admin");
+    // Client B's hello grants read alone: the shared record narrows to it.
+    const bGateway = new FakeGateway();
+    bGateway.connectReply = () => ({ ok: true, payload: helloOk([...READ_SCOPES]) });
+    const b = new ClawtrateClient(host(bGateway, storage), FAST);
+    try {
+      await b.start();
+      await until(() => saved(storage)?.heldScopes.includes("operator.admin") === false);
+      failGrantReads(storage);
+      const writes = tokenWrites(storage);
+      a.approval.resolve({
+        status: "approved",
+        requestId: "up-2",
+        deviceToken: "token-U",
+        scopes: a.wanted(),
+      });
+      await until(() => writes.some((write) => write.token === "token-U"));
+      const first = writes.find((write) => write.token === "token-U")!;
+      expect(first.fullGrant).toBe(true);
+      expect(first.heldScopes).not.toContain("operator.admin");
+    } finally {
+      b.stop();
+      a.client.stop();
+    }
+  });
+
+  it("an approved rotation whose reads fail after another client on the store removed the record isn't saved as a full pairing", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const a = await waitingApproval(storage, ["interactive"]);
+    // Client B's gateway refuses the shared token, and B removes the record.
+    const bGateway = new FakeGateway();
+    bGateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    const b = new ClawtrateClient(host(bGateway, storage), FAST);
+    try {
+      await b.start();
+      await until(() => !storage.data.has(tokenKey(URL)));
+      failGrantReads(storage);
+      const writes = tokenWrites(storage);
+      a.approval.resolve({
+        status: "approved",
+        requestId: "up-2",
+        deviceToken: "token-U",
+        scopes: a.wanted(),
+      });
+      await until(() => writes.some((write) => write.token === "token-U"));
+      const first = writes.find((write) => write.token === "token-U")!;
+      expect(first.fullGrant).toBeUndefined();
+    } finally {
+      b.stop();
+      a.client.stop();
+    }
+  });
+
   it("an upgrade right after a fresh full pairing keeps it a full pairing", async () => {
     const storage = memoryStorage();
     const { gateway, approval } = approvingGateway();

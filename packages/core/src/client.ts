@@ -607,6 +607,12 @@ type ConnectionWrites = {
   refusals: number;
   /** For each token key, its tokens rotated by approved access requests: a hello planned before one saves nothing. */
   rotations: Map<string, number>;
+  /**
+   * For each token key, its record's grant as last confirmed by any client on the store (`grantBits`):
+   * every write and removal sets it, and a read seeds one not set yet; null once removed. Only for
+   * an approved rotation whose reads of the saved record fail.
+   */
+  grants: Map<string, { full: boolean; held: number } | null>;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -774,7 +780,7 @@ type WaitingConnect = { url: string | null; cancelled: boolean; older: WaitingCo
 /** Reads of the saved grant an approved rotation tries before it uses the connection's own. */
 const GRANT_READS = 3;
 
-/** A token record's grant as `connectionGrant` keeps it. */
+/** A token record's grant as `ConnectionWrites.grants` keeps it. */
 function grantBits(record: StoredDeviceToken | null): { full: boolean; held: number } {
   return {
     full: record?.fullGrant === true,
@@ -1092,12 +1098,6 @@ export class ClawtrateClient {
    * than the Connects queued.
    */
   private waitingConnects: WaitingConnect | null = null;
-  /**
-   * The grant of the token record this connection runs on, as its plan read it or this client
-   * last wrote it: whether it is a full pairing's, and its held scopes as one bit per scope of
-   * `FULL_SCOPES`. Only for an approved rotation whose read of the saved record fails.
-   */
-  private connectionGrant: { generation: number; full: boolean; held: number } | null = null;
   /** A gateway token the person typed for the current attempt, dropped when it ends. */
   private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
@@ -1430,6 +1430,7 @@ export class ClawtrateClient {
       rejected: new Map(),
       refusals: 0,
       rotations: new Map(),
+      grants: new Map(),
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -2034,19 +2035,19 @@ export class ClawtrateClient {
             // A full pairing's record stays one: what the upgrade granted of what it asked for,
             // by name, beside what it holds outside the request now: the saved record as read
             // in this queued write, after every earlier change of any client on this store. A
-            // read that keeps failing never counts as no record: the grant this connection runs
-            // on stands in, so the rotation is saved, a full pairing's still.
+            // read that keeps failing never counts as no record: the grant last confirmed for the
+            // key by any client on this store stands in, so the rotation is saved, a full
+            // pairing's still, as widened, narrowed or removed since.
             let current: StoredDeviceToken | null | undefined;
             for (let read = 0; read < GRANT_READS && current === undefined; read += 1) {
               current = await this.loadToken(url, deviceId, role, true).catch(() => undefined);
               sameConnection();
             }
-            const own =
-              this.connectionGrant?.generation === generation ? this.connectionGrant : null;
+            const known = this.writes.grants.get(this.tokenKey(url, deviceId, role));
             const fullHeld =
               current === undefined
-                ? own?.full
-                  ? FULL_SCOPES.filter((_scope, index) => (own.held & (1 << index)) !== 0)
+                ? known?.full
+                  ? FULL_SCOPES.filter((_scope, index) => (known.held & (1 << index)) !== 0)
                   : null
                 : current?.fullGrant
                   ? current.heldScopes
@@ -5924,7 +5925,7 @@ export class ClawtrateClient {
         rotationsAtPlan = this.writes.rotations.get(key) ?? 0;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
-        this.connectionGrant = { generation, ...grantBits(token) };
+        if (token && !this.writes.grants.has(key)) this.writes.grants.set(key, grantBits(token));
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
         if (token) this.planHadToken = true;
         else if (this.planHadToken) this.endEligibility();
@@ -8194,8 +8195,7 @@ export class ClawtrateClient {
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
     await this.host.storage.set(key, JSON.stringify(record));
-    if (this.settings?.url === url)
-      this.connectionGrant = { generation: this.generation, ...grantBits(record) };
+    this.writes.grants.set(key, grantBits(record));
   }
 
   private tokenParams(deviceId: string) {
@@ -8316,6 +8316,7 @@ export class ClawtrateClient {
           const existing = await this.loadToken(url, deviceId, role, true);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
+            this.writes.grants.set(key, null);
           }
           const refused = this.writes.rejected.get(key);
           refused?.delete(rejected);
