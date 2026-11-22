@@ -50,7 +50,6 @@ import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-set
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
 import {
   cleanUp,
-  readRecord,
   recordPath,
   recoverDeadRuns,
   saveRecord,
@@ -283,12 +282,7 @@ export default async function globalSetup() {
     });
   };
   let cleaned: string[] | null = null;
-  const cleanUpOnce = () => {
-    // A test may have recorded a copy of the app it started.
-    const saved = readRecord(recordPath(RECORDS, record.run));
-    if (saved?.successor) record.successor = saved.successor;
-    return (cleaned ??= cleanUp(RECORDS, record, reset));
-  };
+  const cleanUpOnce = () => (cleaned ??= cleanUp(RECORDS, record, reset));
   // Restored after the app is gone, which cleanUp makes sure of.
   const finish = () => {
     const problems = [...cleanUpOnce()];
