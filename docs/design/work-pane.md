@@ -668,6 +668,8 @@ Choosing Watch opens the view (F-140, F-143):
 
 ### A view from start to end
 
+Watching a remote gateway requires `wss://`. The device checks the address before requesting a stream ticket. A gateway on loopback can use `ws://`.
+
 Every Watch starts a new view, with its own number on this device. Every answer the gateway sends for a view (its ticket, its stream, its frames, its renewals) is matched to that number, and an answer for a view that has ended is disposed of at once. Nothing appears after the person has left.
 
 | The view is | Entered when                                                | If the person stops watching or leaves (any cause in "How a view ends")                                                                                                                                                                           |
@@ -678,11 +680,13 @@ Every Watch starts a new view, with its own number on this device. Every answer 
 
 The gateway keeps an unrenewed stream for up to 20 seconds before it closes it; the person never sees that: the device closes its side at once.
 
+"Live" lasts only while a usable picture is recent: 10 seconds after the newest frame that was decoded and drawn (and after its capture, when the plugin sends that time), the tile and the full view say "Last picture, <age>" instead, whatever the renewals say. The screencast sends a frame only when the page changes, so a quiet page shows its last picture with its age. Frames too large or that cannot be decoded count as none.
+
 ### What is never captured
 
 - Frames are drawn and dropped. The app never writes one to disk, to a cache, to a log, to Raw, to a notification, or to a crash report, and offers no screenshot or recording of the view.
 - When the app goes to the background on the phone, the view is covered before the system takes its snapshot for the app switcher.
-- Text typed while in control (section 18) is never shown back: the control's Raw records each `input` call with its kind and position, and "12 characters typed" in place of the text.
+- Text typed while in control (section 18) is never shown back: the control's Raw records each `input` call with its kind and position, and "12 characters typed" in place of the text. Not built yet: the app keeps no Raw record of the `input` calls at all, so the typed text is not shown back because nothing of it is kept (F-142).
 - A read-only connection never receives a frame (section 19).
 
 ## 18. Taking over and handing back
