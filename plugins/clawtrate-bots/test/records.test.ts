@@ -293,6 +293,17 @@ describe("the records", () => {
 });
 
 describe("the plugin's methods", () => {
+  it("leaves the last version slot for a current grant update after a stale retry", async () => {
+    const host = load({ versions: memoryStore({ maxEntries: 3 }), startService: false });
+    const input = { scope: "see", bots: ["pip"] };
+    const grant = (await host.call("relay.grants.set", input)).payload!;
+    const update = (expectedGeneration: number) =>
+      host.call("relay.grants.set", { ...input, id: grant.id, expectedGeneration });
+    expect((await update(1)).payload?.generation).toBe(2);
+    expect(reasonOf(await update(1))).toBe("grant-generation");
+    expect((await update(2)).payload?.generation).toBe(3);
+  });
+
   const setup = async () => {
     const host = load({ now: () => T });
     const grant = (

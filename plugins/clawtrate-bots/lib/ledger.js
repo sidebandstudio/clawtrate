@@ -161,6 +161,18 @@ export function decline(ledger, id, digest, by, now) {
   settle(claim(ledger, id, digest, now), "declined", now, by);
 }
 
+/** Checks the generation before storing an update and again when publishing it. */
+export function grantForUpdate(ledger, id, expected) {
+  const current = own(ledger.grants, id);
+  if (!current) throw gone("This agent's access to Clawtrate isn't set up.");
+  if (current.generation !== expected)
+    throw new Refusal(
+      "grant-generation",
+      "This agent's access changed since it was read. Read it again.",
+    );
+  return current;
+}
+
 /**
  * Publishes a grant's version: a new grant (`expected` null), or a new
  * version of the generation the caller read, which can't bring access back
@@ -171,15 +183,9 @@ export function publishGrant(ledger, id, { version, digest, expiresAt }, expecte
   if (expiresAt <= now) throw new Refusal("expired", "This access would already have expired.");
   if (ledger.sweeping === version)
     throw new Refusal("unpublishable", "Clawtrate couldn't record this access. Try again.");
-  const current = own(ledger.grants, id);
-  if (expected === null && current) throw new Refusal("invalid", "This grant already exists.");
-  if (expected !== null && !current) throw gone("This agent's access to Clawtrate isn't set up.");
-  if (current && current.generation !== expected)
-    throw new Refusal(
-      "grant-generation",
-      "This agent's access changed since it was read. Read it again.",
-    );
-  const generation = (current?.generation ?? 0) + 1;
+  if (expected === null && own(ledger.grants, id))
+    throw new Refusal("invalid", "This grant already exists.");
+  const generation = expected === null ? 1 : grantForUpdate(ledger, id, expected).generation + 1;
   withdrawOpen(ledger, id, now);
   ledger.grants[id] = { version, digest, generation, revoked: false, expiresAt };
   if (!fits(ledger, budget)) throw full();

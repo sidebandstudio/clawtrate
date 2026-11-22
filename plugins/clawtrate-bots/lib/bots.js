@@ -285,6 +285,7 @@ export function createBots(api, options = {}) {
         };
         const version = newId("gv");
         const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
+        if (update) L.grantForUpdate((await snapshot()).ledger, id, expected);
         const digest = await records.persist(version, body);
         const { generation } = await records.publish(
           version,
