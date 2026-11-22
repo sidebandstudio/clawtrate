@@ -455,6 +455,26 @@ describe("this device's credentials in secure storage", () => {
     }
   });
 
+  it("once this device is paired, an earlier build's token whose removal failed is never used again", async () => {
+    const { dir, pem } = legacyFolder();
+    const setup = open(dir, fakeBox().box);
+    await setup.storage.set(await ownTokenKey(pem), RECORD);
+    let reads = 0;
+    const paired = open(
+      dir,
+      fakeBox({
+        decrypt: async (data) => {
+          if ((reads += 1) > 1) throw new Error("locked");
+          return fakeBox().box.decrypt(data);
+        },
+      }).box,
+    );
+    expect(await paired.storage.get("connection")).toBe(CONNECTION);
+    // Pairing done: the settings drop the token; removing the earlier copy fails.
+    await paired.storage.set("connection", NO_TOKEN);
+    expect(await paired.storage.get("connection")).toBe(NO_TOKEN);
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
