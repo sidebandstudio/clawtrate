@@ -935,6 +935,39 @@ for (const width of [320, 390, 430]) {
       );
       expect(onBar).toEqual([]);
     });
+
+    for (const [access, scene, count] of [
+      ["read-only", "message-actions-read", 1],
+      ["with write access", "message-actions", 3],
+    ] as const)
+      test(`F-066: ${access}, when the screen gets shorter at its foot under a held message's actions, the bar moves so each button keeps its 44 px hit area`, async ({
+        page,
+      }) => {
+        await open(page, scene);
+        // Your short message before Otto's report.
+        const message = page.locator('[data-message="row-8"]');
+        await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await settle(page);
+        await holdOn(message);
+        const actions = message.getByTestId("message-actions");
+        const buttons = actions.getByRole("button");
+        await expect(buttons).toHaveCount(count);
+        // The bar's foot 50 px above the transcript's, then the screen 70 px shorter.
+        const transcript = page.locator(".transcript");
+        const view = (await transcript.boundingBox())!;
+        const bar = (await actions.boundingBox())!;
+        await transcript.evaluate(
+          (el, by) => {
+            el.scrollTop += by;
+          },
+          bar.y + bar.height - (view.y + view.height - 50),
+        );
+        await settle(page);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+        await page.setViewportSize({ width, height: PHONE.height - 70 });
+        for (const button of await buttons.all())
+          await expect.poll(() => unreached(button)).toEqual([]);
+      });
   });
 }
 

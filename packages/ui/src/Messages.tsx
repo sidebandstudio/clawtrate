@@ -183,28 +183,27 @@ export function MessageActions({
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
-    // A bar a finger opened counts the touch areas its buttons reach past it, within what shows of
-    // the transcript: below the band kept clear for the header and the strip, which lie over it.
-    // It keeps them 2 px off those of the message's other controls: the quote over it, its
-    // reactions and its replies link. A mouse's or a pen's stays beside the bubble wherever there
-    // is room: above or below it, the pointer would leave the message on its way to the bar, and
-    // the bar would hide.
+    // A bar a finger opened counts the touch areas its buttons reach past it, and keeps them 2 px
+    // within what shows of the transcript, below the band kept clear for the header and the strip,
+    // which lie over it, and 2 px off those of the message's other controls: the quote over it,
+    // its reactions and its replies link. A mouse's or a pen's stays beside the bubble wherever
+    // there is room: above or below it, the pointer would leave the message on its way to the bar,
+    // and the bar would hide.
     const touch = toolbar.dataset.pointer === "touch";
-    const reach = reachPast(toolbar);
+    const clear = reachPast(toolbar) + 2;
     const scroller = turn.closest<HTMLElement>(".transcript");
     const view = scroller?.getBoundingClientRect();
     const band = scroller
       ? Number.parseFloat(getComputedStyle(scroller.firstElementChild ?? scroller).paddingTop) || 0
       : 0;
-    const first = view ? view.top + band + reach - turnBox.top : -Infinity;
-    const last = view ? view.bottom - reach - height - turnBox.top : Infinity;
+    const first = view ? view.top + band + clear - turnBox.top : -Infinity;
+    const last = view ? view.bottom - clear - height - turnBox.top : Infinity;
     const quote = turn.previousElementSibling?.matches(".reply-quote")
       ? [turn.previousElementSibling]
       : [];
     const taken = touch
       ? [...quote, ...turn.querySelectorAll(".reaction, .replies-link")].map((control) => {
           const area = touchArea(control);
-          const clear = reach + 2;
           return {
             top: area.top - turnBox.top - clear,
             right: area.right - turnBox.left + clear,
@@ -248,17 +247,25 @@ export function MessageActions({
   }, [turnRef, role]);
 
   // A bar whose width changes while it shows, as write access comes or goes, or whose column
-  // changes width, is placed again. It shows while the stylesheet lets it take the pointer.
+  // changes width, is placed again, and so is one whose transcript is resized or scrolled, as
+  // when the screen gets shorter. It shows while the stylesheet lets it take the pointer.
   useEffect(() => {
     const turn = turnRef.current;
     const toolbar = bar.current;
     if (!turn || !toolbar) return;
-    const observer = new ResizeObserver(() => {
+    const again = () => {
       if (getComputedStyle(toolbar).pointerEvents !== "none") measure();
-    });
+    };
+    const scroller = turn.closest<HTMLElement>(".transcript");
+    const observer = new ResizeObserver(again);
     observer.observe(toolbar);
     observer.observe(turn);
-    return () => observer.disconnect();
+    if (scroller) observer.observe(scroller);
+    scroller?.addEventListener("scroll", again, { passive: true });
+    return () => {
+      observer.disconnect();
+      scroller?.removeEventListener("scroll", again);
+    };
   }, [turnRef, measure]);
 
   // After the commit: the turn's own ref is set only once its children's layout effects ran.
