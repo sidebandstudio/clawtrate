@@ -62,6 +62,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",
   "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
+  "packages/core/src/machines.ts:PLACEMENT_PARTS": "static, the five parts of a bot's placement",
   "packages/core/src/machines.ts:readMachines>places":
     "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":
