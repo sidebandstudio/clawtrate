@@ -507,7 +507,8 @@
     const prop = proposals.find((x) => x.id === id);
     if (!prop || prop.state !== "open") return;
     prop.state = "declined";
-    Object.assign(prop.card, { cardKind: "declined", title: prop.card.declinedTitle, actions: [], note: "Nothing changed.", marks: [] });
+    const note = prop.card.ownRename?.done ? "Only the instructions were declined." : "Nothing changed.";
+    Object.assign(prop.card, { cardKind: "declined", title: prop.card.declinedTitle, actions: [], note, marks: [] });
     renderChat();
   }
 
@@ -802,21 +803,34 @@
       renderChat();
     } else if (act === "own-rename") {
       const prop = proposals.find((x) => x.id === id);
-      const own = prop.card.ownRename;
-      prop.card.stateText = "Renaming…";
-      prop.card.actions = prop.card.actions.filter((a) => a[1] !== "own-rename");
+      const card = prop.card;
+      const own = card.ownRename;
+      const otherActions = card.actions.filter((action) => action[1] !== "own-rename");
+      const bot = botById(own.bot);
+      const oldName = bot.name;
+      card.stateText = "Renaming…";
+      card.actions = [];
       renderChat();
-      await gateway.answer(800, () => (botById(own.bot).name = own.to));
+      const name = await gateway.answer(800, () => (bot.name = own.to));
       own.done = true;
-      prop.card.stateText = "";
-      if (prop.state === "open" && prop.card.actions.every((a) => a[1] !== "review")) {
+      card.stateText = "";
+      if (!card.editor) {
         prop.state = "saved";
-        prop.card.cardKind = "renamed";
-        prop.card.actions = [];
+        Object.assign(card, {
+          cardKind: "renamed",
+          title: `Renamed ${oldName} to ${name}`,
+          rows: [["Name", esc(name), read]],
+          note: "",
+        });
+      } else if (prop.state === "open") {
+        card.title = `${name} asks to change its instructions`;
+        card.rows = card.rows.filter(([label]) => label !== "Name");
+        card.declinedTitle = `Kept ${name}'s instructions`;
+        card.actions = otherActions;
       }
-      chat.items.push({ kind: "line", text: `You renamed it ${own.to}. Read back.`, testid: "own-rename-line" });
+      chat.items.push({ kind: "line", text: `You renamed it ${name}. Read back.`, testid: "own-rename-line" });
       renderChat();
-      say(`Renamed to ${own.to}`);
+      say(`Renamed to ${name}`);
     } else if (act === "use-claw") {
       const c = chat.items.find((i) => i.id === id);
       c.actions = [];

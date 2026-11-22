@@ -245,6 +245,13 @@ await check("MB-12 a bot's own rename is a proposal; Review and save opens the p
   await page.getByTestId("own-rename-line").waitFor();
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Scout");
   if (width !== "phone") assert.equal(await railName(page, "pip", width), "Scout");
+
+  await open("view=rename");
+  await page.getByRole("button", { name: "Rename Pip to Scout" }).click();
+  await page.getByTestId("own-rename-line").waitFor();
+  await page.getByRole("button", { name: "Not now" }).click();
+  await has(page, '[data-testid="card-declined"]', "Kept Scout's instructions");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Scout");
 });
 
 await check("MB-13 a changed bot starts the editor from what it says now; Not now keeps everything; Cancel writes nothing", async ({ page, open }) => {
@@ -301,6 +308,17 @@ await check("MB-16 other origins: unconfirmed origin, a name only the person cha
   await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
   await page.locator('[data-id="pip-freedom"][data-kind="saved"]').waitFor();
   assert.equal(await page.locator('[data-id="pip-freedom"]').getByRole("button").count(), 0);
+
+  await page.clock.install({ time: new Date("2030-01-01T09:00:00Z") });
+  await page.clock.pauseAt(new Date("2030-01-01T09:00:01Z"));
+  await open("view=proposal", "full");
+  const rename = page.locator('[data-id="junebug"]');
+  await rename.getByRole("button", { name: "Rename Juniper to Junebug" }).click();
+  assert.equal(await rename.getByRole("button").count(), 0, "a pending rename cannot be declined");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Juniper");
+  await page.clock.runFor(800);
+  await has(page, '[data-testid="card-renamed"]', "Renamed Juniper to Junebug");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Junebug");
 });
 
 await check("MB-17 agents with access: See by default, no direct changes, the limit, the config", async ({ page, open }) => {
