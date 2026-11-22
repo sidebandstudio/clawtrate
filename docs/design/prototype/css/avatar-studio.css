@@ -83,9 +83,73 @@
   container-type: size;
 }
 
+.as-preview {
+  position: relative;
+}
+
 .as-preview svg {
+  grid-area: 1 / 1;
   width: 100%;
   height: 100%;
+}
+
+/* new: the Claw changing with the name. A pop between families; within one,
+   the old Claw fades out over the new one, so a changed part reads as a morph.
+   Nothing moves with motion reduced: the new Claw is simply there. */
+.as-swap-out {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: as-fade-out var(--as-swap, 300ms) var(--ease-out) forwards;
+}
+
+.as-preview svg[data-swap="pop"] {
+  animation: as-pop var(--as-swap, 300ms) var(--ease-out);
+}
+
+.as-preview svg[data-swap="morph"] {
+  animation: as-fade-in var(--as-swap, 300ms) var(--ease-out);
+}
+
+@keyframes as-pop {
+  0% {
+    opacity: 0.4;
+    scale: 0.82;
+  }
+  60% {
+    opacity: 1;
+    scale: 1.05;
+  }
+  100% {
+    scale: 1;
+  }
+}
+
+@keyframes as-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes as-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+[data-motion="reduce"] .as-swap-out {
+  display: none;
+}
+
+[data-motion="reduce"] .as-preview svg[data-swap] {
+  animation: none;
+}
+
+/* Tiles show their Claw still: only the preview moves (and the board, on purpose). */
+.as-panel svg.creature *,
+.as-proposal svg.creature *,
+.as-closed svg.creature * {
+  animation: none !important;
 }
 
 .as-preview img {
@@ -119,6 +183,76 @@
   font-size: var(--text-lg);
   font-weight: var(--weight-medium);
   text-align: center;
+}
+
+.as-name-note {
+  display: flex;
+  justify-content: center;
+  min-height: 32px;
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.as-follows {
+  align-self: center;
+}
+
+.as-name-error {
+  align-self: center;
+  color: var(--danger);
+}
+
+.as-match .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+}
+
+.as-dialog[data-step="account"] .as-tabs,
+.as-dialog[data-step="account"] .as-name-note,
+.as-dialog[data-step="account"] .as-side {
+  visibility: hidden;
+}
+
+.as-dialog[data-step="account"] .as-name {
+  pointer-events: none;
+}
+
+.as-accounts {
+  display: grid;
+  gap: 8px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.as-account {
+  display: grid;
+  gap: 2px;
+  min-height: 56px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.as-account b {
+  font-weight: var(--weight-medium);
+}
+
+.as-account span {
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.as-account[aria-checked="true"] {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
 }
 
 .as-bot-name {
@@ -413,17 +547,38 @@
   justify-content: flex-start;
 }
 
-.as-wait {
+.as-wait-row {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 12px;
+}
+
+.as-wait {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
   font-size: var(--text-md);
   color: var(--text-muted);
 }
 
-.as-wait .button {
-  margin-left: auto;
+.as-route {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* new: the ideas' actions stay in reach at the panel's foot while it scrolls,
+   above the Save area, on a phone with the keyboard up as well. */
+.as-result-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--space-5));
+  z-index: 1;
+  margin: 12px -14px -14px;
+  padding: 10px 14px calc(14px + var(--space-5));
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--bg-bubble);
 }
 
 /* The waiting dot of bots.md: the only thing here that pulses, and not when motion is reduced. */
@@ -495,6 +650,74 @@
   padding: 12px var(--space-6) var(--space-6);
 }
 
+.as-foot > .button[data-size="lg"],
+.as-foot-row {
+  width: 100%;
+}
+
+.as-foot-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 8px;
+}
+
+.as-foot-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.as-foot .b-note {
+  width: 100%;
+}
+
+/* After Close, Create or Save: the way back in, and what was written. */
+.as-closed {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(440px, 100% - 32px);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  translate: -50% -50%;
+}
+
+.as-done {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.as-done-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.as-saved {
+  width: 72px;
+  height: 72px;
+}
+
+.as-saved img {
+  border-radius: 50%;
+}
+
+.as-tag {
+  margin: 0;
+  max-width: 100%;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
 /* Phone: a sheet over the whole screen; the preview shrinks, the tabs stay. */
 @container frame (max-width: 687px) {
   .as-app {
@@ -536,6 +759,33 @@
 
   .as-foot {
     padding: 10px var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+
+  .as-result-actions {
+    margin-right: -14px;
+    margin-left: -14px;
+  }
+
+  /* Phone: 44 px targets for every control, with or without a pointer. */
+  .as-tabs [role="tab"],
+  .as-dialog .button[data-size="sm"],
+  .as-closed .button {
+    min-height: var(--tap-min);
+  }
+
+  .as-dialog .as-side,
+  .as-dialog .b-head .as-close {
+    width: var(--tap-min);
+    height: var(--tap-min);
+  }
+
+  .as-colors {
+    gap: 6px;
+  }
+
+  .as-color {
+    width: var(--tap-min);
+    height: var(--tap-min);
   }
 }
 
