@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import { ClawtrateClient, setupGrant, type ClientOptions } from "../src/client.ts";
 import type { KeyValueStore } from "../src/host.ts";
-import { FULL_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const URL = "ws://127.0.0.1:19950";

@@ -17,7 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -914,10 +914,10 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
       name,
       KEYCHAIN_PATH,
     ]);
-    if (removed.status !== 0 && removed.status !== 44)
-      throw new Error(
-        `security delete-generic-password failed with ${removed.status ?? removed.signal}`,
-      );
+    expect(
+      removed.status === 0 || removed.status === 44,
+      `security delete-generic-password ended with ${removed.status ?? removed.signal}`,
+    ).toBe(true);
     expect(keychainHolds(service, name), "this run's item is gone after it").toBe(false);
   }
 });
