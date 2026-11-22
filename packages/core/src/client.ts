@@ -1073,6 +1073,11 @@ export class ClawtrateClient {
   private attachmentBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
+  /**
+   * Computer Stops of runs the gateway has not named yet (`task\0run`), by who asked: their first
+   * abort goes once the send's answer or history names the run, unless the owner is withdrawn first.
+   */
+  private readonly unsentStops = new WeakMap<object, Set<string>>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1899,6 +1904,16 @@ export class ClawtrateClient {
     this.withdrawnOwners.add(owner);
     this.fileTransfers.release(owner);
     for (const readers of this.approvalReads.values()) readers.delete(owner);
+    // A Computer Stop whose abort has not gone yet goes with it; one already sent is left as it is.
+    for (const id of this.unsentStops.get(owner) ?? []) {
+      const [key, runId] = id.split("\u0000") as [string, string];
+      const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+      if (run?.state === "stopping" && !run.bound)
+        this.updateActivity(key, (activity) =>
+          revertStop(activity, runId, new WithdrawnError().message),
+        );
+    }
+    this.unsentStops.delete(owner);
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
@@ -2895,7 +2910,14 @@ export class ClawtrateClient {
       // has taken the send stops nothing, with or without the run's id, and the turn then runs
       // in full. So a run the gateway has not named yet is aborted once the send's answer
       // names it (`deliver`); an answer that says it is over already needs no abort.
-      if (!current.bound) return;
+      if (!current.bound) {
+        if (options.taskOnly && options.owner) {
+          const unsent = this.unsentStops.get(options.owner) ?? new Set<string>();
+          unsent.add(`${key}\u0000${runId}`);
+          this.unsentStops.set(options.owner, unsent);
+        }
+        return;
+      }
       await this.abortRun(key, current.id);
     } catch (error) {
       this.noteMissingScope(error);

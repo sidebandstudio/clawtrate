@@ -2,7 +2,8 @@
 // gateway's answers leave unknown: a send whose answer never comes, a dropped
 // connection, an acceptance that names no run, other runs active meanwhile.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createBridgeSession } from "../src/bridge.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
@@ -97,6 +98,50 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     await until(() => gateway.calls("chat.abort").length === 1);
     expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: id }]);
     client.stop();
+  });
+});
+
+describe("a Computer Stop of a run the gateway has not named yet, when its task is closed first", () => {
+  /** This viewer's Computer Stop of the message just sent; the client keeps the task open. */
+  async function stopThenClose(client: Parameters<typeof createBridgeSession>[0]) {
+    const viewer = createBridgeSession(client);
+    onTestFinished(() => viewer.dispose());
+    await viewer.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "computerShow", key: KEY });
+    await viewer.apply({ type: "computerStopTask" });
+    await viewer.apply({ type: "closeSession", key: KEY });
+  }
+
+  it("F-145: the send's answer names the run afterwards: no abort is sent", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    const { client, transcript } = await openTask({ gateway });
+    onTestFinished(() => {
+      answer.resolve({ runId: "never", status: "started" });
+      client.stop();
+    });
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await stopThenClose(client);
+    answer.resolve({ runId: id, status: "started" });
+    await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    expect(transcript().runs.find((run) => run.id === id)?.state).toBe("running");
+  });
+
+  it("F-145: history names the run afterwards: no abort is sent", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => new Promise(() => {});
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 100 } });
+    onTestFinished(() => client.stop());
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await stopThenClose(client);
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
+    await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+    expect(gateway.calls("chat.abort")).toEqual([]);
   });
 });
 
