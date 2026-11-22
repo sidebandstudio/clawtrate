@@ -455,8 +455,9 @@ describe("a refused device token never removes a newer one", () => {
       if ((signs += 1) === 1) await signed.promise;
       return "signature";
     };
-    // The other client's read after signing finds token-A; token-A's refusal is accepted
-    // before that read hands it back, so before its frame goes.
+    // The other client's read after signing finds token-A. Before that read hands it back,
+    // token-A's refusal is accepted and its removal has run, so the read's own check can't see
+    // the refusal: only the check at the frame can.
     let lateRead = false;
     const get = storage.get;
     storage.get = async (key) => {
@@ -466,6 +467,8 @@ describe("a refused device token never removes a newer one", () => {
         gateway.connectReply = () => ({ ok: false, error: tokenMismatch });
         gateway.dropAll();
         await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+        await until(() => !storage.data.has(tokenKey(URL_A)));
+        await sleep(10);
       }
       return value;
     };
@@ -569,12 +572,15 @@ describe("a refused device token never removes a newer one", () => {
       client.stop();
       expect(storage.data.has(tokenKey(URL_A))).toBe(false);
       const restarted = new ClawtrateClient(testHost(gateway, storage), FAST);
-      const before = gateway.connects.length;
-      await restarted.start();
-      await until(() => gateway.connects.length > before);
-      expect(connectAuth(gateway, before)?.token).toBe("bootstrap");
-      await until(() => restarted.state.connection.status === "connected");
-      restarted.stop();
+      try {
+        const before = gateway.connects.length;
+        await restarted.start();
+        await until(() => gateway.connects.length > before);
+        expect(connectAuth(gateway, before)?.token).toBe("bootstrap");
+        await until(() => restarted.state.connection.status === "connected");
+      } finally {
+        restarted.stop();
+      }
     } finally {
       held.resolve();
       other.stop();
@@ -676,6 +682,126 @@ describe("a refused device token never removes a newer one", () => {
     } finally {
       otherHeld.resolve();
       reconnectHeld.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a rotation on another gateway doesn't stop a hello saving its token", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+    });
+    let holdNext = false;
+    const gatewayA = new FakeGateway();
+    gatewayA.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      holdNext = true;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "issued-A") };
+    };
+    // This client's hello save on A waits while a token on B is rotated.
+    const held = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL_A)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    const approval = deferred<unknown>();
+    const gatewayB = new FakeGateway();
+    gatewayB.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "token-B") };
+    };
+    gatewayB.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-B" });
+    gatewayB.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
+    const client = new ClawtrateClient(testHost(gatewayA, storage), FAST);
+    const other = new ClawtrateClient(testHost(gatewayB, storage), FAST);
+    try {
+      await client.start();
+      await until(() => waiting);
+      await other.connect({ url: URL_B, token: "boot-B" });
+      await until(() => other.state.connection.status === "connected");
+      await other.requestAccess();
+      await until(() => other.state.connection.upgrade.status === "pending");
+      approval.resolve({
+        status: "approved",
+        requestId: "up-B",
+        deviceToken: "rotated-B",
+        scopes: [...INTERACTIVE_SCOPES],
+      });
+      await until(() => storage.data.get(tokenKey(URL_B))?.includes('"rotated-B"') ?? false);
+      held.resolve();
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      expect(storage.data.get(tokenKey(URL_A)) ?? "").toContain('"issued-A"');
+    } finally {
+      held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a hello that echoes a token refused while its save waited doesn't save it again", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: savedToken("token-A"),
+    });
+    // The other client's frame with token-A reaches its gateway late, and is refused there.
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = () => ({ ok: false, error: tokenMismatch });
+    const otherHost = testHost(otherGateway, storage);
+    const arrive = deferred<void>();
+    let late = false;
+    otherHost.createWebSocket = (url) => {
+      const socket = otherGateway.createWebSocket(url);
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        if (!data.includes('"token-A"')) return send(data);
+        late = true;
+        void arrive.promise.then(() => send(data));
+      };
+      return socket;
+    };
+    // This client's gateway accepts token-A, and its hello save waits.
+    let holdNext = false;
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      holdNext = true;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+    };
+    const held = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL_A)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    const other = new ClawtrateClient(otherHost, FAST);
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await other.start();
+      await until(() => late);
+      await client.start();
+      await until(() => waiting);
+      arrive.resolve();
+      await until(() => other.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+      await until(() => !storage.data.has(tokenKey(URL_A)));
+      held.resolve();
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      expect(storage.data.has(tokenKey(URL_A))).toBe(false);
+    } finally {
+      arrive.resolve();
+      held.resolve();
       other.stop();
       client.stop();
     }

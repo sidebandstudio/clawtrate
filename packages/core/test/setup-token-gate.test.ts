@@ -13,6 +13,7 @@ import {
   setupGrant,
 } from "../src/client.ts";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import {
   deferred,
   FakeGateway,
@@ -117,7 +118,7 @@ describe("the setup connection's token gate", () => {
     });
   }
 
-  it("F-492: a pairing whose save loses the token to another connection on this store ends in an error, never connected", async () => {
+  it("F-492: a pairing whose save loses the token to another connection on this store ends in an error, never connected, and Retry sends nothing without a new consent", async () => {
     const gateway = gatewayGranting({
       role: "operator",
       scopes: ["operator.read"],
@@ -161,8 +162,105 @@ describe("the setup connection's token gate", () => {
       expect(statuses).not.toContain("connected");
       expect(client.state.connection.error?.code).toBe(SETUP_PAIRING_UNSAVED);
       expect(storage.data.has(tokenKey(URL))).toBe(false);
+      // Another connection saves a pairing for the address afterwards: Retry sends nothing,
+      // since the person never agreed to use it.
+      storage.data.set(
+        tokenKey(URL),
+        JSON.stringify({
+          token: "device-token",
+          grantedScopes: ["operator.read"],
+          heldScopes: ["operator.read"],
+        }),
+      );
+      const sent = gateway.connects.length;
+      await client.retryNow();
+      await sleep(60);
+      expect(gateway.connects.length).toBe(sent);
     } finally {
       held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("F-492: a pairing whose save comes after an approved rotation of the same token keeps the rotated token and ends in an error", async () => {
+    const storage = memoryStorage();
+    // Another client on this store is connected with the shared token, with nothing saved, and
+    // waits for an access request to be approved.
+    const approval = deferred<unknown>();
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk((params as ConnectParams).scopes),
+    });
+    otherGateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    otherGateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
+    const other = new ClawtrateClient(testHost(otherGateway, storage), FAST);
+    // The setup's hello save waits, and so does the rotation's write once it has started.
+    const gateway = gatewayGranting({
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "device-token",
+    });
+    const reply = gateway.connectReply;
+    let holdNext = false;
+    gateway.connectReply = (params, url) => {
+      holdNext = true;
+      return reply(params, url);
+    };
+    const helloHeld = deferred<void>();
+    let helloWaiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL)) {
+        holdNext = false;
+        helloWaiting = true;
+        await helloHeld.promise;
+      }
+      return get(key);
+    };
+    const writeHeld = deferred<void>();
+    let writeWaiting = false;
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === tokenKey(URL) && value.includes('"token-R"')) {
+        writeWaiting = true;
+        await writeHeld.promise;
+      }
+      return set(key, value);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const statuses: string[] = [];
+    client.store.subscribe(() => statuses.push(client.state.connection.status));
+    try {
+      await client.start();
+      await other.connect({ url: URL, token: "shared" });
+      await until(() => other.state.connection.status === "connected");
+      await other.requestAccess();
+      await until(() => other.state.connection.upgrade.status === "pending");
+      await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+      await until(() => helloWaiting);
+      approval.resolve({
+        status: "approved",
+        requestId: "up-1",
+        deviceToken: "token-R",
+        scopes: [...INTERACTIVE_SCOPES],
+      });
+      await until(() => writeWaiting);
+      // The setup's token is staged and its save queued behind the rotation's write. The other
+      // client stops, so no reconnect of its own opens a socket after the rotation.
+      helloHeld.resolve();
+      await sleep(30);
+      other.stop();
+      writeHeld.resolve();
+      await until(() => ["error", "connected"].includes(client.state.connection.status));
+      await sleep(30);
+      expect(JSON.parse(storage.data.get(tokenKey(URL))!).token).toBe("token-R");
+      expect(statuses).not.toContain("connected");
+      expect(client.state.connection.error?.code).toBe(SETUP_PAIRING_UNSAVED);
+    } finally {
+      helloHeld.resolve();
+      writeHeld.resolve();
       other.stop();
       client.stop();
     }
