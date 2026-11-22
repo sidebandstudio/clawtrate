@@ -61,6 +61,7 @@ const stored = (storage: { data: Map<string, string> }) =>
     heldScopes: string[];
     adminHeld?: boolean;
     pairingHeld?: boolean;
+    fullGrant?: boolean;
   } | null;
 
 describe("full access behind a flag", () => {
@@ -79,8 +80,7 @@ describe("full access behind a flag", () => {
     expect(stored(storage)).toMatchObject({
       token: ISSUED,
       heldScopes: [...FULL_SCOPES],
-      adminHeld: true,
-      pairingHeld: true,
+      fullGrant: true,
     });
     expect(client.state.connection).toMatchObject({
       scopes: [...FULL_SCOPES],
@@ -201,13 +201,8 @@ describe("full access behind a flag", () => {
     });
   }
 
-  it("F-509: a setup code's first pairing asks for the six, and its token is written with what the gateway confirmed", async () => {
-    const gateway = new FakeGateway();
-    gateway.connectReply = (params) => {
-      const { scopes, auth } = params as ConnectParams;
-      const granted = auth?.bootstrapToken ? [...INTERACTIVE_SCOPES] : scopes;
-      return { ok: true, payload: helloOk(granted, ISSUED) };
-    };
+  it("F-509: a full setup code's first pairing asks for the six, and its token is written with exactly the grant", async () => {
+    const gateway = grantingGateway();
     const { client, storage } = fullClient(gateway);
     await client.start();
     await client.connectWithSetupCode({
@@ -220,9 +215,157 @@ describe("full access behind a flag", () => {
       scopes: [...FULL_SCOPES],
       auth: { bootstrapToken: CODE },
     });
-    // A limited code's grant: kept as it is, within the six.
-    expect(stored(storage)).toMatchObject({ token: ISSUED, heldScopes: [...INTERACTIVE_SCOPES] });
-    expect(stored(storage)?.adminHeld).toBeUndefined();
+    expect(stored(storage)).toMatchObject({
+      token: ISSUED,
+      heldScopes: [...FULL_SCOPES],
+      fullGrant: true,
+    });
+    client.stop();
+  });
+
+  it("F-509: a limited code refuses the six; nothing is kept and nothing smaller is asked for by itself", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "bootstrap token invalid",
+        details: { code: "AUTH_BOOTSTRAP_TOKEN_INVALID" },
+      },
+    });
+    const { client, storage } = fullClient(gateway);
+    await client.start();
+    await client.connectWithSetupCode({
+      url: URL,
+      bootstrapToken: CODE,
+      expiresAtMs: Date.now() + 600_000,
+    });
+    await until(() => client.state.connection.status === "error");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stored(storage)).toBe(null);
+    for (const each of gateway.connects as ConnectParams[])
+      expect(each.scopes).toEqual([...FULL_SCOPES]);
+    client.stop();
+  });
+
+  const exact: Array<[string, string[], string[]]> = [
+    ["questions alone", ["operator.questions"], ["operator.questions"]],
+    ["admin alone", ["operator.admin"], ["operator.admin"]],
+    [
+      "read and pairing, and one it never asked for",
+      ["operator.read", "operator.pairing", "operator.talk"],
+      ["operator.read", "operator.pairing"],
+    ],
+  ];
+  for (const [name, grant, held] of exact) {
+    it(`keeps exactly what was granted by name (${name}), and a reconnect asks for no more`, async () => {
+      const gateway = grantingGateway(grant);
+      const { client, storage } = fullClient(gateway);
+      await client.start();
+      await client.connect({ url: URL, token: SHARED });
+      await until(() => client.state.connection.status === "connected");
+      expect(stored(storage)).toMatchObject({ heldScopes: held, fullGrant: true });
+      gateway.dropAll();
+      await until(() => gateway.connects.length === 2);
+      await until(() => client.state.connection.status === "connected");
+      expect(connectAt(gateway, 1).scopes).toEqual(held);
+      client.stop();
+    });
+  }
+
+  it("a reconnect whose grant narrowed, with the same token, narrows the record, and the next asks for that", async () => {
+    let grant: string[] | null = null;
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(grant ?? scopes, auth?.deviceToken ?? ISSUED) };
+    };
+    const { client, storage } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: URL, token: SHARED });
+    await until(() => client.state.connection.status === "connected");
+    expect(stored(storage)?.heldScopes).toEqual([...FULL_SCOPES]);
+    grant = [...READ_SCOPES];
+    gateway.dropAll();
+    await until(() => stored(storage)?.heldScopes.length === 1);
+    expect(stored(storage)).toMatchObject({ token: ISSUED, heldScopes: [...READ_SCOPES] });
+    gateway.dropAll();
+    await until(() => gateway.connects.length === 3);
+    expect(connectAt(gateway, 2).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a malformed hello on a first full pairing writes nothing", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: {
+        ...helloOk([...FULL_SCOPES], ISSUED),
+        auth: { role: "node", scopes: [...FULL_SCOPES], deviceToken: ISSUED },
+      },
+    });
+    const { client, storage } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: URL, token: SHARED });
+    await until(() => gateway.connects.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stored(storage)).toBe(null);
+    client.stop();
+  });
+
+  it("a full pairing's refused token ends the attempt: nothing asks for the six again until the person connects", async () => {
+    const gateway = grantingGateway();
+    const { client, storage } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: URL, token: SHARED });
+    await until(() => client.state.connection.status === "connected");
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "device token mismatch",
+        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      },
+    });
+    gateway.dropAll();
+    await until(() => stored(storage) === null);
+    // Waiting for approval from here on: every attempt can be seen, and none is granted.
+    const pending = {
+      ok: false as const,
+      error: {
+        code: "NOT_PAIRED",
+        message: "device pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "req-2", deviceId: "device-1" },
+      },
+    };
+    gateway.connectReply = () => pending;
+    const before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    await client.connect({ url: URL, token: SHARED });
+    await until(() => (gateway.connects.at(-1) as ConnectParams).scopes.length === 6);
+    client.stop();
+  });
+
+  it("a full pairing's token asks for read alone on a host without secure storage", async () => {
+    const gateway = grantingGateway();
+    const record = JSON.stringify({
+      token: "device-token",
+      grantedScopes: FULL_SCOPES,
+      heldScopes: FULL_SCOPES,
+      fullGrant: true,
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: record,
+    });
+    const { client } = fullClient(gateway, { storage, secure: async () => false });
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    expect(stored(storage)?.heldScopes).toEqual([...FULL_SCOPES]);
     client.stop();
   });
 

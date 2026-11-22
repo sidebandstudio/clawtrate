@@ -586,6 +586,12 @@ type StoredDeviceToken = {
   adminHeld?: boolean;
   /** The same for device access (`operator.pairing`), asked for by name. */
   pairingHeld?: boolean;
+  /**
+   * A first full pairing's record: `heldScopes` is exactly what the gateway granted of
+   * what the signed request named, in its order, and only ever narrows. Used only while
+   * full access holds; otherwise its device asks for read.
+   */
+  fullGrant?: boolean;
 };
 
 /**
@@ -610,6 +616,29 @@ function withinAsked(granted: readonly string[], asked: readonly string[]): stri
       ? asked.includes(scope)
       : asked.some((wanted) => scopeSatisfied([wanted], scope)),
   );
+}
+
+/** Whether a hello carries a grant a full pairing may keep: this protocol, the operator role and named scopes. */
+function fullGrantValid(hello: Pick<HelloOk, "auth" | "protocol">): boolean {
+  const auth = asRecord(hello.auth);
+  const scopes = auth?.scopes;
+  return (
+    hello.protocol === PROTOCOL_VERSION &&
+    auth?.role === "operator" &&
+    Array.isArray(scopes) &&
+    scopes.length > 0 &&
+    scopes.every((scope) => typeof scope === "string")
+  );
+}
+
+/** A first full pairing's record: the scopes of the signed request the gateway granted by name, in its order. */
+function fullRecord(
+  token: string,
+  granted: readonly string[],
+  asked: readonly string[],
+): StoredDeviceToken {
+  const held = asked.filter((scope) => FULL_SCOPES.includes(scope) && granted.includes(scope));
+  return { token, grantedScopes: [...held], heldScopes: held, fullGrant: true };
 }
 
 /**
@@ -974,6 +1003,11 @@ export class ClawtrateClient {
    * keeps this device's credentials in secure storage. Read again as each connection opens.
    */
   private fullAccess = false;
+  /**
+   * A full pairing's saved token was refused: no attempt asks for the six again until
+   * the person chooses to connect again.
+   */
+  private fullDeclined = false;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -1368,6 +1402,8 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      // The person chose to connect: a new pairing may ask for full access again.
+      this.fullDeclined = false;
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
       await this.saveSettings({ url, token });
@@ -1401,6 +1437,8 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+      // The person chose to connect: a new pairing may ask for full access again.
+      this.fullDeclined = false;
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
       this.selectionApplied = selection;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -5794,7 +5832,10 @@ export class ClawtrateClient {
         // The lifecycle's acceptHello (a read of the saved record, then a store of the hello's
         // token), with this socket's liveness asked before the store and before its write.
         const issued = hello.auth?.deviceToken?.trim();
-        if (issued && context.plan.identity) {
+        // A first full pairing keeps a grant only from a valid hello; anything else writes nothing.
+        const fullAsk = context.plan.scopes.some((scope) => !READ_SCOPES.includes(scope));
+        const grantValid = fullGrantValid(hello);
+        if (issued && context.plan.identity && (grantValid || !fullAsk || !this.fullAccess)) {
           const role = hello.auth?.role ?? context.plan.role;
           const ids = { clientId: context.plan.clientId, deviceId: context.plan.identity.deviceId };
           const stored = await tokenStore.load({ ...ids, role });
@@ -5807,8 +5848,30 @@ export class ClawtrateClient {
               scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
             },
             live,
-            context.plan.scopes,
+            this.fullAccess && grantValid ? context.plan.scopes : undefined,
           );
+        }
+        // A full pairing's record narrows to what this hello granted of what was signed for,
+        // whether or not the token changed.
+        if (grantValid && context.plan.identity && live()) {
+          const ids = { deviceId: context.plan.identity.deviceId, role: hello.auth.role };
+          const granted = hello.auth.scopes ?? [];
+          const asked = context.plan.scopes;
+          await this.changeConnection(async () => {
+            if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+              return;
+            const record = await this.loadToken(settings.url, ids.deviceId, ids.role);
+            if (!record?.fullGrant) return;
+            const held = record.heldScopes.filter(
+              (scope) => !asked.includes(scope) || granted.includes(scope),
+            );
+            if (held.length === record.heldScopes.length) return;
+            await this.writeToken(settings.url, ids.deviceId, ids.role, {
+              ...record,
+              heldScopes: held,
+              grantedScopes: record.grantedScopes.filter((scope) => held.includes(scope)),
+            });
+          });
         }
         if (!live()) return;
         // Only this connection may drop this gateway's bootstrap secret.
@@ -5847,7 +5910,7 @@ export class ClawtrateClient {
               staged.deviceId,
               staged.role,
               !existing && grant === "within"
-                ? grantRecord(staged.token, staged.scopes, context.plan.scopes)
+                ? fullRecord(staged.token, staged.scopes, context.plan.scopes)
                 : {
                     token: staged.token,
                     grantedScopes: [...staged.scopes],
@@ -6194,11 +6257,12 @@ export class ClawtrateClient {
       if (requestId) this.pairingSeen = seen;
       // A setup connection shows this device, the scopes it asked for and the gateway's
       // pending-devices instruction, never the request's own fields.
-      const scopes = setup
-        ? [...this.state.connection.requestedScopes]
-        : Array.isArray(details.requestedScopes)
-          ? details.requestedScopes.filter((s): s is string => typeof s === "string")
-          : [...this.state.connection.requestedScopes];
+      const scopes =
+        setup || this.fullAccess
+          ? [...this.state.connection.requestedScopes]
+          : Array.isArray(details.requestedScopes)
+            ? details.requestedScopes.filter((s): s is string => typeof s === "string")
+            : [...this.state.connection.requestedScopes];
       const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
         url,
         setup ? "" : requestId,
@@ -7739,7 +7803,9 @@ export class ClawtrateClient {
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
-    if (!token) return this.fullAccess ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (!token) return this.fullAccess && !this.fullDeclined ? [...FULL_SCOPES] : [...READ_SCOPES];
+    // A full pairing's token is used for more than read only while full access holds.
+    if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
     if (this.isSetup(url) && !this.fullAccess) return [...READ_SCOPES];
     return [...token.heldScopes];
   }
@@ -7753,6 +7819,17 @@ export class ClawtrateClient {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
+    if (parsed.fullGrant === true) {
+      const held = Array.isArray(parsed.heldScopes)
+        ? FULL_SCOPES.filter((scope) => parsed.heldScopes!.includes(scope))
+        : [];
+      return {
+        token: parsed.token,
+        grantedScopes: Array.isArray(parsed.grantedScopes) ? [...parsed.grantedScopes] : held,
+        heldScopes: held,
+        fullGrant: true,
+      };
+    }
     return {
       token: parsed.token,
       // Earlier builds stored the grant as `scopes`.
@@ -7827,7 +7904,7 @@ export class ClawtrateClient {
         // A first pairing that asked for more than read holds what the gateway confirmed within
         // what it asked for: a narrower grant is kept as it is, and nothing asks again.
         if (!existing && asked?.some((scope) => !READ_SCOPES.includes(scope))) {
-          await this.writeToken(url, deviceId, role, grantRecord(token, scopes, asked));
+          await this.writeToken(url, deviceId, role, fullRecord(token, scopes, asked));
           return;
         }
         const held = existing?.heldScopes ?? [...READ_SCOPES];
@@ -7838,6 +7915,7 @@ export class ClawtrateClient {
           heldScopes: held,
           ...(existing?.adminHeld ? { adminHeld: true } : {}),
           ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          ...(existing?.fullGrant ? { fullGrant: true } : {}),
         });
       });
     };
@@ -7865,6 +7943,8 @@ export class ClawtrateClient {
           const existing = await this.loadToken(url, deviceId, role);
           if (existing?.token.trim() !== rejected) return;
           await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+          // Asking for the six again takes the person's decision.
+          if (existing.fullGrant) this.fullDeclined = true;
         });
       },
     };
