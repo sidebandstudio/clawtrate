@@ -36,6 +36,8 @@ const fsHooks = vi.hoisted(() => ({
   failRename: null as null | ((to: string) => boolean),
   /** Folder syncs to refuse, from the next one on. */
   failFolderSyncs: 0,
+  /** Removals to refuse. */
+  failRm: null as null | ((path: string) => boolean),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -71,7 +73,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     fsHooks.failRename?.(String(to))
       ? Promise.reject(Object.assign(new Error("rename refused"), { code: "EIO" }))
       : actual.rename(from, to)) as typeof actual.rename;
-  return { ...actual, open, writeFile, rename };
+  const rm = ((path: string, options?: Parameters<typeof actual.rm>[1]) =>
+    fsHooks.failRm?.(String(path))
+      ? Promise.reject(Object.assign(new Error("removal refused"), { code: "EPERM" }))
+      : actual.rm(path, options)) as typeof actual.rm;
+  return { ...actual, open, writeFile, rename, rm };
 });
 
 const SHARED = "shared-token-5f1c";
@@ -92,6 +98,7 @@ afterEach(() => {
   fsHooks.written.length = 0;
   fsHooks.failRename = null;
   fsHooks.failFolderSyncs = 0;
+  fsHooks.failRm = null;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -425,6 +432,17 @@ describe("this device's credentials in secure storage", () => {
     await expect(two.storage.set("connection", b)).rejects.toThrow();
     expect(await two.storage.get("connection")).toBe(CONNECTION);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+  });
+
+  it("a settings change while the old key file can't be removed changes nothing, live or at the next start", async () => {
+    const { dir } = legacyFolder();
+    fsHooks.failRm = (path) => path.endsWith(DEVICE_KEY_FILE);
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.status()).toBe("cleanup-pending");
+    await expect(credentials.storage.set("turn-limit-minutes", "45")).rejects.toThrow();
+    expect(await credentials.storage.get("turn-limit-minutes")).toBe("30");
+    expect(state(dir)["turn-limit-minutes"]).toBe("30");
+    expect(await open(dir, fakeBox().box).storage.get("turn-limit-minutes")).toBe("30");
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {

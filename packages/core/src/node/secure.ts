@@ -355,14 +355,11 @@ export function createSecureCredentials(options: {
   };
 
   /** Once the record is committed: the files without credentials, then the key file, then earlier temporary files. */
-  const sweep = async (
-    mode: Extract<Mode, { kind: "secure" }>,
-    next: Record<string, string> = settings,
-  ) => {
+  const sweep = async (mode: Extract<Mode, { kind: "secure" }>) => {
     // No earlier copy changes until the sealed record's rename is on disk: a sync that fails
     // here stops the sweep before it touches a file, and the next change tries again.
     await syncFolder(dataDir);
-    await writeSettings(next);
+    await writeSettings(settings);
     await rm(keyPath, { force: true });
     await syncFolder(dataDir);
     // Done only once no earlier temporary file is left: one a live writer still holds keeps it open.
@@ -517,8 +514,10 @@ export function createSecureCredentials(options: {
    */
   const keepSettings = async (next: Record<string, string>) => {
     const current = await mode();
-    if (current.kind === "secure" && !current.swept) await sweep(current, next);
-    else if (!(current.kind === "session" && current.holdSettings)) await writeSettings(next);
+    // A pending cleanup finishes first, with the settings as they are: a cleanup that fails
+    // leaves `next` unwritten, so a call that fails has changed nothing a later start reads.
+    if (current.kind === "secure" && !current.swept) await sweep(current);
+    if (!(current.kind === "session" && current.holdSettings)) await writeSettings(next);
     settings = next;
   };
 
