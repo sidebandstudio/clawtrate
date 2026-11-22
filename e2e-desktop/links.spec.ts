@@ -20,6 +20,8 @@ import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 const DESKTOP = join(import.meta.dirname, "../apps/desktop");
 const WINDOWS = process.platform === "win32";
 const ADDED = "Link text added to your draft. Nothing was sent.";
+/** Wide enough for the rail beside the conversation, too narrow to dock Work: a drawer. */
+const DRAWER = { width: 900, height: 800 };
 
 const link = (bot: string, text: string, gateway = GATEWAY_ID) =>
   `clawtrate://chat?bot=${bot}&gateway=${gateway}&text=${encodeURIComponent(text)}`;
@@ -99,6 +101,9 @@ async function deliver(...given: string[]) {
 
 const field = () => page.getByTestId("composer-input");
 const note = () => page.getByTestId("link-note");
+const shell = () => page.locator(".shell");
+const botButton = (name: string) =>
+  page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name},`) });
 
 async function expectCaretAtEnd(locator: Locator) {
   const [start, end, length] = await locator.evaluate((element: HTMLTextAreaElement) => [
@@ -118,6 +123,12 @@ async function expectCantOpen(reason: string) {
   await page.keyboard.press("Enter");
   await expect(card).toHaveCount(0);
 }
+
+/** The gateway calls that would mark this chat read. */
+const reads = (key: string) =>
+  served.gateway
+    .calls("sessions.patch")
+    .filter((params) => (params as { key?: string }).key === key);
 
 test.describe.configure({ mode: "serial" });
 
@@ -164,7 +175,7 @@ test.beforeAll(async () => {
   page = await launch();
   await page.getByPlaceholder("Gateway address").fill(served.url);
   await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
-  await expect(page.getByTestId("bot")).toHaveCount(3, { timeout: 30_000 });
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
 });
 
 test.afterAll(async () => {
@@ -173,10 +184,7 @@ test.afterAll(async () => {
 
 test("F-248: a link handed over by a second launch opens the bot's chat with its text, unsent", async () => {
   // The app shows another bot's chat when the link comes.
-  await page
-    .getByTestId("bot-list")
-    .getByRole("button", { name: /^Otto,/ })
-    .click();
+  await botButton("Otto").click();
   await expect(field()).toHaveAttribute("aria-label", "Message Otto");
 
   await deliver(link("marlow", "Review the intro.\nKeep it short."));
@@ -261,6 +269,39 @@ test("F-248: a link that cannot open says why, and leaves the chat and its draft
     "Clawtrate isn't connected to a gateway. Connect to the right gateway, then open the link again.",
   );
   served.refuse(false);
+  await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost", {
+    timeout: 30_000,
+  });
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: a link reads no chat on the gateway and saves no layout", async () => {
+  await page.setViewportSize(DRAWER);
+  const saved = () => page.evaluate(() => localStorage.getItem("clawtrate.panel"));
+  await field().focus();
+  await page.keyboard.press("ControlOrMeta+Backslash");
+  await expect(shell()).toHaveAttribute("data-panel", "open");
+  expect(await saved()).toBe("open");
+
+  // The newest of Wren's chats is unread on the gateway.
+  await deliver(link("wren", "Look at the review."));
+  await expect(field()).toHaveAttribute("aria-label", "Message Wren");
+  await expect(field()).toHaveValue("Look at the review.");
+  await expect(shell()).toHaveAttribute("data-panel", "closed");
+  // The drawer closed for now; the place the person chose for it stays.
+  expect(await saved()).toBe("open");
+  // A read made on opening it would have reached the gateway by now.
+  await page.waitForTimeout(500);
+  expect(reads("agent:wren:review")).toEqual([]);
+
+  // Leaving it does not read it either; opening it again by hand does.
+  await botButton("Marlow").click();
+  await expect(field()).toHaveAttribute("aria-label", "Message Marlow");
+  await page.waitForTimeout(500);
+  expect(reads("agent:wren:review")).toEqual([]);
+  await botButton("Wren").click();
+  await expect(field()).toHaveValue("Look at the review.");
+  await expect.poll(() => reads("agent:wren:review").length).toBeGreaterThan(0);
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
@@ -279,10 +320,7 @@ test("F-248: a link that starts the app waits for its connection, then opens the
   await expect(note()).toHaveText(ADDED);
   await expect(field()).toBeFocused();
   // The other chat kept its draft.
-  await page
-    .getByTestId("bot-list")
-    .getByRole("button", { name: /^Marlow,/ })
-    .click();
+  await botButton("Marlow").click();
   await expect(field()).toHaveValue("Start over.");
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });

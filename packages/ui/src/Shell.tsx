@@ -303,11 +303,18 @@ export function Shell({
         .map((each) => [each.key, each.unreadMarker ?? null]),
     );
   });
+  // A chat a Clawtrate link opened is read only once the person opens it again: a link
+  // changes nothing on the gateway (links.md section 1). Its transcript loads as usual.
+  const linkOpened = useRef<string | null>(null);
   // A read the gateway refused, or that failed, leaves the task unread here too, as the gateway has it.
   const forgetRead = selection.forgetReadHere;
   const readTask = useCallback(
     (key: string, explicitToo: boolean) => {
-      if (keptRef.current.has(key) || (!explicitToo && (markersRef.current[key] ?? null) !== null))
+      if (
+        key === linkOpened.current ||
+        keptRef.current.has(key) ||
+        (!explicitToo && (markersRef.current[key] ?? null) !== null)
+      )
         return;
       void send({ type: "markTask", key, unread: false, opened: true }).catch(() =>
         forgetRead(key),
@@ -320,7 +327,10 @@ export function Shell({
   const openedKey = useRef<string | null>(null);
   useEffect(() => {
     // Covered by Routines, it is not open: coming back opens it again.
-    if (!conversationVisible) openedKey.current = null;
+    if (!conversationVisible) {
+      openedKey.current = null;
+      linkOpened.current = null;
+    }
     if (!taskKey || !connectedNow || !conversationVisible) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;
@@ -336,6 +346,7 @@ export function Shell({
     return () => {
       openedKey.current = null;
       if (visibleRef.current) readTask(taskKey, false);
+      if (linkOpened.current === taskKey) linkOpened.current = null;
     };
   }, [taskKey, readTask]);
 
@@ -441,10 +452,12 @@ export function Shell({
   const openedLink = useRef<number | null>(null);
   const { selectTask } = selection;
   const openLinkedChat = useEffectEvent((botId: string, key: string) => {
+    if (key !== taskKey || routines) linkOpened.current = key;
     selectTask(botId, key);
+    // Closed for now: the drawer's saved position stays as the person left it.
     if (panelOpen && overlay) {
       keepFocus.current = true;
-      setPanel(false);
+      setPanelOpen(false);
     }
     openDetail();
   });

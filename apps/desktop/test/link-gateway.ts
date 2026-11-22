@@ -1,6 +1,7 @@
 // An in-memory gateway for the link check (e2e-desktop/links.spec.ts), behind a
-// WebSocket on 127.0.0.1 the app connects to: two bots with a chat each and one
-// with none, on a connection that may write. Nothing here reaches another host.
+// WebSocket on 127.0.0.1 the app connects to: bots with a chat each, one with
+// none, and one with two, the newest marked unread, on a connection that may
+// write. Nothing here reaches another host.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -22,12 +23,22 @@ export async function linkGateway() {
       { id: "marlow", identity: { name: "Marlow" } },
       { id: "otto", identity: { name: "Otto" } },
       { id: "quill", identity: { name: "Quill" } },
+      { id: "wren", identity: { name: "Wren" } },
     ],
   });
   const now = Date.now();
   const sessions = [
     { key: "agent:marlow:main", agentId: "marlow", label: "Intro review", updatedAt: now },
     { key: "agent:otto:main", agentId: "otto", label: "Release notes", updatedAt: now - 1000 },
+    { key: "agent:wren:main", agentId: "wren", label: "Older notes", updatedAt: now - 3000 },
+    {
+      key: "agent:wren:review",
+      agentId: "wren",
+      label: "Newer review",
+      updatedAt: now - 2000,
+      unread: true,
+      markedUnreadAt: now - 2000,
+    },
   ];
   gateway.handlers["sessions.subscribe"] = () => ({
     subscribed: true,
