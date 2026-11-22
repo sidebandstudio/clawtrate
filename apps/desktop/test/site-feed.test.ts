@@ -435,7 +435,7 @@ describe("assembling the site", () => {
     expect(existsSync(output)).toBe(false);
   });
 
-  it.each(["download/mac/index.html", "install.sh"])(
+  it.each([join("download", "mac", "index.html"), "install.sh"])(
     "refuses a site source without %s",
     async (missing) => {
       fixture();
@@ -446,6 +446,15 @@ describe("assembling the site", () => {
       expect(existsSync(output)).toBe(false);
     },
   );
+
+  it("refuses non-empty output without changing its contents", async () => {
+    fixture();
+    mkdirSync(output);
+    writeFileSync(join(output, "removed.html"), "old page");
+    await expect(assembleSite(source, output, oneBeta, undefined)).rejects.toThrow("not empty");
+    expect(readFileSync(join(output, "removed.html"), "utf8")).toBe("old page");
+    expect(existsSync(join(output, "index.html"))).toBe(false);
+  });
 
   it("fills the download page from the beta it serves, and copies the rest", async () => {
     fixture();
@@ -479,7 +488,7 @@ describe("assembling the site", () => {
   });
 
   it.each([
-    ["download/mac/index.html", "<p>__CLAWTRATE_CHANNEL__</p>"],
+    [join("download", "mac", "index.html"), "<p>__CLAWTRATE_CHANNEL__</p>"],
     ["index.html", '<a href="__CLAWTRATE_ARM64_ZIP__">Download</a>'],
   ])("refuses while %s holds a token the assembly does not fill", async (file, extra) => {
     fixture();

@@ -1106,6 +1106,9 @@ describe("what publishing accepts as the prepared release", () => {
   });
 });
 
+const siteRuns =
+  "repos/sidebandstudio/clawtrate/actions/workflows/site.yml/runs?branch=main&per_page=100";
+
 /** GitHub and the site as the publishing and withdrawing steps see them. */
 function github(
   dir: string,
@@ -1120,6 +1123,7 @@ function github(
     const line = [command, ...args].join(" ");
     for (const [start, answer] of Object.entries(answers))
       if (line.startsWith(start)) return answer;
+    if (command === "gh" && args.includes(siteRuns)) return ok();
     if (line === "gh auth status") return ok();
     if (line.startsWith(`gh api repos/sidebandstudio/clawtrate/compare/${COMMIT}...main`))
       return ok("ahead\n");
@@ -1177,8 +1181,8 @@ function site(
       return page ? page() : new Response("", { status: 404 });
     },
     requestMs: 1_000,
-    waitMs: 0,
-    pollMs: 0,
+    waitMs: 1_000,
+    pollMs: 2_000,
   };
 }
 
@@ -1502,6 +1506,47 @@ describe("withdrawing", () => {
   };
   const serving = (answer: () => Promise<Response> | Response) => site({ [BETA_FEED_URL]: answer });
 
+  it("waits for Site runs on main before accepting the public feed", async () => {
+    const made = hub(false);
+    const events: string[] = [];
+    const runner: Run = (command, args, options) => {
+      if (args.includes(siteRuns)) {
+        events.push("list");
+        return ok(events.length === 1 ? "123" : "");
+      }
+      return made.runner(command, args, options);
+    };
+    const net = serving(() => {
+      events.push("read");
+      return new Response("", { status: 404 });
+    });
+    await withdraw(runner, VERSION, { ...net, pollMs: 1 });
+    expect(events).toEqual(["list", "list", "read"]);
+  });
+
+  it("stops without judging the feed while a Site run on main stays unfinished", async () => {
+    const made = hub(false);
+    const runner: Run = (command, args, options) =>
+      args.includes(siteRuns) ? ok("123") : made.runner(command, args, options);
+    const read = vi.fn(() => new Response("", { status: 404 }));
+    expect(await stopped(() => withdraw(runner, VERSION, serving(read)))).toContain(
+      "have not finished",
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("rejects a matching response completed after the deadline", async () => {
+    let now = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const net = serving(() => {
+      now += 1_001;
+      return new Response("", { status: 404 });
+    });
+    expect(await stopped(() => withdraw(hub(false).runner, VERSION, net))).toContain(
+      "no answer in time",
+    );
+  });
+
   it("reports the draft GitHub lists and the older beta the site now offers", async () => {
     await withdraw(
       hub(true).runner,
@@ -1585,8 +1630,8 @@ describe("withdrawing", () => {
           signal.addEventListener("abort", () => reject(signal.reason)),
         ),
       requestMs: 20,
-      waitMs: 0,
-      pollMs: 0,
+      waitMs: 1_000,
+      pollMs: 2_000,
     };
     expect(await stopped(() => withdraw(hub(false).runner, VERSION, hanging))).toBe(
       `Could not tell what the site serves (no answer in time). Check ${BETA_FEED_URL} yourself.`,

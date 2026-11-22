@@ -1331,16 +1331,20 @@ export async function readSite(net: Net, ms = net.requestMs): Promise<SiteReadin
 
 /**
  * Reads the site until `done` accepts a reading or the wait ends; returns the
- * last reading. The first read is immediate, with its own deadline; each later
- * one must answer, body included, before the wait ends.
+ * last reading completed in time, or an inconclusive result for a late read.
  */
 async function watchSite(net: Net, done: (reading: SiteReading) => boolean) {
   const deadline = Date.now() + net.waitMs;
-  for (let first = true; ; first = false) {
+  for (;;) {
     const reading = await readSite(
       net,
-      first ? net.requestMs : Math.max(1, Math.min(net.requestMs, deadline - Date.now())),
+      Math.max(1, Math.min(net.requestMs, deadline - Date.now())),
     );
+    if (Date.now() > deadline)
+      return {
+        done: false,
+        reading: { kind: "inconclusive", reason: "no answer in time" } as const,
+      };
     if (done(reading)) return { done: true, reading };
     if (Date.now() + net.pollMs > deadline) return { done: false, reading };
     await new Promise((resolve) => setTimeout(resolve, net.pollMs));
@@ -1620,6 +1624,28 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
     `GitHub lists ${tag} as a draft. Its download addresses can still answer from caches for a while.`,
   );
   dispatchSite(runner);
+  // A run that checked the tag before the edit can still deploy the withdrawn feed, so the
+  // feed is judged only once main has none left. Main's runs queue one at a time, so an
+  // unfinished one is always among the newest.
+  const deadline = Date.now() + net.waitMs;
+  for (;;) {
+    const runs = runner("gh", [
+      "api",
+      `repos/${REPOSITORY}/actions/workflows/site.yml/runs?branch=main&per_page=100`,
+      "--jq",
+      '.workflow_runs[] | select(.status != "completed") | .id',
+    ]);
+    if (runs.status !== 0)
+      stop(
+        `Could not read the Site workflow's runs on main from GitHub. Wait for them to finish, then check ${BETA_FEED_URL}.`,
+      );
+    if (!runs.stdout.trim()) break;
+    if (Date.now() + net.pollMs > deadline)
+      stop(
+        `The Site workflow's runs on main have not finished. Look at them, then check ${BETA_FEED_URL}.`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, net.pollMs));
+  }
   // What the site should serve now, by the rule the Site workflow uses.
   const next = newestBeta(releases);
   console.log(
