@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { STATE_FILE } from "@clawtrate/core/node";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
@@ -419,7 +420,8 @@ async function main(): Promise<void> {
     });
     if (choice === 0) {
       try {
-        await keepAside(privateDataDir(), new Date());
+        const dir = privateDataDir();
+        await keepAside(recover === "settings" ? join(dir, STATE_FILE) : dir, new Date());
         app.relaunch();
         app.exit(0);
       } catch {

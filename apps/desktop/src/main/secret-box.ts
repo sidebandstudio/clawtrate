@@ -83,8 +83,12 @@ export const MOCK_KEYCHAIN_SWITCH = "use-mock-keychain";
 export function startupFailure(error: unknown): {
   title: string;
   message: string;
-  /** Whether the app offers to start fresh, keeping the files it couldn't use (`keepAside`). */
-  recover: boolean;
+  /**
+   * What starting fresh sets aside (`keepAside`), kept unchanged: the whole data folder for a
+   * damaged record, only `state.json` for unreadable settings, so a good record stays in use.
+   * False when the app offers no such choice.
+   */
+  recover: false | "folder" | "settings";
 } {
   const name = error instanceof Error ? error.name : "";
   if (name === "SecureStorageUnavailableError")
@@ -99,14 +103,14 @@ export function startupFailure(error: unknown): {
       title: "Clawtrate couldn't use this device's credentials",
       message:
         "The file that holds this device's credentials is damaged or was changed, so Clawtrate didn't use it. Start fresh to set this device's saved files aside, unchanged, in a folder next to them, and pair this device again. Or quit and restore them from a backup.",
-      recover: true,
+      recover: "folder",
     };
   if (name === "SavedSettingsInvalidError")
     return {
       title: "Clawtrate couldn't read its saved settings",
       message:
-        "This device's saved settings from an earlier version can't be read, so Clawtrate didn't use them. Start fresh to set this device's saved files aside, unchanged, in a folder next to them, and pair this device again. Or quit and restore them from a backup.",
-      recover: true,
+        "This device's saved settings can't be read, so Clawtrate didn't use them. Start fresh to set the settings file aside, unchanged, next to it: this device's saved credentials stay in place, so choose its gateway again and it reconnects with them. Or quit and restore the file from a backup.",
+      recover: "settings",
     };
   return {
     title: "Clawtrate couldn't start",
@@ -119,9 +123,9 @@ export function startupFailure(error: unknown): {
 export const RECOVERY_BUTTONS = ["Start fresh and keep the old files", "Quit"] as const;
 
 /**
- * Starting fresh: renames the data folder to a sibling, `<folder>-kept-<date>` (with `-2`, `-3`
- * … if taken), so nothing in it changes and none of it is read, and returns that path. The next
- * start makes an empty folder and pairs as a new device.
+ * Starting fresh: renames the data folder, or one file in it, to a sibling,
+ * `<path>-kept-<date>` (with `-2`, `-3` … if taken), so nothing in it changes and none of it is
+ * read, and returns that path. The next start makes what is missing afresh.
  */
 export async function keepAside(dir: string, now: Date): Promise<string> {
   const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
@@ -142,5 +146,5 @@ export async function keepAside(dir: string, now: Date): Promise<string> {
 export const SESSION_ONLY = {
   title: "Clawtrate couldn't save this device securely",
   message:
-    "Your keychain couldn't be used, so this session keeps changes to this device's pairing in memory only, and full control stays off. Unlock your keychain and open Clawtrate again to keep them.",
+    "Your keychain couldn't be used, so this session keeps changes to this device's pairing in memory only, and full control stays off. Reopening Clawtrate discards those changes: unlock your keychain, open Clawtrate again, and repeat any pairing changes you want to keep.",
 };

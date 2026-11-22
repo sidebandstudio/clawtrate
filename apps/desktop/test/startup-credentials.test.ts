@@ -129,14 +129,21 @@ describe("a desktop start that can't open this device's credentials", () => {
     expect(startupFailure(named("SecureStorageUnavailableError")).message).toMatch(
       /Unlock your keychain/,
     );
+    expect(startupFailure(named("CredentialRecordInvalidError")).recover).toBe("folder");
+    expect(startupFailure(named("SavedSettingsInvalidError")).recover).toBe("settings");
+    expect(startupFailure(named("SavedSettingsInvalidError")).message).toMatch(
+      /saved credentials stay in place/,
+    );
     for (const name of ["CredentialRecordInvalidError", "SavedSettingsInvalidError"]) {
       const said = startupFailure(named(name));
-      expect(said.recover, name).toBe(true);
       expect(said.message, name).toMatch(/Start fresh/);
       expect(said.message, name).toMatch(/unchanged/);
       expect(said.message, name).not.toMatch(/remove this device from the gateway/);
     }
     expect(startupFailure(new Error("other")).recover).toBe(false);
+    // Reopening discards a session's changes, and the warning says so.
+    expect(SESSION_ONLY.message).toMatch(/discards those changes/);
+    expect(SESSION_ONLY.message).toMatch(/repeat any pairing changes/);
     expect(RECOVERY_BUTTONS[0]).toMatch(/keep the old files/);
   });
 
@@ -168,9 +175,21 @@ describe("a desktop start that can't open this device's credentials", () => {
     );
     expect(guarded).toContain("buttons: [...RECOVERY_BUTTONS]");
     const fresh = guarded.slice(guarded.indexOf("if (choice === 0) {"));
-    expect(fresh.indexOf("await keepAside(privateDataDir(), new Date());")).toBeGreaterThan(0);
-    expect(fresh.indexOf("app.relaunch();")).toBeGreaterThan(
-      fresh.indexOf("await keepAside(privateDataDir(), new Date());"),
-    );
+    const aside =
+      'await keepAside(recover === "settings" ? join(dir, STATE_FILE) : dir, new Date());';
+    expect(fresh.indexOf(aside)).toBeGreaterThan(0);
+    expect(fresh.indexOf("app.relaunch();")).toBeGreaterThan(fresh.indexOf(aside));
+  });
+
+  it("for unreadable settings, starting fresh sets only the settings file aside, and the sealed record stays", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-keep-settings-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "credentials.bin"), "sealed-bytes");
+    writeFileSync(join(dir, STATE_FILE), "not json");
+    const kept = await keepAside(join(dir, STATE_FILE), new Date("2026-11-22T10:20:30Z"));
+    expect(kept).toBe(join(dir, `${STATE_FILE}-kept-20261122-102030`));
+    expect(readFileSync(kept, "utf8")).toBe("not json");
+    expect(existsSync(join(dir, STATE_FILE))).toBe(false);
+    expect(readFileSync(join(dir, "credentials.bin"), "utf8")).toBe("sealed-bytes");
   });
 });
