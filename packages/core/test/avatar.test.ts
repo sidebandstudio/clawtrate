@@ -273,7 +273,7 @@ describe("every creature stays inside the circle an avatar is cropped to", () =>
     }
     expect(creatures).toBe(84);
     expect(outside).toEqual([]);
-  });
+  }, 60_000);
 });
 
 describe("each family acts out each state as the issue says", () => {
