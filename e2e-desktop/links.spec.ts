@@ -554,6 +554,8 @@ test("F-248: a link's card closes to the heading of the screen that replaced the
   await deliverWhileBotsLoad(`${link("otto", "Hi")}&send=1`, refusal());
   const heading = page.locator(".conversation h1[tabindex]").first();
   await expect(heading).toBeAttached({ timeout: 30_000 });
+  // And the chat has loaded, so the heading is the one that stays.
+  await expect(page.locator(".conversation [aria-busy='true']")).toHaveCount(0);
   await expectCantOpen("This Clawtrate link is invalid. Ask for a new link.");
   await expect(heading).toBeFocused();
 });
