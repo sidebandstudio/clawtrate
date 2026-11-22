@@ -752,6 +752,35 @@ describe("where a bot runs: the engine", () => {
     expect(await Promise.race([credentials, Promise.resolve("waiting")])).toBe("waiting");
   });
 
+  it("F-046: a read that starts while a save is out isn't shared with a read after the save settles", async () => {
+    const gw = gateway();
+    const e = engine(gw, { admin: true });
+    const gets = () => gw.calls.filter(([method]) => method === "config.get").length;
+    const held: Array<() => void> = [];
+    const hold =
+      (handler: (params: Json) => unknown) =>
+      (params: Json): Promise<unknown> =>
+        new Promise((resolve) => held.push(() => resolve(handler(params))));
+    const patch = gw.handlers["config.patch"]!;
+    const get = gw.handlers["config.get"]!;
+    gw.handlers["config.patch"] = hold(patch);
+    gw.handlers["config.get"] = hold(get);
+    const save = e.setCommandMachine("otto", { host: "gateway" }, "c1");
+    const during = e.readPlacement("otto", "browser");
+    // The patch answers; the read sent while it was out is still out.
+    held.shift()!();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const before = gets();
+    const after = e.readPlacement("otto", "browser");
+    expect(gets()).toBe(before + 1);
+    gw.handlers["config.get"] = get;
+    while (held.length > 0) {
+      held.shift()!();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    await Promise.all([save, during, after]);
+  });
+
   it("F-273: the browser part is timed when its settings answer, not when they were asked for", async () => {
     const gw = gateway();
     let clock = 1;

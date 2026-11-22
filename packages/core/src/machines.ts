@@ -886,7 +886,8 @@ export class MachinesEngine {
   }
 
   private requireWrite(scope: "admin" | "pairing", what: string): void {
-    // A read sent before a write can answer from before it, so the page's read after it asks again.
+    // A read sent before a write, or while it is out, can answer from before it. The shared read is
+    // dropped when a write starts and again when a settings write settles, so a read after asks again.
     this.sharedConfig = null;
     this.connectedOrThrow();
     if (this.ctx.readOnly())
@@ -935,10 +936,14 @@ export class MachinesEngine {
     let savedHash: string | null;
     let message: string | null = null;
     try {
-      const receipt = await this.ctx.request("config.patch", {
-        raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
-        ...(baseHash ? { baseHash } : {}),
-      });
+      const receipt = await this.ctx
+        .request("config.patch", {
+          raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
+          ...(baseHash ? { baseHash } : {}),
+        })
+        .finally(() => {
+          this.sharedConfig = null;
+        });
       savedHash = str(rec(receipt).hash, MAX_REASON_CHARS);
     } catch (error) {
       // The gateway can persist a change and not apply it; it says so with the saved config.
@@ -997,7 +1002,9 @@ export class MachinesEngine {
         ).workspace,
       );
     try {
-      await this.ctx.request("agents.update", { agentId: botId, workspace: path });
+      await this.ctx.request("agents.update", { agentId: botId, workspace: path }).finally(() => {
+        this.sharedConfig = null;
+      });
     } catch (error) {
       const now = await reported().catch(() => null);
       throw new PlacementWriteError(
