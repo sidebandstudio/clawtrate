@@ -196,8 +196,8 @@ export function publishGrant(ledger, id, { version, digest, expiresAt }, expecte
 export function revoke(ledger, id, now, why = "removed") {
   const grant = own(ledger.grants, id);
   if (!grant) throw gone("This agent's access to Clawtrate isn't set up.");
+  grant.generation += 1;
   if (!grant.revoked) {
-    grant.generation += 1;
     grant.revoked = why;
     grant.revokedAt = now;
   }

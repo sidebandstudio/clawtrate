@@ -120,6 +120,17 @@ describe("grants", () => {
     );
   });
 
+  it("each removal invalidates earlier grant updates and keeps the first removal date", () => {
+    const l = withGrant();
+    const first = L.revoke(l, "g", T);
+    L.revoke(l, "g", T + 1000);
+    const next = { version: "gv2", digest: "y", expiresAt: T + 10_000 };
+    expect(reason(() => L.publishGrant(l, "g", next, first.generation, T + 2000))).toBe(
+      "grant-generation",
+    );
+    expect(l.grants.g).toMatchObject({ revoked: "removed", revokedAt: T, generation: 3 });
+  });
+
   it("only a version unreferenced for an hour in this epoch can be marked, one at a time", () => {
     const l = withGrant();
     L.admit(l, proposal("p", fromBot("pip")), T);
@@ -148,6 +159,8 @@ describe("grants", () => {
     L.admit(l, proposal("q", agent("g", 1), bot("main")), T);
     L.sweep(l, T + 1000);
     expect([l.grants.g.revoked, l.proposals.q.state]).toEqual(["expired", "withdrawn"]);
+    L.revoke(l, "g", T + 2000);
+    expect(l.grants.g).toMatchObject({ revoked: "expired", revokedAt: T + 1000 });
     L.sweep(l, T + 1000 + L.RETAIN_MS - 1);
     expect(l.grants.g).toBeDefined();
     L.sweep(l, T + 1000 + L.RETAIN_MS);
