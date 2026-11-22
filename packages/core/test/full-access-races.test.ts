@@ -555,6 +555,55 @@ describe("full access under interleavings", () => {
     }
   });
 
+  it("an approved upgrade whose read of the saved grant waits while a broader request replaces it writes nothing", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // The approval's queued write reads the saved grant first; that read waits.
+    const release = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      const value = await get(key);
+      if (!waiting && key === tokenKey(URL)) {
+        waiting = true;
+        await release.promise;
+      }
+      return value;
+    };
+    const writes = tokenWrites(storage);
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => waiting);
+    // Meanwhile the person asks for admin: a new request, still waiting, replaces this one.
+    storage.get = get;
+    gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    void client.requestAccess("admin").catch(() => {});
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length > 1);
+    release.resolve();
+    await sleep(50);
+    // The replaced request's write stops at its check after the read.
+    expect(writes.filter((write) => write.token === "token-U")).toEqual([]);
+    client.stop();
+  });
+
   it("an upgrade right after a fresh full pairing keeps it a full pairing", async () => {
     const storage = memoryStorage();
     const { gateway, approval } = approvingGateway();
