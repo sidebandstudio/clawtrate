@@ -784,6 +784,8 @@ async function deviceIdUnderKeychainCheck(
   // macOS stops the app with a "Keychain Not Found" dialog (seen on CI).
   delete place.env.CFFIXED_USER_HOME;
   place.env.HOME = homedir();
+  // An earlier launch's port file would name a port no app listens on now.
+  rmSync(join(userData, "DevToolsActivePort"), { force: true });
   const logFd = openSync(join(dir, "app.log"), "a", 0o600);
   const gated = gatedSpawn(
     spawn,
