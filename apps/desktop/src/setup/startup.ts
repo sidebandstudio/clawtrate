@@ -3,7 +3,7 @@
 // development gateway, and whether it reopens a saved gateway. A sandboxed or
 // refused start never resolves the development gateway, the ordinary data
 // folder or a saved connection: a sandbox keeps its data in its own checked
-// `app-data`, a refused start in the folder its launch named with Chromium's
+// `app-data`, a refused or automated Windows start in the folder its launch named with
 // `--user-data-dir`, or else in a fresh private temporary folder.
 
 import type { DevGatewayConnection } from "../host/runtime.ts";
@@ -25,9 +25,9 @@ export function desktopStartup(
     /** The development gateway, read only for a development build that isn't sandboxed. */
     devConnection: () => DevGatewayConnection | null;
     autoConnectDev: () => boolean;
-    /** The data folder the launch itself named (`--user-data-dir`), kept by a refused start. */
+    /** The data folder the launch itself named (`--user-data-dir`), kept when setup is unavailable. */
     launchData: () => string | null;
-    /** A fresh private temporary folder, for a refused start that named none. */
+    /** A fresh private temporary folder, when an isolated launch named none. */
     privateData: () => string;
   },
 ): DesktopStartup {
@@ -36,10 +36,8 @@ export function desktopStartup(
     case "sandbox":
       return { userData: launch.sandbox.appData, ...sealed };
     case "refused":
-      return { userData: options.launchData() ?? options.privateData(), ...sealed };
     case "windows":
-      // The look starts nothing on Windows; the launch's own data folder stays.
-      return { userData: null, ...sealed };
+      return { userData: options.launchData() ?? options.privateData(), ...sealed };
     case "production":
       return {
         userData: null,

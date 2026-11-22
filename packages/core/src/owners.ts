@@ -248,6 +248,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   routeHeldWrites: { max: MAX_ROUTE_HELD_WRITES, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
+  // Each failed request's log policy; an entry lives only as long as that error object.
+  dispatchedQuiet: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
   // sign-ins Clawtrate started; what it set for each bot; bots whose empty fallback list did not land.
   // Keys and values are bounded where they enter (`prefProfileId`, `prefBotId`, `readIntent`).

@@ -21,7 +21,7 @@ it("S5: setup identifies processes by absolute system ps with a fixed environmen
   vi.stubEnv("PATH", "/tmp/elsewhere");
   vi.stubEnv("LANG", "de_DE.UTF-8");
   try {
-    expect(processIdentity(4343)).toEqual({ state: "alive", identity: "Mon Nov 16 21:27:01 2026" });
+    expect(processIdentity(4343)).toEqual({ state: "alive", identity: "2026-11-16T21:27:01Z" });
   } finally {
     vi.unstubAllEnvs();
   }
@@ -37,3 +37,39 @@ it("S5: setup identifies processes by absolute system ps with a fixed environmen
   expect(Object.hasOwn(options.env, "LANG")).toBe(false);
   expect(options.env.LC_ALL).toBe("C");
 });
+
+it("F-492: a start identity is the same in any time zone, and one recorded in a local zone is unknown", async () => {
+  const { processVerdict } = await import("../src/state-guard.ts");
+  vi.spyOn(process, "kill").mockReturnValue(true);
+  const seen: Array<string | undefined> = [];
+  for (const zone of ["America/New_York", "Asia/Tokyo", undefined]) {
+    if (zone) vi.stubEnv("TZ", zone);
+    launch.mockClear();
+    expect(processIdentity(4343)).toEqual({ state: "alive", identity: "2026-11-16T21:27:01Z" });
+    const [, , options] = launch.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: NodeJS.ProcessEnv },
+    ];
+    seen.push(options.env.TZ);
+    vi.unstubAllEnvs();
+  }
+  // ps always reads in UTC, whatever zone the caller has.
+  expect(seen).toEqual(["UTC", "UTC", "UTC"]);
+  const identify = () => ({ state: "alive" as const, identity: "2026-11-16T21:27:01Z" });
+  expect(processVerdict(4343, "2026-11-16T21:27:01Z", identify).state).toBe("alive");
+  // A marker or run record of an earlier version, in its writer's local time: neither a match
+  // nor a mismatch, so nothing is started over, signalled or deleted on its word.
+  expect(processVerdict(4343, "Mon Nov 16 21:27:01 2026", identify).state).toBe("unknown");
+  expect(processVerdict(4343, "Mon Nov 16 16:27:01 2026", identify).state).toBe("unknown");
+});
+
+it.each(["absent", "zombie"] as const)(
+  "an older run can be cleaned up when its recorded PID is %s",
+  async (how) => {
+    const { processVerdict } = await import("../src/state-guard.ts");
+    expect(
+      processVerdict(4343, "Mon Nov 16 21:27:01 2026", () => ({ state: "exited", how })),
+    ).toEqual({ state: "dead" });
+  },
+);

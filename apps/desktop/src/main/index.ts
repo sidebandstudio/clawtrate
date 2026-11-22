@@ -128,7 +128,7 @@ const SETUP = resolveSetupLaunch({
 
 /**
  * What the host starts on, from that launch, also before the lock: a sandbox's
- * checked `app-data` or, refused, the folder the launch named with
+ * checked `app-data` or, for a refused or automated Windows start, the folder named with
  * `--user-data-dir` or else a fresh private temporary folder as its data
  * folder, and then no development gateway and no saved gateway reopened.
  * Only a person's packaged app keeps the ordinary data folder and resumes.
@@ -596,21 +596,24 @@ let quitting: "no" | "waiting" | "done" = "no";
 
 app.on("before-quit", (event) => {
   if (quitting === "done") return;
-  if (quitting === "waiting") {
-    event.preventDefault();
-    return;
-  }
-  // The SSH children end first, by PID, within a bound; then the app quits as before.
   event.preventDefault();
+  if (quitting === "waiting") return;
   quitting = "waiting";
-  programs.stopAll();
-  void closeSetup();
-  runtime?.client.stop();
-  const bound = new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS));
-  void Promise.race([closeRemote().catch(() => undefined), bound]).finally(() => {
-    quitting = "done";
-    app.quit();
-  });
+  // The programs setup started, and the workers in their groups, end before the app does
+  // (killed after their grace). Then setup and the client close, and the SSH forward and
+  // every `ssh` the host started end by PID within a bound; then the app quits.
+  const programsGone = programs.stopAllAndWait().catch(() => undefined);
+  void programsGone
+    .then(() => {
+      void closeSetup();
+      runtime?.client.stop();
+      const bound = new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS));
+      return Promise.race([closeRemote().catch(() => undefined), bound]);
+    })
+    .finally(() => {
+      quitting = "done";
+      app.quit();
+    });
 });
 
 // One app per data folder: a second launch focuses the running window and exits.

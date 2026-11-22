@@ -316,6 +316,8 @@ const CANT_TELL: Record<string, string> = {
   endpoint:
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
   contradictory: "OpenClaw's status results disagree, or say too little to tell.",
+  "read-only":
+    "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
 };
 
 /** The found card and actions for each result of the look (§6). */
@@ -636,6 +638,12 @@ const FAILURES: Record<
     text: () => "Try again, or go back.",
     next: "bots",
     step: 2,
+  },
+  cleanup: {
+    lead: "Clawtrate couldn't close the connection it started.",
+    text: () => "Go back to try again.",
+    next: "back",
+    step: 1,
   },
   other: {
     lead: "Clawtrate couldn't connect to the gateway.",

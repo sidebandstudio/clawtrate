@@ -16,5 +16,8 @@ test-results/
 # Private run state and third-party reference images. Never commit.
 .orchestrator/
 
+# Beta releases staged by pnpm release:beta
+.release/
+
 # Development gateway run state (PIDs, logs, local token)
 tools/dev-gateway/.run/

@@ -4,9 +4,10 @@
 // limit; every program runs through `RunProgram`, never a shell, in the
 // world's own working folder. A sandboxed world never runs the deep status.
 
-import { lstat, readdir, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   MAX_LOOK_OTHERS,
   OLDEST_OPENCLAW_VERSION,
@@ -41,6 +42,7 @@ export const LIMITS = {
 
 /** The design's limit on the look's own checks of files (§4). */
 export const FILE_CHECK_MS = 2_000;
+const MAX_MANIFEST_BYTES = 64 * 1024;
 
 /** The steps the person sees: "Finding OpenClaw", "Checking its version", "Asking the gateway". */
 export const LOOK_STEPS = 3;
@@ -102,15 +104,73 @@ const cantTell = (reason: CantTellReason, version: string | null = null): SetupL
 class FileCheckTimeout extends Error {}
 
 /** Every file check of one look, together, within `FILE_CHECK_MS`. */
-function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   const left = Math.max(0, deadline - Date.now());
-  return Promise.race([
-    work,
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => reject(new FileCheckTimeout()), left);
-      timer.unref?.();
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new FileCheckTimeout()), left);
+    timer.unref?.();
+  });
+  try {
+    const result = await Promise.race([work, timeout]);
+    if (Date.now() >= deadline) throw new FileCheckTimeout();
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The OpenClaw versions whose commands the look runs: those whose pinned source
+ * shows a read-only path past the launcher's package-lifecycle branch. None yet:
+ * in 2026.10.6 every command but the browser's native host goes through it
+ * (openclaw.mjs, lines 649-715), and an unsupported Node starts a runtime
+ * recovery that may install one (lines 37-80). Any other version declines.
+ */
+export const READ_ONLY_VERSIONS: ReadonlySet<string> = new Set();
+
+/**
+ * The installed version, read from the package the program belongs to, without
+ * running it: the launcher `openclaw.mjs` it resolves to, beside the package's
+ * own `package.json` named "openclaw". Null when it isn't that.
+ */
+async function installedVersion(program: string): Promise<string | null> {
+  try {
+    const launcher = await realpath(program);
+    if (basename(launcher) !== "openclaw.mjs") return null;
+    const manifest = join(dirname(launcher), "package.json");
+    const file = await open(manifest, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.size > MAX_MANIFEST_BYTES) return null;
+      const bytes = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+      let size = 0;
+      while (size < bytes.length) {
+        const { bytesRead } = await file.read(bytes, size, bytes.length - size);
+        if (bytesRead === 0) break;
+        size += bytesRead;
+      }
+      if (size > MAX_MANIFEST_BYTES) return null;
+      const parsed = JSON.parse(bytes.toString("utf8", 0, size)) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (parsed.name !== "openclaw" || typeof parsed.version !== "string") return null;
+      return parseBareVersion(parsed.version) ? parsed.version : null;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Production's check: the package's own version, and whether it is one verified read-only. */
+export async function readOnlyProgram(
+  program: string,
+): Promise<{ verified: boolean; version: string | null }> {
+  const version = await installedVersion(program);
+  return { verified: version !== null && READ_ONLY_VERSIONS.has(version), version };
 }
 
 /** `fileIdentity` within the look's limit on file checks: null when the file system doesn't answer. */
@@ -255,13 +315,11 @@ export async function lookHere(
   if (cancelled()) return null;
   // The program's identity before anything runs it, under the file deadline: what Connect checks
   // again is the file whose answers these are.
-  const identityNow = () =>
-    world.installed
-      ? Promise.resolve("stand-in")
-      : withDeadline(fileIdentity(program), Date.now() + FILE_CHECK_MS);
+  const identityNow = (deadline: number) =>
+    world.installed ? Promise.resolve("stand-in") : withDeadline(fileIdentity(program), deadline);
   let programIdentity: string | null;
   try {
-    programIdentity = await identityNow();
+    programIdentity = await identityNow(files);
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
     throw error;
@@ -269,6 +327,20 @@ export async function lookHere(
   if (cancelled()) return null;
   active();
   options.onStep?.(1);
+  // The real program runs only in a version whose commands are verified read-only. Its version
+  // comes from its package, read, never from running it; anything else declines, running nothing.
+  if (!world.installed) {
+    let verdict: { verified: boolean; version: string | null };
+    try {
+      verdict = await withDeadline((world.readOnly ?? readOnlyProgram)(program), files);
+    } catch (error) {
+      if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+      throw error;
+    }
+    if (cancelled()) return null;
+    active();
+    if (!verdict.verified) return { look: cantTell("read-only", verdict.version), found: null };
+  }
   const first = world.profiles[0];
   if (!first) return { look: { ...empty, outcome: "not-found" }, found: null };
   const versionRun = await runFor(first, ["--version"], LIMITS.version);
@@ -333,7 +405,7 @@ export async function lookHere(
   const identify = options.identify ?? processIdentity;
   // The same file still, or nothing found here is offered.
   try {
-    if ((await identityNow()) !== programIdentity) programIdentity = null;
+    if ((await identityNow(Date.now() + FILE_CHECK_MS)) !== programIdentity) programIdentity = null;
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
     throw error;

@@ -9,6 +9,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { INSTANCE_NAME_PATTERN } from "../../../../tools/dev-gateway/src/instance.ts";
+import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
 
 export type ProgramResult = {
   /** The exit code, or null when the program was ended or did not start. */
@@ -18,6 +19,11 @@ export type ProgramResult = {
   tooLarge: boolean;
   /** The program could not be started at all. */
   failed: boolean;
+  /**
+   * Its output didn't end before the program's own end and a short drain (a worker it started
+   * kept the pipe): what came is dropped, never parsed, and `stdout` is empty.
+   */
+  cut?: boolean;
 };
 
 export type ProgramRequest = {
@@ -28,6 +34,8 @@ export type ProgramRequest = {
   cwd: string;
   timeoutMs: number;
   maxBytes: number;
+  /** Ends the program when it aborts, as its time limit does: the run that asked is over. */
+  signal?: AbortSignal;
 };
 
 export type RunProgram = (request: ProgramRequest) => Promise<ProgramResult>;
@@ -97,52 +105,99 @@ export function checkRequest(request: ProgramRequest): void {
 
 /**
  * Starts programs and remembers each by its PID until it exits, so that
- * `stopAll` ends exactly the ones it started. `check` decides which requests
- * may start; the setup host uses `checkRequest`.
+ * `stopAll` ends exactly the ones it started. Each starts as the leader of a
+ * process group of its own, so a worker it starts is in that group: stopping
+ * signals the group by its id, never a process found by name, and only while
+ * its leader is still running with the start time it had when it started. A
+ * group is forgotten as soon as its leader has exited and been reaped, so its
+ * id, free to be reused, is never signalled again. A worker that leaves the
+ * group, or outlives its leader, is not setup's to supervise. `check` decides
+ * which requests may start; the setup host uses `checkRequest`.
  */
 export class ProgramRunner {
   private readonly children = new Set<ChildProcess>();
+  /**
+   * The process groups of programs this runner started, by their leader's PID,
+   * with the leader's start time as `ps` read it then: until the leader exits.
+   */
+  private readonly groups = new Map<number, string | null>();
   private readonly spawnImpl: typeof nodeSpawn;
   private readonly check: (request: ProgramRequest) => void;
   private readonly graceMs: number;
+  private readonly identify: Identify;
 
   constructor(
     options: {
       spawn?: typeof nodeSpawn;
       check?: (request: ProgramRequest) => void;
       graceMs?: number;
+      identify?: Identify;
     } = {},
   ) {
     this.spawnImpl = options.spawn ?? nodeSpawn;
     this.check = options.check ?? checkRequest;
     this.graceMs = options.graceMs ?? STOP_GRACE_MS;
+    this.identify = options.identify ?? processIdentity;
   }
 
-  /** Asks a child to stop, and kills it if it is still there after the grace. */
-  private end(child: ChildProcess): void {
-    const pid = child.pid;
-    if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  /**
+   * Whether a group is still verifiably this runner's: its leader hasn't exited, and is the
+   * process it started, by its start time. Anything else is forgotten.
+   */
+  private ours(group: number): boolean {
+    if (!this.groups.has(group)) return false;
+    const started = this.groups.get(group);
+    const now = this.identify(group);
+    if (started && now.state === "alive" && now.identity === started) return true;
+    this.groups.delete(group);
+    return false;
+  }
+
+  /** Signals one group this runner started, while it is verifiably its own. */
+  private signal(group: number, name: NodeJS.Signals): void {
+    if (!this.ours(group)) return;
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(-group, name);
     } catch {
-      return;
+      // gone meanwhile
     }
-    const timer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // already gone
+  }
+
+  /**
+   * Asks a program and the workers in its group to stop, and kills what is
+   * still there after the grace. Resolves once the leader has exited, or a
+   * moment after the kill.
+   */
+  private end(group: number): Promise<void> {
+    if (!this.ours(group)) return Promise.resolve();
+    this.signal(group, "SIGTERM");
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const poll = setInterval(() => {
+        if (!this.groups.has(group)) {
+          clearInterval(poll);
+          resolve();
+          return;
         }
-      }
-    }, this.graceMs);
-    timer.unref?.();
-    child.once("exit", () => clearTimeout(timer));
+        const waited = Date.now() - started;
+        if (waited >= this.graceMs) this.signal(group, "SIGKILL");
+        if (waited >= this.graceMs + 1000) {
+          clearInterval(poll);
+          resolve();
+        }
+      }, 50);
+      poll.unref?.();
+    });
   }
 
   readonly run: RunProgram = (request) => {
     this.check(request);
     return new Promise((resolve) => {
+      // A run already cancelled starts nothing.
+      if (request.signal?.aborted) {
+        resolve({ exitCode: null, stdout: "", timedOut: true, tooLarge: false, failed: false });
+        return;
+      }
       let child: ChildProcess;
       try {
         child = this.spawnImpl(request.program, [...request.args], {
@@ -151,13 +206,28 @@ export class ProgramRunner {
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
+          // A process group of its own, which the workers it starts join.
+          detached: process.platform !== "win32",
         });
       } catch {
         resolve({ exitCode: null, stdout: "", timedOut: false, tooLarge: false, failed: true });
         return;
       }
       this.children.add(child);
+      const group = child.pid;
+      if (group !== undefined && process.platform !== "win32") {
+        const leader = this.identify(group);
+        this.groups.set(group, leader.state === "alive" ? leader.identity : null);
+        // Exited and reaped: the group's id may be reused from now on, so it is forgotten.
+        child.once("exit", () => this.groups.delete(group));
+      }
+      const stop = () => {
+        if (group !== undefined && process.platform !== "win32") void this.end(group);
+        else child.kill("SIGTERM");
+      };
       const chunks: Buffer[] = [];
+      let ended = false;
+      child.stdout!.once("end", () => (ended = true));
       let size = 0;
       let timedOut = false;
       let tooLarge = false;
@@ -174,13 +244,20 @@ export class ProgramRunner {
       };
       const timer = setTimeout(() => {
         timedOut = true;
-        this.end(child);
+        stop();
       }, request.timeoutMs);
+      const signal = request.signal;
+      const cancel = () => {
+        timedOut = true;
+        stop();
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      child.once("exit", () => signal?.removeEventListener("abort", cancel));
       child.stdout!.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size > request.maxBytes) {
           tooLarge = true;
-          this.end(child);
+          stop();
           return;
         }
         chunks.push(chunk);
@@ -190,14 +267,18 @@ export class ProgramRunner {
       child.once("error", () =>
         finish({ exitCode: null, stdout: "", timedOut, tooLarge, failed: true }),
       );
-      const done = (code: number | null) =>
+      const done = (code: number | null) => {
+        // Only a whole output is kept: one still open after the drain was cut, and is dropped.
+        const cut = !ended;
         finish({
           exitCode: code,
-          stdout: tooLarge ? "" : Buffer.concat(chunks).toString("utf8"),
+          stdout: tooLarge || cut ? "" : Buffer.concat(chunks).toString("utf8"),
           timedOut,
           tooLarge,
           failed: false,
+          ...(cut ? { cut: true } : {}),
         });
+      };
       child.once("close", (code) => done(code));
       // When the program has exited, its pipes get a moment to drain, then it is over.
       child.once("exit", (code) => {
@@ -207,13 +288,28 @@ export class ProgramRunner {
     });
   };
 
+  /** How many groups this runner started still have their leader running. */
+  groupsLeft(): number {
+    return this.groups.size;
+  }
+
   /** The PIDs of the programs running now. */
   running(): number[] {
     return [...this.children].flatMap((child) => (child.pid === undefined ? [] : [child.pid]));
   }
 
-  /** Ends every program this runner started that still runs, by its PID, killing it after the grace. */
+  /**
+   * Ends every program this runner started, and the workers in their groups,
+   * killing what is still there after the grace.
+   */
   stopAll(): void {
-    for (const child of this.children) this.end(child);
+    void this.stopAllAndWait();
+  }
+
+  /** `stopAll`, resolving once every group this runner started has no member left. */
+  async stopAllAndWait(): Promise<void> {
+    for (const child of this.children)
+      if (process.platform === "win32" && child.exitCode === null) child.kill("SIGTERM");
+    await Promise.all([...this.groups.keys()].map((group) => this.end(group)));
   }
 }

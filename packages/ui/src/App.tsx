@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
-import { screenFor } from "./screen.ts";
+import { screenFor, setupHolds } from "./screen.ts";
 import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
@@ -100,12 +100,7 @@ export function App({
   else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
     setMismatch(null);
   }
-  // Connected through setup opens the app only once the bots were read (docs/design/setup.md §7).
-  const setupHolds =
-    info.setup !== undefined &&
-    (state.setup?.phase === "connecting" ||
-      (state.setup?.phase === "failed" && state.setup.failure?.kind === "bots"));
-  const screen = mismatch || setupHolds ? "connect" : screenFor(state);
+  const screen = mismatch || setupHolds(info, state.setup) ? "connect" : screenFor(state);
   // When one screen replaces another and takes focus with it, focus the first
   // control of the new one. Not on launch: nothing had focus to lose.
   const shown = useRef(screen);

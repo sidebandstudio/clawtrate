@@ -1,6 +1,10 @@
 # The first screen and the look on this computer
 
-The desktop app's first screen asks "Where does OpenClaw run?" ([`docs/design/setup.md`](../design/setup.md)). "This computer" looks for OpenClaw's gateway on the computer the app runs on and pairs with it read-only after the app's own dialog. On a developer's computer that would find, and could pair with, the OpenClaw you use every day. So the look never sees the real computer from a checkout, and no development, test, screenshot or preview run starts a program of OpenClaw's to look.
+The desktop app's first screen asks "Where does OpenClaw run?" ([`docs/design/setup.md`](../design/setup.md)). "This computer" looks for OpenClaw's gateway on the computer the app runs on and, where it may, pairs with it read-only after the app's own dialog; on a real computer it doesn't yet (below). On a developer's computer that would find, and could pair with, the OpenClaw you use every day. So the look never sees the real computer from a checkout, and no development, test, screenshot or preview run starts a program of OpenClaw's to look.
+
+## On a real computer today: Advanced
+
+No installed OpenClaw version is on the list of versions whose commands Clawtrate has verified as read-only (`READ_ONLY_VERSIONS` in [`apps/desktop/src/setup/look.ts`](../../apps/desktop/src/setup/look.ts)), and the list is empty. OpenClaw's launcher can repair its own installation before it handles any command, `--version` included: in 2026.10.6 it replays pending package-lifecycle work first. So on a real computer "This computer" runs nothing. It reads the version from the installed package's `package.json`, says Clawtrate doesn't run that version to look, and offers Advanced, where you enter the gateway's address and token. Connect without typing is reached only in a sandbox, where the host's own stand-in answers instead of OpenClaw ([`docs/decisions.md`](../decisions.md), "What the look runs, and when it runs nothing").
 
 ## What must be sandboxed
 
@@ -14,11 +18,11 @@ The desktop app decides this before anything else starts, before its single-inst
 
 A packaged app started with none of these is a person's app, and it looks at the real computer. Nothing can tell a packaged app driven by other automation from one a person opened. So **nothing may automate a packaged app without the sandbox switch**. `pnpm check:packaged` gives it one on every launch, the second launch included, and `test/sandboxed-launches.test.ts` checks that it does.
 
-A run that must be sandboxed and was given no sandbox, or one that doesn't pass, is refused before anything is opened: its output gets one fixed line, "The look on this computer refused to start: …", and "This computer" shows "Looking on this computer is off here" with the reason, on macOS and Linux. Windows shows Use Advanced.
+A run that must be sandboxed and was given no sandbox, or one that doesn't pass, is refused before anything is opened: its output gets one fixed line, "The look on this computer refused to start: …", and "This computer" shows "Looking on this computer is off here" with the reason, on macOS and Linux. Windows shows Use Advanced. On Windows, an automated launch uses the profile supplied with `--user-data-dir` or creates a fresh temporary profile before taking the single-instance lock.
 
 ## A sandbox
 
-A sandbox is a private folder of your account's, under a temporary root fixed in code, reached without links and outside your home, holding its description, `sandbox.json`:
+A sandbox is a private folder of your account's, under a temporary root fixed in code, reached without links and outside your home, below folders no other account can replace it through (each owned by you or the system and writable only by its owner, unless sticky like the temporary root), holding its description, `sandbox.json`:
 
 ```json
 { "instance": "look", "run": "<the instance's current run id>", "scenario": "recorded" }

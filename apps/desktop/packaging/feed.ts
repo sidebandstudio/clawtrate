@@ -16,7 +16,8 @@ import { buildAddressProblem } from "../src/main/update/address.ts";
 import { FEED_FORMAT, FILE_EXTENSION, FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import type { UpdateTrack } from "@clawtrate/core";
-import { PRODUCT_NAME } from "./config.ts";
+// Not from config.ts: the site assembly imports this file and installs no packages.
+import { PRODUCT_NAME } from "../src/main/identity.ts";
 import { releaseDate, type Env } from "./update-defines.ts";
 
 export interface FeedDocument {

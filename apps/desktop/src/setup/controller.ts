@@ -6,8 +6,10 @@
 // dialog says yes.
 
 import {
+  GatewayChangedError,
   initialSetupState,
   SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   type ClawtrateClient,
   type ApprovalPlace,
@@ -31,6 +33,10 @@ const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
 /** A program that ran to its end, in time and within its limit, and exited 0. */
 const succeeded = (result: ProgramResult) =>
   result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
+
+/** The connection a setup attempt opened, by its address. */
+/** Setup's connection: its attempt, its address and the client's selection that made it. */
+type Owned = { attempt: number; url: string; selection: number };
 
 /** What the host's own dialog shows: its words, nothing the page wrote. */
 export type Confirmation = { message: string; detail: string; confirm: string };
@@ -85,7 +91,9 @@ export class SetupController implements SetupHost {
   private attempt = 0;
   private found: FoundGateway | null = null;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
-  private owned: { attempt: number; url: string } | null = null;
+  private owned: Owned | null = null;
+  /** Closing `owned`, while that is under way: one at a time, for that owner only. */
+  private cleaning: { owned: Owned; done: Promise<boolean> } | null = null;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
   private watching: (() => void) | null = null;
   private readonly now: () => number;
@@ -254,12 +262,17 @@ export class SetupController implements SetupHost {
     }
     if (phase === "connecting" || phase === "failed") {
       this.stopWatching();
-      void this.closeOwned();
-      this.publish(
-        this.state.look
-          ? { ...initialSetupState, phase: "found", look: this.state.look }
-          : initialSetupState,
-      );
+      // The screen stays until the cleanup settles: the found card only once setup's connection
+      // is closed, for this Back; a cleanup that failed says so (closeOwned), and Back tries again.
+      const attempt = this.attempt;
+      void this.closeOwned().then((closed) => {
+        if (!closed || attempt !== this.attempt) return;
+        this.publish(
+          this.state.look
+            ? { ...initialSetupState, phase: "found", look: this.state.look }
+            : initialSetupState,
+        );
+      });
     }
   }
 
@@ -276,13 +289,36 @@ export class SetupController implements SetupHost {
   /**
    * Closes the connection this setup opened, connected or not, while its bots
    * load too, and one still waiting to open: the disconnect waits behind it in
-   * the client's queue. Another gateway selected since is never touched.
+   * the client's queue. Another gateway selected since is never touched. The
+   * connection stays setup's own until the client has forgotten it, or says
+   * another gateway is selected: a cleanup that failed (its settings couldn't
+   * be deleted, so it stays connected) says so, and Back or Connect tries it
+   * again. A cleanup under way is shared, and its answer changes the screen
+   * only for the owner and the attempt it was asked for. True once closed.
    */
-  private async closeOwned(): Promise<void> {
+  private async closeOwned(): Promise<boolean> {
     const owned = this.owned;
-    this.owned = null;
-    // Refused when another gateway is selected by then: that one stays as it is.
-    if (owned) await this.options.client.disconnect(owned.url).catch(() => {});
+    if (!owned) return true;
+    const attempt = this.attempt;
+    let cleaning = this.cleaning;
+    if (cleaning?.owned !== owned) {
+      const done = this.options.client.disconnect(owned.url, owned.selection).then(
+        () => true,
+        // Refused because another gateway is selected by then: that one stays as it is.
+        (error: unknown) => error instanceof GatewayChangedError,
+      );
+      const entry = { owned, done };
+      cleaning = this.cleaning = entry;
+      void done.then(() => {
+        if (this.cleaning === entry) this.cleaning = null;
+      });
+    }
+    if (await cleaning.done) {
+      if (this.owned === owned) this.owned = null;
+      return true;
+    }
+    if (this.owned === owned && attempt === this.attempt) this.fail({ kind: "cleanup" });
+    return false;
   }
 
   /**
@@ -306,6 +342,12 @@ export class SetupController implements SetupHost {
     ) {
       throw new Error("There is nothing to connect to. Look again.");
     }
+    // Setup's own earlier connection, one Back couldn't close included, is closed first. A
+    // cleanup is shared, so after it only the request whose attempt still stands goes on: two
+    // Connects that waited for the same cleanup never both reach the dialog.
+    const before = this.attempt;
+    if (this.owned && !(await this.closeOwned())) return;
+    if (this.found !== found || this.attempt !== before) return;
     const attempt = (this.attempt += 1);
     const confirm = this.options.confirm;
     if (!confirm) {
@@ -347,7 +389,7 @@ export class SetupController implements SetupHost {
     }
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
     try {
-      await this.connectOpened(attempt, opened, found, expired);
+      await this.connectOpened(attempt, opened, found, expired, access);
     } catch (error) {
       if (attempt !== this.attempt) return;
       this.stopWatching();
@@ -365,6 +407,8 @@ export class SetupController implements SetupHost {
     opened: Opened,
     found: FoundGateway,
     expired: () => boolean,
+    /** What the card and the dialog offered: reuse this device's saved pairing, or a new one. */
+    access: "new" | "paired",
   ): Promise<void> {
     const client = this.options.client;
     const changedNow = () => {
@@ -379,8 +423,10 @@ export class SetupController implements SetupHost {
     const paired = await client.hasDeviceToken(found.url);
     if (attempt !== this.attempt) return;
     if (!this.sameListener(opened, found)) return changedNow();
-    // The person agreed to reuse a saved pairing, not to a new one: gone, the card asks again.
-    if (!paired && this.state.look?.access === "paired") return this.pairingGone();
+    // The person agreed to what the dialog named: reusing this device's saved pairing, or a new
+    // pairing. A pairing gone or appeared since, and the card asks again.
+    if (paired !== (access === "paired"))
+      return paired ? this.pairingAppeared() : this.pairingGone();
     // The facts are read again after every wait that can be long, and the consent's two
     // minutes hold on every branch: anything other than what the dialog named, and nothing runs.
     const changed = async () => !(await this.unchanged(opened, found)) || expired();
@@ -404,12 +450,38 @@ export class SetupController implements SetupHost {
         return false;
       }
     };
+    // Once each socket is up and again just before its credential goes, the endpoint's
+    // listener is read again: the port's listener by PID and start time, the endpoint, the
+    // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
+    // The client's signal ends with the socket or the reads' shared time: the commands stop then.
+    const verify = async (signal: AbortSignal) => {
+      if (attempt !== this.attempt) return false;
+      try {
+        return (
+          (await this.unchanged(opened, found, signal)) &&
+          !signal.aborted &&
+          attempt === this.attempt
+        );
+      } catch (error) {
+        if (attempt === this.attempt) {
+          this.stopWatching();
+          this.refused(error);
+        }
+        return false;
+      }
+    };
     if (paired) {
       // A saved pairing for this address: reused, asking for read alone (§7).
       this.publish({ ...this.state, step: 1 });
-      this.owned = { attempt, url: found.url };
-      this.watch(attempt, found.url, found.port);
-      await client.connectForSetup(found.url, { check: listening });
+      // The selection this connect makes: its cleanup and its readiness are that one's only.
+      const selection = client.nextSelection();
+      this.owned = { attempt, url: found.url, selection };
+      this.watch(attempt, found.url, found.port, selection);
+      await client.connectForSetup(found.url, {
+        check: listening,
+        verify,
+        consent: () => !expired(),
+      });
       return;
     }
     const made = await opened.run({
@@ -432,10 +504,15 @@ export class SetupController implements SetupHost {
     }
     if (attempt !== this.attempt) return;
     this.publish({ ...this.state, step: 1 });
-    this.owned = { attempt, url: found.url };
-    this.watch(attempt, found.url, found.port);
+    const selection = client.nextSelection();
+    this.owned = { attempt, url: found.url, selection };
+    this.watch(attempt, found.url, found.port, selection);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
-    await client.connectWithSetupCode(code, { check: listening });
+    await client.connectWithSetupCode(code, {
+      check: listening,
+      verify,
+      consent: () => !expired(),
+    });
   }
 
   /**
@@ -464,10 +541,14 @@ export class SetupController implements SetupHost {
    * same listener by PID and start time, and token sign-in, each command
    * having finished in time and within its limit.
    */
-  private async unchanged(opened: Opened, found: FoundGateway): Promise<boolean> {
+  private async unchanged(
+    opened: Opened,
+    found: FoundGateway,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const { world, run } = opened;
     const identity = world.installed ? "stand-in" : await boundedFileIdentity(found.program);
-    if (identity !== found.programIdentity) return false;
+    if (identity !== found.programIdentity || signal?.aborted) return false;
     const env = { ...world.env, PATH: programPath(found.program), ...found.profile.env };
     const [statusRun, authRun] = await Promise.all([
       run({
@@ -476,6 +557,7 @@ export class SetupController implements SetupHost {
         env,
         cwd: world.cwd,
         ...LIMITS.status,
+        ...(signal ? { signal } : {}),
       }),
       run({
         program: found.program,
@@ -483,6 +565,7 @@ export class SetupController implements SetupHost {
         env,
         cwd: world.cwd,
         ...LIMITS.auth,
+        ...(signal ? { signal } : {}),
       }),
     ]);
     if (!succeeded(statusRun) || !succeeded(authRun)) return false;
@@ -504,7 +587,7 @@ export class SetupController implements SetupHost {
 
   /** Follows the connection Connect started, until it is in or has failed. */
   /** Follows this attempt's connection to `url` only: another route's state says nothing about it. */
-  private watch(attempt: number, url: string, port: number): void {
+  private watch(attempt: number, url: string, port: number, selection: number): void {
     this.stopWatching();
     let seen = false;
     const check = (state: ClawtrateState) => {
@@ -522,10 +605,14 @@ export class SetupController implements SetupHost {
         );
         return;
       }
-      if (connection.gatewayUrl !== url) return;
+      // Only this selection's own connection speaks for this attempt: another choice of the
+      // same address, or one refused meanwhile, says nothing about it.
+      if (connection.gatewayUrl !== url || !this.options.client.isSelected(selection)) return;
       seen = true;
       if (connection.status === "connected") {
-        if (discovery.status === "ready") {
+        // Ready only for this selection's own read: one left from an earlier selection of the
+        // same address isn't this connection's.
+        if (discovery.status === "ready" && this.options.client.readyFor(selection)) {
           this.stopWatching();
           this.publish({ ...this.state, phase: "done", step: 2 });
         } else if (discovery.status === "error") {
@@ -540,6 +627,8 @@ export class SetupController implements SetupHost {
         const code = connection.error?.code;
         // The saved pairing went before the socket asked: back to the card, for a new consent.
         if (code === SETUP_PAIRING_GONE) return this.pairingGone();
+        // One appeared before the code went: back to the card, for consent to reuse it.
+        if (code === SETUP_PAIRING_APPEARED) return this.pairingAppeared();
         this.fail({
           kind:
             code === "SETUP_GRANT_REFUSED"
@@ -565,6 +654,16 @@ export class SetupController implements SetupHost {
       phase: "found",
       failure: null,
       look: this.state.look && { ...this.state.look, access: "new" },
+    });
+  }
+
+  /** Back to the card for consent to reuse it: this device has a saved pairing for the address now. */
+  private pairingAppeared(): void {
+    this.publish({
+      ...this.state,
+      phase: "found",
+      failure: null,
+      look: this.state.look && { ...this.state.look, access: "paired" },
     });
   }
 

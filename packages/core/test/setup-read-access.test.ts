@@ -5,7 +5,12 @@
 // adds pairing and nothing else, whatever the gateway grants.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, SETUP_CONNECT_REFUSED, SETUP_PAIRING_GONE } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  SETUP_CONNECT_REFUSED,
+  SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_GONE,
+} from "../src/client.ts";
 import { MAX_LOOK_OTHERS, initialSetupState } from "../src/setup.ts";
 import { PAIRING_SCOPE, READ_SCOPE, READ_SCOPES, WRITE_SCOPE } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
@@ -58,6 +63,130 @@ describe("a setup reconnect with a saved pairing", () => {
     );
     expect((gateway.connects[1] as Connect).scopes).toEqual([READ_SCOPE, WRITE_SCOPE]);
     expect(client.state.connection.canWrite).toBe(true);
+    client.stop();
+  });
+
+  it("F-492: after a reconnect, setup waits for discovery from the new socket", async () => {
+    const gateway = granting([READ_SCOPE]);
+    const identity = deferred<unknown>();
+    gateway.handlers["gateway.identity.get"] = () => identity.promise;
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await client.start();
+      const selection = client.nextSelection();
+      let reportedReady = false;
+      client.store.subscribe(() => {
+        if (client.readyFor(selection)) reportedReady = true;
+      });
+      await client.connectForSetup(URL);
+      await until(() => gateway.calls("sessions.subscribe").length === 1);
+      gateway.dropAll();
+      await until(() => gateway.calls("gateway.identity.get").length === 2);
+      expect(reportedReady).toBe(false);
+      identity.resolve({ deviceId: "fixture-gateway" });
+      await until(() => client.readyFor(selection));
+      gateway.dropAll();
+      expect(client.readyFor(selection)).toBe(false);
+    } finally {
+      identity.resolve({});
+      client.stop();
+    }
+  });
+
+  it("F-492: a setup whose bots failed to load keeps asking for read alone, on a reconnect and a retry", async () => {
+    const gateway = granting([READ_SCOPE, WRITE_SCOPE]);
+    const bots = gateway.handlers["agents.list"]!;
+    gateway.handlers["agents.list"] = () => {
+      throw new Error("fixture: the bots couldn't be read");
+    };
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE, WRITE_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectForSetup(URL);
+    await until(() => client.state.discovery.status === "error");
+    // The setup failure screen is up. The connection drops and reconnects by itself.
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+    );
+    expect((gateway.connects[1] as Connect).scopes).toEqual([READ_SCOPE]);
+    // And the screen's Try again, from a dropped connection, opens with read alone too.
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    gateway.refuseConnections = false;
+    await client.retryNow();
+    await until(
+      () => client.state.connection.status === "connected" && gateway.connects.length >= 3,
+    );
+    for (const sent of gateway.connects as Connect[]) expect(sent.scopes).toEqual([READ_SCOPE]);
+    expect(client.state.connection.canWrite).toBe(false);
+    // Once the bots are read, setup is over and an ordinary reconnect asks for what is held.
+    gateway.handlers["agents.list"] = bots;
+    gateway.dropAll();
+    await until(() => client.state.discovery.status === "ready");
+    const count = gateway.connects.length;
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length > count && client.state.connection.status === "connected",
+    );
+    expect((gateway.connects.at(-1) as Connect).scopes).toEqual([READ_SCOPE, WRITE_SCOPE]);
+    client.stop();
+  });
+
+  it("F-492: the first frame with a credential goes only within the dialog's consent, a saved token's too", async () => {
+    for (const mode of ["saved-token", "code"] as const) {
+      const gateway = granting([READ_SCOPE]);
+      const storage = memoryStorage(
+        mode === "saved-token" ? { [tokenKey(URL)]: record([READ_SCOPE]) } : {},
+      );
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      await client.start();
+      // The dialog's two minutes have passed by the time the socket is ready to send.
+      const consent = () => false;
+      if (mode === "saved-token") await client.connectForSetup(URL, { consent });
+      else
+        await client.connectWithSetupCode(
+          {
+            url: URL,
+            bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnop",
+            expiresAtMs: Date.now() + 600_000,
+          },
+          { consent },
+        );
+      await until(() => client.state.connection.error?.code === SETUP_ENDPOINT_CHANGED);
+      await sleep(100);
+      expect(gateway.connects).toHaveLength(0);
+      client.stop();
+    }
+    // Within it, the frame goes; once its hello is in, the consent is used and a reconnect
+    // after the two minutes still goes on.
+    const gateway = granting([READ_SCOPE]);
+    const storage = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    let holds = true;
+    const events: string[] = [];
+    const reply = gateway.connectReply;
+    gateway.connectReply = (params, url) => {
+      events.push("connect");
+      return reply(params, url);
+    };
+    await client.connectForSetup(URL, {
+      consent: () => {
+        events.push("consent");
+        void Promise.resolve().then(() => events.push("next microtask"));
+        return holds;
+      },
+    });
+    await until(() => client.state.connection.status === "connected");
+    expect(events).toEqual(["consent", "connect", "next microtask"]);
+    holds = false;
+    gateway.dropAll();
+    await until(
+      () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+    );
     client.stop();
   });
 
@@ -258,12 +387,18 @@ describe("a setup connection, end to end of its first hello", () => {
     client.stop();
   });
 
-  it("F-492: a setup code connection that meets a token saved meanwhile keeps that record's held access", async () => {
+  it("F-492: a setup code connection that meets a token saved after its code went keeps that record's held access", async () => {
     const gateway = new FakeGateway();
-    gateway.connectReply = () => ({ ok: true, payload: helloOk([READ_SCOPE], "reissued-token") });
-    const storage = memoryStorage({
-      [tokenKey(URL)]: record([READ_SCOPE, WRITE_SCOPE], { adminHeld: true, pairingHeld: true }),
-    });
+    const storage = memoryStorage();
+    // Saved while the gateway answers the code: before it, the code wouldn't go (SETUP_PAIRING_APPEARED).
+    gateway.connectReply = (params) => {
+      expect((params as { auth?: { bootstrapToken?: string } }).auth?.bootstrapToken).toBeTruthy();
+      storage.data.set(
+        tokenKey(URL),
+        record([READ_SCOPE, WRITE_SCOPE], { adminHeld: true, pairingHeld: true }),
+      );
+      return { ok: true, payload: helloOk([READ_SCOPE], "reissued-token") };
+    };
     const client = new ClawtrateClient(testHost(gateway, storage), FAST);
     await client.start();
     await client.connectWithSetupCode({
@@ -271,11 +406,58 @@ describe("a setup connection, end to end of its first hello", () => {
       bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnop",
       expiresAtMs: Date.now() + 600_000,
     });
-    await until(() => JSON.parse(storage.data.get(tokenKey(URL))!).token === "reissued-token");
+    await until(() => storage.data.get(tokenKey(URL))?.includes("reissued-token") === true);
     const stored = JSON.parse(storage.data.get(tokenKey(URL))!);
     expect(stored.heldScopes).toEqual(expect.arrayContaining([READ_SCOPE, WRITE_SCOPE]));
     expect(stored.adminHeld).toBe(true);
     expect(stored.pairingHeld).toBe(true);
+    client.stop();
+  });
+
+  it("F-492: a hello accepted on a socket replaced meanwhile saves no token and no settings", async () => {
+    const gateway = new FakeGateway();
+    let replies = 0;
+    let holdNext = false;
+    gateway.connectReply = () => {
+      replies += 1;
+      // The first socket's hello is accepted slowly: its read of the saved record waits.
+      if (replies === 1) holdNext = true;
+      return {
+        ok: true,
+        payload: helloOk([READ_SCOPE], replies === 1 ? "retired-token" : "current-token"),
+      };
+    };
+    const base = memoryStorage({ [tokenKey(URL)]: record([READ_SCOPE]) });
+    const held = deferred<void>();
+    let settingsWrites = 0;
+    const storage = {
+      ...base,
+      get: async (key: string) => {
+        if (key === tokenKey(URL) && holdNext) {
+          holdNext = false;
+          await held.promise;
+        }
+        return base.get(key);
+      },
+      set: async (key: string, value: string) => {
+        if (key === "connection") settingsWrites += 1;
+        return base.set(key, value);
+      },
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL });
+    await until(() => replies === 1);
+    await sleep(50);
+    // That socket drops while its hello is being accepted; the protocol opens a newer one,
+    // on the same address and connection, which connects and saves its own token.
+    gateway.dropAll();
+    await until(() => base.data.get(tokenKey(URL))?.includes("current-token") === true);
+    const writes = settingsWrites;
+    held.resolve();
+    await sleep(150);
+    expect(JSON.parse(base.data.get(tokenKey(URL))!).token).toBe("current-token");
+    expect(settingsWrites).toBe(writes);
     client.stop();
   });
 

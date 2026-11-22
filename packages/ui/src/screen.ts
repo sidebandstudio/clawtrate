@@ -1,4 +1,4 @@
-import type { ClawtrateState, SetupState } from "@clawtrate/core";
+import type { ClawtrateState, HostInfo, SetupState } from "@clawtrate/core";
 import type { SetupView } from "./setup/Setup.tsx";
 
 /**
@@ -28,4 +28,19 @@ export const setupUnderWay = (setup: SetupState | undefined): boolean =>
  */
 export function followSetup(view: SetupView, wasUnderWay: boolean, underWay: boolean): SetupView {
   return underWay && !wasUnderWay && view === "first" ? "here" : view;
+}
+
+/**
+ * Whether setup keeps the connection screen up whatever the state says: while
+ * its Connect is under way, until the bots were read (docs/design/setup.md
+ * §7), and while a cleanup that failed waits for Back, since its connection
+ * stays up and may finish loading.
+ */
+export function setupHolds(info: HostInfo, setup: ClawtrateState["setup"]): boolean {
+  return (
+    info.setup !== undefined &&
+    (setup?.phase === "connecting" ||
+      (setup?.phase === "failed" &&
+        (setup.failure?.kind === "bots" || setup.failure?.kind === "cleanup")))
+  );
 }

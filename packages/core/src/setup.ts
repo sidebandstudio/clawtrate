@@ -39,7 +39,13 @@ export type CantTellReason =
   /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
   | "endpoint"
   /** Over SSH: the status results disagree, or say too little to tell running from stopped. */
-  | "contradictory";
+  | "contradictory"
+  /**
+   * The installed OpenClaw has no command Clawtrate has verified as read-only:
+   * its launcher may repair its own installation before any command runs, so
+   * the look runs nothing (docs/decisions.md, "What the look runs").
+   */
+  | "read-only";
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
@@ -95,6 +101,8 @@ export type SetupFailureKind =
   | "pairing-gone"
   /** Connected, but the bots couldn't be read. */
   | "bots"
+  /** Back couldn't close the connection setup opened; Back tries again. */
+  | "cleanup"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 

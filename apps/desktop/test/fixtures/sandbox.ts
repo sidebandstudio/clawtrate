@@ -12,7 +12,7 @@ import { MARKER_FILE, type Identify } from "../../../../tools/dev-gateway/src/st
 
 export const GATEWAY_PID = 4343;
 export const START_PID = 4242;
-export const STARTED = "Mon Nov 16 21:27:01 2026";
+export const STARTED = "2026-11-16T21:27:01Z";
 
 export const runId = (digit: string) => digit.repeat(48);
 
