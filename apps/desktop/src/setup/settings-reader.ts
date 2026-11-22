@@ -144,7 +144,6 @@ function guardHome(home: string, platform: NodeJS.Platform): void {
   if (
     canonical !== home ||
     root === undefined ||
-    home === root.canonical ||
     real === null ||
     realHome === null ||
     within(home, realHome) ||
