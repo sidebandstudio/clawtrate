@@ -20,7 +20,7 @@ The owner has authorized publishing Mac betas. The track reads "Beta" in the app
 
 ### Cut a beta
 
-From a clean checkout of `main` at the commit to release, with no `apps/desktop/dist`:
+Use a dedicated, clean checkout of `main` at the commit to release. Keep other builds in separate checkouts until preparation finishes. The candidate temporarily changes `apps/desktop/package.json`, and electron-vite writes to `apps/desktop/out/`.
 
 ```sh
 git switch main && git pull --ff-only
@@ -28,30 +28,126 @@ pnpm install --frozen-lockfile
 pnpm release:beta
 ```
 
-If the vault lacks any of the five values, the script names the missing ones and stops before building. Otherwise it:
+The script keeps its state in one private folder per macOS user, `~/Library/Application Support/clawtrate-release` (mode 700). It finds that folder from your account, not from `TMPDIR` or `HOME`, so every shell and checkout you release from shares it.
 
-1. chooses the version: the checked-in version with its patch raised, the UTC day and the next run number that no tag, draft or staged release has used, for example `0.1.1-beta.20261120.1`, and refuses one that is not newer than every tag;
-2. makes a private temporary folder, `$TMPDIR/clawtrate-signing-XXXXXX`, and a keychain in it that locks itself after an hour unused and when the Mac sleeps. The certificate and its password go to `/usr/bin/security`, one command at a time, each one's status checked, and the notary key's path, id and issuer to `/usr/bin/xcrun notarytool`, on their standard input, never in a command's arguments or environment. The certificate's file is deleted as soon as its import returns, and the key's file (`notary.p8`) as soon as `notarytool` has stored it, so neither exists when the build starts;
-3. builds and signs both apps with `candidate-build.ts`, the same build the release candidates use, with only ordinary variables (`PATH`, `HOME`, the locale and caches), the keychain, the identity's hash, the notary profile's name, the Beta feed address and the build date. Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
+First it takes the release lock there. It writes `locks/release-<pid>-<token>.lock`, a file of its own with its pid, its start time and a random token, then reads every other lock file:
+
+- A run that is alive with the start time it recorded holds the lock, and this run refuses.
+- A run whose pid no longer exists has ended. Its file is removed, and its leftovers are recovered next (see [If a run is killed](#if-a-run-is-killed)).
+- Anything else is ambiguous: a file it cannot read, or a running pid that started at another time than its lock records. The run refuses and names the file rather than guess.
+
+A run only ever removes its own lock file and those of runs that have certainly ended. If the vault lacks any of the five values, the script names the missing ones and stops before building. Otherwise it:
+
+1. chooses the version: the checked-in version with its patch raised, the UTC day and the next run number that no tag, draft or staged release has used, for example `0.1.1-beta.20261120.1`. It refuses a version that is not newer than every tag. It then creates `.release/beta/<version>/`, only if no one has, with this run's marker inside (`.clawtrate-release-run`, holding its pid and a random token). If the folder appears first, it stops and leaves it as it is;
+2. makes a signing folder, `clawtrate-signing-XXXXXX`, in the state folder, and a keychain in it that locks itself after an hour unused and when the Mac sleeps. The certificate and its password go to `/usr/bin/security` on its standard input, one command at a time, each one's status checked. The notary key's path, id and issuer go to `/usr/bin/xcrun notarytool` on its standard input. No secret is ever in a command's arguments or environment. The certificate's file is deleted as soon as its import returns, and the key's file (`notary.p8`) as soon as `notarytool` has stored it, so neither exists when the build starts. If making that folder or recording the run in it fails, the run removes what it had reserved;
+3. builds and signs both apps with `candidate-build.ts`, the same build the release candidates use. The build gets only ordinary variables (`PATH`, `HOME`, the locale and caches), the keychain, the identity's hash, the notary profile's name, the Beta feed address and the build date.
+   - electron-builder writes the beta's packaged artifacts into `build/` in the signing folder (`CLAWTRATE_PACKAGE_OUTPUT`). Ordinary `pnpm package:mac` writes its packaged artifacts to `apps/desktop/dist`.
+   - For the build only, the keychain goes first on your keychain search list, with your other keychains after it in their order and your default keychain unchanged. electron-builder asks `codesign` for the identity by name with `--keychain`, and `codesign` finds no identity in a keychain that is not on the list. The list as it was is recorded in the signing folder first.
+   - When the build ends, the run reads the list again before writing anything. If it is exactly what the run put there, the recorded list goes back. If it holds the run's keychain among other changes, made by you or another tool meanwhile, only the run's keychain comes off and those changes stay. If it is already the recorded list, nothing is written. If it cannot be read, or no longer holds the run's keychain, the run writes nothing. What it writes counts only once it reads back as written.
+   - Apple notarizes each app, and the packager's own reading of each signature must be a certificate;
 4. copies each zip into the private folder, unpacks the copy and checks the app in it: bundle id, version, architecture (`lipo`), `codesign --verify --deep --strict`, a Developer ID Application signature by the keychain's team, `spctl --assess --type execute` accepting it as notarized, and `xcrun stapler validate`. Every one of these tools must succeed and print what is expected. Should a ticket be missing, it staples the app, zips it again, unpacks that zip and checks it all again;
-5. writes `.release/beta/<version>/` from those verified copies: the two zips, `feed.json` (the Beta feed, naming each zip at its release download address with its size and SHA-512), `latest-mac.json` (the team and each architecture's version, address and SHA-256, for the site's install script), `notes.md` and `release.json`, the record of every file's size and hashes;
-6. removes the signing folder and `apps/desktop/dist`, and prints the files, their SHA-256, the SHA-256 of `release.json` and the command that publishes them, which includes it. Keep that value somewhere outside the staging folder: publishing requires it, and it is what ties the staged files to the ones that passed the checks.
+5. writes `.release/beta/<version>/` from those verified copies, then removes its marker. The folder holds:
+   - the two zips;
+   - `feed.json`, the Beta feed, naming each zip at its release download address with its size and SHA-512;
+   - `latest-mac.json`, the team and each architecture's version, address and SHA-256, for the site's install script;
+   - `notes.md`;
+   - `release.json`, the record of every file's size and hashes;
+6. removes the signing folder, with the build output in it, and its lock file. It prints the files, their SHA-256, the SHA-256 of `release.json` and the command that publishes them, which includes that digest. Keep the digest somewhere outside the staging folder: publishing requires it, and it is what ties the staged files to the ones that passed the checks.
 
-Only Apple's notary service receives anything. A failed build prints the path of its log, not the log: electron-builder's output can name the identity, its hash and the team. Keep that log and the script's output private.
+Only Apple's notary service receives anything.
+
+A failed run first puts your search list back. Then it removes its build output and its own version's folder in `.release/beta/`, but that folder only while it still carries this run's marker and holds no `release.json`. A staged release is never removed, and a folder without the marker is left in place and named. If removing them fails, the list has already been put back.
+
+The list may not read back as written, or the run may be unable to tell what to put back. Either way the run stops with the command or the reason, and keeps both the signing folder (with its `search-list.json`) and its lock file. The next run then recovers the list from them before anything else.
+
+A failed build prints the path of its log, not the log: electron-builder's output can name the identity, its hash and the team. Keep that log and the script's output private.
 
 ### If a run is killed
 
-A normal exit, an error, Ctrl-C and `kill` (SIGTERM) remove the signing folder. Ctrl-C and `kill` first stop the build and everything it started, a stalled notarization included, and wait for all of it to end. A run killed outright (`kill -9`, a crash or a power cut) leaves its `$TMPDIR/clawtrate-signing-XXXXXX` folder. Killed while `security` imports the certificate, it can still hold the certificate's file, and killed while `notarytool` stores the key, the key's file (`notary.p8`), both readable by your user. At any later point it holds the keychain, whose password died with the run but which stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps. It also holds the verified copies of the zips.
+A normal exit, an error, Ctrl-C and `kill` (SIGTERM) put your keychain search list back by the rule above. Once that is verified, they remove the signing folder and the run's lock file. Ctrl-C and `kill` first stop the build and everything it started, a stalled notarization included, and wait for all of it to end.
 
-The next `pnpm release:beta` removes, before anything else, each such folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. A folder with no `pid` may be a run that is just starting, so it is left alone and named. To remove one yourself, check its run first:
+A run killed outright (`kill -9`, a crash or a power cut) leaves its lock file and its `clawtrate-signing-XXXXXX` folder in `~/Library/Application Support/clawtrate-release`. What the folder holds depends on when the run was killed:
+
+- during the certificate's import by `security`: possibly the certificate's file, readable by your user;
+- while `notarytool` stores the key: possibly the key's file (`notary.p8`), readable by your user;
+- at any later point: the keychain. Its password died with the run, but it stays unlocked, and usable by your user's processes, until it locks itself after an hour or when the Mac sleeps;
+- also the build output, and `search-list.json`, your keychain search list from before the build.
+
+If the release process was force-killed during the build, its detached build group can still be signing or notarizing. Before retrying or removing anything, confirm that the build and its workers have exited. The `pid` file identifies only the release process. If you cannot establish which workers belonged to that run, leave its files and keychain list in place. After a machine restart, those workers have exited.
+
+The next `pnpm release:beta` does this before anything else:
+
+- It removes the lock file of any run whose pid no longer exists. A lock file it cannot read, or one whose pid is running but started at another time, stops it, naming the file.
+- It removes each signing folder whose recorded run (`pid` inside it) has ended, and refuses while that run is still going. Before removing a folder, it recovers the search list by the same rule as a run's own restore and says what it did. When it cannot tell what to put back, it writes nothing, keeps the folder and stops.
+- It leaves alone, and names, a folder with no `pid`, which may be a run that is just starting.
+
+A run whose restore could not be verified keeps its folder and its lock file on purpose, and printed the command or the reason.
+
+To clean up yourself, recover the list before you remove the folder. Once the folder is gone, so is `search-list.json`, the only record of your list from before the build. Check the run first:
 
 ```sh
-cat "$TMPDIR"/clawtrate-signing-XXXXXX/pid     # the run's process id
-ps -p <that pid>                               # no row: the run has ended
-rm -rf "$TMPDIR"/clawtrate-signing-XXXXXX      # that folder only
+S="$(node -p 'require("node:os").userInfo().homedir')/Library/Application Support/clawtrate-release"
+cat "$S"/clawtrate-signing-XXXXXX/pid          # the run's process id
+ps -p <that pid> -o lstart=                    # no row: the run has ended
 ```
 
-The keychain was never added to your keychain list, so nothing else needs undoing. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
+Keep other releases and tools that edit the keychain search list idle during manual recovery. The read and write are separate operations. Readback can verify the result but cannot detect an edit overwritten between them.
+
+If the run ended before writing `search-list.json`, the command checks whether its keychain is on the current list. If it is absent, the ended run's folder can be removed without changing the list. If it is present, keep the folder for inspection. With a record, the command follows the same recovery rule as the release script.
+
+```sh
+/usr/bin/python3 -I - "$S"/clawtrate-signing-XXXXXX <<'PY'
+import json, os, subprocess, sys
+folder = sys.argv[1]
+keychain = os.path.join(folder, "release.keychain-db")
+names = {keychain, os.path.join(os.path.realpath(folder), "release.keychain-db")}
+def read():
+    out = subprocess.run(["/usr/bin/security", "list-keychains", "-d", "user"], capture_output=True, text=True, check=True).stdout
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    if any(len(line) < 3 or line[0] != '"' or line[-1] != '"' or '"' in line[1:-1] for line in lines):
+        sys.exit("Could not read the search list. Keep the folder.")
+    return [line[1:-1] for line in lines]
+now = read()
+print("The list now:             ", now)
+try:
+    with open(os.path.join(folder, "search-list.json")) as saved:
+        record = json.load(saved)
+except FileNotFoundError:
+    if names & set(now):
+        sys.exit("No recovery record and the release keychain is listed. Keep the folder.")
+    print("No recovery record. The release keychain is absent. No restore is needed.")
+    sys.exit(0)
+if not isinstance(record, list) or not all(isinstance(path, str) for path in record):
+    sys.exit("Invalid recovery record. Keep the folder.")
+print("Recorded before the build:", record)
+if now == record:
+    print("The list is already the recorded one: nothing to write.")
+    sys.exit(0)
+if not names & set(now):
+    sys.exit("The list no longer holds this run's keychain and is not the recorded one: nothing written. Compare it with search-list.json yourself.")
+installed = [keychain] + [path for path in record if path not in names]
+target = record if [keychain if path in names else path for path in now] == installed else [path for path in now if path not in names]
+subprocess.run(["/usr/bin/security", "list-keychains", "-d", "user", "-s", *target], check=True)
+after = read()
+print("Written:                  ", target)
+print("Read back:                ", after)
+sys.exit(0 if after == target else "The list does NOT read back as written: remove nothing, and check it.")
+PY
+```
+
+If the command reports that no restore is needed, the list already matches the record, or the readback matches what it wrote, recovery is complete.
+
+If the release preserved your edits but its readback failed, its keychain may already be absent and the list may differ from the original record. Check the current list against the target from the failed run's restore message, path by path and in order. If they match and the release keychain is absent, recovery is complete. If you cannot verify the target, keep the recovery files.
+
+Once recovery is complete and the run and its workers have exited, remove that folder and its lock file:
+
+```sh
+rm -rf "$S"/clawtrate-signing-XXXXXX           # that folder only
+cat "$S"/locks/release-<pid>-<token>.lock      # the pid and start time it recorded
+rm "$S"/locks/release-<pid>-<token>.lock       # that file only, once that pid has ended
+```
+
+A failed run's version folder that it could not remove carries its marker, `.clawtrate-release-run`. A folder without it was not that run's, and the script leaves it and names it. If the certificate's or the key's file may have been copied, revoke it (the key in App Store Connect, the certificate in the developer account) and put a new one in the vault.
 
 ### Check it before publishing
 

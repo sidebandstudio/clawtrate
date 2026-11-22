@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
 import { builderConfig, PRODUCT_NAME } from "./config.ts";
+import { packageOutput } from "./output.ts";
 import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
@@ -73,11 +74,12 @@ for (const artifact of artifacts) console.log(artifact);
 // What the macOS apps' signatures are, read back from the bundles. electron-builder
 // skips signing in a pull request's CI run even with an identity set.
 if (target === "mac") {
+  const output = packageOutput(process.env, APP_DIR);
   for (const folder of ["mac-arm64", "mac"]) {
-    const app = join(APP_DIR, "dist", folder, `${PRODUCT_NAME}.app`);
+    const app = join(output.path, folder, `${PRODUCT_NAME}.app`);
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
     const { kind, matches } = checkMacSignature(plan.mac, shown);
-    console.log(`Signature of dist/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
+    console.log(`Signature of ${output.label}/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
     if (!matches) {
       console.error("The signature is not the one the signing variables asked for.");
       process.exitCode = 1;
