@@ -514,6 +514,8 @@ export function createFixtureBridge(
    */
   hold(): void;
   release(): void;
+  /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
+  computerRefusals(): number;
 } {
   const now = Date.now();
   const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
@@ -691,7 +693,7 @@ export function createFixtureBridge(
         case "computerFrame":
           return e.frame(v, command.n, command.after);
         case "computerTake":
-          return e.take(v);
+          return computer.take(v);
         case "computerCancelTake":
           return e.cancelTake(v);
         case "computerInput":
@@ -1005,5 +1007,6 @@ export function createFixtureBridge(
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,
+    computerRefusals: () => computer?.refusals() ?? 0,
   };
 }

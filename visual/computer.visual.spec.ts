@@ -13,6 +13,7 @@ import {
   fullView,
   openFull,
   OTTO_COMPUTER,
+  refusals,
   take,
   tileReady,
   watch,
@@ -171,9 +172,11 @@ const SCENES: Scene[] = [
       await openFull(page);
       await take(page);
       for (let i = 0; i < 2; i++) {
+        await refusals(page, i + 1);
         await expect(controlBar(page)).toContainText("Juniper is still acting");
         await controlBar(page).getByRole("button", { name: "Try again" }).click();
       }
+      await refusals(page, 3);
       await expect(controlBar(page)).toContainText("Juniper is still acting");
       await fullView(page)
         .getByRole("button", { name: /^Close the full view/ })

@@ -407,6 +407,8 @@ export function computerFixture(
   const mode = params.mode;
   let typed = "";
   let takes = 0;
+  /** Takes the engine has applied as refused because the bot is still acting (`refusals`). */
+  let refusals = 0;
   let releases = 0;
   let tabReads = 0;
   let shownTab = 0;
@@ -746,6 +748,13 @@ export function computerFixture(
 
   return {
     engine,
+    /** Take control as the viewer's session does; a refusal counts once the pane shows it. */
+    take: async (viewer: string) => {
+      await engine.take(viewer);
+      if (get().computer?.panes[viewer]?.control.status === "busy") refusals += 1;
+    },
+    /** How many takes the pane has shown refused as busy: a check waits for this, not a timer. */
+    refusals: () => refusals,
     /** Machine facts the scripted gateway gives for `readMachine`; `probe` prepares its desktop. */
     machine: (key: string, probe: boolean) => {
       // `machinefail`: the first read answers, every later one fails as a whole.

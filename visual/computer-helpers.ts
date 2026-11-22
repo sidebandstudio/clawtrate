@@ -62,6 +62,19 @@ export async function openFull(page: Page) {
   await painted(fullView(page).locator("canvas"));
 }
 
+/**
+ * The fixture has shown `n` takes refused as busy: a check waits for the refusal itself, not for
+ * the scripted plugin's timer to fire within an expect's time.
+ */
+export const refusals = (page: Page, n: number) =>
+  page.waitForFunction(
+    (count) =>
+      (
+        window as unknown as { clawtrateFixture: { computerRefusals(): number } }
+      ).clawtrateFixture.computerRefusals() >= count,
+    n,
+  );
+
 /** From the full view: Take control, and wait for the answer the scene's plugin gives. */
 export async function take(page: Page) {
   await fullView(page).getByRole("button", { name: "Take control" }).click();
