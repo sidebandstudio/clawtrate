@@ -380,8 +380,12 @@ export class IKHandshake {
         message.subarray(KEY_BYTES, KEY_BYTES + KEY_BYTES + TAG_BYTES),
       );
       this.#mixDh(this.#static.secretKey, rs);
+      const payload = this.#symmetric.decryptAndHash(
+        message.subarray(KEY_BYTES + KEY_BYTES + TAG_BYTES),
+      );
+      // Published only once the whole message has authenticated.
       this.#remoteStatic = rs;
-      return this.#symmetric.decryptAndHash(message.subarray(KEY_BYTES + KEY_BYTES + TAG_BYTES));
+      return payload;
     });
   }
 

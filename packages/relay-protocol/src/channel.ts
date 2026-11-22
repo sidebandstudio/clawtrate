@@ -151,12 +151,17 @@ export interface PhoneGate {
   check(phoneKey: Uint8Array, enroll: Uint8Array | undefined): GateCheck;
 }
 
+/** An object or a function: what `object` admits as an opaque candidate or a gate's answer. */
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
 function checkGateResult(check: unknown): GateCheck {
   if (check === "enrolled" || isRefusal(check)) return check;
-  if (typeof check === "object" && check !== null) {
+  if (isObjectLike(check)) {
     // Read once: the candidate checked here is the one the transaction is given.
     const eligible = (check as { readonly eligible?: unknown }).eligible;
-    if (typeof eligible === "object" && eligible !== null) return { eligible };
+    if (isObjectLike(eligible)) return { eligible };
   }
   return fail("malformed", "The gate's answer is not one it may give.");
 }
@@ -479,11 +484,25 @@ abstract class Channel {
     return this.#partialSince !== null && now - this.#partialSince > MAX_PARTIAL_MESSAGE_MS;
   }
 
+  /**
+   * Reserves budget, or returns false. A budget that ends the channel while it reserves (a
+   * callback that closes or aborts it) gets its reservation back, and nothing is delivered.
+   */
+  #take(bytes: number): boolean {
+    if (this.#budget === null) return true;
+    if (!this.#budget.take(bytes)) return false;
+    if (this.state === "closed" || this.state === "failed") {
+      this.#budget.give(bytes);
+      fail(this.state, "The channel ended while it reserved room for text.");
+    }
+    return true;
+  }
+
   #receiveText(kind: "text-part" | "text-end", data: Uint8Array): ChannelEvent[] {
     if (this.#partBytes + data.length > MAX_MESSAGE_BYTES) {
       fail("message_too_large", `A message is at most ${MAX_MESSAGE_BYTES} bytes.`);
     }
-    if (this.#budget !== null && !this.#budget.take(data.length)) {
+    if (!this.#take(data.length)) {
       fail("over_budget", "The host has no room for more buffered text.");
     }
     this.#partBytes += data.length;
@@ -491,7 +510,7 @@ abstract class Channel {
     if (kind === "text-part") return [];
     // Joining makes a second copy of the message; reserve room for it before allocating.
     const total = this.#partBytes;
-    if (this.#budget !== null && !this.#budget.take(total)) {
+    if (!this.#take(total)) {
       fail("over_budget", "The host has no room to join this message.");
     }
     let joined: Uint8Array | null = null;

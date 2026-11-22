@@ -254,6 +254,25 @@ describe("the authenticated phone key", () => {
   });
 });
 
+describe("the gate's callable answers", () => {
+  it("accepts a function as the candidate, and as the answer itself, reading eligible once", () => {
+    const candidate = Object.assign(() => "offer", { id: 7 });
+    let reads = 0;
+    const answer = Object.assign(() => undefined, {
+      get eligible() {
+        reads++;
+        return candidate;
+      },
+    });
+    const pair = makePair({ enroll: false });
+    pair.gate.check = () => answer as unknown as GateCheck;
+    const events = toAdmit(pair);
+    expect(reads).toBe(1);
+    const attempt = pair.connector.beginAdmission(admissionOf(events));
+    expect(attempt.candidate).toBe(candidate);
+  });
+});
+
 describe("the gate", () => {
   it("cannot reopen a channel it aborted", () => {
     const pair = makePair();

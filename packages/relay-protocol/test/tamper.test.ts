@@ -4,7 +4,7 @@ import { deliver, makePair, openPair, RELAY_ID, sends } from "./helpers.ts";
 
 const FIXED_EPHEMERAL = new Uint8Array(32).fill(3);
 
-/** Every single-bit change at every position: the low bit and the high bit of each byte. */
+/** At every position, two single-bit changes: the low bit and the high bit of the byte. */
 function* flips(frame: Uint8Array): Generator<Uint8Array> {
   for (let i = 0; i < frame.length; i++) {
     for (const bit of [0x01, 0x80]) {
@@ -27,7 +27,7 @@ function expectProtocolError(run: () => unknown): RelayProtocolError {
 
 // Each case runs hundreds of handshakes; a busy machine may take several times longer than usual.
 describe("tampering", { timeout: 60_000 }, () => {
-  it("any changed bit in handshake message 1 fails the connector before the gate is asked", () => {
+  it("a flipped low or high bit in any byte of handshake message 1 fails the connector before the gate is asked", () => {
     const pair = makePair();
     const hs1 = pair.phone.start();
     let gateAsked = false;
@@ -45,7 +45,7 @@ describe("tampering", { timeout: 60_000 }, () => {
     expect(gateAsked).toBe(false);
   });
 
-  it("any changed bit in handshake message 2 fails the phone before it opens", () => {
+  it("a flipped low or high bit in any byte of handshake message 2 fails the phone before it opens", () => {
     const pair = makePair();
     // Phones with the same keys and the same ephemeral key all write the same message 1, so
     // the connector's one message 2 answers each of them.
@@ -72,7 +72,7 @@ describe("tampering", { timeout: 60_000 }, () => {
     }
   });
 
-  it("any changed bit in a transport frame fails the receiver, and it stays failed", () => {
+  it("a flipped low or high bit in any byte of a transport frame fails the receiver, and it stays failed", () => {
     const length = (() => {
       const pair = makePair();
       openPair(pair);

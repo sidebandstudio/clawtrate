@@ -77,6 +77,20 @@ describe("Noise IK against the Cacophony test vectors", () => {
     );
   });
 
+  it("publishes the initiator's key only after the whole of message 1 authenticates", () => {
+    const vector = cacophony.vectors[0]!;
+    const responder = new IKHandshake({
+      initiator: false,
+      prologue: hex(vector.resp_prologue),
+      staticKey: keyPairFromSecret(hex(vector.resp_static)),
+    });
+    // The static key decrypts; the payload after it does not.
+    const message = hex(vector.messages[0]!.ciphertext);
+    message[message.length - 1]! ^= 1;
+    expect(() => responder.readMessage1(message)).toThrow(RelayProtocolError);
+    expect(responder.remoteStaticKey).toBeNull();
+  });
+
   it("hands out copies of the peer's static key, so a caller cannot change the handshake", () => {
     const vector = cacophony.vectors[0]!;
     const responder = new IKHandshake({

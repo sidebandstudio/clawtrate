@@ -236,6 +236,52 @@ describe("reassembly bounds", () => {
   });
 });
 
+describe("a budget that ends the channel while it reserves", () => {
+  /** A budget whose next reservations (counted from 1) run `end` after they succeed. */
+  function endingBudget(endOnTake: number, end: () => void) {
+    let takes = 0;
+    class EndingBudget extends ReceiveBudget {
+      override take(bytes: number): boolean {
+        const ok = super.take(bytes);
+        if (++takes === endOnTake) end();
+        return ok;
+      }
+    }
+    return new EndingBudget(10 * MAX_RECORD_DATA_BYTES);
+  }
+
+  for (const how of ["close", "abort"] as const) {
+    it(`gives a fragment's reservation back and delivers nothing (${how})`, () => {
+      let pair: Pair | null = null;
+      const budget = endingBudget(1, () =>
+        how === "close" ? pair!.connector.close() : pair!.connector.abort(),
+      );
+      pair = pairWith({ budget });
+      expect(() => pair!.connector.receive(sealAs(pair!.phone, FULL_PART))).toThrow(
+        RelayProtocolError,
+      );
+      expect(budget.usedBytes).toBe(0);
+      expect(pair.connector.bufferedBytes).toBe(0);
+    });
+
+    it(`gives the join reservation back and delivers no text (${how})`, () => {
+      let pair: Pair | null = null;
+      // Take 1: the part; take 2: the end record; take 3: the join.
+      const budget = endingBudget(3, () =>
+        how === "close" ? pair!.connector.close() : pair!.connector.abort(),
+      );
+      pair = pairWith({ budget });
+      expect(pair.connector.receive(sealAs(pair.phone, FULL_PART))).toEqual([]);
+      const end = sealAs(pair.phone, { kind: "text-end", data: Uint8Array.of(120) });
+      let events: unknown = "none";
+      expect(() => (events = pair!.connector.receive(end))).toThrow(RelayProtocolError);
+      expect(events).toBe("none");
+      expect(budget.usedBytes).toBe(0);
+      expect(pair.connector.bufferedBytes).toBe(0);
+    });
+  }
+});
+
 describe("handshake state", () => {
   function secretsOf(channel: Initiator | Responder) {
     return IKHandshake.secretsForTests(
