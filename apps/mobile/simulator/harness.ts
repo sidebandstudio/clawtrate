@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
   type Dirent,
@@ -17,7 +18,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import { callGateway, openInstance } from "../../../tools/dev-gateway/src/cli.ts";
-import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
+import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
 
 const run = promisify(execFile);
@@ -416,6 +417,13 @@ export async function openclaw(args: string[]): Promise<string> {
 
 export function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   return callGateway<T>(openInstance(env.instance), method, params);
+}
+
+/** Keep this task's scripted reply open until the check has observed the live run. */
+export function holdStreamCompletion(key: string): () => void {
+  const path = join(openInstance(env.instance).runDir, IOS_STREAM_HOLD_FILE);
+  writeFileSync(path, key, { flag: "wx", mode: 0o600 });
+  return () => rmSync(path, { force: true });
 }
 
 export type Device = {

@@ -76,6 +76,7 @@ import {
 import {
   CHECKOUT_DIR,
   GATEWAY_PORT,
+  IOS_STREAM_HOLD_FILE,
   MODEL_ID,
   MODEL_REF,
   OpenclawRunner,
@@ -1143,6 +1144,9 @@ export async function start(
             stdio: ["ignore", providerLog, providerLog],
             env: {
               ...providerEnv(process.env, ports.providerPort),
+              ...(inst.name?.startsWith("ios-")
+                ? { SCRIPTED_STREAM_HOLD_FILE: join(inst.runDir, IOS_STREAM_HOLD_FILE) }
+                : {}),
               // The pages the development browser may open, when there is one.
               ...(browserBots.length > 0
                 ? { SCRIPTED_PAGES_PORT: String(browserPorts(ports, browserBots).pagesPort) }

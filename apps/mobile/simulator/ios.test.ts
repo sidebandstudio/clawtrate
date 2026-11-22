@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS,
@@ -39,6 +39,7 @@ import {
   echoingGateway,
   env,
   gatewayCall,
+  holdStreamCompletion,
   infoPlist,
   inject,
   launch,
@@ -130,6 +131,8 @@ function runOnGateway(botId: string, key: string, message: string): Promise<stri
     message,
     "--thinking",
     "low",
+    "--timeout",
+    "960",
     "--json",
   ]);
 }
@@ -876,7 +879,14 @@ describe("the iOS app", () => {
 
   it("F-020 F-323: on iPhone, a run started on the gateway shows its bot working on Home, its avatar moving, and in its open chat what it writes; disconnected, the chat says so; quit while a run goes on, the app opened again shows it running, then how it ended", async () => {
     const { key, title } = await gatewayTask("marlow", "Anything new");
-    let run = runOnGateway("marlow", key, "#stream 120");
+    const startRun = () => {
+      const release = holdStreamCompletion(key);
+      onTestFinished(release);
+      const finished = runOnGateway("marlow", key, "#stream 20");
+      void finished.catch(() => {}); // Await the result after the UI checks, even if it fails early.
+      return { finished, release };
+    };
+    const first = startRun();
     // The gateway runs this task (another of Marlow's may run too, on its own).
     await until("the check's run on the gateway", async () =>
       (await sessions()).find((r) => r.key === key && (r.hasActiveRun || r.status === "running")),
@@ -936,8 +946,10 @@ describe("the iOS app", () => {
     await shoot("running-disconnected");
     await steps("reconnect-during-run", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      // Back in reach: the line is no longer in the off colour, and the run ends.
-      waitGone({ id: "running-dot-off" }, 60_000),
+      waitFor({ id: "running-dot-live" }, 60_000),
+    ]);
+    first.release();
+    await steps("run-finished", [
       waitGone({ id: "running" }, 240_000),
       // The reply's history has landed.
       {
@@ -948,10 +960,10 @@ describe("the iOS app", () => {
         },
       },
     ]);
-    await run;
+    await first.finished;
 
     // Quit while the next run goes on.
-    run = runOnGateway("marlow", key, "#stream 150");
+    const second = startRun();
     await until("the check's second run on the gateway", async () =>
       (await sessions()).find((r) => r.key === key && (r.hasActiveRun || r.status === "running")),
     );
@@ -966,6 +978,9 @@ describe("the iOS app", () => {
       waitFor({ id: `task-${lit(key)}`, text: `${lit(title)}, working` }, 30_000),
       tap({ id: `task-${lit(key)}` }),
       { scrollUntilVisible: { element: { id: "running" }, direction: "DOWN", timeout: 60_000 } },
+    ]);
+    second.release();
+    await steps("reopened-run-finished", [
       waitGone({ id: "running" }, 300_000),
       tap({ id: "back" }),
       waitFor({ id: `task-${lit(key)}` }),
@@ -973,7 +988,7 @@ describe("the iOS app", () => {
       tap({ id: "back" }),
       waitFor({ id: "home" }),
     ]);
-    await run;
+    await second.finished;
   });
 
   it("on iPhone, a dropped connection keeps Home on screen and says it is reconnecting, with Retry now; once the gateway is back the app reconnects by itself and the strip goes", async () => {
