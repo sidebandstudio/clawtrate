@@ -141,6 +141,15 @@ import {
   type RawRecord,
 } from "./mapping.ts";
 import {
+  MAX_SEARCHES_IN_FLIGHT,
+  searchFiles,
+  searchMessages,
+  searchRoutines,
+  type FileSearch,
+  type MessageSearch,
+  type RoutineSearch,
+} from "./search.ts";
+import {
   PAIRING_ENDED,
   pairingEnded,
   protocolMessage,
@@ -1146,6 +1155,8 @@ export class ClawtrateClient {
   private readonly fileTransfers = new FileTransfers(() => this.now());
   /** File lists and reads in flight (`MAX_FILE_READS`). */
   private fileReads = 0;
+  /** Search requests in flight (`MAX_SEARCHES_IN_FLIGHT`). */
+  private searches = 0;
   /** Changes with every hello and every close, so work started on one connection never runs on the next. */
   private epoch = 0;
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
@@ -1564,6 +1575,19 @@ export class ClawtrateClient {
     // An approval waiting for a task that can show it may belong here now.
     this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
+  }
+
+  /**
+   * Read an open task's history again, keeping every hold on it: the retry of a
+   * failed read. Closing and opening again would not read while another viewer
+   * holds the task, since only the first open reads.
+   */
+  reloadSession(key: string): void {
+    if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
+    const current = this.state.transcripts[key];
+    if (current?.status === "error")
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+    if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
   }
 
   /** Keep only Raw entries that still belong to this task's retained state. */
@@ -7527,6 +7551,44 @@ export class ClawtrateClient {
     if (this.state.connection.status !== "connected")
       throw new Error("Not connected to the gateway.");
     return listArchived(this.actionContext(null), botId);
+  }
+
+  // Search (`search.ts`; search.md). All `operator.read`; nothing is kept, and the query is never logged.
+
+  private async search<T>(
+    read: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>,
+  ): Promise<T> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    if (this.searches >= MAX_SEARCHES_IN_FLIGHT)
+      throw new Error("Other searches are running; try again in a moment.");
+    this.searches += 1;
+    try {
+      return await read((method, params) => this.request(method, params));
+    } finally {
+      this.searches -= 1;
+    }
+  }
+
+  /** Messages across bots, or one bot's (`sessions.search`). */
+  searchMessages(query: string, botId: string | null): Promise<MessageSearch> {
+    return this.search((request) => searchMessages(request, query, botId));
+  }
+
+  /** One page of routines matching the query (`cron.list`). */
+  searchRoutines(query: string, offset: number): Promise<RoutineSearch> {
+    return this.search((request) => searchRoutines(request, query, offset));
+  }
+
+  /** One bot's file names, through its newest listed task (`sessions.files.list`, `sessions.describe`). */
+  searchFiles(query: string, botId: string): Promise<FileSearch> {
+    let newest: { key: string; updatedAt: number } | null = null;
+    for (const task of this.state.tasksByBot[botId] ?? []) {
+      const updatedAt = task.updatedAt ?? 0;
+      if (!newest || updatedAt > newest.updatedAt) newest = { key: task.key, updatedAt };
+    }
+    const key = newest?.key ?? null;
+    return this.search((request) => searchFiles(request, query, botId, key));
   }
 
   /** Change the rail's arrangement on the gateway; `base` is this device's, for the first change. */

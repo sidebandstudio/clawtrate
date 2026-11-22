@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
 import type { ClawtrateClient } from "../src/client.ts";
+import { KEY, openTask } from "./client-harness.ts";
+import { GatewayError, until } from "./fake-gateway.ts";
 
 describe("parseBridgeCommand", () => {
   it("accepts the known commands", () => {
@@ -222,5 +224,44 @@ describe("bridge session policy", () => {
     const session = createBridgeSession(client);
     session.dispose();
     await expect(session.apply({ type: "retry" })).rejects.toThrow(/disconnected/);
+  });
+});
+
+describe("reloadSession", () => {
+  it("F-033: a viewer retries a failed history read with one fresh request, and both viewers still hold the task", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      await second.apply({ type: "openSession", key: KEY });
+      // Only the two viewers hold the task now.
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false });
+      const before = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+
+      // A viewer that doesn't hold the task can't make it read.
+      const third = createBridgeSession(client);
+      await expect(third.apply({ type: "reloadSession", key: KEY })).rejects.toThrow(/isn't open/);
+      third.dispose();
+
+      await first.apply({ type: "closeSession", key: KEY });
+      expect(client.state.transcripts[KEY]).toBeDefined();
+      await second.apply({ type: "closeSession", key: KEY });
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+    } finally {
+      first.dispose();
+      second.dispose();
+      client.stop();
+    }
   });
 });
