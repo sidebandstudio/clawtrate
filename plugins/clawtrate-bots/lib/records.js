@@ -11,17 +11,30 @@
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
-// matching digest. Nothing deletes a version yet: reclaiming unpublished ones
-// comes with the journal's cleanup.
+// matching digest. Cleanup and publication exclude each other through the
+// ledger: a publisher checks, after each observation, that the version still
+// exists and isn't being swept; cleanup marks the one version it deletes in
+// the ledger first, deletes it, then clears the mark. Cleanup takes only
+// versions nothing refers to: unpublished ones, replaced grant versions, and
+// those of settled requests whose ledger entries retention has removed.
 
 import { canonical, digestOf } from "./canonical.js";
-import { Refusal, emptyLedger, sweep } from "./ledger.js";
+import {
+  ORPHAN_MS,
+  Refusal,
+  clearSweeping,
+  emptyLedger,
+  markSweeping,
+  referenced,
+  sweep,
+} from "./ledger.js";
 
 export const NAMESPACE = "records";
-/** Versions are bounded: nothing deletes one in this part, and a refused submission keeps no row. */
+/** Versions are bounded; the sweep reclaims those nothing refers to any more. */
 export const VERSIONS = { namespace: "versions", maxEntries: 512, overflowPolicy: "reject-new" };
 const LEDGER = "ledger";
 const VERSION = "v:";
+const PAGE = 500;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -32,9 +45,13 @@ export class Records {
       if (typeof store[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.store = store;
+    for (const need of ["entriesInKeyRange", "delete"])
+      if (typeof versions[need] !== "function")
+        throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.versions = versions;
     this.now = now;
     this.onChange = onChange;
+    this.sweepRunning = false;
   }
 
   /** @returns {Promise<ReturnType<typeof emptyLedger>>} */
@@ -133,7 +150,8 @@ export class Records {
 
   /**
    * Publishes a stored version with `change`, checking after each observation
-   * that it still exists and reads.
+   * that it still exists and reads. The change itself refuses the version
+   * cleanup is deleting.
    * @template R
    * @param {string} id
    * @param {string} digest
@@ -150,5 +168,44 @@ export class Records {
       },
       deadline,
     );
+  }
+
+  /**
+   * Reclaims versions nothing has referred to for an hour. One sweep at a
+   * time; a deletion an earlier sweep left marked is finished first.
+   */
+  async sweepOrphans() {
+    if (this.sweepRunning) return [];
+    this.sweepRunning = true;
+    const removed = [];
+    try {
+      const pending = (await this.ledger()).sweeping;
+      if (pending) await this.reclaim(pending, removed);
+      const now = this.now();
+      let start = VERSION;
+      for (;;) {
+        const page = await this.versions.entriesInKeyRange({
+          keyStartInclusive: start,
+          keyEndExclusive: "v;",
+          limit: PAGE,
+        });
+        const live = referenced(await this.ledger());
+        for (const { key, value } of page) {
+          const id = key.slice(VERSION.length);
+          if (live.has(id) || !(value?.storedAt + ORPHAN_MS <= now)) continue;
+          if (await this.transact((l) => markSweeping(l, id))) await this.reclaim(id, removed);
+        }
+        if (page.length < PAGE) return removed;
+        start = `${page[page.length - 1].key}\u0000`;
+      }
+    } finally {
+      this.sweepRunning = false;
+    }
+  }
+
+  async reclaim(id, removed) {
+    await this.versions.delete(VERSION + id);
+    await this.transact((l) => clearSweeping(l, id));
+    removed.push(id);
   }
 }

@@ -5,12 +5,15 @@
 //
 // A proposal's entry: { digest, state, source, grant?, bot: { id, createdAt },
 // fields, createdAt, expiresAt, settledAt?, by? }. A grant's entry: { version,
-// digest, generation, revoked, expiresAt, revokedAt? }. `rev` counts every
-// stored change.
+// digest, generation, revoked, expiresAt, revokedAt? }. `sweeping` is the one
+// version cleanup is deleting, which no publisher may publish; `rev` counts
+// every stored change, so a mark and its clearing never restore an earlier row.
 
 export const LIMITS = Object.freeze({ open: 200, perSource: 20 });
 export const EXPIRES_MS = 24 * 60 * 60 * 1000;
 export const RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
+/** A version nothing has referred to for this long was never published, or was replaced or retired. */
+export const ORPHAN_MS = 60 * 60 * 1000;
 /** The store's limit for one value, in UTF-8 bytes of JSON. */
 export const VALUE_MAX = 1024 * 1024;
 /** Room kept so every open proposal can settle and every grant can be revoked, whatever fills the rest. */
@@ -33,8 +36,8 @@ export function requireId(kind, value, what) {
 }
 const own = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
 
-/** @returns {{ rev: number, proposals: Record<string, any>, grants: Record<string, any> }} */
-export const emptyLedger = () => ({ rev: 0, proposals: {}, grants: {} });
+/** @returns {{ rev: number, proposals: Record<string, any>, grants: Record<string, any>, sweeping?: string | null }} */
+export const emptyLedger = () => ({ rev: 0, proposals: {}, grants: {}, sweeping: null });
 export const sourceKey = (source) =>
   source.kind === "agent" ? `agent:${source.grant}` : `bot:${source.bot}`;
 const isOpen = (entry) => entry.state === "open";
@@ -102,7 +105,7 @@ const full = () =>
 /** Admits a proposal: the limits, the grant, supersession and the records' size, decided together. */
 export function admit(ledger, proposal, now, budget) {
   const { id, digest, source, bot, fields, createdAt, expiresAt } = proposal;
-  if (own(ledger.proposals, id))
+  if (own(ledger.proposals, id) || ledger.sweeping === id)
     throw new Refusal("unpublishable", "Clawtrate couldn't record this request. Try again.");
   if (expiresAt <= now)
     throw new Refusal("expired", "This request expired before it was recorded.");
@@ -157,15 +160,28 @@ export function decline(ledger, id, digest, by, now) {
 }
 
 /**
- * Publishes a new grant at generation 1. A grant is never changed: a
- * narrower one is a new grant, and the old one is revoked.
+ * Publishes a grant's version: a new grant (`expected` null), or a new
+ * version of the generation the caller read, which can't bring access back
+ * after a revocation it didn't read. It withdraws that grant's open
+ * suggestions in the same change.
  */
-export function publishGrant(ledger, id, { version, digest, expiresAt }, now, budget) {
+export function publishGrant(ledger, id, { version, digest, expiresAt }, expected, now, budget) {
   if (expiresAt <= now) throw new Refusal("expired", "This access would already have expired.");
-  if (own(ledger.grants, id)) throw new Refusal("invalid", "This grant already exists.");
-  ledger.grants[id] = { version, digest, generation: 1, revoked: false, expiresAt };
+  if (ledger.sweeping === version)
+    throw new Refusal("unpublishable", "Clawtrate couldn't record this access. Try again.");
+  const current = own(ledger.grants, id);
+  if (expected === null && current) throw new Refusal("invalid", "This grant already exists.");
+  if (expected !== null && !current) throw gone("This agent's access to Clawtrate isn't set up.");
+  if (current && current.generation !== expected)
+    throw new Refusal(
+      "grant-generation",
+      "This agent's access changed since it was read. Read it again.",
+    );
+  const generation = (current?.generation ?? 0) + 1;
+  withdrawOpen(ledger, id, now);
+  ledger.grants[id] = { version, digest, generation, revoked: false, expiresAt };
   if (!fits(ledger, budget)) throw full();
-  return { generation: 1 };
+  return { generation };
 }
 
 /** Removes access: the generation moves on and the open suggestions are withdrawn, together. */
@@ -179,4 +195,22 @@ export function revoke(ledger, id, now, why = "removed") {
   }
   withdrawOpen(ledger, id, now);
   return { generation: grant.generation };
+}
+
+export const referenced = (ledger) =>
+  new Set([
+    ...Object.keys(ledger.proposals),
+    ...Object.values(ledger.grants).map((g) => g.version),
+  ]);
+
+/** Marks one version nothing refers to for deletion; only one at a time. */
+export function markSweeping(ledger, version) {
+  if ((ledger.sweeping ?? null) !== null && ledger.sweeping !== version) return false;
+  if (referenced(ledger).has(version)) return false;
+  ledger.sweeping = version;
+  return true;
+}
+
+export function clearSweeping(ledger, version) {
+  if (ledger.sweeping === version) ledger.sweeping = null;
 }

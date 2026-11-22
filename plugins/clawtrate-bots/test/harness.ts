@@ -31,7 +31,7 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
       await gate.wait;
     }
   };
-  const faults = { corrupt: new Set<string>(), beforeCommit: () => {} };
+  const faults = { corrupt: new Set<string>(), beforeCommit: () => {}, failNextDelete: false };
   type Intent = { action: string; value?: unknown };
   const apply = (key: string, comparison: string, intent: Intent) => {
     if (mark(key) !== comparison)
@@ -78,6 +78,26 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
           return apply(key, comparison, intent);
         },
       };
+    },
+    async delete(key: string) {
+      await tick();
+      if (faults.failNextDelete) {
+        faults.failNextDelete = false;
+        throw new Error("the delete failed");
+      }
+      return rows.delete(key);
+    },
+    async entriesInKeyRange(range: {
+      keyStartInclusive: string;
+      keyEndExclusive: string;
+      limit: number;
+    }) {
+      await tick();
+      return [...rows.keys()]
+        .filter((k) => k >= range.keyStartInclusive && k < range.keyEndExclusive)
+        .sort()
+        .slice(0, range.limit)
+        .map((key) => ({ key, value: read(key), createdAt: 0 }));
     },
     /** A bounded namespace with overflowPolicy "reject-new" refuses new keys at its limit. */
     async registerIfAbsent(key: string, value: unknown) {

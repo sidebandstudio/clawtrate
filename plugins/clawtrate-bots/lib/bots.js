@@ -242,10 +242,13 @@ export function createBots(api, options = {}) {
           const { generation } = await records.transact((l, at) => L.revoke(l, id, at));
           return { id, generation, revoked: true };
         }
-        // A grant is never changed: a narrower one is a new grant, with a fresh id.
-        if (params.id !== undefined)
-          throw bad("A grant can't be changed. Add a new one and remove this one.");
-        const id = newId("g");
+        // A new grant gets a fresh id; an update names the generation it read,
+        // and the publish compares it, so a stale update can't land.
+        const update = params.id !== undefined;
+        const id = update ? requireId("g", params.id, "id") : newId("g");
+        const expected = update ? params.expectedGeneration : null;
+        if (update && !Number.isSafeInteger(expected))
+          throw bad("An update names the expectedGeneration it read.");
         if (!["see", "suggest"].includes(params.scope)) throw bad("scope must be see or suggest.");
         const all = params.bots === "all";
         if (
@@ -285,7 +288,7 @@ export function createBots(api, options = {}) {
         const { generation } = await records.publish(
           version,
           digest,
-          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, t),
+          (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
           () => expiresAt,
         );
         return { id, generation, ...details };
@@ -413,6 +416,7 @@ export function createBots(api, options = {}) {
       const tick = () =>
         records
           .transact(() => {})
+          .then(() => records.sweepOrphans())
           .catch((error) =>
             api.logger?.warn?.(`${PLUGIN_ID}: couldn't sweep its records: ${error.message}`),
           );

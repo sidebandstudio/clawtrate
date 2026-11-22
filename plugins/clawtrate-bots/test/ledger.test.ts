@@ -31,7 +31,7 @@ const open = (l: ReturnType<typeof L.emptyLedger>) =>
   Object.values(l.proposals).filter((e) => e.state === "open").length;
 const withGrant = (expiresAt = T + 1e9) => {
   const l = L.emptyLedger();
-  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, T);
+  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, null, T);
   return l;
 };
 
@@ -101,14 +101,36 @@ describe("grants", () => {
     );
   });
 
-  it("a grant is created once, and revoking it is final", () => {
+  it("an update needs the generation it read, so it can't undo a revocation", () => {
     const l = withGrant(T + 1000);
+    L.admit(l, proposal("p", agent("g", 1)), T);
     const next = { version: "gv2", digest: "y", expiresAt: T + 1000 };
-    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
+    expect(reason(() => L.publishGrant(l, "g", next, null, T))).toBe("invalid");
+    expect(L.publishGrant(l, "g", next, 1, T).generation).toBe(2);
+    expect(l.proposals.p.state).toBe("withdrawn");
     L.revoke(l, "g", T);
-    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
-    expect(l.grants.g).toMatchObject({ generation: 2, revoked: "removed" });
-    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, T))).toBe("expired");
+    expect(reason(() => L.publishGrant(l, "g", { ...next, version: "gv3" }, 2, T))).toBe(
+      "grant-generation",
+    );
+    expect(L.publishGrant(l, "g", { ...next, version: "gv3" }, 3, T)).toEqual({ generation: 4 });
+    expect(l.grants.g).toMatchObject({ revoked: false, version: "gv3" });
+    expect(reason(() => L.publishGrant(l, "new", next, 1, T))).toBe("grant-missing");
+    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, null, T))).toBe(
+      "expired",
+    );
+  });
+
+  it("only a version nothing refers to can be marked for deletion, one at a time", () => {
+    const l = withGrant();
+    L.admit(l, proposal("p", fromBot("pip")), T);
+    expect([L.markSweeping(l, "p"), L.markSweeping(l, "gv1")]).toEqual([false, false]);
+    expect(L.markSweeping(l, "orphan")).toBe(true);
+    expect(L.markSweeping(l, "other")).toBe(false);
+    expect(reason(() => L.admit(l, proposal("orphan", fromBot("main"), bot("main")), T))).toBe(
+      "unpublishable",
+    );
+    L.clearSweeping(l, "orphan");
+    expect(L.markSweeping(l, "other")).toBe(true);
   });
 
   it("an expired grant is revoked, and a revoked grant leaves after 30 days", () => {

@@ -199,6 +199,42 @@ try {
   );
 
   await check(
+    "F-537: a grant updated to generation 2; a helper still on generation 1 is refused",
+    async () => {
+      const g = await call<{ id: string; generation: number }>(op, "relay.grants.set", {
+        scope: "suggest",
+        bots: [bot],
+      });
+      const updated = await call<{ generation: number }>(op, "relay.grants.set", {
+        id: g.id,
+        expectedGeneration: 1,
+        scope: "suggest",
+        bots: [bot],
+      });
+      assert.equal(updated.generation, 2);
+      assert.equal(
+        await outcome(propose(op, { id: g.id, generation: 1 }, bot, "label")),
+        "grant-generation",
+      );
+      assert.equal(
+        await outcome(
+          call(op, "relay.grants.set", {
+            id: g.id,
+            expectedGeneration: 1,
+            scope: "see",
+            bots: [bot],
+          }),
+        ),
+        "grant-generation",
+        "a stale update",
+      );
+      const fresh = await propose(op, { id: g.id, generation: 2 }, bot, "label");
+      await call(op, "proposals.decline", { id: fresh.proposalId, digest: fresh.digest });
+      assert.equal(await openCount(op), 0);
+    },
+  );
+
+  await check(
     "F-536: two proposals racing for the last slot of one source (20), then of the gateway (200): one admitted, one refused, the count at the limit",
     async () => {
       const grants = await Promise.all(Array.from({ length: 11 }, () => grantFor(op)));
