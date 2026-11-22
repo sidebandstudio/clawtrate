@@ -177,11 +177,11 @@ export function MessageActions({
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
-    // On touch, room counts the touch areas the buttons reach past the bar, within what shows of
+    // A bar a finger opened counts the touch areas its buttons reach past it, within what shows of
     // the transcript: below the band kept clear for the header and the strip, which lie over it.
-    // A mouse's bar stays beside the bubble wherever there is room: above or below it, the
+    // A mouse's or a pen's stays beside the bubble wherever there is room: above or below it, the
     // pointer would leave the message on its way to the bar, and the bar would hide.
-    const touch = document.documentElement.dataset.input === "touch";
+    const touch = toolbar.dataset.pointer === "touch";
     const reach = reachPast(toolbar);
     const scroller = turn.closest<HTMLElement>(".transcript");
     const view = scroller?.getBoundingClientRect();
@@ -225,7 +225,12 @@ export function MessageActions({
   useEffect(() => {
     const turn = turnRef.current;
     if (!turn) return;
-    const onEnter = () => measure();
+    // The bar is placed and spaced for the pointer that shows it: a finger's touch and hold, or a
+    // mouse or a pen over the message.
+    const onEnter = (event: PointerEvent) => {
+      if (bar.current) bar.current.dataset.pointer = event.pointerType;
+      measure();
+    };
     turn.addEventListener("pointerenter", onEnter);
     // Touch and hold on the message shows its actions; a tap elsewhere hides them.
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -235,6 +240,7 @@ export function MessageActions({
       if (timer) return cancel();
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
       timer = setTimeout(() => {
+        if (bar.current) bar.current.dataset.pointer = "touch";
         measure();
         setHeld(true);
       }, LONG_PRESS_MS);

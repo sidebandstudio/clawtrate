@@ -125,6 +125,37 @@ async function pillsReach(page: Page, row: string, count: number): Promise<void>
   for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
 }
 
+/**
+ * Hover Otto's list of what fills the disk, a bubble with room beside it for the bar, with its top
+ * 10 px under the header and then 20 px above the transcript's foot, and move slowly to React each
+ * time: the bar shows beside it and stays to take the pointer.
+ */
+async function hoverToReact(page: Page): Promise<void> {
+  const message = page.locator('[data-message="row-7"]');
+  const bubble = message.locator(".msg > .bubble");
+  const actions = message.getByTestId("message-actions");
+  const header = (await page.locator(".conversation-header").boundingBox())!;
+  const view = (await page.locator(".transcript").boundingBox())!;
+  for (const top of [header.y + header.height - 10, view.y + view.height - 20]) {
+    await page.mouse.move(0, 0);
+    await bubble.evaluate((el, top) => {
+      el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+    }, top);
+    await settle(page);
+    const box = (await bubble.boundingBox())!;
+    await page.mouse.move(box.x + 20, Math.max(box.y, header.y + header.height) + 6);
+    await expect.poll(() => shown(actions)).toBe(true);
+    const bar = (await actions.boundingBox())!;
+    expect(bar.x).toBeGreaterThanOrEqual(box.x + box.width);
+    // On its way across, the pointer stays on the message, so the bar stays to take it.
+    const react = actions.getByRole("button", { name: "Add a reaction" });
+    const at = (await react.boundingBox())!;
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2, { steps: 20 });
+    expect(await shown(actions)).toBe(true);
+    expect(await react.evaluate((el) => el.matches(":hover"))).toBe(true);
+  }
+}
+
 test.describe("message actions", () => {
   test.use(contextFor(WIDE, "light"));
 
@@ -153,31 +184,7 @@ test.describe("message actions", () => {
     page,
   }) => {
     await open(page);
-    // Otto's list of what fills the disk: a bubble with room beside it for the bar.
-    const message = page.locator('[data-message="row-7"]');
-    const bubble = message.locator(".msg > .bubble");
-    const actions = message.getByTestId("message-actions");
-    const header = (await page.locator(".conversation-header").boundingBox())!;
-    const view = (await page.locator(".transcript").boundingBox())!;
-    // Its top 10 px under the header, then 20 px above the transcript's foot.
-    for (const top of [header.y + header.height - 10, view.y + view.height - 20]) {
-      await page.mouse.move(0, 0);
-      await bubble.evaluate((el, top) => {
-        el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
-      }, top);
-      await settle(page);
-      const box = (await bubble.boundingBox())!;
-      await page.mouse.move(box.x + 20, Math.max(box.y, header.y + header.height) + 6);
-      await expect.poll(() => shown(actions)).toBe(true);
-      const bar = (await actions.boundingBox())!;
-      expect(bar.x).toBeGreaterThanOrEqual(box.x + box.width);
-      // On its way across, the pointer stays on the message, so the bar stays to take it.
-      const react = actions.getByRole("button", { name: "Add a reaction" });
-      const at = (await react.boundingBox())!;
-      await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2, { steps: 20 });
-      expect(await shown(actions)).toBe(true);
-      expect(await react.evaluate((el) => el.matches(":hover"))).toBe(true);
-    }
+    await hoverToReact(page);
   });
 
   test("F-066: the actions are one tab stop; Left and Right move between them and they show while focused", async ({
@@ -681,6 +688,21 @@ test.describe("message actions", () => {
   });
 });
 
+test.describe("message actions with a mouse on a touch screen", () => {
+  // The primary pointer is coarse, so the page takes its touch sizes, and a mouse is there too.
+  test.use({ ...contextFor(WIDE, "light"), hasTouch: true });
+
+  test("F-066: on a touch screen, a hovered message keeps a mouse's actions beside it, spaced as on any desktop, where the pointer reaches them", async ({
+    page,
+  }) => {
+    await open(page);
+    expect(await page.evaluate(() => document.documentElement.dataset.input)).toBe("touch");
+    await hoverToReact(page);
+    const actions = page.locator('[data-message="row-7"]').getByTestId("message-actions");
+    expect(await actions.evaluate((el) => getComputedStyle(el).columnGap)).toBe("2px");
+  });
+});
+
 test.describe("message actions on a phone", () => {
   test.use(contextFor(PHONE, "light"));
 
@@ -859,7 +881,9 @@ for (const size of SIZES) {
         await open(page, "message-actions", theme);
         const turn = report(page);
         await turn.scrollIntoViewIfNeeded();
-        await turn.locator(".msg > .bubble").last().hover();
+        // A phone has no mouse: there a touch and hold shows the actions.
+        if (size.phone) await holdOn(turn);
+        else await turn.locator(".msg > .bubble").last().hover();
         await expect.poll(() => shown(turn.getByTestId("message-actions"))).toBe(true);
         await settle(page);
         await expect(page).toHaveScreenshot(`messages-actions-${theme}-${size.name}.png`);

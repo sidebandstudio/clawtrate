@@ -1509,8 +1509,9 @@ button.reaction {
   position: relative;
 }
 
-/* Far enough apart that each button's 44 px area is its own, with 2 px between them. */
-[data-input="touch"] .msg-actions {
+/* A bar a finger opened: far enough apart that each button's 44 px area is its own, with 2 px
+   between them. A mouse's keeps its spacing. Messages.tsx sets data-pointer. */
+[data-input="touch"] .msg-actions[data-pointer="touch"] {
   gap: 18px;
 }
 
