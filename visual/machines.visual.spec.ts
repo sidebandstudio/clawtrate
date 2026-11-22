@@ -22,7 +22,8 @@ const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
 async function runsOn(page: Page) {
   await page.getByRole("button", { name: /^Where Otto runs: / }).click();
   await expect(page.getByTestId("runs-on-page")).toBeVisible();
-  await expect(page.getByTestId("runs-on-loading")).toHaveCount(0);
+  // Every part is drawn: none is still being read.
+  await expect(page.getByTestId("runs-on-page").locator('[aria-busy="true"]')).toHaveCount(0);
 }
 const runsOnReady = (page: Page) =>
   runsOn(page).then(() => expect(page.getByTestId("runs-on-workspace")).toBeVisible());
@@ -139,6 +140,17 @@ const MORE: Scene[] = [
     ready: async (page) => {
       await page.getByRole("button", { name: /^Where Otto runs: / }).click();
       await expect(page.getByTestId("runs-on-loading")).toBeVisible();
+    },
+  },
+  {
+    name: "runs-on-credentials-reading",
+    rows: "F-046 F-047",
+    query: `${PANE}&access=admin&plugins=hang`,
+    ready: async (page) => {
+      await page.getByRole("button", { name: /^Where Otto runs: / }).click();
+      // Only the plugin credentials are still being read.
+      await expect(page.getByTestId("runs-on-page").locator('[aria-busy="true"]')).toHaveCount(1);
+      await expect(page.getByTestId("inventory-signins")).toHaveText("Reading…");
     },
   },
   {
