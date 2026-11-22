@@ -1950,8 +1950,12 @@ class ViewerSession implements BridgeSession {
         return client.computerCheck(this.viewer);
       case "computerDismiss":
         return client.computerDismiss(this.viewer);
-      case "computerStopTask":
+      case "computerStopTask": {
+        // Only the task of this viewer's pane, while this viewer has that task open.
+        const key = this.viewerId ? client.state.computer?.panes[this.viewerId]?.key : undefined;
+        if (key) this.mine(key);
         return client.computerStopTask(this.viewer, { owner });
+      }
       case "readMachine":
         return client.readMachine(this.mine(command.key), command.nodes, command.probe);
       case "readUsage":

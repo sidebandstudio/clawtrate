@@ -951,6 +951,7 @@ const computerPane = object<ComputerPane>()({
   stop: object<ComputerStop>()({
     sending: FLAG,
     runIds: list(MAX_STOPPED_RUNS, ID),
+    runsOmitted: NUMBER,
     aborted: FLAG,
     error: COMPUTER_TEXT,
   }),

@@ -190,6 +190,8 @@ export function outcomeLine(bot: string, outcome: ComputerOutcome): string {
       return `${bot}'s question was cancelled.`;
     case "already-expired":
       return `${bot}'s question had expired.`;
+    case "already-closed":
+      return `${bot}'s question is no longer open. Your answer wasn't sent.`;
     case "answer-not-sent":
       return answerNotSentLine;
     case "dropped-answered":

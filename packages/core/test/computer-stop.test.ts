@@ -50,6 +50,27 @@ describe("the Computer tab's Stop", () => {
     client.stop();
   });
 
+  it("F-145: Stop acts only on a task this viewer still has open: after the task is closed it sends nothing", async () => {
+    const gateway = grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((each) => each.state === "running"));
+    const viewer = createBridgeSession(client);
+    try {
+      await viewer.apply({ type: "openSession", key: KEY });
+      await viewer.apply({ type: "computerShow", key: KEY });
+      await viewer.apply({ type: "computerLeave" });
+      await viewer.apply({ type: "closeSession", key: KEY });
+      await expect(viewer.apply({ type: "computerStopTask" })).rejects.toThrow(
+        "This task is not open in this view.",
+      );
+      expect(gateway.calls("chat.abort")).toEqual([]);
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+  });
+
   it("F-145: a Stop still waiting for write access is withdrawn when its viewer goes away", async () => {
     const wait = deferred<unknown>();
     const { client, gateway, transcript } = await openTask({ held: READ_SCOPES });

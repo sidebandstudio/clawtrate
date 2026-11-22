@@ -9,6 +9,7 @@ import {
   initialComputerState,
   LIVE_FOR_MS,
   MAX_FRAME_BYTES,
+  MAX_INPUT_TEXT,
   MAX_QUEUED_INPUTS,
   parseFrame,
   pictureAge,
@@ -1334,6 +1335,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(h.pane().stop).toEqual({
       sending: false,
       runIds: ["run-1"],
+      runsOmitted: 0,
       aborted: null,
       error: null,
     });
@@ -1356,7 +1358,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
       stopError,
       outcomeKnown,
     });
-    const asked = { sending: false, runIds: ["run-1"], aborted: null, error: null };
+    const asked = { sending: false, runIds: ["run-1"], runsOmitted: 0, aborted: null, error: null };
     expect(stopProgress(null, [])).toEqual({ kind: "none" });
     expect(stopProgress({ ...asked, sending: true }, [run("running")])).toEqual({
       kind: "sending",
@@ -1373,7 +1375,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(stopProgress(asked, [run("stopped", null, false)])).toEqual({ kind: "ended" });
     expect(stopProgress(asked, [run("completed")])).toEqual({ kind: "ended" });
     expect(stopProgress(asked, [])).toEqual({ kind: "stopping" });
-    const none = { sending: false, runIds: [], aborted: false, error: null };
+    const none = { sending: false, runIds: [], runsOmitted: 0, aborted: false, error: null };
     expect(stopProgress(none, [])).toEqual({ kind: "nothing" });
     expect(stopProgress({ ...none, aborted: true }, [])).toEqual({ kind: "accepted" });
   });
@@ -1933,7 +1935,7 @@ describe("closing edits: tab choice, competing takes, confirmation in time, hand
   });
 
   it("a stop whose answer doesn't say whether it aborted anything is unconfirmed, not 'nothing stopped'", () => {
-    const stop = { sending: false, runIds: [], aborted: null, error: null };
+    const stop = { sending: false, runIds: [], runsOmitted: 0, aborted: null, error: null };
     expect(stopProgress(stop, [])).toEqual({ kind: "unconfirmed" });
     expect(stopProgress({ ...stop, aborted: false }, [])).toEqual({ kind: "nothing" });
     expect(words.nothingToStopLine("Pip")).toBe(
@@ -2018,5 +2020,147 @@ describe("a release on its way (F-145, section 18)", () => {
       true,
     );
     expect(h.pane().view?.status).toBe("live");
+  });
+});
+
+describe("bounds at the engine and what a settled state says", () => {
+  it("F-149: a Stop that named more runs than it keeps never says Stopped", async () => {
+    const ids = Array.from({ length: 9 }, (_, i) => `run-${i + 1}`);
+    const h = harness();
+    await ready(h);
+    h.ctx.stopTask = vi.fn(async () => ({ runIds: ids, aborted: null }));
+    await h.views.stopTask(h.viewer);
+    expect(h.pane().stop).toMatchObject({ runIds: ids.slice(0, 8), runsOmitted: 1 });
+    // The eight kept all stopped; the ninth is not known here.
+    const runs = ids.map((id) => ({
+      id,
+      state: "stopped" as const,
+      stopError: null,
+      outcomeKnown: true,
+    }));
+    expect(stopProgress(h.pane().stop, runs)).toEqual({ kind: "unconfirmed" });
+  });
+
+  it("F-142: a frame whose size is not a finite number is refused", () => {
+    const header = utf8Bytes('{"cssWidth":1e999,"cssHeight":600,"ts":1}');
+    const out = new Uint8Array(4 + header.length + 8);
+    new DataView(out.buffer).setUint32(0, header.length);
+    out.set(header, 4);
+    out.set([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9], 4 + header.length);
+    expect(parseFrame(out)).toBeNull();
+  });
+
+  it("F-142: a view whose stream id is not the plugin's kind is refused, never kept or cut", async () => {
+    const h = harness({
+      "clawtrate-computer.view.open": () => ({
+        streamId: "s".repeat(65),
+        wsPath: `/clawtrate-computer/stream?ticket=${TICKET}`,
+        expiresAtMs: Date.now() + 60_000,
+        renewWithinMs: 20_000,
+        targetId: TAB,
+      }),
+    });
+    await ready(h);
+    await h.views.watch(h.viewer);
+    expect(h.pane().view?.status).toBe("ended");
+    expect(h.streams).toHaveLength(0);
+    const uuid = harness({
+      "clawtrate-computer.view.open": () => ({
+        streamId: "6f1c2a4e-9b3d-4c8e-a1f2-3d4e5f6a7b8c",
+        wsPath: `/clawtrate-computer/stream?ticket=${TICKET}`,
+        expiresAtMs: Date.now() + 60_000,
+        renewWithinMs: 20_000,
+        targetId: TAB,
+      }),
+    });
+    await ready(uuid);
+    await uuid.views.watch(uuid.viewer);
+    expect(uuid.streams).toHaveLength(1);
+  });
+
+  it("F-142: input from a direct caller has the same bounds as a viewer's command", async () => {
+    const h = harness();
+    await granted(h);
+    expect(h.views.input(h.viewer, { kind: "text", text: "x".repeat(MAX_INPUT_TEXT + 1) })).toBe(
+      false,
+    );
+    expect(h.views.input(h.viewer, { kind: "click", x: Number.NaN, y: 1 })).toBe(false);
+    await flush();
+    expect(h.calls("clawtrate-computer.input")).toEqual([]);
+    expect(h.views.input(h.viewer, { kind: "text", text: "ok" })).toBe(true);
+  });
+
+  it("F-142: Stop watching retires a Check on its way, though giving control back is refused again", async () => {
+    vi.useFakeTimers();
+    let renewed!: (value: unknown) => void;
+    let held = false;
+    const h = harness({
+      "clawtrate-computer.control.release": () => {
+        throw refused("FORBIDDEN", "not_holder");
+      },
+      "clawtrate-computer.view.renew": () =>
+        held ? new Promise((resolve) => (renewed = resolve)) : { leaseRenewed: true },
+    });
+    await granted(h);
+    h.views.release(h.viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control.status).toBe("unconfirmed");
+    held = true;
+    const checking = h.views.check(h.viewer);
+    h.views.stopWatching(h.viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.pane().control.status).toBe("unconfirmed");
+    renewed({ leaseRenewed: true, streamRenewed: false });
+    await checking;
+    expect(h.pane().control.status).toBe("unconfirmed");
+  });
+
+  it("F-150: after a drop, the held tab is looked for in the whole reply: listed past the sixteen kept, held elsewhere, it stays unknown", async () => {
+    const others = Array.from({ length: 16 }, (_, i) => ({
+      targetId: `TAB${String(i).padStart(29, "0")}`,
+      url: `http://127.0.0.1:1/${i}`,
+      title: `Tab ${i}`,
+      lease: null,
+    }));
+    let lease: unknown = null;
+    // The held tab is first while control is taken; after the drop sixteen others come first.
+    let late = false;
+    const h = harness({
+      "clawtrate-computer.tabs": () => {
+        const held = { targetId: TAB, url: "http://127.0.0.1:1/sign-in", title: "Sign in", lease };
+        return {
+          agentId: "pip",
+          profile: "bot-pip",
+          browser: "running",
+          tabs: late ? [...others, held] : [held, ...others],
+        };
+      },
+    });
+    await granted(h);
+    late = true;
+    h.env.online = false;
+    h.views.connectionLost();
+    expect(h.pane().control.status).toBe("maybe-held");
+    h.env.online = true;
+    lease = { state: "granted", mine: false };
+    h.views.reconnected();
+    h.views.hello(["clawtrate-computer.tabs"]);
+    await flush();
+    expect(h.pane().tabs).toHaveLength(16);
+    expect(h.pane().control.status).toBe("maybe-held");
+  });
+
+  it("F-145: a question closed with no known cause is not said to be answered", async () => {
+    const h = harness();
+    h.env.question = question();
+    await granted(h);
+    h.env.question = question({ status: "closed" });
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    await flush();
+    expect(h.answered).toEqual([]);
+    expect(h.pane().control.outcome).toBe("already-closed");
+    expect(words.outcomeLine("Pip", "already-closed")).toBe(
+      "Pip's question is no longer open. Your answer wasn't sent.",
+    );
   });
 });

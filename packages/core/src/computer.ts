@@ -74,7 +74,10 @@ export type StopAnswer = {
 export type ComputerStop = {
   /** On its way. */
   sending: boolean;
+  /** The runs it named, at most `MAX_STOPPED_RUNS`. */
   runIds: string[];
+  /** Runs it named past `MAX_STOPPED_RUNS`: how they ended is not known here. */
+  runsOmitted: number;
   aborted: boolean | null;
   /** The request itself failed. */
   error: string | null;
@@ -104,6 +107,8 @@ export function stopProgress(
   const refused = named.find((run) => run && !isTerminal(run.state) && run.stopError);
   if (refused) return { kind: "refused", error: refused.stopError! };
   if (named.some((run) => !run || !isTerminal(run.state))) return { kind: "stopping" };
+  // Runs left out of the report may still be going, or have refused: never said to be stopped.
+  if (stop.runsOmitted > 0) return { kind: "unconfirmed" };
   return named.every((run) => run!.state === "stopped" && run!.outcomeKnown)
     ? { kind: "stopped" }
     : { kind: "ended" };
@@ -209,6 +214,8 @@ export type ComputerOutcome =
   | "already-dismissed"
   | "already-cancelled"
   | "already-expired"
+  /** No longer pending, and how it ended was not seen here (`QuestionStatus` "closed"). */
+  | "already-closed"
   | "answer-not-sent"
   /** Whether the question was still pending couldn't be read: the answer wasn't sent. */
   | "question-unknown"
@@ -347,6 +354,8 @@ const str = (value: unknown): string | null => (typeof value === "string" ? valu
 const cut = (value: string) =>
   value.length > MAX_COMPUTER_TEXT ? value.slice(0, MAX_COMPUTER_TEXT - 1) + "…" : value;
 const GENERATION = /^[0-9a-f]{32}$/;
+/** A view's stream id: the plugin's is a UUID; refused, never cut, when it is anything longer. */
+const STREAM_ID = /^[A-Za-z0-9-]{1,64}$/;
 const TARGET = /^[A-Za-z0-9._-]{1,128}$/;
 
 /** The gateway's code and the plugin's reason of a refused call. */
@@ -401,7 +410,14 @@ export function parseFrame(data: Uint8Array): {
   }
   const width = header?.cssWidth;
   const height = header?.cssHeight;
-  if (typeof width !== "number" || typeof height !== "number" || width <= 0 || height <= 0)
+  if (
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  )
     return null;
   const jpeg = data.subarray(4 + length);
   if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return null;
@@ -967,7 +983,8 @@ export class ComputerViews {
         view: view && tab ? { ...view, title: tab.title || view.title } : view,
       };
     });
-    this.afterTabs(live);
+    // The held tab is looked for in the whole reply, not only the tabs kept for the pane.
+    this.afterTabs(live, tabs);
     // The tab's request or control ended since the take was refused: nothing holds it now.
     const now = this.pane(viewer)?.control;
     if (now?.status === "conflict" && asked >= live.conflictAfter) {
@@ -1006,7 +1023,7 @@ export class ComputerViews {
   }
 
   /** After a reconnect, leases are read before anything is offered again. */
-  private afterTabs(live: Live): void {
+  private afterTabs(live: Live, listed: readonly ComputerTab[]): void {
     const pane = this.pane(live.viewer);
     // Read while connected: what the list says of the old lease settles a drop's "maybe held".
     if (!pane || (pane.control.status !== "checking" && pane.control.status !== "maybe-held"))
@@ -1018,7 +1035,7 @@ export class ComputerViews {
     }
     // A lookup that couldn't see the browser lists nothing, which says nothing of the lease.
     if (pane.browser === "unknown") return;
-    const tab = pane.tabs.find((each) => each.targetId === pane.control.targetId);
+    const tab = listed.find((each) => each.targetId === pane.control.targetId);
     // A new connection never holds the old one's lease: none listed, or one this connection
     // holds (another viewer of this app took the tab), means it ended.
     if (!tab?.lease || tab.lease.holder !== "elsewhere") {
@@ -1160,7 +1177,7 @@ export class ComputerViews {
     if (live.view !== view || view.ended) return;
     const gateway = this.ctx.gatewayUrl();
     const url = wsPath && gateway ? streamUrl(gateway, wsPath) : null;
-    if (!url || !streamId) {
+    if (!url || !streamId || !STREAM_ID.test(streamId)) {
       this.endView(live, "failed", "The plugin's answer gave no stream on this gateway.");
       return;
     }
@@ -1251,6 +1268,8 @@ export class ComputerViews {
     if (!live) return;
     const pane = this.pane(viewer);
     const status = pane?.control.status;
+    // A Check still on its way is retired, whether the hand-back below is confirmed or not.
+    live.closed += 1;
     if (status === "draining") this.abandonTake(live);
     // Anything this viewer may hold goes back, and nothing renews it any more.
     if (live.lease && (status === "granted" || status === "unverified" || status === "unconfirmed"))
@@ -1601,6 +1620,13 @@ export class ComputerViews {
    * control is being given back or is not confirmed. Nothing of it is logged.
    */
   input(viewer: string, input: Input): boolean {
+    // The same bounds as a viewer's command: a direct caller queues nothing larger.
+    let checked: Input;
+    try {
+      checked = parseInput(input);
+    } catch {
+      return false;
+    }
     const live = this.lives.get(viewer);
     const pane = this.pane(viewer);
     const lease = live?.lease;
@@ -1609,15 +1635,15 @@ export class ComputerViews {
     if (live.view && !live.view.ended && live.view.targetId !== lease.targetId) return false;
     const last = lease.inputs.at(-1);
     if (
-      input.kind === "text" &&
+      checked.kind === "text" &&
       last?.kind === "text" &&
-      last.text.length + input.text.length <= MAX_INPUT_TEXT
+      last.text.length + checked.text.length <= MAX_INPUT_TEXT
     ) {
-      last.text += input.text;
+      last.text += checked.text;
     } else {
       if (lease.inputs.length >= MAX_QUEUED_INPUTS) return false;
-      // A copy: text typed next is added to it, never to the caller's own object.
-      lease.inputs.push({ ...input });
+      // A copy (`parseInput`): text typed next is added to it, never to the caller's own object.
+      lease.inputs.push(checked);
     }
     void this.pump(live, lease);
     return true;
@@ -1989,7 +2015,13 @@ export class ComputerViews {
     const pane = this.pane(viewer);
     if (!pane) return;
     const key = pane.key;
-    const sent: ComputerStop = { sending: true, runIds: [], aborted: null, error: null };
+    const sent: ComputerStop = {
+      sending: true,
+      runIds: [],
+      runsOmitted: 0,
+      aborted: null,
+      error: null,
+    };
     this.patch(viewer, (p) => ({ ...p, stop: sent }));
     let stop: ComputerStop;
     try {
@@ -1997,11 +2029,18 @@ export class ComputerViews {
       stop = {
         sending: false,
         runIds: answer.runIds.slice(0, MAX_STOPPED_RUNS),
+        runsOmitted: Math.max(0, answer.runIds.length - MAX_STOPPED_RUNS),
         aborted: answer.aborted,
         error: null,
       };
     } catch (error) {
-      stop = { sending: false, runIds: [], aborted: null, error: refusal(error).message };
+      stop = {
+        sending: false,
+        runIds: [],
+        runsOmitted: 0,
+        aborted: null,
+        error: refusal(error).message,
+      };
     }
     // Its own pane's task only: a pane shown for another task since is not changed.
     this.patch(viewer, (p) => (p.key === key && p.stop === sent ? { ...p, stop } : p));
@@ -2009,13 +2048,15 @@ export class ComputerViews {
 }
 
 function alreadyOutcome(status: QuestionCard["status"] | null): ComputerOutcome {
-  return status === "dismissed"
-    ? "already-dismissed"
-    : status === "cancelled"
-      ? "already-cancelled"
-      : status === "expired"
-        ? "already-expired"
-        : "already-answered";
+  return status === "answered"
+    ? "already-answered"
+    : status === "dismissed"
+      ? "already-dismissed"
+      : status === "cancelled"
+        ? "already-cancelled"
+        : status === "expired"
+          ? "already-expired"
+          : "already-closed";
 }
 
 /** A request that gives up locally after `ms`; the gateway may still act on it. */
