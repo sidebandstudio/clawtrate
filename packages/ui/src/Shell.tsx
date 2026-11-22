@@ -312,17 +312,19 @@ export function Shell({
         .map((each) => [each.key, each.unreadMarker ?? null]),
     );
   });
-  // A chat a Clawtrate link opened is read only once the person opens it again: a link
-  // changes nothing on the gateway (links.md section 1). Its transcript loads as usual.
+  // A chat a Clawtrate link opened, with its latest activity then. The link's opening reads
+  // nothing on the gateway (links.md section 1), and leaving it reads nothing either. A reply
+  // seen there afterwards is read as in any chat, and choosing the chat in the list reads it
+  // as opening it does; from then on it is read as usual. Its transcript loads as usual.
   // The chat on screen while the link waits, at startup the one last open, is not opened
   // yet, so it is read neither then nor on leaving it for the link's chat.
-  const linkOpened = useRef<string | null>(null);
+  const linkOpened = useRef<{ key: string; updatedAt: number | null } | null>(null);
   // A read the gateway refused, or that failed, leaves the task unread here too, as the gateway has it.
   const forgetRead = selection.forgetReadHere;
   const readTask = useCallback(
     (key: string, explicitToo: boolean) => {
       if (
-        key === linkOpened.current ||
+        key === linkOpened.current?.key ||
         keptRef.current.has(key) ||
         (!explicitToo && (markersRef.current[key] ?? null) !== null)
       )
@@ -358,9 +360,19 @@ export function Shell({
       const opened = openedKey.current === taskKey;
       openedKey.current = null;
       if (visibleRef.current && opened) readTask(taskKey, false);
-      if (linkOpened.current === taskKey) linkOpened.current = null;
+      if (linkOpened.current?.key === taskKey) linkOpened.current = null;
     };
   }, [taskKey, readTask]);
+  const updatedAt = task?.updatedAt ?? null;
+  const replied = useEffectEvent((at: number | null) => {
+    const held = linkOpened.current;
+    if (held?.key !== taskKey || held.updatedAt === at) return;
+    linkOpened.current = null;
+    openedKey.current = taskKey;
+    if (connectedNow && conversationVisible && !linkPending && taskUnread && marker === null)
+      readTask(taskKey, false);
+  });
+  useEffect(() => replied(updatedAt), [updatedAt]);
 
   // The one place that moves focus for Work. As a drawer it takes focus, unless
   // focus is already inside it. When the pane closes, focus that was inside it
@@ -406,6 +418,25 @@ export function Shell({
     [onePane],
   );
   const showList = useCallback(() => setView("list"), []);
+  // A chat chosen in the list, by a click or Enter, also the one already open: a chat a
+  // link opened is read then, as opening it does.
+  const [chosen, setChosen] = useState(0);
+  const openFromList = useCallback(
+    (options?: { composer?: boolean }) => {
+      setChosen((count) => count + 1);
+      openDetail(options);
+    },
+    [openDetail],
+  );
+  const choseAgain = useEffectEvent(() => {
+    if (linkOpened.current?.key !== taskKey) return;
+    linkOpened.current = null;
+    openedKey.current = taskKey;
+    if (connectedNow && conversationVisible && !linkPending) readTask(taskKey, true);
+  });
+  useEffect(() => {
+    if (chosen > 0) choseAgain();
+  }, [chosen]);
 
   // Entering Routines closes Work (automation.md section 1); leaving returns focus to what opened it.
   const routinesOpener = useRef<HTMLElement | null>(null);
@@ -485,7 +516,10 @@ export function Shell({
   const openedLink = useRef<number | null>(null);
   const { selectTask } = selection;
   const openLinkedChat = useEffectEvent((botId: string, key: string) => {
-    if (openedKey.current !== key) linkOpened.current = key;
+    if (openedKey.current !== key) {
+      const row = state.tasksByBot[botId]?.find((each) => each.key === key);
+      linkOpened.current = { key, updatedAt: row?.updatedAt ?? null };
+    }
     selectTask(botId, key);
     // Closed for now: the drawer's saved position stays as the person left it.
     if (panelOpen && overlay) {
@@ -760,7 +794,7 @@ export function Shell({
         catchingUp={catchingUp}
         selection={selection}
         onePane={onePane}
-        onOpen={openDetail}
+        onOpen={openFromList}
         onShowList={showList}
         theme={theme}
         onTheme={onTheme}

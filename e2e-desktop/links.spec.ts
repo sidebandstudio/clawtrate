@@ -478,6 +478,42 @@ test("F-248: the notice goes when the person leaves the chat", async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
 });
 
+test("F-248: a reply in a chat a link opened, or choosing that chat in the list, reads it", async () => {
+  const key = "agent:wren:main";
+  /** Open Wren's chat, unread, by a link from Marlow's. The person keeps its draft. */
+  const openByLink = async () => {
+    await botButton("Marlow").click();
+    await expect(field()).toHaveAttribute("aria-label", "Message Marlow");
+    served.update(key, { unread: true });
+    await expect(botButton("Wren")).toHaveAccessibleName(/, unread/);
+    const before = reads(key).length;
+    await deliver(link("wren", "Other words."));
+    await expect(choice()).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(field()).toHaveAttribute("aria-label", "Message Wren");
+    await expect(field()).toHaveValue("Notes for later.");
+    // A read made on opening it would have reached the gateway by now.
+    await page.waitForTimeout(500);
+    expect(reads(key)).toHaveLength(before);
+    return before;
+  };
+
+  // A reply comes while it is on screen.
+  let before = await openByLink();
+  served.update(key, { unread: true, updatedAt: Date.now() });
+  await expect.poll(() => reads(key).length).toBeGreaterThan(before);
+
+  // The person chooses it in the list, where it is already open: with a click, then Enter.
+  before = await openByLink();
+  await botButton("Wren").click();
+  await expect.poll(() => reads(key).length).toBeGreaterThan(before);
+  before = await openByLink();
+  await botButton("Wren").focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => reads(key).length).toBeGreaterThan(before);
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
 test("F-248: a link Windows split in two is invalid, and its second half is no switch", async () => {
   // Read as a switch, the second half would start a second app on another data folder.
   await deliver(link("marlow", "Hi"), `--user-data-dir=${join(dir, "other")}`);

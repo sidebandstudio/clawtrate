@@ -126,8 +126,11 @@ replacing an existing draft. Explain when the link cannot open.
    [Decisions](../decisions.md#apps). Issue #103 owns scheme registration.
 2. Resolve against the current connection snapshot and normal bot selection.
    The engine supplies the connection identity, discovery and access it already
-   reads. The link adds no gateway calls or scopes. The normal tiers apply to
-   later explicit actions. Bind any choice to the connection and resolved chat.
+   reads. The link adds no gateway calls or scopes. Opening the chat for a link
+   marks nothing read, and neither does leaving it. A reply seen there
+   afterwards is read as in any chat, and so is the chat once the person
+   chooses it in the rail. The normal tiers apply to later explicit actions.
+   Bind any choice to the connection and resolved chat.
    Clear pending link text on close or after applying it. If the connection or
    chat changes while the choice is open, discard the choice and show the
    applicable failure. If the draft changes, show the choice again for the new
