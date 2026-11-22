@@ -16,9 +16,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseStatus } from "../src/setup/parse.ts";
-import { lookHere } from "../src/setup/look.ts";
+import { FILE_CHECK_MS, lookHere, readOnlyProgram } from "../src/setup/look.ts";
 import {
   checkRequest,
   ProgramRunner,
@@ -139,6 +139,32 @@ const defaultTable = (status = statusJson({ port: 18789 }), auth = authJson()) =
 });
 
 describe("what the look runs of an installed OpenClaw", () => {
+  it("F-515: reads a package manifest up to 64 KiB", async () => {
+    const launcher = join(dir, "openclaw.mjs");
+    const path = join(dir, "package.json");
+    writeFileSync(launcher, "");
+    const manifest = JSON.stringify({ name: "openclaw", version: "2026.10.6" }).padEnd(64 * 1024);
+    writeFileSync(path, manifest);
+    expect((await readOnlyProgram(launcher)).version).toBe("2026.10.6");
+    writeFileSync(path, manifest + " ");
+    expect((await readOnlyProgram(launcher)).version).toBeNull();
+  });
+
+  it("F-515: the manifest check uses the time left from finding the program", async () => {
+    const world = homeWorld();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      const result = await lookHere(world, fakeRunner(defaultTable()).run, {
+        onStep(step) {
+          if (step === 1) clock.mockReturnValue(FILE_CHECK_MS + 1);
+        },
+      });
+      expect(result?.look).toMatchObject({ outcome: "cant-tell", reason: "timeout" });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("F-492 F-515: an OpenClaw whose launcher may repair itself is never run: the look reads its version and declines", async () => {
     // An installed package as npm leaves it, its launcher a stand-in that leaves a marker if it
     // runs at all, with the lifecycle work the real launcher would replay still pending.
@@ -1007,9 +1033,12 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     // Owned by another account, even unwritable to others.
     chmodSync(shared, 0o755);
     const lstat = s.context.files.lstat;
+    const foreignUid = s.context.uid === 1 ? 2 : 1;
     s.context.files.lstat = (path) => {
       const entry = lstat(path);
-      return path === shared && entry ? Object.assign(Object.create(entry), { uid: 4321 }) : entry;
+      return path === shared && entry
+        ? Object.assign(Object.create(entry), { uid: foreignUid })
+        : entry;
     };
     expect(await s.outcome(box.file)).toBe("file");
     s.context.files.lstat = lstat;

@@ -248,12 +248,17 @@ export class SetupController implements SetupHost {
     }
     if (phase === "connecting" || phase === "failed") {
       this.stopWatching();
-      void this.closeOwned();
-      this.publish(
-        this.state.look
-          ? { ...initialSetupState, phase: "found", look: this.state.look }
-          : initialSetupState,
-      );
+      // The screen stays until the cleanup settles: the found card only once setup's connection
+      // is closed, for this Back; a cleanup that failed says so (closeOwned), and Back tries again.
+      const attempt = this.attempt;
+      void this.closeOwned().then((closed) => {
+        if (!closed || attempt !== this.attempt) return;
+        this.publish(
+          this.state.look
+            ? { ...initialSetupState, phase: "found", look: this.state.look }
+            : initialSetupState,
+        );
+      });
     }
   }
 
@@ -323,9 +328,12 @@ export class SetupController implements SetupHost {
     ) {
       throw new Error("There is nothing to connect to. Look again.");
     }
-    // Setup's own earlier connection, one Back couldn't close included, is closed first.
+    // Setup's own earlier connection, one Back couldn't close included, is closed first. A
+    // cleanup is shared, so after it only the request whose attempt still stands goes on: two
+    // Connects that waited for the same cleanup never both reach the dialog.
+    const before = this.attempt;
     if (this.owned && !(await this.closeOwned())) return;
-    if (this.found !== found) return;
+    if (this.found !== found || this.attempt !== before) return;
     const attempt = (this.attempt += 1);
     const confirm = this.options.confirm;
     if (!confirm) {
@@ -431,10 +439,15 @@ export class SetupController implements SetupHost {
     // Once each socket is up and again just before its credential goes, the endpoint's
     // listener is read again: the port's listener by PID and start time, the endpoint, the
     // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
-    const verify = async () => {
+    // The client's signal ends with the socket or the reads' shared time: the commands stop then.
+    const verify = async (signal: AbortSignal) => {
       if (attempt !== this.attempt) return false;
       try {
-        return (await this.unchanged(opened, found)) && attempt === this.attempt;
+        return (
+          (await this.unchanged(opened, found, signal)) &&
+          !signal.aborted &&
+          attempt === this.attempt
+        );
       } catch (error) {
         if (attempt === this.attempt) {
           this.stopWatching();
@@ -514,10 +527,14 @@ export class SetupController implements SetupHost {
    * same listener by PID and start time, and token sign-in, each command
    * having finished in time and within its limit.
    */
-  private async unchanged(opened: Opened, found: FoundGateway): Promise<boolean> {
+  private async unchanged(
+    opened: Opened,
+    found: FoundGateway,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const { world, run } = opened;
     const identity = world.installed ? "stand-in" : await boundedFileIdentity(found.program);
-    if (identity !== found.programIdentity) return false;
+    if (identity !== found.programIdentity || signal?.aborted) return false;
     const env = { ...world.env, PATH: programPath(found.program), ...found.profile.env };
     const [statusRun, authRun] = await Promise.all([
       run({
@@ -526,6 +543,7 @@ export class SetupController implements SetupHost {
         env,
         cwd: world.cwd,
         ...LIMITS.status,
+        ...(signal ? { signal } : {}),
       }),
       run({
         program: found.program,
@@ -533,6 +551,7 @@ export class SetupController implements SetupHost {
         env,
         cwd: world.cwd,
         ...LIMITS.auth,
+        ...(signal ? { signal } : {}),
       }),
     ]);
     if (!succeeded(statusRun) || !succeeded(authRun)) return false;

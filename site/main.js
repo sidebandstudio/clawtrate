@@ -1,61 +1,94 @@
-// The site's only script: the theme switch, copy buttons, the approval demo,
-// the questions, and the entrances. The page reads fully without it, in dark.
+// The home page's script: the install commands, the approval demo, the questions,
+// and the entrances. theme.js is the theme switch; claws.js adds the Claws and the logo row.
+// The page reads fully without either, in dark.
 // Screens follow the theme through CSS, so the first paint is already right.
 
 (function () {
-  const root = document.documentElement;
-  const isLight = () => root.dataset.theme === "light";
-
-  const toggle = document.querySelector("[data-theme-toggle]");
-  function labelToggle() {
-    toggle.setAttribute("aria-label", isLight() ? "Switch to dark" : "Switch to light");
-  }
-  toggle.addEventListener("click", () => {
-    const next = isLight() ? "dark" : "light";
-    if (next === "light") root.dataset.theme = "light";
-    else delete root.dataset.theme;
-    try {
-      localStorage.setItem("theme", next);
-    } catch {
-      // Without storage the choice lasts for this visit.
-    }
-    labelToggle();
-  });
-  labelToggle();
-
-  // Copy the install command.
+  // Copy the install command. The label says what happened, then goes back.
   document.querySelectorAll("[data-copy]").forEach((button) => {
+    let reset = 0;
+    const restore = () => {
+      clearTimeout(reset);
+      reset = 0;
+      button.textContent = "Copy";
+    };
     button.addEventListener("click", async () => {
+      let said;
       try {
         await navigator.clipboard.writeText(button.parentElement.querySelector("code").textContent);
-        button.textContent = "Copied";
+        said = "Copied";
       } catch {
         const code = button.parentElement.querySelector("code");
         window.getSelection().selectAllChildren(code);
-        button.textContent = "Selected";
+        said = "Selected";
       }
-      setTimeout(() => (button.textContent = "Copy"), 1800);
+      if (document.hidden) return;
+      clearTimeout(reset);
+      button.textContent = said;
+      reset = setTimeout(restore, 1800);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && reset) restore();
     });
   });
+
+  // Homebrew or curl: tabs over the two commands, the same choice in every box.
+  const switches = [...document.querySelectorAll("[data-cmd]")];
+  function choose(tool) {
+    switches.forEach((box) => {
+      box.querySelectorAll("[data-cmd-tabs] button").forEach((tab) => {
+        const on = tab.dataset.tool === tool;
+        tab.setAttribute("aria-selected", String(on));
+        tab.tabIndex = on ? 0 : -1;
+      });
+      box.querySelectorAll(".cmd-box").forEach((panel) => {
+        panel.hidden = panel.dataset.tool !== tool;
+      });
+    });
+  }
+  switches.forEach((box) => {
+    const list = box.querySelector("[data-cmd-tabs]");
+    const tabs = [...list.querySelectorAll("button")];
+    list.setAttribute("role", "tablist");
+    list.setAttribute("aria-labelledby", box.previousElementSibling.id);
+    tabs.forEach((tab, index) => {
+      const panel = box.querySelector(`.cmd-box[data-tool="${tab.dataset.tool}"]`);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", panel.id);
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", tab.id);
+      tab.addEventListener("click", () => choose(tab.dataset.tool));
+      tab.addEventListener("keydown", (event) => {
+        const last = tabs.length - 1;
+        const to = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: last }[event.key];
+        if (to === undefined) return;
+        event.preventDefault();
+        const next = tabs[(to + tabs.length) % tabs.length];
+        choose(next.dataset.tool);
+        next.focus();
+      });
+    });
+  });
+  choose("brew");
 
   // The approval demo: Allow once or Deny, then reset.
   const demo = document.querySelector(".demo");
   const tag = demo.querySelector("[data-tag]");
   const live = demo.querySelector(".demo-live");
-  const pill = demo.querySelector(".pill img");
+  const pill = demo.querySelector(".pill .claw-art");
   const states = {
-    pending: { tag: "Needs approval", face: "bots/otto.svg", say: "" },
+    pending: { tag: "Needs approval", face: "waiting", say: "" },
     allowed: {
       tag: "Allowed once",
-      face: "bots/otto-done.svg",
+      face: "done",
       say: "Allowed once. Otto ran the command.",
     },
-    denied: { tag: "Denied", face: "bots/otto-blocked.svg", say: "Denied. Otto changed nothing." },
+    denied: { tag: "Denied", face: "blocked", say: "Denied. Otto changed nothing." },
   };
   function show(state, focus) {
     demo.dataset.state = state;
     tag.textContent = states[state].tag;
-    pill.src = states[state].face;
+    pill.dataset.state = states[state].face;
     live.textContent = states[state].say;
     if (focus) focus.focus();
   }

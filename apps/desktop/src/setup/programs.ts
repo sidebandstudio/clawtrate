@@ -34,6 +34,8 @@ export type ProgramRequest = {
   cwd: string;
   timeoutMs: number;
   maxBytes: number;
+  /** Ends the program when it aborts, as its time limit does: the run that asked is over. */
+  signal?: AbortSignal;
 };
 
 export type RunProgram = (request: ProgramRequest) => Promise<ProgramResult>;
@@ -191,6 +193,11 @@ export class ProgramRunner {
   readonly run: RunProgram = (request) => {
     this.check(request);
     return new Promise((resolve) => {
+      // A run already cancelled starts nothing.
+      if (request.signal?.aborted) {
+        resolve({ exitCode: null, stdout: "", timedOut: true, tooLarge: false, failed: false });
+        return;
+      }
       let child: ChildProcess;
       try {
         child = this.spawnImpl(request.program, [...request.args], {
@@ -239,6 +246,13 @@ export class ProgramRunner {
         timedOut = true;
         stop();
       }, request.timeoutMs);
+      const signal = request.signal;
+      const cancel = () => {
+        timedOut = true;
+        stop();
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      child.once("exit", () => signal?.removeEventListener("abort", cancel));
       child.stdout!.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size > request.maxBytes) {

@@ -16,6 +16,13 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#101112" />
     <link rel="icon" href="../../favicon.png" sizes="32x32" />
+    <link
+      rel="preload"
+      href="../../fonts/figtree-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="../../style.css" />
     <script>
       // Dark unless this visitor chose light on the site.
@@ -23,34 +30,909 @@
         if (localStorage.getItem("theme") === "light")
           document.documentElement.dataset.theme = "light";
       } catch (e) {}
+      document.documentElement.classList.add("js");
     </script>
   </head>
   <body>
+    <!-- The Claws' shared shapes: the eyes' clips and the lure's light. -->
+    <svg class="claw-defs" width="0" height="0" aria-hidden="true" focusable="false">
+      <defs>
+        <clipPath id="claw-eye"><circle r="3.1" /></clipPath>
+        <clipPath id="claw-eye-large"><circle r="3.7" /></clipPath>
+        <radialGradient id="lure-light">
+          <stop offset="0" stop-color="#f6f5f2" stop-opacity="0.9" />
+          <stop offset="0.35" stop-color="#bfe9ff" stop-opacity="0.35" />
+          <stop offset="1" stop-color="#45bdf5" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+    </svg>
+
     <header class="bar">
       <div class="bar-inner">
         <a class="brand" href="../../" aria-label="Clawtrate, home">
           <img src="../../logo.webp" width="32" height="32" alt="" />
           <span>Clawtrate</span>
         </a>
+        <nav aria-label="Sections">
+          <a href="../../">Overview</a>
+        </nav>
+        <div class="bar-end">
+          <button class="theme" type="button" aria-label="Switch to light" data-theme-toggle>
+            <svg class="i-sun" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.75" />
+              <path
+                d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05"
+              />
+            </svg>
+            <svg class="i-moon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.25 9.6A5.5 5.5 0 0 1 6.4 2.75a5.5 5.5 0 1 0 6.85 6.85Z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
     <main class="download">
       <h1>Download Clawtrate for Mac</h1>
-      <p class="download-version">
-        Beta __CLAWTRATE_BETA_VERSION__, Developer ID signed and notarized by Apple.
-      </p>
-      <div class="download-choices">
-        <a class="btn btn-primary" href="__CLAWTRATE_ARM64_ZIP__">Download for Apple silicon</a>
-        <a class="btn btn-secondary" href="__CLAWTRATE_X64_ZIP__">Download for Intel</a>
+      <p class="download-lede">Beta is out now for Mac. Stable isn't released yet.</p>
+
+      <div class="tracks">
+        <!-- Beta: the Lantern, a deep-sea Claw whose lure lights the way. -->
+        <article class="track track-beta" aria-labelledby="beta-title" data-claw-zone>
+          <div class="track-stage">
+            <span class="snow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            <span class="fizz" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <button
+              class="claw claw-lantern"
+              type="button"
+              aria-label="The Lantern, Beta's Claw."
+              disabled
+              data-claw
+              data-react="waiting"
+              data-moment="working:650 done:1800"
+            >
+              <svg
+                class="claw-art lantern"
+                viewBox="0 0 40 40"
+                data-state="thinking"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <g data-s="thinking">
+                  <g
+                    data-part="creature"
+                    style="transform-box: view-box; transform-origin: 20px 35px"
+                  >
+                    <g
+                      data-part="lure"
+                      style="
+                        transform-box: view-box;
+                        transform-origin: 20px 14.8px;
+                        animation: av-lure-sway 2600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                      "
+                    >
+                      <path
+                        data-part="stem"
+                        fill="none"
+                        stroke="#45bdf5"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M19.4 13.8C18.8 8.4 21.8 4.6 26.2 4.8C28.8 4.9 30.6 6.8 30.6 9.4"
+                      />
+                      <circle class="halo" cx="30.6" cy="10.2" r="9" fill="url(#lure-light)" />
+                      <circle
+                        data-part="ball"
+                        fill="#f6f5f2"
+                        stroke="#c9c6bf"
+                        stroke-width="0.7"
+                        style="
+                          animation: av-glow 2600ms cubic-bezier(0.42, 0, 0.58, 1) 0ms infinite;
+                        "
+                        cx="30.6"
+                        cy="10.2"
+                        r="2.9"
+                      />
+                    </g>
+                    <g data-part="body" fill="#45bdf5"><circle cx="20" cy="25" r="11.4" /></g>
+                    <g data-part="eye" transform="translate(16 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="1.02" cy="-1.3" r="1.67" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect data-part="lid" x="-6" y="-5.1" width="12" height="3.3" />
+                      </g>
+                    </g>
+                    <g data-part="eye" transform="translate(24 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="1.02" cy="-1.3" r="1.67" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect data-part="lid" x="-6" y="-5.1" width="12" height="3.3" />
+                      </g>
+                    </g>
+                    <circle data-part="mouth" fill="#16181b" cx="21" cy="29.5" r="0.95" />
+                  </g>
+                </g>
+                <g data-s="waiting">
+                  <g
+                    data-part="creature"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 20px 35px;
+                      animation: av-lean 2600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                    "
+                  >
+                    <g
+                      data-part="lure"
+                      style="transform-box: view-box; transform-origin: 20px 14.8px"
+                    >
+                      <path
+                        data-part="stem"
+                        fill="none"
+                        stroke="#45bdf5"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M19.4 13.8C18.8 8.4 21.8 4.6 26.2 4.8C28.8 4.9 30.6 6.8 30.6 9.4"
+                      />
+                      <circle
+                        data-part="ping"
+                        fill="none"
+                        stroke="#f6f5f2"
+                        stroke-width="1.4"
+                        vector-effect="non-scaling-stroke"
+                        style="
+                          transform-box: view-box;
+                          transform-origin: 30.6px 10.2px;
+                          animation: av-ping 2600ms cubic-bezier(0.2, 0, 0.4, 1) 0ms infinite;
+                        "
+                        cx="30.6"
+                        cy="10.2"
+                        r="2.9"
+                      />
+                      <circle class="halo" cx="30.6" cy="10.2" r="9" fill="url(#lure-light)" />
+                      <circle
+                        data-part="ball"
+                        fill="#f6f5f2"
+                        stroke="#c9c6bf"
+                        stroke-width="0.7"
+                        cx="30.6"
+                        cy="10.2"
+                        r="2.9"
+                      />
+                    </g>
+                    <g data-part="body" fill="#45bdf5"><circle cx="20" cy="25" r="11.4" /></g>
+                    <g data-part="eye" transform="translate(16 23.4) scale(1.1)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 0ms infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                    <g data-part="eye" transform="translate(24 23.4) scale(1.1)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 50ms
+                              infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="#16181b"
+                      d="M17.8 28.8H22.2Q22.2 31.8 20 31.8Q17.8 31.8 17.8 28.8Z"
+                    />
+                  </g>
+                </g>
+                <g data-s="working">
+                  <g
+                    data-part="creature"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 20px 35px;
+                      animation: av-bob 600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                    "
+                  >
+                    <g
+                      data-part="lure"
+                      style="
+                        transform-box: view-box;
+                        transform-origin: 20px 14.8px;
+                        animation: av-conduct 600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                      "
+                    >
+                      <path
+                        data-part="stem"
+                        fill="none"
+                        stroke="#45bdf5"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M19.4 13.8C18.8 8.4 21.8 4.6 26.2 4.8C28.8 4.9 30.6 6.8 30.6 9.4"
+                      />
+                      <circle class="halo" cx="30.6" cy="10.2" r="9" fill="url(#lure-light)" />
+                      <circle
+                        data-part="ball"
+                        fill="#f6f5f2"
+                        stroke="#c9c6bf"
+                        stroke-width="0.7"
+                        cx="30.6"
+                        cy="10.2"
+                        r="2.9"
+                      />
+                    </g>
+                    <g data-part="body" fill="#45bdf5"><circle cx="20" cy="25" r="11.4" /></g>
+                    <g data-part="eye" transform="translate(16 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0.1" cy="0.75" r="1.67" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect data-part="lid" x="-6" y="-5.1" width="12" height="3.92" />
+                      </g>
+                    </g>
+                    <g data-part="eye" transform="translate(24 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0.1" cy="0.75" r="1.67" />
+                      <g fill="#45bdf5" clip-path="url(#claw-eye)">
+                        <rect data-part="lid" x="-6" y="-5.1" width="12" height="3.92" />
+                      </g>
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="none"
+                      stroke="#16181b"
+                      stroke-width="1.3"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M18.4 29.6H21.6"
+                    />
+                  </g>
+                </g>
+                <g data-s="done">
+                  <g
+                    data-part="creature"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 20px 35px;
+                      animation: av-hop 3200ms cubic-bezier(0.3, 0, 0.2, 1) 0ms infinite;
+                    "
+                  >
+                    <g
+                      data-part="lure"
+                      style="transform-box: view-box; transform-origin: 20px 14.8px"
+                    >
+                      <path
+                        data-part="stem"
+                        fill="none"
+                        stroke="#45bdf5"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M19.4 13.8C18.8 8.4 21.8 4.6 26.2 4.8C28.8 4.9 30.6 6.8 30.6 9.4"
+                      />
+                      <circle class="halo" cx="30.6" cy="10.2" r="9" fill="url(#lure-light)" />
+                      <circle
+                        data-part="ball"
+                        fill="#f6f5f2"
+                        stroke="#c9c6bf"
+                        stroke-width="0.7"
+                        cx="30.6"
+                        cy="10.2"
+                        r="2.9"
+                      />
+                    </g>
+                    <g data-part="body" fill="#45bdf5"><circle cx="20" cy="25" r="11.4" /></g>
+                    <g data-part="eye" transform="translate(16 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <path
+                        fill="none"
+                        stroke="#16181b"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
+                      />
+                    </g>
+                    <g data-part="eye" transform="translate(24 23.4)">
+                      <circle fill="#45bdf5" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <path
+                        fill="none"
+                        stroke="#16181b"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
+                      />
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="none"
+                      stroke="#16181b"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M17.4 28.6Q20 32 22.6 28.6"
+                    />
+                  </g>
+                </g>
+              </svg>
+            </button>
+            <p class="claw-name" aria-hidden="true">The Lantern</p>
+          </div>
+          <div class="track-body">
+            <p class="track-tag">Out now</p>
+            <h2 id="beta-title">Beta</h2>
+            <p class="download-version">
+              __CLAWTRATE_BETA_VERSION__ · Developer ID signed and notarized by Apple. Requires
+              macOS 13 or later.
+            </p>
+            <div class="download-choices">
+              <a class="btn btn-primary" href="__CLAWTRATE_ARM64_ZIP__"
+                >Download for Apple silicon</a
+              >
+              <a class="btn btn-secondary" href="__CLAWTRATE_X64_ZIP__">Download for Intel</a>
+            </div>
+            <p class="download-note">
+              Not sure which? Open About This Mac in the Apple menu—any Apple M‑series chip is Apple
+              silicon. Unzip the download and drag Clawtrate to Applications.
+            </p>
+            <p class="download-note">
+              <a href="__CLAWTRATE_RELEASE_PAGE__">This beta on GitHub</a> ·
+              <a href="https://github.com/sidebandstudio/clawtrate/releases">All releases</a>
+            </p>
+          </div>
+        </article>
+
+        <!-- Stable: a Clawling with the white ball, waiting for its first release. -->
+        <article class="track track-stable" aria-labelledby="stable-title" data-claw-zone>
+          <div class="track-stage">
+            <span class="shore" aria-hidden="true"></span>
+            <button
+              class="claw claw-clawling"
+              type="button"
+              aria-label="The Clawling, Stable's Claw."
+              disabled
+              data-claw
+              data-react="waiting"
+              data-moment="done:1800"
+            >
+              <svg
+                class="claw-art clawling"
+                viewBox="0 0 40 40"
+                data-state="idle"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <circle
+                  class="ball"
+                  data-s="idle waiting"
+                  cx="36"
+                  cy="31.3"
+                  r="2.7"
+                  fill="#f6f5f2"
+                  stroke="#c9c6bf"
+                  stroke-width="0.7"
+                />
+                <g data-s="idle">
+                  <g
+                    data-part="creature"
+                    style="transform-box: view-box; transform-origin: 20px 35px"
+                  >
+                    <g
+                      data-part="arm"
+                      style="transform-box: view-box; transform-origin: 10.1px 27.5px"
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M10.1 27.5L5.3 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-92.4 5.3 22.9)"
+                        cx="5.3"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                    </g>
+                    <g
+                      data-part="arm"
+                      style="transform-box: view-box; transform-origin: 29.9px 27.5px"
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M29.9 27.5L34.7 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-8.4 34.7 22.9)"
+                        cx="34.7"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                    </g>
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.6 21.5Q15.8 15.55 15 9.6"
+                    />
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M23.4 21.5Q24.2 15.55 25 9.6"
+                    />
+                    <g data-part="body" fill="#5b8dff">
+                      <path
+                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                      />
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="none"
+                      stroke="#16181b"
+                      stroke-width="1.3"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M18.2 27.4Q20 29.1 21.8 27.4"
+                    />
+                    <g data-part="eye" transform="translate(15 9.6)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0.6" cy="0.2" r="1.67" />
+                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 0ms infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                    <g data-part="eye" transform="translate(25 9.6)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0.6" cy="0.2" r="1.67" />
+                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 50ms
+                              infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                  </g>
+                </g>
+                <g data-s="waiting">
+                  <g
+                    data-part="creature"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 20px 35px;
+                      animation: av-lean 2600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                    "
+                  >
+                    <g
+                      data-part="arm"
+                      style="transform-box: view-box; transform-origin: 10.1px 27.5px"
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M10.1 27.5L5.3 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-92.4 5.3 22.9)"
+                        cx="5.3"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                    </g>
+                    <g
+                      class="av-still"
+                      data-part="arm"
+                      style="
+                        transform-box: view-box;
+                        transform-origin: 29.9px 27.5px;
+                        animation: av-wave 900ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                        --av-still: -54deg;
+                      "
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M29.9 27.5L34.7 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-8.4 34.7 22.9)"
+                        cx="34.7"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                    </g>
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.6 21.5Q15.8 14.95 15 8.4"
+                    />
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M23.4 21.5Q24.2 14.95 25 8.4"
+                    />
+                    <g data-part="body" fill="#5b8dff">
+                      <path
+                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                      />
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="#16181b"
+                      d="M17.8 27.2H22.2Q22.2 30.2 20 30.2Q17.8 30.2 17.8 27.2Z"
+                    />
+                    <g data-part="eye" transform="translate(15 8.4) scale(1.1)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 0ms infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                    <g data-part="eye" transform="translate(25 8.4) scale(1.1)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                        <rect
+                          data-part="lid"
+                          style="
+                            transform-box: view-box;
+                            transform-origin: 0px 0px;
+                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 50ms
+                              infinite;
+                          "
+                          x="-6"
+                          y="-10.1"
+                          width="12"
+                          height="7"
+                        />
+                      </g>
+                    </g>
+                  </g>
+                </g>
+                <g data-s="done">
+                  <g
+                    data-part="creature"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 20px 35px;
+                      animation: av-hop 3200ms cubic-bezier(0.3, 0, 0.2, 1) 0ms infinite;
+                    "
+                  >
+                    <g
+                      data-part="arm"
+                      style="
+                        transform-box: view-box;
+                        transform-origin: 10.1px 27.5px;
+                        rotate: 42deg;
+                      "
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M10.1 27.5L5.3 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-92.4 5.3 22.9)"
+                        cx="5.3"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                    </g>
+                    <g
+                      data-part="arm"
+                      style="
+                        transform-box: view-box;
+                        transform-origin: 29.9px 27.5px;
+                        rotate: -42deg;
+                      "
+                    >
+                      <path
+                        stroke="#5b8dff"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M29.9 27.5L34.7 22.9"
+                      />
+                      <circle
+                        data-part="claw"
+                        fill="none"
+                        stroke="#5b8dff"
+                        stroke-width="3.4"
+                        pathLength="100"
+                        stroke-dasharray="78 22"
+                        transform="rotate(-8.4 34.7 22.9)"
+                        cx="34.7"
+                        cy="22.9"
+                        r="3.2"
+                      />
+                      <circle
+                        data-part="ball"
+                        fill="#f6f5f2"
+                        stroke="#c9c6bf"
+                        stroke-width="0.7"
+                        cx="36.73"
+                        cy="20.64"
+                        r="2.7"
+                      />
+                    </g>
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.6 21.5Q15.8 15.25 15 9"
+                    />
+                    <path
+                      data-part="stalk"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M23.4 21.5Q24.2 15.25 25 9"
+                    />
+                    <g data-part="body" fill="#5b8dff">
+                      <path
+                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                      />
+                    </g>
+                    <path
+                      data-part="mouth"
+                      fill="none"
+                      stroke="#16181b"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M17.4 27Q20 30.4 22.6 27"
+                    />
+                    <g data-part="eye" transform="translate(15 9)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <path
+                        fill="none"
+                        stroke="#16181b"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
+                      />
+                    </g>
+                    <g data-part="eye" transform="translate(25 9)">
+                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                      <path
+                        fill="none"
+                        stroke="#16181b"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
+                      />
+                    </g>
+                  </g>
+                </g>
+              </svg>
+            </button>
+            <p class="claw-name" aria-hidden="true">The Clawling</p>
+          </div>
+          <div class="track-body">
+            <p class="track-tag">Not released yet</p>
+            <h2 id="stable-title">Stable</h2>
+            <p class="track-text">No Stable build yet. Use Beta to try Clawtrate today.</p>
+            <p class="download-note">
+              Releases appear on
+              <a href="https://github.com/sidebandstudio/clawtrate/releases">GitHub</a> as they
+              ship.
+            </p>
+          </div>
+        </article>
       </div>
-      <p class="download-note">
-        Not sure which? Choose About This Mac in the Apple menu: a chip named Apple M is Apple
-        silicon. Open the download and move Clawtrate to Applications.
-      </p>
-      <p class="download-note">
-        <a href="__CLAWTRATE_RELEASE_PAGE__">This beta on GitHub</a> ·
-        <a href="https://github.com/sidebandstudio/clawtrate/releases">All releases</a>
-      </p>
+
+      <section class="pedigree" aria-labelledby="pedigree-title" data-reveal>
+        <p class="pedigree-title" id="pedigree-title">Built by engineers from</p>
+        <ul class="pedigree-logos">
+          <li>
+            <img
+              class="logo-aws"
+              src="../../assets/logos/aws.svg"
+              alt="AWS"
+              width="189"
+              height="126"
+              decoding="async"
+            />
+          </li>
+          <li>
+            <img
+              class="logo-amazon"
+              src="../../assets/logos/amazon.svg"
+              alt="Amazon"
+              width="399"
+              height="134"
+              decoding="async"
+            />
+          </li>
+          <li>
+            <img
+              class="logo-sonos"
+              src="../../assets/logos/sonos.svg"
+              alt="Sonos"
+              width="514"
+              height="100"
+              decoding="async"
+            />
+          </li>
+          <li>
+            <img
+              class="logo-mit-lincoln-laboratory"
+              src="../../assets/logos/mit-lincoln-laboratory.svg"
+              alt="MIT Lincoln Laboratory"
+              width="2025"
+              height="204"
+              decoding="async"
+            />
+          </li>
+          <li>
+            <img
+              class="logo-summit-partners"
+              src="../../assets/logos/summit-partners.svg"
+              alt="Summit Partners"
+              width="232"
+              height="44"
+              decoding="async"
+            />
+          </li>
+          <li>
+            <img
+              class="logo-philips"
+              src="../../assets/logos/philips.svg"
+              alt="Philips"
+              width="500"
+              height="92"
+              decoding="async"
+            />
+          </li>
+        </ul>
+      </section>
     </main>
+
+    <footer class="foot">
+      <p>Clawtrate — Your OpenClaw agents, orchestrated.</p>
+      <nav aria-label="Project">
+        <a href="https://github.com/sidebandstudio/clawtrate">Source</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/releases">Releases</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/LICENSE">MIT license</a>
+        <a href="https://github.com/sidebandstudio/clawtrate/blob/main/SECURITY.md">Security</a>
+      </nav>
+      <p>Not affiliated with OpenClaw or xAI. No analytics on this site.</p>
+    </footer>
+    <script src="../../theme.js" defer></script>
+    <script
+      src="../../claws.js"
+      defer
+      onerror="document.documentElement.classList.remove('js')"
+    ></script>
   </body>
 </html>

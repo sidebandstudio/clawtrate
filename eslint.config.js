@@ -50,6 +50,18 @@ export default tseslint.config(
     },
   },
   {
+    // The relay protocol runs in Workers, Node, Electron and Hermes, so it uses neither.
+    files: ["packages/relay-protocol/src/**/*.ts"],
+    languageOptions: { globals: {} },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { patterns: [{ group: ["node:*"], message: "the relay protocol runs outside Node too" }] },
+      ],
+      "no-restricted-globals": ["error", "window", "document", "process", "Buffer", "require"],
+    },
+  },
+  {
     // Metro reads its config as CommonJS.
     files: ["apps/mobile/metro.config.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },

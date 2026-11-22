@@ -228,11 +228,11 @@ describe("Back, when closing setup's connection fails", () => {
       expect(storage.data.has("connection")).toBe(true);
       setup.cancel();
       await until(() => deleteSetting.mock.calls.length === 1);
-      // Connect while that cleanup is under way: it waits for the same one, asks nothing.
-      const connecting = setup.connect();
+      // While that cleanup is under way the screen stays as it was: no card to Connect from yet.
+      expect(setup.current.phase).toBe("connecting");
+      await expect(setup.connect()).rejects.toThrow(/nothing to connect to/);
       firstDelete.reject(new Error("fixture settings write failed"));
-      await connecting;
-      expect(setup.current.phase).toBe("failed");
+      await until(() => setup.current.phase === "failed");
       expect(setup.current.failure?.kind).toBe("cleanup");
       expect(deleteSetting).toHaveBeenCalledTimes(1);
       expect(confirm).toHaveBeenCalledTimes(1);
@@ -281,6 +281,42 @@ describe("Back, when closing setup's connection fails", () => {
       expect(gateway.sockets.every((socket) => socket.readyState === 3)).toBe(true);
       expect(setup.current.phase).toBe("found");
       expect(setup.current.look?.access).toBe("paired");
+    });
+  });
+});
+
+describe("two Connects that wait for the same cleanup", () => {
+  it("F-492: only one reaches the dialog once the shared cleanup closes setup's connection", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(SCOPES, TOKEN) });
+    const bots = deferred<object>();
+    gateway.handlers["agents.list"] = () => bots.promise;
+    const storage = memoryStorage();
+    const remove = storage.delete;
+    let failing = true;
+    const closing = deferred<void>();
+    const deleteSetting = vi.fn(async (key: string) => {
+      if (key === "connection" && failing) throw new Error("fixture settings write failed");
+      if (key === "connection") await closing.promise;
+      return remove(key);
+    });
+    const confirm = vi.fn(async () => true);
+    const client = makeClient(gateway, { ...storage, delete: deleteSetting });
+    await withLocalSetup(client, async (setup) => {
+      (setup as unknown as { options: { confirm: typeof confirm } }).options.confirm = confirm;
+      await setup.connect();
+      await until(() => gateway.calls("agents.list").length > 0);
+      setup.cancel();
+      await until(() => setup.current.failure?.kind === "cleanup");
+      // Connect pressed twice: both wait for the one cleanup, which then succeeds.
+      failing = false;
+      const first = setup.connect();
+      const second = setup.connect();
+      await until(() => deleteSetting.mock.calls.length === 2);
+      closing.resolve();
+      await Promise.all([first, second]);
+      expect(deleteSetting).toHaveBeenCalledTimes(2);
+      expect(confirm).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -15,7 +15,6 @@ import {
   dialog,
   ipcMain,
   nativeImage,
-  nativeTheme,
   session,
   shell,
   type WebContents,
@@ -216,7 +215,8 @@ function createWindow(): BrowserWindow {
     minWidth: 900,
     minHeight: 560,
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0e14" : "#f4f5f2",
+    // The dark theme's ground: the app opens dark until a person chooses otherwise.
+    backgroundColor: "#101112",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     ...(process.platform === "darwin" ? {} : { icon: join(RESOURCES, "icon.png") }),
     webPreferences: {

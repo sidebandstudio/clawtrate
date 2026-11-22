@@ -4,8 +4,15 @@
 // for its commands, its workspace, what its settings say about the browser.
 // Then what its settings name, as inventory. Nothing is inferred from them.
 // Nothing is kept: the page reads the gateway when it opens and after a save.
+// Each part is read apart and drawn when its own read answers.
 
-import type { BotPlacement, ConnectionState, HostInfo } from "@clawtrate/core";
+import {
+  PLACEMENT_PARTS,
+  type ConnectionState,
+  type HostInfo,
+  type PlacementPart,
+  type PlacementParts,
+} from "@clawtrate/core";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
@@ -23,10 +30,11 @@ import {
 } from "./words.ts";
 import "./machines.css";
 
-type Read =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; placement: BotPlacement };
+type Read<T> =
+  { status: "loading" } | { status: "error"; message: string } | { status: "ready"; value: T };
+
+/** Each part of where a bot runs, as far as its own read has answered. */
+export type Placement = { [P in PlacementPart]: Read<PlacementParts[P]> };
 
 /** The connection and the access a read or a form belongs to. */
 export const connectionKey = (connection: ConnectionState) =>
@@ -39,13 +47,14 @@ export const connectionKey = (connection: ConnectionState) =>
   ].join("\n");
 
 /**
- * A bot's placement, read when shown and again on `reload()`. A read belongs to
- * the bot and the connection's access it was made for: while another bot's, an
- * earlier connection's or other scopes' read is all there is, nothing is drawn.
+ * A bot's placement, its parts read when shown and again on `reload()`. A read
+ * belongs to the bot and the connection's access it was made for: while another
+ * bot's, an earlier connection's or other scopes' read is all there is, nothing
+ * is drawn. Each part is kept as soon as its own read answers.
  */
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
-  const [held, setHeld] = useState<{ key: string; read: Read } | null>(null);
+  const [held, setHeld] = useState<{ key: string; parts: Partial<Placement> } | null>(null);
   const [tick, setTick] = useState(0);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
@@ -53,18 +62,20 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
-    bridge.invoke({ type: "readPlacement", botId }).then(
-      (placement) => live && setHeld({ key, read: { status: "ready", placement } }),
-      (error: unknown) =>
-        live &&
-        setHeld({
-          key,
-          read: {
-            status: "error",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        }),
-    );
+    const keep = (part: Partial<Placement>) =>
+      live &&
+      setHeld((was) => ({ key, parts: { ...(was?.key === key ? was.parts : {}), ...part } }));
+    for (const part of PLACEMENT_PARTS)
+      bridge.invoke({ type: "readPlacement", botId, part }).then(
+        (value) => keep({ [part]: { status: "ready", value } }),
+        (error: unknown) =>
+          keep({
+            [part]: {
+              status: "error",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+      );
     return () => {
       live = false;
     };
@@ -72,11 +83,17 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const reload = useCallback(() => setTick((n) => n + 1), []);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
-  const read: Read = !connected
-    ? { status: "error", message: "Not connected to the gateway." }
-    : held && held.key === key
-      ? held.read
-      : { status: "loading" };
+  const part = <P extends PlacementPart>(name: P): Placement[P] =>
+    !connected
+      ? { status: "error", message: "Not connected to the gateway." }
+      : ((held?.key === key ? held.parts[name] : undefined) ?? { status: "loading" });
+  const read: Placement = {
+    commands: part("commands"),
+    workspace: part("workspace"),
+    browser: part("browser"),
+    inventory: part("inventory"),
+    credentials: part("credentials"),
+  };
   return { read, reload };
 }
 
@@ -94,7 +111,7 @@ export function Mark({ kind }: { kind: "set" | "shown" }) {
   );
 }
 
-/** The Runs on group's one row. */
+/** The Runs on group's one row: the command setting, and bots with the same settings once read. */
 export function RunsOnRow({
   botName,
   read,
@@ -102,14 +119,22 @@ export function RunsOnRow({
   onOpen,
 }: {
   botName: string;
-  read: Read;
+  read: Placement;
   nameOf: (id: string) => string;
   onOpen: () => void;
 }) {
+  const { commands, workspace } = read;
   const value =
-    read.status === "ready"
-      ? runsOnValue(read.placement, nameOf)
-      : read.status === "error"
+    commands.status === "ready"
+      ? runsOnValue(
+          commands.value.commands,
+          [
+            ...commands.value.sameMachine,
+            ...(workspace.status === "ready" ? workspace.value.sameWorkspace : []),
+          ],
+          nameOf,
+        )
+      : commands.status === "error"
         ? "Couldn't load"
         : "Reading…";
   return (
@@ -164,6 +189,18 @@ const unavailableWords = (status: string, message?: string) =>
         ? "Not connected"
         : `Couldn't read: ${message ?? ""}`;
 
+/** A fact drawn from its part once that part's read answers; until then, that it is read or why it couldn't be. */
+function shown<T>(read: Read<T>, draw: (value: T) => ReactNode): ReactNode {
+  if (read.status === "ready") return draw(read.value);
+  return read.status === "loading" ? (
+    <span className="b-faint" aria-busy="true">
+      Reading…
+    </span>
+  ) : (
+    <span className="b-faint">{unavailableWords("failed", read.message)}</span>
+  );
+}
+
 /** The page "Where <bot> runs". */
 export function RunsOnPage({
   botId,
@@ -178,7 +215,7 @@ export function RunsOnPage({
 }: {
   botId: string;
   botName: string;
-  read: Read;
+  read: Placement;
   reload: () => void;
   nameOf: (id: string) => string;
   connection: ConnectionState;
@@ -250,47 +287,7 @@ export function RunsOnPage({
     </>
   );
 
-  if (read.status !== "ready") {
-    return (
-      <div className="b-tab m-page" data-testid="runs-on-page">
-        {head}
-        {saveLines}
-        {read.status === "loading" ? (
-          <div
-            aria-busy="true"
-            aria-label={`Loading where ${botName} runs`}
-            data-testid="runs-on-loading"
-          >
-            <div className="skeleton" style={{ height: 52, width: "100%" }} />
-            <div className="skeleton" style={{ height: 96, width: "100%", marginTop: 12 }} />
-            <div className="skeleton" style={{ height: 120, width: "100%", marginTop: 12 }} />
-          </div>
-        ) : (
-          <div className="work-empty" data-testid="runs-on-error">
-            <span className="empty-mark">
-              <WarnIcon />
-            </span>
-            <h4>Couldn't load where {botName} runs</h4>
-            <p>{read.message || "The gateway did not answer."}</p>
-            <div style={{ marginTop: 10 }}>
-              <button type="button" className="button" data-size="sm" onClick={reload}>
-                Try again
-              </button>
-            </div>
-          </div>
-        )}
-        {foot}
-      </div>
-    );
-  }
-
-  const { placement } = read;
-  const { commands, browser, inventory, sameSetting } = placement;
-  const node = commands.node;
-  const onNode = commands.host === "node";
-  const machineName = hostWords(commands);
-
-  const save = async (value: string) => {
+  const save = async (value: string, baseHash: string | null) => {
     setSaving(true);
     setError(null);
     setNote(null);
@@ -300,7 +297,7 @@ export function RunsOnPage({
         botId,
         host: value === "gateway" ? "gateway" : "node",
         nodeId: value === "gateway" ? null : value,
-        baseHash: placement.configHash,
+        baseHash,
       });
       if (!mounted.current) return;
       if (saved.status === "refused") {
@@ -341,6 +338,310 @@ export function RunsOnPage({
     }
   };
 
+  const { workspace, browser, inventory, credentials } = read;
+
+  const sameNotes: string[] = [];
+  if (read.commands.status === "ready" && read.commands.value.sameMachine.length > 0)
+    sameNotes.push(
+      `${botName} and ${names(read.commands.value.sameMachine.map(nameOf))} have the same command machine setting: ${hostWords(read.commands.value.commands)}.`,
+    );
+  if (workspace.status === "ready" && workspace.value.sameWorkspace.length > 0)
+    sameNotes.push(
+      `${botName} and ${names(workspace.value.sameWorkspace.map(nameOf))} have the same workspace setting.`,
+    );
+  const readAt = Object.values(read).flatMap((each) =>
+    each.status === "ready" ? [each.value.readAt] : [],
+  );
+  const readSpan =
+    readAt.length > 0 ? [clockTime(Math.min(...readAt)), clockTime(Math.max(...readAt))] : null;
+  // Try again reads every part again; it is offered once, at the first part whose read failed.
+  const failed = PLACEMENT_PARTS.find((part) => read[part].status === "error");
+  const tryAgain = (
+    <div className="b-actions">
+      <button type="button" className="button" data-size="sm" onClick={reload}>
+        Try again
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="b-tab m-page" data-testid="runs-on-page">
+      {head}
+      {sameNotes.length > 0 && (
+        <Note tone="warn" testId="runs-on-shared">
+          {sameNotes.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </Note>
+      )}
+
+      <h4 className="b-group">Commands</h4>
+      {read.commands.status === "ready" ? (
+        <CommandsPart
+          part={read.commands.value}
+          botName={botName}
+          disabled={!admin || saving}
+          saveLines={saveLines}
+          now={now}
+          onSave={save}
+        />
+      ) : (
+        <>
+          {saveLines}
+          {read.commands.status === "loading" ? (
+            <div
+              aria-busy="true"
+              aria-label={`Loading where ${botName} runs`}
+              data-testid="runs-on-loading"
+            >
+              <div className="skeleton" style={{ height: 52, width: "100%" }} />
+            </div>
+          ) : (
+            <div className="work-empty" data-testid="runs-on-error">
+              <span className="empty-mark">
+                <WarnIcon />
+              </span>
+              <h4>Couldn't load where {botName} runs</h4>
+              <p>{read.commands.message || "The gateway did not answer."}</p>
+              <div style={{ marginTop: 10 }}>
+                <button type="button" className="button" data-size="sm" onClick={reload}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <h4 className="b-group">Workspace</h4>
+      <dl className="facts m-facts">
+        <Fact label="Folder" testId="runs-on-workspace">
+          {shown(workspace, ({ workspace: path }) =>
+            path ? (
+              <>
+                <span className="mono m-path">{path}</span>{" "}
+                <CopyValue value={path} label="Copy folder" />
+              </>
+            ) : (
+              "Workspace path unavailable here"
+            ),
+          )}
+        </Fact>
+      </dl>
+      {failed === "workspace" && tryAgain}
+      <p className="b-hint">{botName}'s workspace, as the gateway reports it.</p>
+      <p className="b-hint">This control sets the bot's workspace in the gateway's settings.</p>
+      {admin && editing === null && workspace.status === "ready" && (
+        <div className="b-actions">
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-bs="workspace-change"
+            onClick={() => setEditing(workspace.value.workspace ?? "")}
+          >
+            Change…
+          </button>
+          <span className="b-hint">The gateway checks the path you enter.</span>
+        </div>
+      )}
+      {admin && editing !== null && (
+        <WorkspaceForm
+          botId={botId}
+          botName={botName}
+          initial={editing}
+          current={workspace.status === "ready" ? workspace.value.workspace : null}
+          onDone={(saved) => {
+            if (!mounted.current) return;
+            setEditing(null);
+            if (saved) {
+              announce(
+                saved.asTyped
+                  ? `Saved. ${botName}'s workspace: ${saved.workspace}`
+                  : saved.workspace === null
+                    ? "The gateway accepted the workspace change. The current workspace could not be confirmed."
+                    : `The gateway accepted the workspace change. It now lists ${botName}'s workspace as ${saved.workspace}.`,
+              );
+              reload();
+            }
+          }}
+          onFailed={() => {
+            if (mounted.current) reload();
+          }}
+        />
+      )}
+
+      <h4 className="b-group">Browser</h4>
+      <dl className="facts m-facts">
+        <Fact label={`${botName}'s tool lists`} testId="runs-on-browser">
+          {shown(
+            browser,
+            ({ browser: { own } }) =>
+              `Allow: ${listWords(own.allow)} · Deny: ${listWords(own.deny)}`,
+          )}
+        </Fact>
+        <Fact label="Every bot's tool lists">
+          {shown(
+            browser,
+            ({ browser: { everyBot } }) =>
+              `Allow: ${listWords(everyBot.allow)} · Deny: ${listWords(everyBot.deny)}`,
+          )}
+        </Fact>
+        <Fact label="The gateway's browser switches" testId="runs-on-browser-gateway">
+          {shown(
+            browser,
+            ({ browser: { gateway } }) =>
+              `Browser control: ${switchWords(gateway.control)} · Browser plugin: ${switchWords(gateway.plugin)}`,
+          )}
+        </Fact>
+        <Fact label="Clawtrate's computer plugin" testId="runs-on-browser-profile">
+          {shown(
+            browser,
+            ({ browser: { plugin } }) =>
+              (!plugin.present
+                ? "No entry in the gateway's settings"
+                : plugin.profile
+                  ? `Names the profile ${plugin.profile} for ${botName}`
+                  : `Names no profile for ${botName}`) +
+              (plugin.enabled === false ? "; turned off in the gateway's settings" : ""),
+          )}
+        </Fact>
+      </dl>
+      {failed === "browser" && tryAgain}
+      <p className="b-hint" data-testid="runs-on-browser-choice">
+        As stored in the gateway's settings. <Mark kind="shown" /> Choosing or creating a browser
+        profile isn't offered here.
+      </p>
+
+      <h4 className="b-group">What {botName}'s settings name</h4>
+      <p className="b-hint" style={{ marginTop: 0 }}>
+        Inventory. Whether {botName} can use each isn't reported.
+      </p>
+      <dl className="facts m-facts" data-testid="runs-on-inventory">
+        <Fact label="Accounts" testId="inventory-accounts">
+          {shown(inventory, ({ accounts }) =>
+            "status" in accounts
+              ? unavailableWords(
+                  accounts.status,
+                  accounts.status === "failed" ? accounts.message : undefined,
+                )
+              : accounts.length === 0
+                ? "None listed"
+                : accounts
+                    .map(
+                      (account) =>
+                        `${account.label ?? account.id}${account.bound ? " (bound)" : ""}`,
+                    )
+                    .join(", "),
+          )}
+        </Fact>
+        <Fact label="Tool servers" testId="inventory-servers">
+          {shown(inventory, ({ toolServers }) =>
+            toolServers.length === 0
+              ? "None configured"
+              : toolServers
+                  .map(
+                    (server) =>
+                      `${server.name} (${
+                        server.deniedBy
+                          ? `${server.deniedBy.list === "bot" ? `${botName}'s` : "every bot's"} deny list: ${server.deniedBy.entry}`
+                          : server.offered === true
+                            ? "offered in the latest task listed here"
+                            : server.offered === false
+                              ? "not offered in the latest task listed here"
+                              : "configured"
+                      })`,
+                  )
+                  .join("; "),
+          )}
+        </Fact>
+        <Fact label="Secrets" testId="inventory-secrets">
+          {shown(inventory, ({ secrets }) =>
+            Array.isArray(secrets) ? (
+              secrets.length === 0 ? (
+                "None in the gateway's secret store"
+              ) : (
+                `Names in the gateway's secret store: ${secrets.join(", ")}`
+              )
+            ) : (
+              <span className="b-faint">{unavailableWords(secrets.status)}</span>
+            ),
+          )}
+        </Fact>
+        <Fact label="Plugin credentials" testId="inventory-signins">
+          {shown(credentials, ({ plugins, pluginsOmitted }) =>
+            Array.isArray(plugins) ? (
+              plugins.length === 0 ? (
+                "No plugin entries to inspect in the gateway's settings"
+              ) : (
+                plugins
+                  .map(
+                    (each) =>
+                      `${each.plugin}: ${
+                        "status" in each.fields
+                          ? `Unavailable (${unavailableWords(each.fields.status, each.fields.status === "failed" ? each.fields.message : undefined)})`
+                          : each.fields.length === 0
+                            ? "declares no credentials"
+                            : each.fields
+                                .map((field) => `${field.label}, ${credentialWords(field)}`)
+                                .join("; ")
+                      }${each.fieldsOmitted > 0 ? ` · ${each.fieldsOmitted} more fields not read` : ""}`,
+                  )
+                  .join(" · ") + (pluginsOmitted > 0 ? ` · ${pluginsOmitted} more not read` : "")
+              )
+            ) : (
+              <span className="b-faint">{unavailableWords(plugins.status)}</span>
+            ),
+          )}
+        </Fact>
+        <Fact label="Workspace-only file tools" testId="inventory-folders">
+          {shown(inventory, ({ workspaceOnly }) =>
+            workspaceOnly === null
+              ? "Not set"
+              : `${workspaceOnly.value ? "On" : "Off"}, in ${workspaceOnly.set === "bot" ? `${botName}'s settings` : "the gateway's settings for every bot"}`,
+          )}
+        </Fact>
+      </dl>
+      {(failed === "inventory" || failed === "credentials") && tryAgain}
+      {readSpan && (
+        <p className="b-hint" data-testid="runs-on-read-at">
+          From {botName}'s settings and the gateway's, read{" "}
+          {readSpan[0] === readSpan[1]
+            ? `at ${readSpan[0]}`
+            : `from ${readSpan[0]} to ${readSpan[1]}`}
+          .
+          {inventory.status === "ready" && inventory.value.listing
+            ? ` Tool servers offered: the listing of ${botName}'s latest task listed here, read at ${clockTime(inventory.value.listing.readAt)}.`
+            : ""}
+          {read.commands.status === "ready" && read.commands.value.nodesOmitted > 0
+            ? ` ${read.commands.value.nodesOmitted} more machines aren't listed.`
+            : ""}
+        </p>
+      )}
+      {foot}
+    </div>
+  );
+}
+
+/** The command setting, once its own read answers. */
+function CommandsPart({
+  part,
+  botName,
+  disabled,
+  saveLines,
+  now,
+  onSave,
+}: {
+  part: PlacementParts["commands"];
+  botName: string;
+  disabled: boolean;
+  saveLines: ReactNode;
+  now: number;
+  onSave: (value: string, baseHash: string | null) => void;
+}) {
+  const { commands } = part;
+  const node = commands.node;
+  const onNode = commands.host === "node";
   const listed = onNode && node !== null;
   const current = commands.host === "gateway" ? "gateway" : listed ? node.id : "stored";
   const storedLabel =
@@ -355,42 +656,20 @@ export function RunsOnPage({
           : commands.host;
   const choices = [
     { value: "gateway", label: "The gateway's machine" },
-    ...placement.nodes.map((each) => ({
+    ...part.nodes.map((each) => ({
       value: each.id,
       label: `${each.name} · ${each.connected ? "Connected" : "Not connected"}`,
     })),
     ...(current === "stored" ? [{ value: "stored", label: storedLabel, disabled: true }] : []),
   ];
-
-  const sameNotes: string[] = [];
-  if (sameSetting.machine.length > 0)
-    sameNotes.push(
-      `${botName} and ${names(sameSetting.machine.map(nameOf))} have the same command machine setting: ${machineName}.`,
-    );
-  if (sameSetting.workspace.length > 0)
-    sameNotes.push(
-      `${botName} and ${names(sameSetting.workspace.map(nameOf))} have the same workspace setting.`,
-    );
-
   const origin =
     commands.host === null
       ? `Not set in the gateway's settings for ${botName} or for every bot.`
       : commands.inherited
         ? "From the gateway's setting for every bot."
         : `Set in ${botName}'s own settings.`;
-
   return (
-    <div className="b-tab m-page" data-testid="runs-on-page">
-      {head}
-      {sameNotes.length > 0 && (
-        <Note tone="warn" testId="runs-on-shared">
-          {sameNotes.map((line) => (
-            <p key={line}>{line}</p>
-          ))}
-        </Note>
-      )}
-
-      <h4 className="b-group">Commands</h4>
+    <>
       <p className="b-hint m-label" id="m-machine-label">
         The machine {botName}'s settings name for its commands:
       </p>
@@ -398,9 +677,9 @@ export function RunsOnPage({
         label={`${botName}'s command machine`}
         value={current}
         choices={choices}
-        disabled={!admin || saving}
+        disabled={disabled}
         onChoose={(value) => {
-          if (value !== current) void save(value);
+          if (value !== current) onSave(value, part.configHash);
         }}
         testId="runs-on-machine"
       />
@@ -417,7 +696,7 @@ export function RunsOnPage({
           </>
         )}
       </p>
-      {placement.configActive === false && (
+      {part.configActive === false && (
         <p className="b-hint" data-testid="runs-on-not-applied">
           The gateway reports saved settings it hasn't applied yet.
         </p>
@@ -444,178 +723,7 @@ export function RunsOnPage({
             : "No machine is stored with this setting."}
         </p>
       )}
-
-      <h4 className="b-group">Workspace</h4>
-      <dl className="facts m-facts">
-        <Fact label="Folder" testId="runs-on-workspace">
-          {placement.workspace ? (
-            <>
-              <span className="mono m-path">{placement.workspace}</span>{" "}
-              <CopyValue value={placement.workspace} label="Copy folder" />
-            </>
-          ) : (
-            "Workspace path unavailable here"
-          )}
-        </Fact>
-      </dl>
-      <p className="b-hint">{botName}'s workspace, as the gateway reports it.</p>
-      <p className="b-hint">This control sets the bot's workspace in the gateway's settings.</p>
-      {admin && editing === null && (
-        <div className="b-actions">
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            data-bs="workspace-change"
-            onClick={() => setEditing(placement.workspace ?? "")}
-          >
-            Change…
-          </button>
-          <span className="b-hint">The gateway checks the path you enter.</span>
-        </div>
-      )}
-      {admin && editing !== null && (
-        <WorkspaceForm
-          botId={botId}
-          botName={botName}
-          initial={editing}
-          current={placement.workspace}
-          onDone={(saved) => {
-            if (!mounted.current) return;
-            setEditing(null);
-            if (saved) {
-              announce(
-                saved.asTyped
-                  ? `Saved. ${botName}'s workspace: ${saved.workspace}`
-                  : saved.workspace === null
-                    ? "The gateway accepted the workspace change. The current workspace could not be confirmed."
-                    : `The gateway accepted the workspace change. It now lists ${botName}'s workspace as ${saved.workspace}.`,
-              );
-              reload();
-            }
-          }}
-          onFailed={() => {
-            if (mounted.current) reload();
-          }}
-        />
-      )}
-
-      <h4 className="b-group">Browser</h4>
-      <dl className="facts m-facts">
-        <Fact label={`${botName}'s tool lists`} testId="runs-on-browser">
-          Allow: {listWords(browser.own.allow)} · Deny: {listWords(browser.own.deny)}
-        </Fact>
-        <Fact label="Every bot's tool lists">
-          Allow: {listWords(browser.everyBot.allow)} · Deny: {listWords(browser.everyBot.deny)}
-        </Fact>
-        <Fact label="The gateway's browser switches" testId="runs-on-browser-gateway">
-          Browser control: {switchWords(browser.gateway.control)} · Browser plugin:{" "}
-          {switchWords(browser.gateway.plugin)}
-        </Fact>
-        <Fact label="Clawtrate's computer plugin" testId="runs-on-browser-profile">
-          {!browser.plugin.present
-            ? "No entry in the gateway's settings"
-            : browser.plugin.profile
-              ? `Names the profile ${browser.plugin.profile} for ${botName}`
-              : `Names no profile for ${botName}`}
-          {browser.plugin.enabled === false ? "; turned off in the gateway's settings" : ""}
-        </Fact>
-      </dl>
-      <p className="b-hint" data-testid="runs-on-browser-choice">
-        As stored in the gateway's settings. <Mark kind="shown" /> Choosing or creating a browser
-        profile isn't offered here.
-      </p>
-
-      <h4 className="b-group">What {botName}'s settings name</h4>
-      <p className="b-hint" style={{ marginTop: 0 }}>
-        Inventory. Whether {botName} can use each isn't reported.
-      </p>
-      <dl className="facts m-facts" data-testid="runs-on-inventory">
-        <Fact label="Accounts" testId="inventory-accounts">
-          {"status" in inventory.accounts
-            ? unavailableWords(
-                inventory.accounts.status,
-                inventory.accounts.status === "failed" ? inventory.accounts.message : undefined,
-              )
-            : inventory.accounts.length === 0
-              ? "None listed"
-              : inventory.accounts
-                  .map(
-                    (account) => `${account.label ?? account.id}${account.bound ? " (bound)" : ""}`,
-                  )
-                  .join(", ")}
-        </Fact>
-        <Fact label="Tool servers" testId="inventory-servers">
-          {inventory.toolServers.length === 0
-            ? "None configured"
-            : inventory.toolServers
-                .map(
-                  (server) =>
-                    `${server.name} (${
-                      server.deniedBy
-                        ? `${server.deniedBy.list === "bot" ? `${botName}'s` : "every bot's"} deny list: ${server.deniedBy.entry}`
-                        : server.offered === true
-                          ? "offered in the latest task listed here"
-                          : server.offered === false
-                            ? "not offered in the latest task listed here"
-                            : "configured"
-                    })`,
-                )
-                .join("; ")}
-        </Fact>
-        <Fact label="Secrets" testId="inventory-secrets">
-          {Array.isArray(inventory.secrets) ? (
-            inventory.secrets.length === 0 ? (
-              "None in the gateway's secret store"
-            ) : (
-              `Names in the gateway's secret store: ${inventory.secrets.join(", ")}`
-            )
-          ) : (
-            <span className="b-faint">{unavailableWords(inventory.secrets.status)}</span>
-          )}
-        </Fact>
-        <Fact label="Plugin credentials" testId="inventory-signins">
-          {Array.isArray(inventory.pluginCredentials) ? (
-            inventory.pluginCredentials.length === 0 ? (
-              "No plugin entries to inspect in the gateway's settings"
-            ) : (
-              inventory.pluginCredentials
-                .map(
-                  (each) =>
-                    `${each.plugin}: ${
-                      "status" in each.fields
-                        ? `Unavailable (${unavailableWords(each.fields.status, each.fields.status === "failed" ? each.fields.message : undefined)})`
-                        : each.fields.length === 0
-                          ? "declares no credentials"
-                          : each.fields
-                              .map((field) => `${field.label}, ${credentialWords(field)}`)
-                              .join("; ")
-                    }${each.fieldsOmitted > 0 ? ` · ${each.fieldsOmitted} more fields not read` : ""}`,
-                )
-                .join(" · ") +
-              (inventory.pluginsOmitted > 0 ? ` · ${inventory.pluginsOmitted} more not read` : "")
-            )
-          ) : (
-            <span className="b-faint">{unavailableWords(inventory.pluginCredentials.status)}</span>
-          )}
-        </Fact>
-        <Fact label="Workspace-only file tools" testId="inventory-folders">
-          {inventory.workspaceOnly === null
-            ? "Not set"
-            : `${inventory.workspaceOnly.value ? "On" : "Off"}, in ${inventory.workspaceOnly.set === "bot" ? `${botName}'s settings` : "the gateway's settings for every bot"}`}
-        </Fact>
-      </dl>
-      <p className="b-hint" data-testid="runs-on-read-at">
-        From {botName}'s settings and the gateway's, read at {clockTime(placement.readAt)}.
-        {inventory.listing
-          ? ` Tool servers offered: the listing of ${botName}'s latest task listed here, read at ${clockTime(inventory.listing.readAt)}.`
-          : ""}
-        {placement.nodesOmitted > 0
-          ? ` ${placement.nodesOmitted} more machines aren't listed.`
-          : ""}
-      </p>
-      {foot}
-    </div>
+    </>
   );
 }
 

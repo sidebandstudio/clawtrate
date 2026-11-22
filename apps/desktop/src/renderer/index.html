@@ -5,9 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: https:; media-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'"
+      content="default-src 'self'; img-src 'self' data: https:; media-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; script-src 'self' 'sha256-Gt2myF4eF1B7STm8b9M+pQ/FtYDf3sMol1rONy7gqPo='; object-src 'none'; base-uri 'none'"
     />
-    <meta name="color-scheme" content="light dark" />
+    <!-- Dark unless the script below finds a chosen theme. It sets the theme before the
+         stylesheet and the bundle load, so the first frame is already the chosen one. -->
+    <meta name="color-scheme" content="dark" />
+    <!-- The policy above allows this script by its hash; a change to it needs a new hash. -->
+    <script>
+      (() => {
+        let choice = new URLSearchParams(location.search).get("theme");
+        try {
+          choice ??= localStorage.getItem("clawtrate.theme");
+        } catch {
+          // Storage can be unavailable.
+        }
+        if (choice !== "system" && choice !== "light" && choice !== "dark") choice = "dark";
+        document.documentElement.dataset.theme = choice;
+        let scheme = choice;
+        if (scheme === "system") {
+          scheme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.querySelector('meta[name="color-scheme"]').content = scheme;
+      })();
+    </script>
     <title>Clawtrate</title>
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <link rel="icon" href="./favicon-32.png" type="image/png" sizes="32x32" />

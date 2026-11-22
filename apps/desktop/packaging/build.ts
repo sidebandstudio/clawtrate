@@ -3,20 +3,27 @@
 //
 //   node packaging/build.ts mac   # Clawtrate.app, a .dmg and a .zip for arm64 and x64
 //   node packaging/build.ts win   # an NSIS installer for x64; run it on Windows
+//   node packaging/build.ts mac --check <absolute folder>
+//                                 # for `pnpm check:packaged`: an ad hoc signed app for this
+//                                 # Mac's architecture, under a fresh check bundle id
 //
-// Output goes to apps/desktop/dist, which git ignores. Nothing is published.
+// Output goes to apps/desktop/dist, which git ignores, or for --check to the
+// folder named. Nothing is published.
 // Clawtrate's signing plan, preflight and signature-kind lines omit input values.
 // electron-builder's output passes through and can include those values.
 // Keep signed-build logs private.
 
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
-import { builderConfig, PRODUCT_NAME } from "./config.ts";
+import { APP_ID, builderConfig, PRODUCT_NAME } from "./config.ts";
+import { OUTPUT_VARIABLE, packageOutput } from "./output.ts";
 import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
+import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
 
@@ -62,10 +69,24 @@ const require = createRequire(join(APP_DIR, "package.json"));
 const electronVersion = (require("electron/package.json") as { version: string }).version;
 
 const platform = target === "mac" ? Platform.MAC : Platform.WINDOWS;
+// A check build carries an identifier of its own, so the preferences macOS keeps
+// by bundle id are never those of a Clawtrate someone uses.
+const check = target === "mac" && process.argv[3] === "--check";
+if (check) {
+  requireUnsignedEnvironment(process.env);
+  if (!process.argv[4] || !isAbsolute(process.argv[4])) {
+    console.error("usage: node packaging/build.ts mac --check <absolute folder>");
+    process.exit(2);
+  }
+}
+const env = check ? { ...process.env, [OUTPUT_VARIABLE]: process.argv[4] } : process.env;
+const config = builderConfig(env, electronVersion);
 const artifacts = await build({
   projectDir: APP_DIR,
-  targets: platform.createTarget(),
-  config: builderConfig(process.env, electronVersion),
+  targets: platform.createTarget(check ? "dir" : undefined),
+  config: check
+    ? { ...config, appId: `${APP_ID}.check.${randomBytes(8).toString("hex")}` }
+    : config,
   publish: "never",
 });
 for (const artifact of artifacts) console.log(artifact);
@@ -73,11 +94,14 @@ for (const artifact of artifacts) console.log(artifact);
 // What the macOS apps' signatures are, read back from the bundles. electron-builder
 // skips signing in a pull request's CI run even with an identity set.
 if (target === "mac") {
-  for (const folder of ["mac-arm64", "mac"]) {
-    const app = join(APP_DIR, "dist", folder, `${PRODUCT_NAME}.app`);
+  const output = packageOutput(env, APP_DIR);
+  for (const folder of check
+    ? [process.arch === "arm64" ? "mac-arm64" : "mac"]
+    : ["mac-arm64", "mac"]) {
+    const app = join(output.path, folder, `${PRODUCT_NAME}.app`);
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
     const { kind, matches } = checkMacSignature(plan.mac, shown);
-    console.log(`Signature of dist/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
+    console.log(`Signature of ${output.label}/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
     if (!matches) {
       console.error("The signature is not the one the signing variables asked for.");
       process.exitCode = 1;
