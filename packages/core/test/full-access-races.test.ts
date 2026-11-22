@@ -41,6 +41,11 @@ const saved = (storage: { data: Map<string, string> }) =>
     heldScopes: string[];
   } | null;
 
+type NodeEvents = {
+  on(event: string, listener: (reason: unknown) => void): void;
+  off(event: string, listener: (reason: unknown) => void): void;
+};
+
 const refusal = (code: string) => ({
   ok: false as const,
   error: { code: "UNAUTHORIZED", message: "refused", details: { code } },
@@ -733,6 +738,93 @@ describe("full access under interleavings", () => {
       (gateway.calls("device.scopes.requestUpgrade").at(-1) as { scopes: string[] }).scopes;
     return { client, gateway, approval, wanted };
   };
+
+  /** A saved rotation whose reconnect can't read the record: reads fail from the save on. */
+  const rotationWithFailingReads = async () => {
+    // Nothing the failed reconnect leaves may go unhandled.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    // The test process's own: this package's tests have no Node types.
+    const proc = (globalThis as unknown as { process: NodeEvents }).process;
+    proc.on("unhandledRejection", onUnhandled);
+    const done = () => {
+      proc.off("unhandledRejection", onUnhandled);
+      expect(unhandled).toEqual([]);
+    };
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const reads = { fail: false, failed: 0 };
+    const get = storage.get;
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      await set(key, value);
+      if (key === tokenKey(URL) && JSON.parse(value).token === "token-U") reads.fail = true;
+    };
+    storage.get = async (key) => {
+      if (reads.fail && key === tokenKey(URL)) {
+        reads.failed += 1;
+        throw new Error("read failed");
+      }
+      return get(key);
+    };
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    const before = gateway.connects.length;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    // The reopen fails: the error is shown, and another try is scheduled.
+    await until(() => client.state.connection.error?.code === "RECONNECT_FAILED");
+    expect(client.state.connection.retryAt).not.toBeNull();
+    expect(client.state.connection.gatewayUrl).toBe(URL);
+    expect(saved(storage)?.token).toBe("token-U");
+    const tries = reads.failed;
+    await until(() => reads.failed > tries);
+    return { client, gateway, storage, reads, before, done };
+  };
+
+  it("a reconnect after a saved rotation whose read of the record fails shows an error and retries until it reconnects with the rotated token", async () => {
+    const { client, gateway, reads, before, done } = await rotationWithFailingReads();
+    // Reads come back: the retry reconnects to the same gateway with the rotated token.
+    reads.fail = false;
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).auth?.deviceToken).toBe("token-U");
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.error).toBeNull();
+    expect(client.state.connection.gatewayUrl).toBe(URL);
+    client.stop();
+    done();
+  });
+
+  it("a reconnect after a saved rotation that keeps failing stops retrying at Disconnect or Forget", async () => {
+    for (const end of ["suspend", "disconnect"] as const) {
+      const { client, gateway, reads, done } = await rotationWithFailingReads();
+      await client[end]();
+      const stopped = reads.failed;
+      const connects = gateway.connects.length;
+      await sleep(150);
+      expect(reads.failed, end).toBe(stopped);
+      expect(gateway.connects.length, end).toBe(connects);
+      expect(client.state.connection.status, end).toBe(end === "suspend" ? "disconnected" : "idle");
+      client.stop();
+      done();
+    }
+  });
 
   it("an approved rotation whose reads fail keeps pairing another client on the store was granted meanwhile", async () => {
     const storage = memoryStorage({

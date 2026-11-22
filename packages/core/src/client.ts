@@ -1072,6 +1072,8 @@ export class ClawtrateClient {
     null;
   /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
   private heldToken: string | null = null;
+  /** The next try of a reopen that failed before its connection could retry by itself (`reopen`). */
+  private reopenTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Full access holds for the current connection: asked for, not read-only, and the host
    * keeps this device's credentials in secure storage. Read again as each connection opens.
@@ -2067,7 +2069,7 @@ export class ClawtrateClient {
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
         this.quietReconnect = true;
-        void this.open({ keepPendingAnswer: true });
+        this.reopen();
       },
     });
     this.scopeUpgrade = upgrade;
@@ -5698,6 +5700,37 @@ export class ClawtrateClient {
     return this.options.allowGatewayUrl ? this.options.allowGatewayUrl(url) : true;
   }
 
+  /**
+   * Opens the selected gateway again, keeping a pending answer, from outside a change (an
+   * approved access request's reconnect). A failure before the connection could retry by itself,
+   * such as a read of the saved token, is shown and tried again with the reconnect backoff, for as
+   * long as nothing opened or closed a connection since: a Disconnect, a switch or a stop ends it,
+   * and closing clears the next try.
+   */
+  private reopen(attempt = 0): void {
+    const opening = this.open({ keepPendingAnswer: true });
+    const generation = this.generation;
+    opening.catch(() => {
+      if (generation !== this.generation || !this.settings) return;
+      const reconnect = this.options.reconnect ?? { initialMs: 1000, maxMs: 30_000 };
+      const delayMs = Math.min(reconnect.initialMs * 2 ** attempt, reconnect.maxMs);
+      this.log("warn", "Could not reconnect to the gateway; trying again.");
+      this.setConnection({
+        status: this.everConnected ? "reconnecting" : "connecting",
+        error: {
+          code: "RECONNECT_FAILED",
+          message: "Clawtrate couldn't read this device's saved pairing to reconnect.",
+          hint: null,
+        },
+        retryAt: this.now() + delayMs,
+      });
+      this.reopenTimer = setTimeout(() => {
+        this.reopenTimer = null;
+        this.reopen(attempt + 1);
+      }, delayMs);
+    });
+  }
+
   private async open(options?: { keepPendingAnswer: boolean }): Promise<void> {
     this.close(options);
     const settings = this.settings;
@@ -6469,6 +6502,8 @@ export class ClawtrateClient {
 
   private close(options?: { keepPendingAnswer: boolean }): void {
     this.generation += 1;
+    if (this.reopenTimer !== null) clearTimeout(this.reopenTimer);
+    this.reopenTimer = null;
     this.discoveryRead = null;
     this.selectionReady = -1;
     this.endSocketReads();
