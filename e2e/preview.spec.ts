@@ -498,6 +498,7 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     "Sort bots: Recent activity",
   );
 
+  let previewed = 0;
   for (const agent of bots) {
     const row = botRow(page, name(agent));
     // F-015: the gateway's default bot carries the star, and only it.
@@ -510,13 +511,19 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     const newest = sessions
       .filter((s) => s.agentId === agent.id && !s.archived)
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
-    const words = newest
-      .lastMessagePreview!.replace(/[*_`#|]/g, "")
-      .split(/\s+/)
-      .slice(0, 3);
-    await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+    // The gateway previews only a task with a message. One another check just made has none
+    // yet, and the row shows that task's title instead.
+    if (newest.lastMessagePreview) {
+      const words = newest.lastMessagePreview
+        .replace(/[*_`#|]/g, "")
+        .split(/\s+/)
+        .slice(0, 3);
+      await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+      previewed += 1;
+    }
     await expect(row.locator(".bot-time")).toHaveText(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/);
   }
+  expect(previewed).toBeGreaterThan(0);
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
