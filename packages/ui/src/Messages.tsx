@@ -283,6 +283,17 @@ export function MessageActions({
       measure();
     };
     turn.addEventListener("pointerenter", onEnter);
+    // The finger that held the message is still down when its bar opens, maybe where a button of
+    // the bar now lies: the click its lift can make presses nothing. The next touch, click or key
+    // is the person's own.
+    const events = ["click", "pointerdown", "keydown"];
+    const swallow = (event: Event) => {
+      if (event.type === "click") {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      for (const type of events) window.removeEventListener(type, swallow, true);
+    };
     // Touch and hold on the message shows its actions; a tap elsewhere hides them.
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onDown = (event: PointerEvent) => {
@@ -294,6 +305,7 @@ export function MessageActions({
         if (bar.current) bar.current.dataset.pointer = "touch";
         measure();
         setHeld(true);
+        for (const type of events) window.addEventListener(type, swallow, true);
       }, LONG_PRESS_MS);
     };
     const cancel = () => {
@@ -306,6 +318,7 @@ export function MessageActions({
     turn.addEventListener("pointermove", cancel);
     return () => {
       cancel();
+      for (const type of events) window.removeEventListener(type, swallow, true);
       turn.removeEventListener("pointerenter", onEnter);
       turn.removeEventListener("pointerdown", onDown);
       turn.removeEventListener("pointerup", cancel);

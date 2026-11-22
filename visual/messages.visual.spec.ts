@@ -76,6 +76,16 @@ const unreached = (control: Locator) =>
     );
   });
 
+/** A finger down on the screen at a point, as a phone's touch screen sends it, until it lifts. */
+async function fingerDown(page: Page, x: number, y: number): Promise<() => Promise<unknown>> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x, y, id: 1, radiusX: 10, radiusY: 10, force: 1 }],
+  });
+  return () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+
 /** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
 async function react(page: Page, reactions: Record<string, MessageReaction[]>): Promise<void> {
   await page.evaluate((reactions) => {
@@ -984,6 +994,57 @@ for (const width of [320, 390, 430]) {
         for (const button of await buttons.all())
           await expect.poll(() => unreached(button)).toEqual([]);
       });
+
+    test("F-066: lifting the finger that held a message presses nothing in its actions, though Reply opened under it", async ({
+      page,
+    }) => {
+      await open(page);
+      // Your reply, the last message: at the transcript's foot, its actions open over its bubble.
+      const message = page.locator('[data-message="row-reply"]');
+      const actions = message.getByTestId("message-actions");
+      await holdOn(message);
+      const reply = (await actions
+        .getByRole("button", { name: "Reply in a thread" })
+        .boundingBox())!;
+      const x = reply.x + reply.width / 2;
+      const y = reply.y + reply.height / 2;
+      // Shut by a touch elsewhere, then held by a finger where Reply was.
+      await page.evaluate(() =>
+        document.body.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            pointerType: "touch",
+            pointerId: 2,
+            isPrimary: true,
+          }),
+        ),
+      );
+      await expect(actions).not.toHaveAttribute("data-open", "true");
+      await page.evaluate(() => {
+        const w = window as unknown as { clicks: number };
+        w.clicks = 0;
+        window.addEventListener("click", () => w.clicks++, true);
+      });
+      const lift = await fingerDown(page, x, y);
+      await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
+      const under = await page.evaluate(
+        ([x, y]) =>
+          document.elementFromPoint(x!, y!)?.closest("button")?.getAttribute("aria-label"),
+        [x, y],
+      );
+      expect(under).toBe("Reply in a thread");
+      await lift();
+      // The lift's click came and pressed nothing: the actions stay open, and no thread opens.
+      await expect
+        .poll(() => page.evaluate(() => (window as unknown as { clicks: number }).clicks))
+        .toBe(1);
+      await settle(page);
+      await expect(page.getByRole("dialog", { name: "Thread" })).toBeHidden();
+      await expect(actions).toHaveAttribute("data-open", "true");
+      // A tap of its own on Reply opens the thread.
+      await page.touchscreen.tap(x, y);
+      await expect(page.getByRole("dialog", { name: "Thread" })).toBeVisible();
+    });
   });
 }
 
