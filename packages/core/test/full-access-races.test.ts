@@ -520,4 +520,49 @@ describe("full access under interleavings", () => {
     });
     client.stop();
   });
+
+  it("an upgrade whose approval waited while a hello narrowed the grant builds on the narrowed grant", async () => {
+    const held = [
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.questions",
+      "operator.pairing",
+    ];
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", held),
+    });
+    const { gateway, approval } = approvingGateway();
+    let narrow = false;
+    gateway.connectReply = (params) => {
+      const { scopes } = params as ConnectParams;
+      return {
+        ok: true,
+        payload: helloOk(
+          narrow ? scopes.filter((scope) => scope !== "operator.pairing") : [...scopes],
+        ),
+      };
+    };
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess("admin").catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // While the approval waits, a reconnect's hello narrows the record.
+    narrow = true;
+    gateway.dropAll();
+    await until(() => saved(storage)?.heldScopes.includes("operator.pairing") === false);
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => saved(storage)?.token === "token-U");
+    expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
+    client.stop();
+  });
 });
