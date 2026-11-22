@@ -221,6 +221,7 @@ import {
   APPROVALS_SCOPE,
   ADMIN_SCOPE,
   ADMIN_SCOPES,
+  FULL_SCOPES,
   PAIRING_SCOPE,
   heldFromGrant,
   INTERACTIVE_SCOPES,
@@ -527,6 +528,14 @@ export type ClientOptions = {
    * never requested, so every write fails at once.
    */
   readOnly?: boolean;
+  /**
+   * A first pairing asks for all six operator scopes (`FULL_SCOPES`), and a
+   * reconnect asks for what the gateway confirmed within them. Off by default.
+   * Honoured only while the host keeps this device's credentials in the
+   * system's secure storage (`ClawtrateHost.secureCredentials`), and never with
+   * `readOnly`. A device paired before keeps what it holds.
+   */
+  fullAccess?: boolean;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -601,6 +610,31 @@ function withinAsked(granted: readonly string[], asked: readonly string[]): stri
       ? asked.includes(scope)
       : asked.some((wanted) => scopeSatisfied([wanted], scope)),
   );
+}
+
+/**
+ * A token record for a grant the gateway confirmed: what it asked for, or what an asked
+ * scope implies, is kept. Admin and pairing are held only when asked for and granted.
+ */
+function grantRecord(
+  token: string,
+  granted: readonly string[],
+  asked: readonly string[],
+): StoredDeviceToken {
+  const within = withinAsked(granted, asked);
+  const admin = asked.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
+  const pairing = asked.includes(PAIRING_SCOPE) && within.includes(PAIRING_SCOPE);
+  return {
+    token,
+    grantedScopes: within,
+    heldScopes: [
+      ...heldFromGrant(within),
+      ...(admin ? [ADMIN_SCOPE] : []),
+      ...(pairing ? [PAIRING_SCOPE] : []),
+    ],
+    ...(admin ? { adminHeld: true } : {}),
+    ...(pairing ? { pairingHeld: true } : {}),
+  };
 }
 
 /**
@@ -680,18 +714,27 @@ function digest(text: string): string {
 /**
  * What a setup connection's hello granted: `read` only for this protocol, the
  * operator role and exactly `["operator.read"]`; anything else, another role,
- * no scopes or more scopes, is `other` and nothing is written.
+ * no scopes or more scopes, is `other` and nothing is written. A setup that
+ * asked for more (full access) is `within` when the grant is the operator role
+ * and one or more of the scopes it asked for, and nothing else: the narrower
+ * grant is kept as it is.
  */
-export function setupGrant(hello: Pick<HelloOk, "auth" | "protocol">): "read" | "other" {
+export function setupGrant(
+  hello: Pick<HelloOk, "auth" | "protocol">,
+  asked: readonly string[] = READ_SCOPES,
+): "read" | "within" | "other" {
   const auth = asRecord(hello.auth);
   const scopes = auth?.scopes;
-  return hello.protocol === PROTOCOL_VERSION &&
-    auth?.role === "operator" &&
-    Array.isArray(scopes) &&
-    scopes.length === 1 &&
-    scopes[0] === READ_SCOPES[0] &&
-    READ_SCOPES.length === 1
-    ? "read"
+  if (hello.protocol !== PROTOCOL_VERSION || auth?.role !== "operator" || !Array.isArray(scopes))
+    return "other";
+  if (asked.length === 1 && asked[0] === READ_SCOPES[0])
+    return scopes.length === 1 && scopes[0] === READ_SCOPES[0] && READ_SCOPES.length === 1
+      ? "read"
+      : "other";
+  return scopes.length > 0 &&
+    scopes.every((scope) => typeof scope === "string" && asked.includes(scope)) &&
+    asked.every((scope) => FULL_SCOPES.includes(scope))
+    ? "within"
     : "other";
 }
 
@@ -920,12 +963,17 @@ export class ClawtrateClient {
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
-   * exactly `operator.read`.
+   * exactly `operator.read`, or with full access, within the scopes it asked for.
    */
   private tokenGate: { generation: number; url: string; staged: StagedDeviceToken | null } | null =
     null;
   /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
   private heldToken: string | null = null;
+  /**
+   * Full access holds for the current connection: asked for, not read-only, and the host
+   * keeps this device's credentials in secure storage. Read again as each connection opens.
+   */
+  private fullAccess = false;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -1340,7 +1388,8 @@ export class ClawtrateClient {
    * (docs/design/setup.md §7). The code stays in memory, is never written to
    * storage, and is dropped after the first hello or failure. The first device
    * token is written only when the gateway granted the operator role and
-   * exactly `operator.read`; anything else writes nothing and disconnects. The
+   * exactly `operator.read` (with full access, scopes within the six it asked
+   * for); anything else writes nothing and disconnects. The
    * gateway is saved once that token is.
    */
   async connectWithSetupCode(
@@ -1740,20 +1789,7 @@ export class ClawtrateClient {
             }
             // Only what the upgrade asked for, or what an asked scope implies, is kept: a
             // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
-            const within = withinAsked(scopes, target);
-            const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
-            const pairing = askedPairing && within.includes(PAIRING_SCOPE);
-            await this.writeToken(url, deviceId, role, {
-              token,
-              grantedScopes: within,
-              heldScopes: [
-                ...heldFromGrant(within),
-                ...(admin ? [ADMIN_SCOPE] : []),
-                ...(pairing ? [PAIRING_SCOPE] : []),
-              ],
-              ...(admin ? { adminHeld: true } : {}),
-              ...(pairing ? { pairingHeld: true } : {}),
-            });
+            await this.writeToken(url, deviceId, role, grantRecord(token, scopes, target));
           }),
       },
       reconnect: () => {
@@ -5423,6 +5459,10 @@ export class ClawtrateClient {
       return;
     }
 
+    const full = this.options.fullAccess === true && !this.options.readOnly;
+    const secure = full ? await this.secureCredentials() : false;
+    if (generation !== this.generation) return;
+    this.fullAccess = full && secure;
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
@@ -5445,10 +5485,7 @@ export class ClawtrateClient {
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
         // Not paired yet: only a hello says so, since a saved token may be one the gateway refuses.
-        requestedScopes:
-          stored && !this.options.readOnly && !this.isSetup(settings.url)
-            ? [...stored.heldScopes]
-            : [...READ_SCOPES],
+        requestedScopes: this.scopesToAsk(settings.url, stored),
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
@@ -5660,9 +5697,9 @@ export class ClawtrateClient {
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = token || code ? null : settings.token;
         // Exactly the scopes this client means to hold, never what the token happens to allow;
-        // a setup connection asks for read alone, a token that arrived meanwhile included.
-        const requested =
-          token && !this.options.readOnly && !setup ? token.heldScopes : [...READ_SCOPES];
+        // a setup connection asks for read alone, a token that arrived meanwhile included,
+        // unless full access holds.
+        const requested = this.scopesToAsk(settings.url, token);
         const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
@@ -5770,6 +5807,7 @@ export class ClawtrateClient {
               scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
             },
             live,
+            context.plan.scopes,
           );
         }
         if (!live()) return;
@@ -5785,7 +5823,8 @@ export class ClawtrateClient {
           // Another protocol: nothing is written, and the protocol notice says so (onHello).
           if (hello.protocol !== PROTOCOL_VERSION) return;
           const staged = gate.staged;
-          if (setupGrant(hello) !== "read" || staged === null || staged.role !== "operator") {
+          const grant = setupGrant(hello, context.plan.scopes);
+          if (grant === "other" || staged === null || staged.role !== "operator") {
             this.refuseSetupGrant();
             return;
           }
@@ -5802,13 +5841,21 @@ export class ClawtrateClient {
             const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
             if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
               return false;
-            await this.writeToken(settings.url, staged.deviceId, staged.role, {
-              token: staged.token,
-              grantedScopes: [...staged.scopes],
-              heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
-              ...(existing?.adminHeld ? { adminHeld: true } : {}),
-              ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-            });
+            // A first full pairing holds what the gateway confirmed within what it asked for.
+            await this.writeToken(
+              settings.url,
+              staged.deviceId,
+              staged.role,
+              !existing && grant === "within"
+                ? grantRecord(staged.token, staged.scopes, context.plan.scopes)
+                : {
+                    token: staged.token,
+                    grantedScopes: [...staged.scopes],
+                    heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
+                    ...(existing?.adminHeld ? { adminHeld: true } : {}),
+                    ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+                  },
+            );
             return true;
           });
           if (!written) return;
@@ -6151,7 +6198,7 @@ export class ClawtrateClient {
         ? [...this.state.connection.requestedScopes]
         : Array.isArray(details.requestedScopes)
           ? details.requestedScopes.filter((s): s is string => typeof s === "string")
-          : [...REQUESTED_SCOPES];
+          : [...this.state.connection.requestedScopes];
       const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
         url,
         setup ? "" : requestId,
@@ -7676,6 +7723,27 @@ export class ClawtrateClient {
     return this.identity;
   }
 
+  /** Whether the host keeps this device's credentials in secure storage now; false on any doubt. */
+  private async secureCredentials(): Promise<boolean> {
+    try {
+      return (await this.host.secureCredentials?.()) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The scopes a connect asks for. A read-only host asks for read. With no saved token, a
+   * first pairing asks for all six with full access, and read otherwise. A saved token asks
+   * for exactly what it holds, except that a setup connection asks for read without full access.
+   */
+  private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
+    if (this.options.readOnly) return [...READ_SCOPES];
+    if (!token) return this.fullAccess ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (this.isSetup(url) && !this.fullAccess) return [...READ_SCOPES];
+    return [...token.heldScopes];
+  }
+
   private async loadToken(
     url: string,
     deviceId: string,
@@ -7733,12 +7801,14 @@ export class ClawtrateClient {
     save: (
       params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      asked?: readonly string[],
     ) => Promise<void>;
   } {
     const current = () => generation === this.generation && this.settings?.url === url;
     const save = async (
       { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      asked?: readonly string[],
     ) => {
       if (!current() || !live()) return;
       // A setup connection's first token waits in memory for its grant to be checked.
@@ -7754,6 +7824,12 @@ export class ClawtrateClient {
         if (!current() || !live()) return;
         const existing = await this.loadToken(url, deviceId, role);
         if (!current() || !live()) return;
+        // A first pairing that asked for more than read holds what the gateway confirmed within
+        // what it asked for: a narrower grant is kept as it is, and nothing asks again.
+        if (!existing && asked?.some((scope) => !READ_SCOPES.includes(scope))) {
+          await this.writeToken(url, deviceId, role, grantRecord(token, scopes, asked));
+          return;
+        }
         const held = existing?.heldScopes ?? [...READ_SCOPES];
         await this.writeToken(url, deviceId, role, {
           token,
@@ -7772,11 +7848,7 @@ export class ClawtrateClient {
       load: async ({ deviceId, role }) => {
         const record = await this.loadToken(url, deviceId, role);
         if (!record) return null;
-        return {
-          token: record.token,
-          scopes:
-            this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
-        };
+        return { token: record.token, scopes: this.scopesToAsk(url, record) };
       },
       store: (params) => save(params, () => true),
       // A removal that names no token could take one saved after the rejection.
