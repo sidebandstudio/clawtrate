@@ -31,7 +31,7 @@ const open = (l: ReturnType<typeof L.emptyLedger>) =>
   Object.values(l.proposals).filter((e) => e.state === "open").length;
 const withGrant = (expiresAt = T + 1e9) => {
   const l = L.emptyLedger();
-  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, null, T);
+  L.publishGrant(l, "g", { version: "gv1", digest: "x", expiresAt }, T);
   return l;
 };
 
@@ -101,20 +101,14 @@ describe("grants", () => {
     );
   });
 
-  it("an update needs the generation it read, so it can't undo a revocation", () => {
+  it("a grant is created once, and revoking it is final", () => {
     const l = withGrant(T + 1000);
-    L.admit(l, proposal("p", agent("g", 1)), T);
     const next = { version: "gv2", digest: "y", expiresAt: T + 1000 };
-    expect(L.publishGrant(l, "g", next, 1, T).generation).toBe(2);
-    expect(l.proposals.p.state).toBe("withdrawn");
+    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
     L.revoke(l, "g", T);
-    expect(reason(() => L.publishGrant(l, "g", { ...next, version: "gv3" }, 2, T))).toBe(
-      "grant-generation",
-    );
-    expect(reason(() => L.publishGrant(l, "new", next, 1, T))).toBe("grant-missing");
-    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, null, T))).toBe(
-      "expired",
-    );
+    expect(reason(() => L.publishGrant(l, "g", next, T))).toBe("invalid");
+    expect(l.grants.g).toMatchObject({ generation: 2, revoked: "removed" });
+    expect(reason(() => L.publishGrant(l, "late", { ...next, expiresAt: T }, T))).toBe("expired");
   });
 
   it("an expired grant is revoked, and a revoked grant leaves after 30 days", () => {

@@ -695,6 +695,7 @@ Where these run, as the records PR (step 1) found them:
 - **F-537's withheld answer** belongs to the relay (step 8). The records PR checks that an admitted call's outcome is recorded and that the next call is refused.
 - **F-535's refusals** need a bot's tool, so they are contract tests in step 2; step 1's second part unit-tests the rule and checks `managers.set` on a gateway.
 - **F-536 once the plugin may apply** runs as unit tests in step 1's second part; its gateway checks wait for the primitives in "Gated on missing gateway primitives".
+- **Moved to step 1's second part**, each with its test: the cleanup sweep with its deletion marker (the records PR deletes no version, and publishing still checks its version exists), and grant updates (the records PR only creates and revokes grants, so a narrower grant is a new one).
 
 ### Not yet established
 

@@ -130,7 +130,6 @@ try {
     "F-537: a grant used, revoked mid-call, refused after, withdrawn on every device, an old generation refused",
     async () => {
       const g = await grantFor(op);
-      grantId = g.id;
       const first = await propose(op, g, bot, "label");
       const marker = other.lastSeq;
       const [during] = await Promise.all([
@@ -166,17 +165,12 @@ try {
         await outcome(propose(op, { id: g.id, generation: 2 }, bot, "label")),
         "grant-revoked",
       );
-      const again = await call<{ generation: number }>(op, "relay.grants.set", {
-        id: g.id,
-        expectedGeneration: 2,
-        scope: "suggest",
-        bots: [bot],
-      });
-      assert.equal(again.generation, 3);
+      // Access comes back only as a new grant; the stale helper stays refused.
+      grantId = (await grantFor(op)).id;
       assert.equal(
         await outcome(propose(op, g, bot, "label")),
-        "grant-generation",
-        "a reconnect with an old generation",
+        "grant-revoked",
+        "a reconnect with the original generation",
       );
     },
   );
@@ -184,7 +178,7 @@ try {
   await check(
     "A gateway switch mid-proposal: two instances are isolated, so a request and a grant stay with their gateway",
     async () => {
-      const switched = await propose(op, { id: grantId, generation: 3 }, bot, "effort");
+      const switched = await propose(op, { id: grantId, generation: 1 }, bot, "effort");
       const opB = await admin(b, "Bots check, second gateway");
       assert.notEqual((await call<Json>(opB, "status")).gateway, status.gateway);
       assert.equal(
@@ -192,7 +186,7 @@ try {
         "unknown",
       );
       assert.equal(
-        await outcome(propose(opB, { id: grantId, generation: 3 }, bot, "label")),
+        await outcome(propose(opB, { id: grantId, generation: 1 }, bot, "label")),
         "grant-missing",
       );
       assert.equal(

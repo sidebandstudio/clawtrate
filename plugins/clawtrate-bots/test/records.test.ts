@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EXPIRES_MS, ORPHAN_MS, admit, publishGrant } from "../lib/ledger.js";
+import { EXPIRES_MS, admit } from "../lib/ledger.js";
 import { Records } from "../lib/records.js";
 import { load, memoryStore } from "./harness.ts";
 
@@ -66,55 +66,16 @@ describe("the records", () => {
       expect(await records.version(id, proposals[id].digest)).toBeNull();
   });
 
-  it("cleanup and publication exclude each other: a failed delete, a cleared mark, and a day later", async () => {
-    let now = T;
+  it("publishing checks, after each observation, that its version exists and reads", async () => {
     const store = memoryStore();
-    const records = new Records(store, { now: () => now });
-    type Change = (l: Parameters<typeof admit>[0], at: number) => unknown;
-    const kinds: Record<string, (id: string, digest: string) => Change> = {
-      proposal: (id: string, digest: string) => (l, at) =>
-        admit(l, entry(id, digest, { kind: "bot", bot: "pip" }, "pip", at), at),
-      grant: (id: string, digest: string) => (l, at) =>
-        publishGrant(l, "g", { version: id, digest, expiresAt: at + 1e10 }, null, at),
-    };
-    for (const [kind, change] of Object.entries(kinds)) {
-      now = T;
-      const id = `${kind}-late`;
-      const digest = await records.persist(id, { id });
-      now = T + ORPHAN_MS;
-      store.faults.failNextDelete = true;
-      await expect(records.sweepOrphans()).rejects.toThrow("the delete failed");
-      expect((await records.ledger()).sweeping).toBe(id);
-      await expect(records.publish(id, digest, change(id, digest))).rejects.toMatchObject({
-        reason: "unpublishable",
-      });
-      expect(await records.sweepOrphans()).toEqual([id]);
-      expect((await records.ledger()).sweeping).toBeNull();
-      await expect(records.publish(id, digest, change(id, digest))).rejects.toMatchObject({
-        reason: "unpublishable",
-      });
-      now = T + 26 * 60 * 60 * 1000;
-      await expect(records.publish(id, digest, change(id, digest))).rejects.toMatchObject({
-        reason: "unpublishable",
-      });
-    }
-    expect((await records.ledger()).proposals).toEqual({});
-  });
-
-  it("a publisher racing a sweep: whichever ledger update lands first decides", async () => {
-    let now = T;
-    const records = new Records(memoryStore(), { now: () => now });
+    const records = new Records(store, { now: () => T });
     const digest = await records.persist("p", { id: "p" });
-    now = T + ORPHAN_MS;
-    const [published, swept] = await Promise.all([
-      outcome(
-        records.publish("p", digest, (l, at) =>
-          admit(l, entry("p", digest, { kind: "bot", bot: "pip" }, "pip", at), at),
-        ),
-      ),
-      records.sweepOrphans(),
-    ]);
-    expect(published === "admitted" ? swept : ["p"]).toEqual(published === "admitted" ? [] : swept);
+    store.rows.delete("v:p");
+    const publish = records.publish("p", digest, (l, at) =>
+      admit(l, entry("p", digest, { kind: "bot", bot: "pip" }, "pip", at), at),
+    );
+    await expect(publish).rejects.toMatchObject({ reason: "unpublishable" });
+    expect((await records.ledger()).proposals).toEqual({});
   });
 
   it("reopening Records over the same store reads the same ledger and versions", async () => {
@@ -206,44 +167,20 @@ describe("the plugin's methods", () => {
     );
   });
 
-  it("permissions come from the generation that supplied them, in both orders", async () => {
+  it("permissions come from the grant at the generation given, and a grant can't be changed", async () => {
     const { host, grant, suggest } = await setup();
-    const narrow = { id: grant.id, expectedGeneration: 1, scope: "suggest", bots: ["pip"] };
     const instructions = { fields: { instructions: { agents: { text: "x", baseHash: null } } } };
-    const held = host.store.hold("v:p_");
-    const late = suggest(instructions);
-    await held.reached;
-    expect((await host.call("relay.grants.set", narrow)).payload).toMatchObject({
-      generation: 2,
-      includeInstructions: false,
-    });
-    held.release();
-    expect(reasonOf(await late)).toBe("grant-generation");
-    expect(reasonOf(await suggest(instructions, 1))).toBe("grant-generation");
-    expect(reasonOf(await suggest(instructions, 2))).toBe("instructions");
-    // A request naming the next generation isn't checked against the current, wider one.
-    const ahead = host.store.hold("v:p_");
-    const early = suggest(instructions, 3);
-    const where = await Promise.race([
-      early.then(() => "answered"),
-      ahead.reached.then(() => "held"),
-    ]);
-    if (where === "held")
-      await host.call("relay.grants.set", {
-        ...narrow,
-        expectedGeneration: 2,
-        includeInstructions: false,
-      });
-    ahead.release();
-    expect([where, reasonOf(await early)]).toEqual(["answered", "grant-generation"]);
-    // A pending update can't bring access back after a revocation.
-    const update = host.store.hold("v:gv_");
-    const pending = host.call("relay.grants.set", { ...narrow, expectedGeneration: 2 });
-    await update.reached;
+    const reads = host.dispatched.length;
+    expect(reasonOf(await suggest(instructions, 2))).toBe("grant-generation");
+    expect(host.dispatched.length).toBe(reads);
+    const change = { id: grant.id, scope: "suggest", bots: ["pip"] };
+    expect(reasonOf(await host.call("relay.grants.set", change))).toBe("invalid");
+    const narrow = (await host.call("relay.grants.set", { scope: "suggest", bots: ["pip"] }))
+      .payload!;
+    const fromNarrow = { grant: narrow.id, generation: 1, bot: "pip", ...instructions };
+    expect(reasonOf(await host.call("relay.propose", fromNarrow))).toBe("instructions");
     await host.call("relay.grants.set", { id: grant.id, revoke: true });
-    update.release();
-    expect(reasonOf(await pending)).toBe("grant-generation");
-    expect(reasonOf(await suggest({}, 4))).toBe("grant-revoked");
+    expect(reasonOf(await suggest(instructions, 2))).toBe("grant-revoked");
   });
 
   it("a suggestion admitted before the revocation is withdrawn on every device; one after is refused", async () => {

@@ -25,7 +25,7 @@ export function memoryStore() {
   const mark = (key: string) => `${key}#${rows.get(key)?.rev ?? "absent"}`;
   /** Holds writes of keys with a prefix until released; `reached` resolves when one is held. */
   const gates: { prefix: string; reach: () => void; wait: Promise<void> }[] = [];
-  const faults = { failNextDelete: false, corrupt: new Set<string>() };
+  const faults = { corrupt: new Set<string>() };
   return {
     rows,
     faults,
@@ -71,10 +71,6 @@ export function memoryStore() {
     },
     async delete(key: string) {
       await tick();
-      if (faults.failNextDelete) {
-        faults.failNextDelete = false;
-        throw new Error("the delete failed");
-      }
       return rows.delete(key);
     },
     async entriesInKeyRange(range: {

@@ -9,39 +9,27 @@
 //
 // Persist first, then publish: a version is written in full before the ledger
 // refers to it, and readers use only versions the ledger refers to, with a
-// matching digest. Cleanup and publication exclude each other through the
-// ledger: a publisher checks, after each observation, that the version still
-// exists and isn't being swept; cleanup marks the one version it deletes in
-// the ledger first, deletes it, then clears the mark.
+// matching digest. Nothing deletes a version yet: reclaiming unpublished ones
+// comes with the journal's cleanup.
 
 import { canonical, digestOf } from "./canonical.js";
-import {
-  ORPHAN_MS,
-  Refusal,
-  clearSweeping,
-  emptyLedger,
-  markSweeping,
-  referenced,
-  sweep,
-} from "./ledger.js";
+import { Refusal, emptyLedger, sweep } from "./ledger.js";
 
 export const NAMESPACE = "records";
 const LEDGER = "ledger";
 const VERSION = "v:";
-const PAGE = 500;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 export class Records {
   constructor(store, { now = Date.now, onChange = () => {} } = {}) {
-    for (const need of ["observe", "compareAndApply", "registerIfAbsent", "entriesInKeyRange"])
+    for (const need of ["observe", "compareAndApply", "registerIfAbsent"])
       if (typeof store[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
     this.store = store;
     this.now = now;
     this.onChange = onChange;
-    this.sweepRunning = false;
   }
 
   /** @returns {Promise<ReturnType<typeof emptyLedger>>} */
@@ -69,7 +57,7 @@ export class Records {
       if (verify) await verify(ledger, now);
       const result = change(ledger, now);
       if (digestOf(ledger) === digestOf(before) && seen.value) return result;
-      // A revision on every stored change: a mark and its clearing never restore an earlier row.
+      // A revision on every stored change, so no change restores an earlier row.
       ledger.rev = (before.rev ?? 0) + 1;
       const out = await this.store.compareAndApply(LEDGER, seen.comparison, {
         operation: "update",
@@ -112,7 +100,7 @@ export class Records {
 
   /**
    * Publishes a stored version with `change`, checking after each observation
-   * that cleanup hasn't taken it.
+   * that it still exists and reads.
    * @template R
    * @param {string} id
    * @param {string} digest
@@ -120,49 +108,9 @@ export class Records {
    * @returns {Promise<R>}
    */
   publish(id, digest, change) {
-    return this.transact(change, async (ledger) => {
-      if (ledger.sweeping === id || !(await this.version(id, digest)))
+    return this.transact(change, async () => {
+      if (!(await this.version(id, digest)))
         throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
     });
-  }
-
-  /**
-   * Reclaims versions nothing has referred to for an hour: never published,
-   * replaced, or settled and removed. One sweep at a time; a deletion an
-   * earlier sweep left marked is finished first.
-   */
-  async sweepOrphans() {
-    if (this.sweepRunning) return [];
-    this.sweepRunning = true;
-    const removed = [];
-    try {
-      const pending = (await this.ledger()).sweeping;
-      if (pending) await this.reclaim(pending, removed);
-      const now = this.now();
-      let start = VERSION;
-      for (;;) {
-        const page = await this.store.entriesInKeyRange({
-          keyStartInclusive: start,
-          keyEndExclusive: "v;",
-          limit: PAGE,
-        });
-        const live = referenced(await this.ledger());
-        for (const { key, value } of page) {
-          const id = key.slice(VERSION.length);
-          if (live.has(id) || !(value?.storedAt + ORPHAN_MS <= now)) continue;
-          if (await this.transact((l) => markSweeping(l, id))) await this.reclaim(id, removed);
-        }
-        if (page.length < PAGE) return removed;
-        start = `${page[page.length - 1].key}\u0000`;
-      }
-    } finally {
-      this.sweepRunning = false;
-    }
-  }
-
-  async reclaim(id, removed) {
-    await this.store.delete(VERSION + id);
-    await this.transact((l) => clearSweeping(l, id));
-    removed.push(id);
   }
 }

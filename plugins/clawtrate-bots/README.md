@@ -6,15 +6,15 @@ This is the first part: **the records**. It keeps proposals and agent grants, an
 
 ## Gateway methods
 
-| Method                    | Scope | What                                                                                                                                                                            |
-| ------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `clawtrate-bots.status`   | read  | Version, the gateway's identity as the plugin knows it, capabilities, the open count and the limits. Apply and Describe are reported unavailable                                |
-| `.proposals.list`, `.get` | read  | Proposals the ledger refers to, each with its payload. A version whose digest doesn't match reads as "Clawtrate couldn't read this request."                                    |
-| `.proposals.decline`      | write | `{ id, digest }`: claims an open proposal and settles it `declined`, with the deciding device hashed                                                                            |
-| `.proposals.accept`       | admin | `{ id, digest }`: runs the claim's checks, then refuses with `apply-unavailable`                                                                                                |
-| `.relay.grants.get`       | read  | A grant's generation, state and details                                                                                                                                         |
-| `.relay.grants.set`       | admin | Writes a grant's version (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`), then publishes it with a new generation. `{ id, revoke: true }` removes access |
-| `.relay.propose`          | admin | `{ grant, generation, bot, fields, reason? }`: records an agent's suggestion for a bot the grant covers. It only proposes, and records its source                               |
+| Method                    | Scope | What                                                                                                                                                                                                                                   |
+| ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clawtrate-bots.status`   | read  | Version, the gateway's identity as the plugin knows it, capabilities, the open count and the limits. Apply and Describe are reported unavailable                                                                                       |
+| `.proposals.list`, `.get` | read  | Proposals the ledger refers to, each with its payload. A version whose digest doesn't match reads as "Clawtrate couldn't read this request."                                                                                           |
+| `.proposals.decline`      | write | `{ id, digest }`: claims an open proposal and settles it `declined`, with the deciding device hashed                                                                                                                                   |
+| `.proposals.accept`       | admin | `{ id, digest }`: runs the claim's checks, then refuses with `apply-unavailable`                                                                                                                                                       |
+| `.relay.grants.get`       | read  | A grant's generation, state and details                                                                                                                                                                                                |
+| `.relay.grants.set`       | admin | Writes a new grant's version (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`), then publishes it at generation 1. A grant is never changed: a narrower one is a new grant. `{ id, revoke: true }` removes access |
+| `.relay.propose`          | admin | `{ grant, generation, bot, fields, reason? }`: records an agent's suggestion for a bot the grant covers. It only proposes, and records its source                                                                                      |
 
 Every method but the reads needs a person's own connection: a direct operator request over the gateway's socket. An in-process call, such as a turn with no operator (research finding R6), is refused with `operator-required`, even when it reuses a client.
 
@@ -29,10 +29,7 @@ One retained keyed store in the gateway's database (`lib/records.js`):
 - **Versions** are immutable and written once: a proposal's details, or a grant's.
 - **The ledger** is one row. It is the only record that decides anything (`lib/ledger.js`), and it changes only through `compareAndApply`. Admission enforces 200 open proposals, 20 per source, and one open proposal per bot and field (a newer one supersedes). Revoking a grant moves its generation on and withdraws its open suggestions in the same update. A claim checks the digest and the grant's generation.
 - **Persist first, then publish.** Readers use only versions the ledger refers to.
-- **The sweep** runs at start and hourly:
-  - proposals expire after 24 hours;
-  - settled ones are removed after 30 days;
-  - a version nothing has referred to for an hour is reclaimed. It is first marked swept in a ledger update, so a delayed publisher can't publish it afterwards.
+- **The sweep** runs at start and hourly: proposals expire after 24 hours, and settled ones, and grants revoked, leave the ledger after 30 days. Nothing deletes a version yet; reclaiming unpublished ones comes with the journal's cleanup.
 
 ## Tests
 

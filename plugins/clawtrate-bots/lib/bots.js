@@ -2,12 +2,14 @@
 
 import { hashDevice, newId } from "./canonical.js";
 import * as L from "./ledger.js";
-import { EXPIRES_MS, LIMITS, ORPHAN_MS, Refusal, requireId } from "./ledger.js";
+import { EXPIRES_MS, LIMITS, Refusal, requireId } from "./ledger.js";
 import { NAMESPACE, Records } from "./records.js";
 
 export const PLUGIN_ID = "clawtrate-bots";
 export const PLUGIN_VERSION = "0.1.0";
 const GRANT_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+/** How often expiry and retention run when nothing else changes the ledger. */
+const SWEEP_MS = 60 * 60 * 1000;
 const EFFORT = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const AUTONOMY = ["hands-off", "ask"];
 const TEXT_MAX_BYTES = 64 * 1024;
@@ -221,12 +223,10 @@ export function createBots(api, options = {}) {
           const { generation } = await records.transact((l, at) => L.revoke(l, id, at));
           return { id, generation, revoked: true };
         }
-        // A new grant gets a fresh id; an update names the generation it read.
-        const update = params.id !== undefined;
-        const id = update ? requireId("g", params.id, "id") : newId("g");
-        const expected = update ? params.expectedGeneration : null;
-        if (update && !Number.isSafeInteger(expected))
-          throw bad("An update names the expectedGeneration it read.");
+        // A grant is never changed: a narrower one is a new grant, with a fresh id.
+        if (params.id !== undefined)
+          throw bad("A grant can't be changed. Add a new one and remove this one.");
+        const id = newId("g");
         if (!["see", "suggest"].includes(params.scope)) throw bad("scope must be see or suggest.");
         const all = params.bots === "all";
         if (
@@ -261,7 +261,7 @@ export function createBots(api, options = {}) {
         const body = { kind: "grant", grant: id, gateway: await gatewayId(), details };
         const digest = await records.persist(version, body);
         const { generation } = await records.publish(version, digest, (l, t) =>
-          L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
+          L.publishGrant(l, id, { version, digest, expiresAt }, t),
         );
         return { id, generation, ...details };
       },
@@ -376,13 +376,12 @@ export function createBots(api, options = {}) {
       const tick = () =>
         records
           .transact(() => {})
-          .then(() => records.sweepOrphans())
           .catch((error) =>
             api.logger?.warn?.(`${PLUGIN_ID}: couldn't sweep its records: ${error.message}`),
           );
       // At start, then hourly.
       await tick();
-      const timer = setInterval(tick, options.sweepIntervalMs ?? ORPHAN_MS);
+      const timer = setInterval(tick, options.sweepIntervalMs ?? SWEEP_MS);
       timer.unref?.();
       timers.push(timer);
     },
