@@ -1524,6 +1524,22 @@ describe("withdrawing", () => {
     expect(events).toEqual(["list", "list", "read"]);
   });
 
+  it("expects the beta GitHub lists once the Site runs have finished", async () => {
+    const newer = "0.1.1-beta.20261121.1";
+    const made = hub(true);
+    let lists = 0;
+    const runner: Run = (command, args, options) => {
+      if (!args.includes(siteRuns)) return made.runner(command, args, options);
+      // A newer beta is published while a Site run is still going.
+      if (lists++ > 0) return ok("");
+      made.releases.push(row(newer, false));
+      return ok("123");
+    };
+    const net = serving(() => new Response(feed(newer)));
+    await withdraw(runner, VERSION, { ...net, pollMs: 1 });
+    expect(output.at(-1)).toBe(`The Beta feed offers ${newer}.`);
+  });
+
   it("stops without judging the feed while a Site run on main stays unfinished", async () => {
     const made = hub(false);
     const runner: Run = (command, args, options) =>

@@ -1646,6 +1646,8 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
       );
     await new Promise((resolve) => setTimeout(resolve, net.pollMs));
   }
+  // A beta published during the wait changes what the Site workflow deploys.
+  releases = githubReleases(runner);
   // What the site should serve now, by the rule the Site workflow uses.
   const next = newestBeta(releases);
   console.log(
