@@ -1998,7 +1998,7 @@ export class ClawtrateClient {
         // It belongs to this gateway and this connection only. It retires every token issued before
         // it, so it is kept even when another socket on this store opened since, and even when a
         // newer request replaced the one it answers: only the current request reconnects or shows
-        // its approval. Queued with every other token change, so a late rejection cannot remove it.
+        // its approval (the pinned client reconnects only for a request not cancelled). Queued with every other token change, so a late rejection cannot remove it.
         store: ({ deviceId, role, token, scopes }) =>
           this.changeConnection(async () => {
             const sameConnection = () => {
@@ -2043,7 +2043,6 @@ export class ClawtrateClient {
       },
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
-        if (this.scopeUpgrade !== upgrade) return;
         this.quietReconnect = true;
         void this.open({ keepPendingAnswer: true });
       },
