@@ -108,6 +108,16 @@ async function holdOn(message: Locator): Promise<void> {
   await bubble.dispatchEvent("pointerup", at);
 }
 
+/** A message's reaction pills, in view, each reaching every point of its 44 px touch area. */
+async function pillsReach(page: Page, row: string, count: number): Promise<void> {
+  const message = page.locator(`[data-message="${row}"]`);
+  const pills = message.getByTestId("reaction");
+  await expect(pills).toHaveCount(count);
+  await message.getByTestId("reactions").evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await settle(page);
+  for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+}
+
 test.describe("message actions", () => {
   test.use(contextFor(WIDE, "light"));
 
@@ -653,6 +663,20 @@ test.describe("message actions on a phone", () => {
     await page.waitForTimeout(900);
     await expect(actions).not.toHaveAttribute("data-open", "true");
   });
+
+  test("F-066: when the screen narrows while a held message's actions show, the bar moves so each button keeps its 44 px hit area", async ({
+    page,
+  }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    await holdOn(turn);
+    await page.setViewportSize({ width: 320, height: PHONE.height });
+    const buttons = turn.getByTestId("message-actions").getByRole("button");
+    await expect(buttons).toHaveCount(3);
+    for (const button of await buttons.all())
+      await expect.poll(() => unreached(button)).toEqual([]);
+  });
 });
 
 /** Otto's progress bubble, a row of its own with no room beside it for the bar on a phone. */
@@ -722,14 +746,12 @@ for (const width of [320, 390]) {
       await page.evaluate(() => {
         const fixture = (
           window as unknown as {
-            clawtrateFixture: {
-              setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
-            };
+            clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
           }
         ).clawtrateFixture;
         fixture.setState((state) => ({
           ...state,
-          connection: { ...(state.connection as object), canWrite: true },
+          connection: { ...state.connection, canWrite: true },
         }));
       });
       const buttons = actions.getByRole("button");
@@ -750,40 +772,29 @@ for (const width of [320, 390]) {
           mine: i === 0,
         })),
       });
-      const message = page.locator('[data-message="row-9"]');
-      const pills = message.getByTestId("reaction");
-      await expect(pills).toHaveCount(6);
-      await message
-        .getByTestId("reactions")
-        .evaluate((el) => el.scrollIntoView({ block: "center" }));
-      await settle(page);
-      const rows = await pills.evaluateAll(
-        (all) => new Set(all.map((each) => each.getBoundingClientRect().top)).size,
-      );
+      await pillsReach(page, "row-9", 6);
+      const rows = await page
+        .locator('[data-message="row-9"]')
+        .getByTestId("reaction")
+        .evaluateAll((all) => new Set(all.map((each) => each.getBoundingClientRect().top)).size);
       expect(rows).toBe(2);
-      for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
     });
 
-    test("F-283: a reaction pill keeps its 44 px hit area over a replies link or a reply's quote under it", async ({
+    test("F-283: a reaction pill keeps its 44 px hit area over the replies link under it", async ({
       page,
     }) => {
       await open(page);
-      // Otto's first answer, which has a reply, takes a reaction too: its replies link is under
-      // the pill. The reply's quote is under the report's pills.
+      // Otto's first answer has a reply, so its replies link is under the reaction it takes here.
       await react(page, { "row-2": [{ emoji: "👀", count: 1, mine: false }] });
-      for (const [row, count] of [
-        ["row-2", 1],
-        ["row-9", 2],
-      ] as const) {
-        const message = page.locator(`[data-message="${row}"]`);
-        const pills = message.getByTestId("reaction");
-        await expect(pills).toHaveCount(count);
-        await message
-          .getByTestId("reactions")
-          .evaluate((el) => el.scrollIntoView({ block: "center" }));
-        await settle(page);
-        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
-      }
+      await pillsReach(page, "row-2", 1);
+    });
+
+    test("F-283: a reaction pill keeps its 44 px hit area over the quote of the reply under it", async ({
+      page,
+    }) => {
+      await open(page);
+      // Your reply after Otto's report quotes an earlier answer, just under the report's pills.
+      await pillsReach(page, "row-9", 2);
     });
   });
 }
