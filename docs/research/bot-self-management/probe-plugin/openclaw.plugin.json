@@ -1,0 +1,12 @@
+{
+  "id": "clawtrate-bots-probe",
+  "name": "Clawtrate bots probe",
+  "description": "Research probe for bot self-management. Development instances only.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "contracts": {
+    "tools": ["clawtrate_probe_self"],
+    "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}
