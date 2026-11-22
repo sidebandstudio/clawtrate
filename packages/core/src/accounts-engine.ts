@@ -1267,10 +1267,11 @@ export class AccountsEngine {
           : a,
       );
     }, SLOW_CREATE_MS);
-    // A bound Create that no longer owns the creation (a reset retired it, and another may have
-    // begun) fails without touching what the creation keeps: its timer and its state.
-    const failed = (error: unknown, uncertain: boolean): never => {
+    const assertCreating = () => {
       if (mark && this.creating !== mark) throw new WriteRetired();
+    };
+    const failed = (error: unknown, uncertain: boolean): never => {
+      assertCreating();
       return this.creationFailed(ctx, error, uncertain);
     };
     let botId: string | null = null;
@@ -1295,6 +1296,7 @@ export class AccountsEngine {
       }
     }
     if (!botId) return failed(new Error("The gateway did not say which bot it made."), true);
+    assertCreating();
     this.planned = { ...this.planned, botId };
     return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"]);
   }

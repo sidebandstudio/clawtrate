@@ -219,6 +219,14 @@ describe("a bot write is bound to its gateway to the end", () => {
     };
     return () => answer.resolve();
   }
+  function resetCreation(client: Awaited<ReturnType<typeof accountsClient>>["client"]) {
+    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
+    (
+      client as unknown as {
+        store: { update(change: (state: typeof client.state) => typeof client.state): void };
+      }
+    ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+  }
   const reconnected = async (
     client: Awaited<ReturnType<typeof accountsClient>>["client"],
     fake: AccountsGateway,
@@ -369,12 +377,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       );
     await until(() => fake.gateway.calls("agents.create").length === 1);
     // The client forgets the gateway, as a switch does, and a new Create begins.
-    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
-    (
-      client as unknown as {
-        store: { update(change: (state: typeof client.state) => typeof client.state): void };
-      }
-    ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+    resetCreation(client);
     const releaseSecond = holdCreate(fake);
     const second = createBridgeSession(client).apply({
       type: "createBot",
@@ -401,6 +404,39 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  it("keeps a partial Create's account choice when an earlier Create answers after it", async () => {
+    const { client, fake } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    const releaseFirst = holdCreate(fake);
+    try {
+      const first = client.createBot(input, "gateway-a");
+      await until(() => fake.gateway.calls("agents.create").length === 1);
+      resetCreation(client);
+      fake.gateway.handlers["agents.create"] = create;
+
+      const save = fake.gateway.handlers["users.prefs.set"]!;
+      fake.gateway.handlers["users.prefs.set"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      expect(await client.createBot({ ...input, name: "Bee" }, "gateway-a")).toEqual({
+        botId: "bee",
+        missing: ["preference"],
+      });
+      releaseFirst();
+      await expect(first).rejects.toThrow("gateway changed");
+
+      fake.gateway.handlers["users.prefs.set"] = save;
+      expect(await client.finishBot("bee")).toEqual({ botId: "bee", missing: [] });
+      expect(fake.prefs["clawtrate.bot-account.bee"]).toEqual({
+        mode: "account",
+        account: input.account,
+      });
+    } finally {
+      releaseFirst();
+      client.stop();
+    }
+  });
+
   it("retired by a reset and then refused, leaves the slow note of a Create begun since", async () => {
     const { client, fake } = await accountsClient();
     const original = fake.gateway.handlers["agents.create"]!;
@@ -416,12 +452,7 @@ describe("a bot write is bound to its gateway to the end", () => {
         (error: Error) => error.message,
       );
     await until(() => fake.gateway.calls("agents.create").length === 1);
-    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
-    (
-      client as unknown as {
-        store: { update(change: (state: typeof client.state) => typeof client.state): void };
-      }
-    ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+    resetCreation(client);
     const answer = deferred<void>();
     fake.gateway.handlers["agents.create"] = (params) => {
       const made = original(params);
