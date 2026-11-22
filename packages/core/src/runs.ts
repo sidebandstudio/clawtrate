@@ -637,6 +637,13 @@ export type OutgoingMessage = {
   /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
   replyToId?: string;
   /**
+   * The gateway's id of the session its task held when it was written. It goes to that session
+   * only, through queueing, holding, retries and a steer that becomes a send, and is refused once
+   * the key holds no session or another one (F-278). Absent while the task's session was not
+   * known: it is then sent only once a read of the task names one.
+   */
+  sessionId?: string;
+  /**
    * Where the gateway put a steer, by its own record; its acknowledgement says neither
    * (docs/research/steer-stop.md). `joined`: the bare `chat` final under the steer's own id
    * came while the run it was sent into went on. `withdrawn`: a Stop's `chat.abort` with that

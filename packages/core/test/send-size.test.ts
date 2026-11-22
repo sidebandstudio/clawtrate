@@ -46,6 +46,7 @@ describe("one size for a message (F-074, F-285)", () => {
       idempotencyKey: id,
       queueMode: "followup",
       replyToId: "row-9",
+      sessionId: `session:${KEY}`,
       files: [
         { fileName: 'notes "v2".txt', mimeType: "text/plain", bytes: 1000 },
         { fileName: "shot.png", mimeType: "image/png", bytes: 2048 },

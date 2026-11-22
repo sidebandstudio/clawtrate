@@ -19,8 +19,14 @@ export type SendShape = {
   idempotencyKey: string;
   queueMode: "steer" | "followup";
   replyToId?: string | null;
-  /** The gateway's id of the session the task's history came from, when it named one. */
+  /** The gateway's id of the session the message was written for, when it is known. */
   sessionId?: string | null;
+  /**
+   * The gateway's id of a row of that session this client read, for a stop command sent again:
+   * the gateway checks a stop command against the task's latest row. Otherwise none, and the
+   * gateway checks the session alone (F-278).
+   */
+  leafEntryId?: string | null;
   files: SizedFile[];
 };
 
@@ -50,7 +56,7 @@ export function chatSendParams<A extends { fileName: string; mimeType: string; c
     // For that session only: under a key whose task was deleted, the gateway refuses the send
     // instead of starting a new, empty task there (F-278). It applies neither to a steer.
     ...(shape.sessionId && shape.queueMode !== "steer"
-      ? { sessionId: shape.sessionId, expectedLeafEntryId: null }
+      ? { sessionId: shape.sessionId, expectedLeafEntryId: shape.leafEntryId ?? null }
       : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(shape.replyToId ? { replyToId: shape.replyToId } : {}),

@@ -23,6 +23,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
+  "packages/core/src/stop-words.ts:GATEWAY_STOP_WORDS": "static, the gateway's own abort words",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
   "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",

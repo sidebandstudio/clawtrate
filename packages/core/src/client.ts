@@ -16,6 +16,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
+import { isStopCommand } from "./stop-words.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
 import {
@@ -899,6 +900,12 @@ export class TaskArchivedError extends Error {
   }
 }
 
+/**
+ * OpenClaw 2026.10.6's refusal of any work in an archived task, a steer too (`INVALID_REQUEST`, no
+ * reason of its own): `Session "<key>" is archived. Restore it before starting new work.`
+ */
+const ARCHIVED_REFUSAL = /^Session ".*" is archived\. Restore it before starting new work\.$/s;
+
 /** A request that never left this client: nothing happened. */
 export class NotSentError extends Error {
   constructor() {
@@ -991,7 +998,10 @@ export class GatewayNotAllowedError extends Error {
   }
 }
 
-/** The session a history read came from, when it names one within the id bound; never cut. */
+/**
+ * The session a history read, a task's row or a creation's answer names, when it names one within
+ * the id bound; never cut.
+ */
 function sessionNamed(history: RawRecord | null): string | null {
   const id = history?.sessionId;
   return typeof id === "string" && id.length > 0 && id.length <= MAX_ID_CHARS ? id : null;
@@ -2416,6 +2426,8 @@ export class ClawtrateClient {
         sizeBytes: decodedBytes(attachment.content),
       })),
       ...(replyToId ? { replyToId } : {}),
+      // The session of the task on screen now: whatever the key holds later, it goes there only.
+      ...(transcript.sessionId ? { sessionId: transcript.sessionId } : {}),
     };
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
@@ -2468,6 +2480,7 @@ export class ClawtrateClient {
     attachments: OutgoingAttachment[],
     replyToId?: string,
     sessionId?: string,
+    leafEntryId?: string,
   ) {
     return chatSendParams(
       {
@@ -2477,6 +2490,7 @@ export class ClawtrateClient {
         queueMode,
         replyToId: replyToId ?? null,
         sessionId: sessionId ?? null,
+        leafEntryId: leafEntryId ?? null,
       },
       attachments,
     );
@@ -2512,6 +2526,8 @@ export class ClawtrateClient {
         idempotencyKey: params.idempotencyKey,
         queueMode: params.queueMode,
         replyToId: params.replyToId ?? null,
+        sessionId: params.sessionId ?? null,
+        leafEntryId: params.expectedLeafEntryId ?? null,
         files,
       },
       this.sendLimits(),
@@ -2870,6 +2886,10 @@ export class ClawtrateClient {
     };
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
+    // The session the creation made: a message sent before its history is read goes there only.
+    const named = sessionNamed(result);
+    if (named && !this.state.transcripts[key]?.sessionId)
+      this.setTranscript(key, (current) => ({ ...current!, sessionId: named }));
     this.updateActivity(key, (activity, ctx) => {
       if (activity.outbox.some((each) => each.id === id)) return activity;
       let next = startLocalRun(
@@ -3073,21 +3093,42 @@ export class ClawtrateClient {
     }
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
-    // The gateway does not check a steer's task. After a reconnect the run shown active may have
-    // ended unseen, its task deleted with it, so this connection's first read of the task comes
-    // first: a run it settles makes the steer a checked send below.
-    const loadedAt = this.state.transcripts[key]?.loadedAt ?? null;
-    const connectedAt = this.state.connection.connectedAt;
-    if (
-      message.mode === "steer" &&
-      loadedAt !== null &&
-      connectedAt !== null &&
-      loadedAt < connectedAt
-    ) {
-      await this.loadTranscript(key, false, null);
+    // A message goes only to the session it was written for. One written before the task's session
+    // was known waits for this connection's read of the task, and so does a steer: the gateway does
+    // not check a steer's session, and after a reconnect the run shown active may have ended unseen,
+    // its task deleted with it. A run the read settles makes the steer a checked send below.
+    if (message.mode === "steer" || message.sessionId === undefined) {
+      if (!this.readOnThisConnection(key)) await this.loadTranscript(key, false, null);
       message = this.outgoing(key, messageId);
       if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
         return;
+      if (!this.readOnThisConnection(key)) {
+        // What the key holds now is not established: nothing is sent, and it can be sent again.
+        const reason = this.state.transcripts[key]?.error;
+        this.failDelivery(
+          key,
+          messageId,
+          new Error(`This task couldn't be read, so it wasn't sent${reason ? `: ${reason}` : "."}`),
+          false,
+        );
+        return;
+      }
+      const named = this.state.transcripts[key]?.sessionId;
+      if (message.sessionId === undefined) {
+        // The read names no session: the gateway has no task under the key.
+        if (!named) {
+          this.failDelivery(key, messageId, new TaskDeletedError(), true);
+          return;
+        }
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { sessionId: named }),
+        );
+        message = this.outgoing(key, messageId)!;
+      } else if (message.mode === "steer" && message.sessionId !== named) {
+        // The key holds another session now: the task the steer was written in is gone.
+        this.failDelivery(key, messageId, new TaskDeletedError(), true);
+        return;
+      }
     }
 
     // A pending question holds every send, whatever run it was meant for and whether or not
@@ -3142,7 +3183,7 @@ export class ClawtrateClient {
 
     let result: RawRecord | null;
     try {
-      const build = (sessionId?: string) =>
+      const build = (leafEntryId?: string) =>
         this.sendParams(
           key,
           message.text,
@@ -3150,9 +3191,10 @@ export class ClawtrateClient {
           message.mode === "steer" ? "steer" : "followup",
           this.attachmentContent.get(messageId)?.files ?? [],
           message.replyToId,
-          sessionId,
+          message.sessionId,
+          leafEntryId,
         );
-      const params = build(this.state.transcripts[key]?.sessionId);
+      const params = build();
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
@@ -3175,7 +3217,7 @@ export class ClawtrateClient {
       });
       result = asRecord(
         await sent.catch((error: unknown) =>
-          this.afterSessionRefusal(key, params, error, () => send(build())),
+          this.afterSessionRefusal(key, params, error, (leaf) => send(build(leaf))),
         ),
       );
     } catch (error) {
@@ -3279,26 +3321,29 @@ export class ClawtrateClient {
   }
 
   /**
-   * A send the gateway refused. What it has under the key now says why. A send that named its
-   * session, refused as no longer for it (`active-leaf-changed`, "active branch changed; review
-   * and retry"), finding no session there, or another one, means the task was deleted and nothing
-   * was sent: OpenClaw 2026.10.6 keeps a task's session through `sessions.reset`, `/new` and
-   * `/reset`. An archived task is refused with a message and no reason of its own, a steer too, so
-   * its row says so. The same session, not archived, means the refusal was not about the task. A
-   * stop command ("stop", "/stop") is checked against the task's latest message, which a guard
-   * naming none matches only in an empty task. Such a send goes again as before, unguarded, under
-   * the same idempotency key. Any other refusal stands.
+   * A send the gateway refused, read from its answer. OpenClaw 2026.10.6 refuses any work in an
+   * archived task, a steer too, with its own words (`ARCHIVED_REFUSAL`). A send that named its
+   * session is refused as no longer for it (`active-leaf-changed`, "active branch changed; review
+   * and retry"), and what the gateway has under the key then says why: no session, or another one,
+   * means the task was deleted and nothing was sent, since a task keeps its session through
+   * `sessions.reset`, `/new` and `/reset`; the same session marked archived means it was archived.
+   * The same session otherwise means the refusal was not about the task: the gateway checks a stop
+   * command (`isStopCommand`) against the task's latest row, which a guard naming none matches only
+   * in an empty task. A stop command goes again once, under the same idempotency key, naming the
+   * latest row this client read, which the gateway takes for that row or any before it, and refuses
+   * in any other session. Any other refusal stands.
    */
   private async afterSessionRefusal(
     key: string,
-    params: { sessionId?: string },
+    params: { message: string; sessionId?: string },
     error: unknown,
-    again: () => Promise<unknown>,
+    again: ((leaf: string) => Promise<unknown>) | null,
   ): Promise<unknown> {
     if (!(error instanceof GatewayProtocolRequestError) || error.gatewayCode !== "INVALID_REQUEST")
       throw error;
-    const moved =
-      params.sessionId !== undefined && asRecord(error.details)?.reason === "active-leaf-changed";
+    if (ARCHIVED_REFUSAL.test(error.message)) throw new TaskArchivedError();
+    if (params.sessionId === undefined || asRecord(error.details)?.reason !== "active-leaf-changed")
+      throw error;
     let row: RawRecord | null;
     try {
       row = asRecord(asRecord(await this.request("sessions.describe", { key }))?.session);
@@ -3306,10 +3351,30 @@ export class ClawtrateClient {
       // What the gateway has under the key is not known: its refusal stands as it came.
       throw error;
     }
-    if (moved && row?.sessionId !== params.sessionId) throw new TaskDeletedError();
+    if (row?.sessionId !== params.sessionId) throw new TaskDeletedError();
     if (row?.archived === true) throw new TaskArchivedError();
-    if (!moved) throw error;
-    return again();
+    const leaf = this.latestRowRead(key);
+    if (!again || !leaf || !isStopCommand(params.message)) throw error;
+    return again(leaf).catch((refused: unknown) =>
+      this.afterSessionRefusal(key, params, refused, null),
+    );
+  }
+
+  /** The gateway's id of the latest row of a task's history this client read, when one has an id. */
+  private latestRowRead(key: string): string | null {
+    const items = this.state.transcripts[key]?.items ?? [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const id = items[index]!.messageId;
+      if (id) return id;
+    }
+    return null;
+  }
+
+  /** Whether a read of the task's history succeeded on this connection. */
+  private readOnThisConnection(key: string): boolean {
+    const loadedAt = this.state.transcripts[key]?.loadedAt ?? null;
+    const connectedAt = this.state.connection.connectedAt;
+    return loadedAt !== null && connectedAt !== null && loadedAt >= connectedAt;
   }
 
   /**
@@ -7344,7 +7409,10 @@ export class ClawtrateClient {
   private openedTranscript(key: string): Transcript {
     const sessionKey = capId(key, MAX_ID_CHARS);
     const known = this.foreign.get(sessionKey);
-    const empty = this.emptyTranscript(key);
+    // The session the task list names, until a read of its history names one: a message sent
+    // before that read goes to it only.
+    const listed = sessionNamed(this.rows.get(sessionKey) ?? null);
+    const empty = { ...this.emptyTranscript(key), ...(listed ? { sessionId: listed } : {}) };
     // Only a run known to wait on a question is carried; history rebuilds every other run.
     const waiting = known ? runsWithQuestionMarkers(known) : [];
     // The task holds them now: none is kept twice, and no copy left here goes stale while the

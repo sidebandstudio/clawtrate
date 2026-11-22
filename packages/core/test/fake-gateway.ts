@@ -17,6 +17,17 @@ export class GatewayError extends Error {
   }
 }
 
+/**
+ * OpenClaw 2026.10.6 names the session a task's history came from, and names none only when the
+ * key holds no task. A history handler that says nothing of it is answered with one per key; one
+ * that sets `sessionId`, to undefined too, is answered as it says.
+ */
+function namingSession(payload: unknown, params: unknown): unknown {
+  if (!payload || typeof payload !== "object" || "sessionId" in payload) return payload;
+  const key = (params as { sessionKey?: unknown } | undefined)?.sessionKey;
+  return typeof key === "string" ? { ...payload, sessionId: `session:${key}` } : payload;
+}
+
 /** When this fake gateway "process" started; its hellos report their uptime from it. */
 const fakeStartedAt = Date.now();
 /** This fake gateway start's `server.bootId`, as a real gateway reports a random one per start. */
@@ -85,6 +96,9 @@ class FakeSocket implements WebSocketLike {
         if (!handler) throw new GatewayError({ code: "UNKNOWN_METHOD", message: method });
         return handler(frame.params);
       })
+      .then((payload) =>
+        method === "chat.history" ? namingSession(payload, frame.params) : payload,
+      )
       .then(
         (payload) => this.reply(id, { ok: true, payload }),
         (error: unknown) =>

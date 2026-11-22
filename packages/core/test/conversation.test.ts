@@ -235,8 +235,16 @@ describe("sending (F-075, F-081, F-106)", () => {
     ]);
     expect(transcript().live).toEqual({ runId: id, text: "" });
     await until(() => transcript().outbox[0]?.status === "sent");
+    // To the session its history came from only (F-278).
     expect(gateway.calls("chat.send")).toEqual([
-      { sessionKey: KEY, message: "Clear it.", idempotencyKey: id, queueMode: "followup" },
+      {
+        sessionKey: KEY,
+        message: "Clear it.",
+        idempotencyKey: id,
+        queueMode: "followup",
+        sessionId: `session:${KEY}`,
+        expectedLeafEntryId: null,
+      },
     ]);
     expect(transcript().runs[0]).toMatchObject({ id: "run-1", bound: true, messageId: id });
 
