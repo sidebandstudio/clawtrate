@@ -95,6 +95,11 @@ class WriteRetired extends Error {
    * left: kept for that gateway's Finish, should it come back.
    */
   unfinished: { name: string; botId: string; missing: MissingStep[] } | null = null;
+  /**
+   * A Create whose answer was lost, cut off while it looked for the bot it may have made with no
+   * gateway saying who it is: kept as in doubt, with its list of bots from before, for that gateway.
+   */
+  doubtful = false;
   /** No gateway said who it is, so the one asked may yet come back. */
   readonly unknown: boolean;
   constructor(unknown = false) {
@@ -1214,23 +1219,36 @@ export class AccountsEngine {
           // A bot made on a gateway that has only gone quiet is kept, with what is left, for its
           // Finish once it says who it is again (`onGateway`); another gateway, or a reset, drops it.
           const left = error instanceof WriteRetired ? error.unfinished : null;
+          const doubtful = error instanceof WriteRetired && error.doubtful;
           base.update((a) =>
             a.creation?.status === "creating" || a.creation?.status === "checking"
               ? {
                   ...a,
-                  creation: left
+                  // In doubt, it is kept as a Create to try again: that looks for the bot first,
+                  // against the bots there before the first Create, and never makes a second.
+                  creation: doubtful
                     ? {
-                        name: left.name,
-                        status: "partial",
+                        ...a.creation,
+                        status: "failed",
                         slow: false,
-                        botId: left.botId,
+                        uncertain: true,
                         error: this.scrub(
-                          `${left.name} was created, but the connection to its gateway was lost before it was finished.`,
+                          `The connection to the gateway was lost before Clawtrate could tell whether ${a.creation.name} was made. Create again looks for it first.`,
                         ),
-                        missing: left.missing,
-                        uncertain: false,
                       }
-                    : null,
+                    : left
+                      ? {
+                          name: left.name,
+                          status: "partial",
+                          slow: false,
+                          botId: left.botId,
+                          error: this.scrub(
+                            `${left.name} was created, but the connection to its gateway was lost before it was finished.`,
+                          ),
+                          missing: left.missing,
+                          uncertain: false,
+                        }
+                      : null,
                 }
               : a,
           );
@@ -1382,6 +1400,9 @@ export class AccountsEngine {
     mark: WriteMark,
   ): Promise<CreatedBot> {
     const plan = this.planned?.botId === botId ? this.planned : null;
+    // What this write records of the bot's fallback list counts only while it owns the creation:
+    // after a reset, or once a newer Create owns it, a late answer leaves the record alone.
+    const owns = () => this.creating === mark;
     const missing: MissingStep[] = [];
     const errors: string[] = [];
     const failed = (step: MissingStep, words: string, error?: unknown) => {
@@ -1412,19 +1433,21 @@ export class AccountsEngine {
     }
     if (steps.includes("fallbacks")) {
       try {
-        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false, ctx);
+        if (plan) await this.writeModel(botId, plan.ref, plan.effort, false, ctx, owns);
         else
           await this.patch(
             { agents: { entries: { [botId]: { model: { fallbacks: [] } } } } },
             [`agents.entries.${botId}.model.fallbacks`],
             ctx,
           );
-        this.unwritten.delete(botId);
+        if (owns()) this.unwritten.delete(botId);
       } catch (error) {
         if (error instanceof WriteRetired) throw cut(error, "fallbacks");
-        this.unwritten.add(botId);
-        if (this.unwritten.size > MAX_ACCOUNTS)
-          this.unwritten.delete(this.unwritten.values().next().value!);
+        if (owns()) {
+          this.unwritten.add(botId);
+          if (this.unwritten.size > MAX_ACCOUNTS)
+            this.unwritten.delete(this.unwritten.values().next().value!);
+        }
         failed(
           "fallbacks",
           plan?.effort
@@ -1480,7 +1503,16 @@ export class AccountsEngine {
       if (this.slowTimer) clearTimeout(this.slowTimer);
       this.slowTimer = null;
     }
-    ctx.update((a) => ({
+    // Settled while the connection hasn't said which gateway it is: the result is kept, for the
+    // gateway it was asked of (another saying who it is drops it), so the Create is never left
+    // "creating" and its Finish is there once that gateway says who it is.
+    const unidentified =
+      this.creating === mark &&
+      !mark.retired &&
+      mark.resets === this.resets &&
+      mark.gatewayId !== null &&
+      this.ctx.gatewayNow() === null;
+    (unidentified ? this.ctx : ctx).update((a) => ({
       ...a,
       creation: {
         name,
@@ -1516,7 +1548,10 @@ export class AccountsEngine {
           return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
         } catch (error) {
           // Retired: bound to a gateway no longer connected, so nothing more is read for it.
-          if (error instanceof WriteRetired) throw error;
+          if (error instanceof WriteRetired) {
+            error.doubtful = error.unknown;
+            throw error;
+          }
           // Not read: try again once the connection is back.
         }
       }
@@ -1610,6 +1645,7 @@ export class AccountsEngine {
     effort: string | null,
     creating: boolean,
     ctx: AccountsContext = this.ctx,
+    owns: () => boolean = () => true,
   ): Promise<void> {
     const entry: RawRecord = { model: { primary: formatModelRef(ref), fallbacks: [] } };
     if (effort) entry.thinkingDefault = effort;
@@ -1619,7 +1655,7 @@ export class AccountsEngine {
         [`agents.entries.${botId}.model.fallbacks`],
         ctx,
       );
-      this.unwritten.delete(botId);
+      if (owns()) this.unwritten.delete(botId);
     } catch (error) {
       if (!creating) throw error;
       // The bot exists; its Account page offers the write again (bots.md section 3).

@@ -6,7 +6,8 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { avatarFor, pictureWithChoice } from "../src/avatar.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
-import { GatewayError, deferred, until } from "./fake-gateway.ts";
+import { GatewayError, deferred, tokenKey, until } from "./fake-gateway.ts";
+import { URL_A, URL_B } from "./client-harness.ts";
 import { SLOW_CREATE_MS } from "../src/accounts.ts";
 
 /** A 2×2 PNG carrying a creature choice, as New bot and Edit picture send it. */
@@ -844,6 +845,151 @@ describe("a bot write is bound to its gateway to the end", () => {
       answer.resolve();
       expect(await second).toEqual({ botId: "bee", missing: [] });
     }, 15_000);
+
+  it("keeps a Create whose answer was lost until A says who it is again: Create again finds it, never makes a second", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    onTestFinished(release);
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    // The answer is lost with the connection, and A comes back without saying who it is.
+    fake.identity = "";
+    await reconnected(client, fake);
+    expect(await first).toMatch("gateway changed");
+    expect(client.state.accounts.creation).toMatchObject({
+      name: "Viral",
+      status: "failed",
+      uncertain: true,
+    });
+    fake.identity = "gateway-a";
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    expect(client.state.accounts.creation).toMatchObject({ status: "failed", uncertain: true });
+    // Create again looks first, against the list of bots from before the first Create.
+    expect(
+      await createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("drops a Create in doubt once another gateway says who it is", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    onTestFinished(release);
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    fake.identity = "";
+    await reconnected(client, fake);
+    await first;
+    expect(client.state.accounts.creation).toMatchObject({ status: "failed", uncertain: true });
+    const from = requested(fake);
+    fake.identity = "gateway-b";
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    expect(client.state.accounts.creation).toBeNull();
+    expect(sentSince(fake, from)).toEqual([]);
+    client.stop();
+  });
+
+  it("leaves a fallback write cut off by a switch of gateway off the next gateway's bots, and a Create there shows its own", async () => {
+    const { client, fake, storage } = await accountsClient();
+    const original = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = () => new Promise(() => {});
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("config.patch").length === 1);
+    fake.gateway.handlers["config.patch"] = original;
+    // The person switches to another gateway, whose own bot "viral" has its fallback list.
+    fake.identity = "gateway-b";
+    storage.data.set(tokenKey(URL_B), storage.data.get(tokenKey(URL_A))!);
+    await client.connect({ url: URL_B });
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    await first;
+    const entries = (fake.config.agents as { entries: Record<string, { model?: unknown }> })
+      .entries;
+    entries.viral = { ...entries.viral, model: { primary: "acme/dev-1@acme:home", fallbacks: [] } };
+    await client.refreshAccounts();
+    expect(
+      client.state.accounts.bindings.find((each) => each.botId === "viral")?.fallbacksUnwritten,
+    ).toBe(false);
+    // A Create on that gateway shows its own state.
+    expect(
+      await createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        name: "Bee",
+        gatewayId: "gateway-b",
+      }),
+    ).toEqual({ botId: "bee", missing: [] });
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "bee" });
+    client.stop();
+  });
+
+  it("keeps the bot, unfinished, if its last task fails while the connection hasn't said who it is", async () => {
+    // Not reached through a dropped socket (its requests fail before the next connection clears the
+    // identity); forced here, so a settlement then never strands the Create.
+    const { client, fake } = await accountsClient();
+    const original = fake.gateway.handlers["sessions.create"]!;
+    const task = deferred<void>();
+    onTestFinished(() => task.resolve());
+    fake.gateway.handlers["sessions.create"] = () =>
+      task.promise.then(() => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "no" });
+      });
+    const store = (
+      client as unknown as {
+        store: { update(change: (state: typeof client.state) => typeof client.state): void };
+      }
+    ).store;
+    const first = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        (result) => result,
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("sessions.create").length === 1);
+    fake.gateway.handlers["sessions.create"] = original;
+    store.update((state) => ({ ...state, connection: { ...state.connection, gatewayId: null } }));
+    task.resolve();
+    expect(await first).toEqual({ botId: "viral", missing: ["task"] });
+    expect(client.state.accounts.creation).toMatchObject({
+      status: "partial",
+      botId: "viral",
+      missing: ["task"],
+    });
+    // A says who it is: Finish makes the task.
+    store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: "gateway-a" },
+    }));
+    expect(
+      await createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
+    client.stop();
+  });
 
   it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
     const { client, fake } = await accountsClient();
