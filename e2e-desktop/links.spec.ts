@@ -253,14 +253,17 @@ test("F-248: a link into a chat with a draft asks before replacing it", async ()
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
-test("F-248: while a link asks about a draft, the composer's shortcuts behind it do nothing", async () => {
+test("F-248: while a link asks about a draft, the shortcuts behind it do nothing", async () => {
   await deliver(link("marlow", "Other words."));
   await expect(choice()).toBeVisible();
   // ⌘↵ or Ctrl+Enter would send the draft from anywhere else in the window.
   await page.keyboard.press("ControlOrMeta+Enter");
+  // ⌘N or Ctrl+N would open New bot over it.
+  await page.keyboard.press("ControlOrMeta+n");
   await frames();
   await expect(field()).toHaveValue("Start over.");
   expect(served.gateway.calls("chat.send")).toEqual([]);
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
   await expect(choice()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(choice()).toHaveCount(0);
