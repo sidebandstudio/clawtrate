@@ -291,6 +291,68 @@ describe("a refused device token never removes a newer one", () => {
     client.stop();
   });
 
+  it("an automatic retry skips the refused token while its deletion waits", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const held = deferred<void>();
+    const remove = storage.delete;
+    storage.delete = async (key) => {
+      if (key === tokenKey(URL_A)) await held.promise;
+      await remove(key);
+    };
+    try {
+      gateway.connectReply = () => ({
+        ok: false,
+        error: { ...tokenMismatch, details: { code: "AUTH_TOKEN_MISMATCH" } },
+      });
+      gateway.dropAll();
+      await until(() => gateway.connects.length >= 3);
+      expect(connectAuth(gateway, 1)?.deviceToken).toBe("token-A");
+      expect(connectAuth(gateway, 2)?.deviceToken).toBeUndefined();
+    } finally {
+      held.resolve();
+      client.stop();
+    }
+  });
+
+  it("a late hello preserves a token replaced since the handshake started", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const otherGateway = new FakeGateway();
+    const other = new ClawtrateClient(testHost(otherGateway, storage), FAST);
+    const held = deferred<void>();
+    let holdNext = false;
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL_A)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    try {
+      gateway.connectReply = () => {
+        holdNext = true;
+        return { ok: true, payload: helloOk([...READ_SCOPES], "older-token") };
+      };
+      otherGateway.connectReply = () => ({
+        ok: true,
+        payload: helloOk([...READ_SCOPES], "newer-token"),
+      });
+      gateway.dropAll();
+      await until(() => waiting);
+      await other.start();
+      await until(() => other.state.connection.status === "connected");
+      held.resolve();
+      await until(() => client.state.connection.status === "connected");
+      expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).token).toBe("newer-token");
+    } finally {
+      held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("removes the saved token when the gateway refuses it", async () => {
     const { client, gateway, storage } = await pairedOnA();
     // Saved with surrounding whitespace: a connect sends it trimmed.

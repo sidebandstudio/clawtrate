@@ -568,11 +568,23 @@ type StoredDeviceToken = {
   pairingHeld?: boolean;
 };
 
+/** Kept per host store, so clients that share one write its device tokens as one. */
+type ConnectionWrites = {
+  /** The last change to a gateway's settings or token; the next one starts once it has settled. */
+  pending: Promise<void>;
+  /** For each token key, the connection that opened last: only it may save that token. */
+  owners: Map<string, symbol>;
+  /** For each token key, the token a refusal named, until its removal has run. */
+  rejected: Map<string, string>;
+};
+const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
+
 /**
  * A connection's token store. A rejection removes a token only through
  * `forget`, which names the token the gateway rejected.
  */
 type ConnectionTokenStore = GatewayBrowserDeviceTokenStore & {
+  ownsToken(deviceId: string, role: string): boolean;
   forget(params: { deviceId: string; role: string }, rejected: string): Promise<void>;
 };
 
@@ -1022,8 +1034,7 @@ export class ClawtrateClient {
   private discoveryRead: { sessionsChanged: boolean } | null = null;
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
-  /** The last change to the selected gateway; the next one starts once it has settled. */
-  private connectionChanges: Promise<void> = Promise.resolve();
+  private readonly writes: ConnectionWrites;
   /** A host stop cancels socket opens requested before it, including ones still saving settings. */
   private stops = 0;
   /** The current attempt reached hello. */
@@ -1202,6 +1213,12 @@ export class ClawtrateClient {
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
+    this.writes = connectionWrites.get(host.storage) ?? {
+      pending: Promise.resolve(),
+      owners: new Map(),
+      rejected: new Map(),
+    };
+    connectionWrites.set(host.storage, this.writes);
     this.options = options;
     this.turnLimitMs = options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
     this.trackedLimit = hostLimit(options.limits?.trackedTasks, MAX_TRACKED_TASKS, "trackedTasks");
@@ -1229,8 +1246,8 @@ export class ClawtrateClient {
    * last one left.
    */
   private changeConnection<T>(change: () => Promise<T>): Promise<T> {
-    const run = this.connectionChanges.then(change);
-    this.connectionChanges = run.then(
+    const run = this.writes.pending.then(change);
+    this.writes.pending = run.then(
       () => {},
       () => {},
     );
@@ -1685,6 +1702,7 @@ export class ClawtrateClient {
             if (
               generation !== this.generation ||
               this.settings?.url !== url ||
+              !auth.tokenStore.ownsToken(deviceId, role) ||
               this.scopeUpgrade !== upgrade
             ) {
               throw new Error("The gateway changed while access was being approved.");
@@ -5372,7 +5390,9 @@ export class ClawtrateClient {
           ),
     }));
 
-    const tokenStore = this.connectionTokenStore(settings.url, generation);
+    const owner = Symbol();
+    const key = this.tokenKey(settings.url, identity.deviceId, "operator");
+    const tokenStore = this.connectionTokenStore(settings.url, generation, owner);
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => {
         const loaded = await this.loadIdentity();
@@ -5462,6 +5482,7 @@ export class ClawtrateClient {
           openRead: null,
         };
         current = mine;
+        this.writes.owners.set(key, owner);
         // Closing or replacing this connection stops its socket's reads too.
         this.endSocketReads = () => endReads(mine);
         // Still this socket of this connection, open, with the setup check it opened under.
@@ -5496,6 +5517,8 @@ export class ClawtrateClient {
         socket.onclose = (event) => {
           // A closed socket's reads stop, and whatever they started with them.
           mine.closed = true;
+          if (current === mine && this.writes.owners.get(key) === owner)
+            this.writes.owners.delete(key);
           endReads(mine);
           handlers.close(event.code, event.reason);
         };
@@ -5714,6 +5737,7 @@ export class ClawtrateClient {
             const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
             if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
               return false;
+            if (!tokenStore.ownsToken(staged.deviceId, staged.role)) return false;
             await this.writeToken(settings.url, staged.deviceId, staged.role, {
               token: staged.token,
               grantedScopes: [...staged.scopes],
@@ -7430,11 +7454,14 @@ export class ClawtrateClient {
     url: string,
     deviceId: string,
     role: string,
+    includeRejected = false,
   ): Promise<StoredDeviceToken | null> {
-    const raw = await this.host.storage.get(this.tokenKey(url, deviceId, role));
+    const key = this.tokenKey(url, deviceId, role);
+    const raw = await this.host.storage.get(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
+    if (!includeRejected && this.writes.rejected.get(key) === parsed.token.trim()) return null;
     return {
       token: parsed.token,
       // Earlier builds stored the grant as `scopes`.
@@ -7472,12 +7499,14 @@ export class ClawtrateClient {
   /**
    * A token store for one connection. Every operation names its gateway URL,
    * and a write is dropped once that connection is no longer current, checked
-   * after every wait, so a late write can never land after a switch. Writes and
-   * removals run in the queue with the gateway's settings, one after another.
+   * after every wait, so a late write can never land after a switch, nor once a
+   * later connection on the same host store has opened. Writes and removals run
+   * in the queue with the gateway's settings, one after another.
    */
   private connectionTokenStore(
     url: string,
     generation: number,
+    owner: symbol,
   ): ConnectionTokenStore & {
     /** `store`, for one socket's hello: nothing is staged or written once that socket is retired. */
     save: (
@@ -7486,6 +7515,8 @@ export class ClawtrateClient {
     ) => Promise<void>;
   } {
     const current = () => generation === this.generation && this.settings?.url === url;
+    const ownsToken = (deviceId: string, role: string) =>
+      this.writes.owners.get(this.tokenKey(url, deviceId, role)) === owner;
     const save = async (
       { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
@@ -7504,6 +7535,7 @@ export class ClawtrateClient {
         if (!current() || !live()) return;
         const existing = await this.loadToken(url, deviceId, role);
         if (!current() || !live()) return;
+        if (!ownsToken(deviceId, role)) return;
         const held = existing?.heldScopes ?? [...READ_SCOPES];
         await this.writeToken(url, deviceId, role, {
           token,
@@ -7517,6 +7549,7 @@ export class ClawtrateClient {
     };
     return {
       save,
+      ownsToken,
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
@@ -7539,10 +7572,13 @@ export class ClawtrateClient {
       // so the comparison trims it too.
       forget: async ({ deviceId, role }, rejected) => {
         if (!current()) return;
+        const key = this.tokenKey(url, deviceId, role);
+        // Until the removal has run, loads skip the refused token, so a retry never sends it again.
+        this.writes.rejected.set(key, rejected);
         await this.changeConnection(async () => {
-          const existing = await this.loadToken(url, deviceId, role);
-          if (existing?.token.trim() !== rejected) return;
-          await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+          const existing = await this.loadToken(url, deviceId, role, true);
+          if (existing?.token.trim() === rejected) await this.host.storage.delete(key);
+          if (this.writes.rejected.get(key) === rejected) this.writes.rejected.delete(key);
         });
       },
     };
