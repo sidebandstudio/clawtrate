@@ -72,11 +72,13 @@ import {
   DEFAULTS_CHOICES,
   MAX_MACHINE_NAME_CHARS,
   MAX_PATH_CHARS,
+  PLACEMENT_PARTS,
   type ApprovalsFile,
-  type BotPlacement,
   type ConfigSave,
   type DefaultsChoice,
   type MachinesView,
+  type PlacementPart,
+  type PlacementParts,
 } from "./machines.ts";
 
 export type BridgeCommand =
@@ -374,14 +376,15 @@ export type BridgeCommand =
   | { type: "searchFiles"; query: string; botId: string }
   // Where a bot runs and Machines (controls.md sections 14 and 15). Read now, never kept;
   // writes are read back before they answer, and need admin (or pairing for names and removals).
-  | { type: "readPlacement"; botId: string }
+  /** One part of where a bot runs; the parts are read apart, so one that hangs holds back only itself. */
+  | { type: "readPlacement"; botId: string; part: PlacementPart }
   | { type: "readMachines" }
   | {
       type: "setCommandMachine";
       botId: string;
       host: "gateway" | "node";
       nodeId: string | null;
-      /** The configuration revision the page showed (`BotPlacement.configHash`). */
+      /** The configuration revision the page showed (the commands part's `configHash`). */
       baseHash: string | null;
     }
   | { type: "setBotWorkspace"; botId: string; path: string }
@@ -485,8 +488,10 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                         ? FileSearch
                                                                         : C extends {
                                                                               type: "readPlacement";
+                                                                              part: infer P extends
+                                                                                PlacementPart;
                                                                             }
-                                                                          ? BotPlacement
+                                                                          ? PlacementParts[P]
                                                                           : C extends {
                                                                                 type: "readMachines";
                                                                               }
@@ -1499,7 +1504,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: botId(command.botId),
       };
     case "readPlacement":
-      return { type: "readPlacement", botId: botId(command.botId) };
+      return {
+        type: "readPlacement",
+        botId: botId(command.botId),
+        part: oneOf(command.part, PLACEMENT_PARTS, "part"),
+      };
     case "readMachines":
       return { type: "readMachines" };
     case "setCommandMachine": {
@@ -2051,7 +2060,7 @@ class ViewerSession implements BridgeSession {
       case "searchFiles":
         return client.searchFiles(command.query, command.botId);
       case "readPlacement":
-        return client.readPlacement(command.botId);
+        return client.readPlacement(command.botId, command.part);
       case "readMachines":
         return client.readMachines();
       case "setCommandMachine":
