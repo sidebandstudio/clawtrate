@@ -618,11 +618,24 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
   });
 
   it("the forward comes up after the LOOK names the gateway, drops, comes back by itself, and closes leaving nothing", async () => {
-    const look = await transport.look(route);
-    if (!look.ok) throw new Error("look failed");
+    const forwardRoute = prepare("forwardlife", "devbox");
+    const key = await transport.checkHostKey(forwardRoute);
+    if (!key.ok || key.state !== "first-contact") throw new Error("expected first contact");
+    expect(key.presented.fingerprint).toBe(fingerprintOfFile(`${sshd.hostKey}.pub`));
+    expect(transport.trustCapturedKey(forwardRoute, key.presented.captureId).ok).toBe(true);
+    const look = await transport.look(forwardRoute);
+    if (!look.ok) {
+      const reason =
+        look.kind === "failed"
+          ? look.failure.kind
+          : look.kind === "cant-tell"
+            ? look.reason
+            : look.kind;
+      throw new Error(`LOOK failed before opening the forward: ${reason}`);
+    }
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = await openForward(route, found);
+    const forward = await openForward(forwardRoute, found);
     const states: ForwardState[] = [];
     forward.onState((state) => states.push(state));
     const upNow = () => forward.state.phase === "up";
@@ -674,6 +687,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     expect(forward.state).toEqual({ phase: "closed", reason: "closed" });
     for (const s of started) if (s.pid) expect(alive(s.pid), `${s.args.join(" ")}`).toBe(false);
     expect(transport.processes.running.size).toBe(0);
+    expect(transport.forget(forwardRoute)).toEqual({ ok: true });
   });
 
   it("a forward whose repeated LOOK names another gateway service on that port is closed", async () => {
