@@ -575,9 +575,10 @@ describe("a bot write is bound to its gateway to the end", () => {
         missing: ["task"],
       });
       const before = fake.gateway.calls("sessions.create").length;
-      const command = { type: "finishBot", botId: "viral" } as const;
-      const one = createBridgeSession(client).apply(command);
-      const two = createBridgeSession(client).apply(command);
+      // Without naming a gateway, as a caller inside the host may: New bot's Finish names it,
+      // and the host's check of it holds both until the gateway is known.
+      const one = client.finishBot("viral");
+      const two = client.finishBot("viral");
       const results = Promise.allSettled([one, two]);
       identity.resolve({ deviceId: "gateway-a" });
       const outcomes = await results;
