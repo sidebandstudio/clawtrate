@@ -1145,11 +1145,18 @@ export class ClawtrateClient {
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
   /** The identity a routed connection must find after each hello; null until its first read. */
   private routeIdentity: { route: string; identity: string | null } | null = null;
-  /** The routed connection, by generation, whose gateway identity matched after its hello. */
+  /**
+   * Every socket this client opens, numbered: a protocol retry on the same
+   * connection is a new socket. `routeSocket` is the open one's number, 0
+   * while none is.
+   */
+  private socketSeq = 0;
+  private routeSocket = 0;
+  /** The routed socket, by number, whose gateway identity matched after its own hello. */
   private routeVerified: number | null = null;
-  /** A routed connection's token writes, held in memory until its identity matched. */
+  /** A routed socket's token writes, held in memory until its identity matched. */
   private routeHeldWrites: Array<() => Promise<void>> = [];
-  /** The connection, by generation, whose writes `routeHeldWrites` holds. */
+  /** The socket, by number, whose writes `routeHeldWrites` holds. */
   private routeHeldFor: number | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
   private checkInReads = 0;
@@ -5616,6 +5623,12 @@ export class ClawtrateClient {
         let socket: WebSocketLike;
         endReads(current);
         current = null;
+        // A new socket, retries included: a routed one is gated until its own hello's identity
+        // read matched, and whatever the one it replaces held back goes.
+        const socketNumber = ++this.socketSeq;
+        this.routeSocket = socketNumber;
+        this.routeHeldWrites = [];
+        this.routeHeldFor = null;
         try {
           socket = this.host.createWebSocket(settings.url);
         } catch (error) {
@@ -5672,6 +5685,13 @@ export class ClawtrateClient {
           // A closed socket's reads stop, and whatever they started with them.
           mine.closed = true;
           endReads(mine);
+          // And it is retired: its identity read, failed or late, and what it held back count
+          // for nothing, and the protocol's retry starts gated on a socket of its own.
+          if (this.routeSocket === socketNumber) {
+            this.routeSocket = 0;
+            this.routeHeldWrites = [];
+            this.routeHeldFor = null;
+          }
           handlers.close(event.code, event.reason);
         };
         socket.onerror = () => handlers.error(new Error("WebSocket error"));
@@ -5840,6 +5860,8 @@ export class ClawtrateClient {
         };
       },
       onConnectHello: async (hello, context) => {
+        // The socket this hello came on: what it holds back, and its identity, are its own.
+        const helloSocket = this.routeSocket;
         // Still the protocol's current socket: one replaced since, on this same address and
         // connection, stages, writes and saves nothing, after any of these waits.
         const live = () => {
@@ -5866,6 +5888,7 @@ export class ClawtrateClient {
               scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
             },
             live,
+            helloSocket,
           );
         }
         if (!live()) return;
@@ -5918,7 +5941,7 @@ export class ClawtrateClient {
             });
           };
           // A route keeps the token only once its gateway said who it is (checkRouteIdentity).
-          if (!this.holdForRoute(generation, commit)) await commit();
+          if (!this.holdForRoute(helloSocket, commit)) await commit();
           return;
         }
         // A setup that reused this device's pairing saves its gateway once its hello is in.
@@ -5976,7 +5999,8 @@ export class ClawtrateClient {
         }
         // A route's gateway says who it is before anything is asked of it or allowed here.
         if (settings.route) {
-          void this.checkRouteIdentity(hello, generation, settings.route);
+          // This hello is the current socket's: its identity read is that socket's alone.
+          void this.checkRouteIdentity(hello, generation, settings.route, this.routeSocket);
           return;
         }
         this.handleHello(hello, generation);
@@ -7463,17 +7487,19 @@ export class ClawtrateClient {
    * `gateway.identity.get` pass; no request, event or token goes further.
    */
   private routeGated(): boolean {
-    return Boolean(this.settings?.route) && this.routeVerified !== this.generation;
+    return Boolean(this.settings?.route) && this.routeVerified !== this.routeSocket;
   }
 
   /**
    * Holds a write of a routed connection's token in memory until its gateway's
    * identity matches, and says so; false when nothing is held back.
    */
-  private holdForRoute(generation: number, write: () => Promise<void>): boolean {
-    if (!this.settings?.route || this.routeVerified === generation) return false;
-    if (this.routeHeldFor !== generation) {
-      this.routeHeldFor = generation;
+  private holdForRoute(socket: number, write: () => Promise<void>): boolean {
+    if (!this.settings?.route || this.routeVerified === socket) return false;
+    // A socket replaced since keeps nothing: its write is dropped, never held for another.
+    if (socket !== this.routeSocket) return true;
+    if (this.routeHeldFor !== socket) {
+      this.routeHeldFor = socket;
       this.routeHeldWrites = [];
     }
     // One hello brings a token and at most its forgetting; anything past the bound is not kept.
@@ -7585,10 +7611,20 @@ export class ClawtrateClient {
    * match; before its first, any identity read is the route's from then on.
    * No identity, or another, closes the connection and nothing else is asked.
    */
-  private async checkRouteIdentity(hello: HelloOk, generation: number, route: string) {
+  private async checkRouteIdentity(
+    hello: HelloOk,
+    generation: number,
+    route: string,
+    socket: number,
+  ) {
     const expected = this.routeIdentity?.route === route ? this.routeIdentity.identity : null;
     const id = await this.readGatewayIdentity();
-    if (generation !== this.generation || this.settings?.route !== route) return;
+    // The read of a socket replaced since says nothing of the current one.
+    const ours = () =>
+      generation === this.generation &&
+      this.routeSocket === socket &&
+      this.settings?.route === route;
+    if (!ours()) return;
     if (id === null || (expected !== null && id !== expected)) {
       // Terminal for this attempt: what it would have kept is forgotten, and nothing retries.
       this.routeHeldWrites = [];
@@ -7620,16 +7656,16 @@ export class ClawtrateClient {
       return;
     }
     this.routeIdentity = { route, identity: id };
-    this.routeVerified = generation;
-    // Only now is a token from this hello kept.
-    const held = this.routeHeldFor === generation ? this.routeHeldWrites : [];
+    this.routeVerified = socket;
+    // Only now is a token from this socket's hello kept.
+    const held = this.routeHeldFor === socket ? this.routeHeldWrites : [];
     this.routeHeldWrites = [];
     this.routeHeldFor = null;
     try {
       for (const write of held) await write();
     } catch {
       // A token or connection that couldn't be kept ends the attempt; what was kept stays.
-      if (generation !== this.generation || this.settings?.route !== route) return;
+      if (!ours()) return;
       this.heldToken = null;
       this.close();
       this.dropSetupCredentials();
@@ -7648,7 +7684,7 @@ export class ClawtrateClient {
       });
       return;
     }
-    if (generation !== this.generation || this.settings?.route !== route) return;
+    if (!ours()) return;
     this.store.update((state) => ({
       ...state,
       connection: { ...state.connection, gatewayId: id },
@@ -7814,6 +7850,7 @@ export class ClawtrateClient {
     save: (
       params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      socket: number,
     ) => Promise<void>;
   } {
     const current = () =>
@@ -7823,6 +7860,7 @@ export class ClawtrateClient {
     const save = async (
       { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      socket: number,
     ) => {
       if (!current() || !live()) return;
       // A setup connection's first token waits in memory for its grant to be checked.
@@ -7850,7 +7888,7 @@ export class ClawtrateClient {
           });
         });
       // A route's token from this hello waits in memory until its gateway's identity matched.
-      if (!this.holdForRoute(generation, write)) await write();
+      if (!this.holdForRoute(socket, write)) await write();
     };
     return {
       save,
@@ -7865,7 +7903,7 @@ export class ClawtrateClient {
             this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
-      store: (params) => save(params, () => true),
+      store: (params) => save(params, () => true, this.routeSocket),
       // A removal that names no token could take one saved after the rejection.
       // This client removes a token only through `forget`.
       clear: async () => {},
@@ -7883,7 +7921,7 @@ export class ClawtrateClient {
             await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
           });
         // Nor does a route's gateway that hasn't said who it is make this device forget its token.
-        if (!this.holdForRoute(generation, forget)) await forget();
+        if (!this.holdForRoute(this.routeSocket, forget)) await forget();
       },
     };
   }

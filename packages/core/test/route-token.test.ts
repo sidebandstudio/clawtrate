@@ -295,6 +295,54 @@ describe("a routed connection's gateway", () => {
     expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-2");
   });
 
+  it("is gated again on every socket: a protocol retry on the same route verifies, publishes and saves nothing until its own identity read, and a retired socket's held writes go", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    await client.start();
+    await client.connectRoute({
+      url: "ws://c0000000000000001.ssh.invalid",
+      route: ROUTE,
+      identity: "gateway-1",
+    });
+    await until(
+      () => client.state.connection.status === "connected" && client.state.bots.length > 0,
+    );
+    // The socket drops and the protocol retries on the same connection. Its hello rotates the
+    // token, and its identity read hangs: nothing of the first socket's verification carries.
+    let answer: (value: unknown) => void = () => {};
+    gateway.handlers["gateway.identity.get"] = () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      });
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], "token-2") });
+    const before = gateway.requests.length;
+    gateway.dropAll();
+    await until(
+      () =>
+        gateway.sockets.length === 2 &&
+        gateway.requests.slice(before).some((r) => r.method === "gateway.identity.get"),
+    );
+    await Promise.allSettled([client.refreshAccounts(), client.refreshRoutines()]);
+    gateway.emit("sessions.changed", { sessionKey: "agent:main:x", label: "planted" });
+    await sleep(100);
+    expect(gateway.requests.slice(before).map((r) => r.method)).toEqual(["gateway.identity.get"]);
+    expect(JSON.stringify(client.state)).not.toContain("planted");
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+    // That socket drops too before its identity was read: what it held back goes. The next
+    // socket's hello brings no token, and its identity matches: the saved token stays the first.
+    const held = answer;
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-1", publicKey: "key" });
+    gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"]) });
+    gateway.dropAll();
+    await until(
+      () => gateway.sockets.length === 3 && client.state.connection.status === "connected",
+    );
+    // The retired socket's identity read answering late changes nothing either.
+    held({ deviceId: "gateway-1", publicKey: "key" });
+    await sleep(100);
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
+  });
+
   it("keeps no first token, and saves no connection, when the gateway that redeemed its code isn't the route's", async () => {
     const { storage, client, setIdentity } = setup();
     setIdentity(null);

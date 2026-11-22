@@ -1203,7 +1203,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     await h.remote.closeAll();
   });
 
-  it("F-498: a saved pairing with no gateway identity recorded beside it is not restored by itself: the found card, and Pair asks again", async () => {
+  it("F-498: a saved pairing with no gateway identity recorded beside it is not restored by itself, and the next Pair makes a fresh pairing instead of reusing its token", async () => {
     const h = host();
     await connected(h);
     await h.remote.closeAll();
@@ -1216,6 +1216,26 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     expect(again.setup().phase).toBe("found");
     expect(again.client.state.connection.status).not.toBe("connected");
     expect(again.fake.sockets).toEqual([]);
+    // The card offers Pair, not a reuse, and Pair makes a code there and pairs afresh.
+    expect(again.setup().look?.access).toBe("new");
+    const calls = stub.calls().length;
+    await again.remote.connect();
+    expect(again.questions.at(-1)?.confirm).toBe("Pair");
+    await until(() => again.setup().phase === "done", 30_000);
+    expect(
+      stub
+        .calls()
+        .slice(calls)
+        .some((call) => call.startsWith("qr ")),
+    ).toBe(true);
+    const first = again.fake.connects[0] as { auth?: { bootstrapToken?: string; token?: string } };
+    expect(first.auth?.bootstrapToken).toBe(BOOTSTRAP);
+    expect(JSON.stringify(first.auth)).not.toContain(DEVICE_TOKEN);
+    expect(again.routes.byKey(record!.key)).toMatchObject({ identity: "gateway-identity-1" });
+    expect(again.routes.hasToken(record!.key)).toBe(true);
+    // Looked at again, the route is paired now, with its identity recorded.
+    await again.remote.there("devbox");
+    expect(again.setup().look?.access).toBe("paired");
     await again.remote.closeAll();
   });
 
@@ -1665,6 +1685,96 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       expect(g.routes.list()).toEqual([]);
       expect(g.routes.hasToken(key)).toBe(false);
       expect(storage.data.has("connection")).toBe(false);
+      await g.remote.closeAll();
+    });
+
+    it("a late Back lets go only of its own selection: a gateway chosen meanwhile stays selected and saved, and the attempt's forward still closes", async () => {
+      const h = host();
+      const before = started.length;
+      await lookOnDevbox(h);
+      // The bots never load: Connect waits on its last step.
+      const agents = h.fake.handlers["agents.list"];
+      h.fake.handlers["agents.list"] = () => new Promise(() => {});
+      const other = "ws://127.0.0.1:51999";
+      try {
+        await h.remote.connect();
+        await until(() => h.client.state.connection.status === "connected", 30_000);
+        // Another gateway is chosen (Advanced), and Back is pressed before that choice applied:
+        // Back's disconnect waits behind it in the queue.
+        const replacing = h.client.connect({ url: other, token: "shared-token-for-the-test" });
+        h.remote.cancel();
+        await replacing;
+        await sleep(500);
+      } finally {
+        h.fake.handlers["agents.list"] = agents!;
+      }
+      expect(h.client.route).toBeNull();
+      expect(h.client.state.connection.gatewayUrl).toBe(other);
+      expect(JSON.parse(h.storage.data.get("connection")!)).toMatchObject({ url: other });
+      const forwards = started.slice(before).filter((run) => run.args.includes("-L"));
+      expect(forwards.length).toBeGreaterThan(0);
+      await until(() => forwards.every((run) => !alive(run.pid!)), 10_000);
+      await h.remote.closeAll();
+    });
+
+    it("a route the store can't write is never half saved: before pairing nothing is sent, after the gateway accepted Done isn't said, and either way the forward goes and nothing is kept", async () => {
+      const forwardsSince = (from: number) =>
+        started.slice(from).filter((run) => run.args.includes("-L"));
+      // The first write, after the forward opened and before anything is sent.
+      const h = host();
+      const before = started.length;
+      await lookOnDevbox(h);
+      const put = h.routes.put.bind(h.routes);
+      h.routes.put = () => {
+        throw new Error("the disk is full");
+      };
+      const connects = h.fake.connects.length;
+      try {
+        await h.remote.connect();
+      } finally {
+        h.routes.put = put;
+      }
+      expect(h.setup().phase).toBe("failed");
+      expect(h.setup().there?.failure?.kind).toBe("route-not-saved");
+      expect(h.fake.connects.length).toBe(connects);
+      expect(h.routes.list()).toEqual([]);
+      expect(h.client.route).toBeNull();
+      expect(forwardsSince(before).length).toBeGreaterThan(0);
+      await until(() => forwardsSince(before).every((run) => !alive(run.pid!)), 10_000);
+      await h.remote.closeAll();
+      // The promotion's write, once the gateway accepted this device and the bots were read.
+      const g = host();
+      const from = started.length;
+      await lookOnDevbox(g);
+      const gput = g.routes.put.bind(g.routes);
+      let key: string | null = null;
+      g.routes.put = (record) => {
+        key = record.key;
+        if (record.identity !== null) throw new Error("the disk is full");
+        return gput(record);
+      };
+      const phases: string[] = [];
+      g.client.store.subscribe((state) => {
+        const phase = state.setup?.phase;
+        if (phase && phases.at(-1) !== phase) phases.push(phase);
+      });
+      try {
+        await g.remote.connect();
+        await until(() => g.setup().phase === "failed", 30_000);
+      } finally {
+        g.routes.put = gput;
+      }
+      expect(g.setup().there?.failure?.kind).toBe("pairing-not-kept");
+      expect(phases).not.toContain("done");
+      expect(g.setup().route ?? null).toBeNull();
+      await until(() => g.client.state.connection.status === "idle", 10_000);
+      expect(g.client.route).toBeNull();
+      expect(g.storage.data.has("connection")).toBe(false);
+      expect(g.routes.list()).toEqual([]);
+      expect(key).not.toBeNull();
+      expect(g.routes.hasToken(key!)).toBe(false);
+      expect(forwardsSince(from).length).toBeGreaterThan(0);
+      await until(() => forwardsSince(from).every((run) => !alive(run.pid!)), 10_000);
       await g.remote.closeAll();
     });
 

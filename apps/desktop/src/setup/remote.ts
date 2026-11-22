@@ -26,6 +26,7 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  GatewayChangedError,
   initialSetupState,
   MAX_SSH_CHANNELS,
   MAX_SSH_REMEMBERED_IDS,
@@ -210,6 +211,8 @@ export class RemoteSetup {
     record: SshRouteRecord;
     fresh: boolean;
     channel: Channel | null;
+    /** The client's selection this attempt's connect made, once it was asked for. */
+    selection: number | null;
   } | null = null;
   private live: Live | null = null;
   /** The route the app's saved connection names while it isn't live: Remove and Review act on it. */
@@ -600,7 +603,7 @@ export class RemoteSetup {
     let access: "new" | "paired" | null = null;
     if (found.found && this.fingerprint) {
       const key = this.keyFor(route, found.found.service);
-      access = (await this.options.client.hasRouteToken(key).catch(() => false)) ? "paired" : "new";
+      access = (await this.reusable(key)) ? "paired" : "new";
       if (attempt !== this.attempt) return;
     }
     this.publish({
@@ -610,6 +613,16 @@ export class RemoteSetup {
       look: { ...found.look, access },
       failure: null,
     });
+  }
+
+  /**
+   * Whether the route `key` has a pairing to reuse: a token kept for it and the
+   * gateway identity recorded beside it, which the next gateway is checked
+   * against. A token without one is a pairing half saved: Pair makes a new one.
+   */
+  private async reusable(key: string): Promise<boolean> {
+    if (this.options.routes.byKey(key)?.identity == null) return false;
+    return this.options.client.hasRouteToken(key).catch(() => false);
   }
 
   private keyFor(route: Route, service: GatewayService): string {
@@ -829,8 +842,12 @@ export class RemoteSetup {
     }
     const key = this.keyFor(route, service.service);
     const known = this.options.routes.byKey(key);
-    // A route with a recorded identity and no token is paired again, with its own dialog.
-    const access = look.access === "paired" && this.options.routes.hasToken(key) ? "paired" : "new";
+    // A route with a recorded identity and no token, or a token and no recorded identity, is
+    // paired again, with its own dialog.
+    const access =
+      look.access === "paired" && this.options.routes.hasToken(key) && known?.identity != null
+        ? "paired"
+        : "new";
     const where = `the ${service.service.profile} gateway on ${route.accountWithPort}`;
     const consent = this.snapshot("pair", route, found, attempt);
     this.consent = consent;
@@ -896,6 +913,13 @@ export class RemoteSetup {
       return;
     }
     if (access === "new") {
+      // A token half saved without its gateway's identity is never reused: it goes, and the
+      // new pairing's own takes its place once its gateway said who it is.
+      if (this.options.routes.hasToken(key)) {
+        await this.options.client.dropRouteToken(key).catch(() => undefined);
+        this.options.routes.deleteToken(key);
+        if (attempt !== this.attempt) return;
+      }
       const made = await transport.runScript(route, "code", {
         profile: service.service.profile,
         port: service.service.port,
@@ -954,12 +978,21 @@ export class RemoteSetup {
       if (attempt === this.attempt) this.failSetup("changed");
       return;
     }
-    // The route is recorded before its first token, which only the store keeps.
-    this.options.routes.put(record);
+    // The route is recorded before its first token, which only the store keeps. A store that
+    // can't be written ends the attempt here: its forward goes and nothing is sent.
+    try {
+      this.options.routes.put(record);
+    } catch {
+      await this.letGoPending();
+      if (attempt === this.attempt)
+        this.failThere({ kind: "route-not-saved", cause: null, exit: null });
+      return;
+    }
     this.publish({ ...this.state, step: 2 });
     const client = this.options.client;
     // The selection this Connect makes: only its own connection and bots speak for it.
     const selection = client.nextSelection();
+    if (this.pending) this.pending.selection = selection;
     this.watchConnect(attempt, key, channel.url, selection);
     await client.connectRoute({
       url: channel.url,
@@ -995,7 +1028,7 @@ export class RemoteSetup {
       return null;
     }
     const forward = opened.forward;
-    this.pending = { forward, record, fresh, channel: null };
+    this.pending = { forward, record, fresh, channel: null, selection: null };
     const up = await this.waitUp(forward, attempt);
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
@@ -1054,8 +1087,8 @@ export class RemoteSetup {
         // Ready only for this selection's own read of the bots.
         if (discovery.status === "ready" && client.readyFor(selection)) {
           this.stopWatching();
-          void this.becomeLive(key, connection.gatewayId);
-          this.publish({ ...this.state, phase: "done", step: 3 });
+          // Done only once the route is promoted: its record written and its forward live.
+          void this.becomeLive(key, connection.gatewayId, attempt);
         } else if (discovery.status === "error") {
           if (this.state.failure?.kind !== "bots")
             this.publish({ ...this.state, phase: "failed", failure: setupFailure("bots") });
@@ -1143,36 +1176,72 @@ export class RemoteSetup {
   }
 
   /** The setup attempt's forward and new record go, unless they became the live route. */
+  private currentPending(): RemoteSetup["pending"] {
+    return this.pending;
+  }
+
   private async letGoPending(): Promise<void> {
     const pending = this.pending;
     this.pending = null;
     if (!pending) return;
     const client = this.options.client;
-    if (client.route === pending.record.key && this.live?.record.key !== pending.record.key) {
+    // Only the connection this attempt made, by its own selection and on its own channel: a
+    // gateway chosen since, even while this disconnect waits in the queue, stays as it is.
+    if (
+      pending.selection !== null &&
+      pending.channel &&
+      this.live?.record.key !== pending.record.key
+    ) {
       // At once, before the queued disconnect: the attempt's socket closes, so nothing its hello
       // brought (a token, the saved connection) is kept after it was let go.
-      client.holdRoute(pending.record.key);
-      await client.disconnect();
+      if (client.isSelected(pending.selection)) client.holdRoute(pending.record.key);
+      try {
+        await client.disconnect(pending.channel.url, pending.selection);
+      } catch (error) {
+        // Another gateway is selected by then: refused, and that one is left alone. Any other
+        // failure is logged; the forward goes all the same.
+        if (!(error instanceof GatewayChangedError)) this.log("Couldn't let go of a connection.");
+      }
     }
-    if (this.live?.forward !== pending.forward) await pending.forward.close();
+    // Its forward goes, unless the live route or a newer attempt holds it now.
+    // (Read through a function: a newer attempt may have set it during the waits above.)
+    const newer = this.currentPending();
+    if (this.live?.forward !== pending.forward && newer?.forward !== pending.forward)
+      await pending.forward.close();
     // A route made by this attempt and never connected is forgotten with its token.
-    if (pending.fresh && this.live?.record.id !== pending.record.id)
-      this.options.routes.remove(pending.record.id);
+    if (
+      pending.fresh &&
+      this.live?.record.id !== pending.record.id &&
+      newer?.record.id !== pending.record.id
+    ) {
+      try {
+        this.options.routes.remove(pending.record.id);
+      } catch {
+        this.log("Couldn't forget a route that never connected.");
+      }
+    }
   }
 
   // The live route --------------------------------------------------------------
 
   /** The attempt's forward is the app's route now: its life is the status strip's (§8). */
-  private async becomeLive(key: string, identity: string): Promise<void> {
+  private async becomeLive(key: string, identity: string, attempt: number): Promise<void> {
     const pending = this.pending;
     const route = this.route;
     if (!pending?.channel || !route) return;
+    // The identity the client read on this channel, after its hello: the route's from now on.
+    // Written while the attempt still owns its forward: a store that can't be written lets the
+    // attempt go, and nothing of the route is kept here.
+    const record = { ...pending.record, identity, lastUsed: this.now() };
+    try {
+      this.options.routes.put(record);
+    } catch {
+      await this.pairingNotKept(pending, attempt);
+      return;
+    }
     this.pending = null;
     const old = this.live;
     if (old && old.record.id !== pending.record.id) await this.closeLive(old, { forget: false });
-    // The identity the client read on this channel, after its hello: the route's from now on.
-    const record = { ...pending.record, identity, lastUsed: this.now() };
-    this.options.routes.put(record);
     const live: Live = {
       record,
       route,
@@ -1187,6 +1256,28 @@ export class RemoteSetup {
     this.saved = null;
     this.followLive(live, key);
     this.setStatus(live, live.status);
+    if (attempt === this.attempt) this.publish({ ...this.state, phase: "done", step: 3 });
+  }
+
+  /**
+   * The gateway accepted this device and the route couldn't be written here:
+   * the attempt's connection, forward and new record go, and so does the token
+   * its hello brought, so no half-saved route is left. The device stays
+   * listed on that gateway, and the screen says so.
+   */
+  private async pairingNotKept(
+    pending: NonNullable<RemoteSetup["pending"]>,
+    attempt: number,
+  ): Promise<void> {
+    if (this.pending === pending) await this.letGoPending();
+    await this.options.client.dropRouteToken(pending.record.key).catch(() => undefined);
+    try {
+      this.options.routes.deleteToken(pending.record.key);
+    } catch {
+      this.log("Couldn't drop a route's token.");
+    }
+    if (attempt === this.attempt)
+      this.failThere({ kind: "pairing-not-kept", cause: null, exit: null });
   }
 
   private setStatus(live: Live, status: RouteStatus): void {
@@ -1642,7 +1733,11 @@ export class RemoteSetup {
       failRoute(now && !now.ok && now.reason === "not-running" ? "stopped" : "failed");
       if (look.ok) {
         this.found = sshLook(look.facts);
-        const access = this.found.found ? (hasToken ? "paired" : "new") : null;
+        const access = this.found.found
+          ? hasToken && record.identity !== null
+            ? "paired"
+            : "new"
+          : null;
         this.publish({
           ...initialSetupState,
           phase: "found",
@@ -1662,6 +1757,7 @@ export class RemoteSetup {
     }
     this.publish({ ...this.state, step: 2 });
     const selection = this.options.client.nextSelection();
+    if (this.pending) this.pending.selection = selection;
     this.watchConnect(attempt, record.key, channel.url, selection);
     await this.options.client.connectRoute({
       url: channel.url,
