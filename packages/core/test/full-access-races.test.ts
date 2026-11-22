@@ -508,6 +508,53 @@ describe("full access under interleavings", () => {
     client.stop();
   });
 
+  it("an upgrade builds on the saved grant as another client on the store narrowed it while the approval waited", async () => {
+    // Held: read and admin. The request below asks for the interactive tier and pairing, so
+    // admin is outside it: it is kept only if the saved record still holds it when written.
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", ["operator.read", "operator.admin"]),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    const otherGateway = new FakeGateway();
+    // The other client's hello grants read alone: the shared record narrows to it.
+    otherGateway.connectReply = () => ({ ok: true, payload: helloOk([...READ_SCOPES]) });
+    const other = new ClawtrateClient(host(otherGateway, storage), FAST);
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      void client.requestAccess("pairing").catch(() => {});
+      void client.requestAccess("interactive").catch(() => {});
+      await until(() => gateway.calls("device.scopes.requestUpgrade").length > 0);
+      await until(() => client.state.connection.upgrade.status === "pending");
+      const wanted = (gateway.calls("device.scopes.requestUpgrade").at(-1) as { scopes: string[] })
+        .scopes;
+      expect(wanted).not.toContain("operator.admin");
+      await other.start();
+      await until(() => saved(storage)?.heldScopes.includes("operator.admin") === false);
+      const writes = tokenWrites(storage);
+      approval.resolve({
+        status: "approved",
+        requestId: "up-2",
+        deviceToken: "token-U",
+        scopes: wanted,
+      });
+      await until(() => writes.some((write) => write.token === "token-U"));
+      const first = writes.find((write) => write.token === "token-U")!;
+      expect(first.fullGrant).toBe(true);
+      expect(first.heldScopes).toContain("operator.pairing");
+      expect(first.heldScopes).not.toContain("operator.admin");
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("an upgrade right after a fresh full pairing keeps it a full pairing", async () => {
     const storage = memoryStorage();
     const { gateway, approval } = approvingGateway();

@@ -1066,14 +1066,6 @@ export class ClawtrateClient {
    */
   private lastEndUrl: string | null = null;
   private endRunStart = 0;
-  /**
-   * The grant of the token record this client last read or wrote, by its key: whether it is a
-   * full pairing's, and its held scopes as one bit per scope of `FULL_SCOPES`, so nothing grows
-   * here. Kept current by every read and write, so an upgrade writes on the grant as it is then.
-   */
-  private lastGrant: { key: string; full: boolean; held: number } | null = null;
-  /** Token records this client has written: a read that began before the latest notes nothing. */
-  private grantWrites = 0;
   /** A gateway token the person typed for the current attempt, dropped when it ends. */
   private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
@@ -1967,31 +1959,29 @@ export class ClawtrateClient {
         // Queued with every other token change, so a late rejection cannot remove it.
         store: ({ deviceId, role, token, scopes }) =>
           this.changeConnection(async () => {
-            if (
-              generation !== this.generation ||
-              this.settings?.url !== url ||
-              this.scopeUpgrade !== upgrade
-            ) {
-              throw new Error("The gateway changed while access was being approved.");
-            }
+            const stillOurs = () => {
+              if (
+                generation !== this.generation ||
+                this.settings?.url !== url ||
+                this.scopeUpgrade !== upgrade
+              ) {
+                throw new Error("The gateway changed while access was being approved.");
+              }
+            };
+            stillOurs();
             // Only what the upgrade asked for, or what an asked scope implies, is kept: a
             // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
             // A full pairing's record stays one: what the upgrade granted of what it asked for,
-            // by name, beside what it holds outside the request now: the grant this client last
-            // read or wrote for the key, current as of this write, with no read of its own.
-            const last =
-              this.lastGrant?.key === this.tokenKey(url, deviceId, role) ? this.lastGrant : null;
+            // by name, beside what it holds outside the request now: the saved record as read
+            // in this queued write, after every earlier change of any client on this store.
+            const current = await this.loadToken(url, deviceId, role, true);
+            stillOurs();
             await this.writeToken(
               url,
               deviceId,
               role,
-              last?.full
-                ? fullUpgrade(
-                    FULL_SCOPES.filter((_scope, index) => (last.held & (1 << index)) !== 0),
-                    token,
-                    target,
-                    scopes,
-                  )
+              current?.fullGrant
+                ? fullUpgrade(current.heldScopes, token, target, scopes)
                 : grantRecord(token, scopes, target),
             );
             const key = this.tokenKey(url, deviceId, role);
@@ -8077,45 +8067,11 @@ export class ClawtrateClient {
     return [...token.heldScopes];
   }
 
-  /** Notes the grant of a token record of the connected gateway just read or written (`lastGrant`). */
-  private noteGrant(
-    url: string,
-    key: string,
-    record: StoredDeviceToken | null,
-    readSince?: number,
-  ): void {
-    // Only the connected gateway's: a look at another address leaves it as it is. A read that
-    // began before a later write (a passive read that finished late) leaves that write's grant.
-    if (this.settings?.url !== url) return;
-    if (readSince === undefined) this.grantWrites += 1;
-    else if (readSince !== this.grantWrites) return;
-    this.lastGrant = {
-      key,
-      full: record?.fullGrant === true,
-      held: FULL_SCOPES.reduce(
-        (bits, scope, index) => (record?.heldScopes.includes(scope) ? bits | (1 << index) : bits),
-        0,
-      ),
-    };
-  }
-
   private async loadToken(
     url: string,
     deviceId: string,
     role: string,
     includeRejected = false,
-  ): Promise<StoredDeviceToken | null> {
-    const since = this.grantWrites;
-    const record = await this.readToken(url, deviceId, role, includeRejected);
-    this.noteGrant(url, this.tokenKey(url, deviceId, role), record, since);
-    return record;
-  }
-
-  private async readToken(
-    url: string,
-    deviceId: string,
-    role: string,
-    includeRejected: boolean,
   ): Promise<StoredDeviceToken | null> {
     const key = this.tokenKey(url, deviceId, role);
     const raw = await this.host.storage.get(key);
@@ -8158,7 +8114,6 @@ export class ClawtrateClient {
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
     await this.host.storage.set(key, JSON.stringify(record));
-    this.noteGrant(url, key, record);
   }
 
   private tokenParams(deviceId: string) {
@@ -8279,7 +8234,6 @@ export class ClawtrateClient {
           const existing = await this.loadToken(url, deviceId, role, true);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
-            this.noteGrant(url, key, null);
           }
           const refused = this.writes.rejected.get(key);
           refused?.delete(rejected);
