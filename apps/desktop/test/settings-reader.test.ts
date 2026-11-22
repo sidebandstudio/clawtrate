@@ -247,7 +247,17 @@ describe.skipIf(!posix)("the home folder", () => {
       },
     ],
     ["a home outside the temporary roots", () => "/usr"],
-    ["a temporary root itself", () => realpathSync(tmpdir())],
+    ["a temporary root itself", () => realpathSync("/tmp")],
+    [
+      "a home below a linked folder",
+      () => {
+        const real = join(scratch, `real-${++homes}`);
+        mkdirSync(join(real, "home", ".openclaw"), { recursive: true, mode: 0o700 });
+        const link = join(scratch, `linked-${homes}`);
+        symlinkSync(real, link);
+        return join(link, "home");
+      },
+    ],
   ])("refuses %s in a sandboxed run", async (_, path) => {
     await expect(openIn(path())).rejects.toBeInstanceOf(SetupRefusedError);
   });
@@ -389,6 +399,12 @@ int main(int argc, char **argv) {
       { encoding: "utf8" },
     );
     expect(result.status).toBe(1);
+    const refusal = spawnSync(
+      "/bin/sh",
+      ["-c", 'exec "$0" read .openclaw missing.json 3<"$1" >&-', helper!, path],
+      { encoding: "utf8" },
+    );
+    expect(refusal.status).toBe(1);
   });
 
   it("reads only from the home it was handed, and takes no path of its own", () => {
