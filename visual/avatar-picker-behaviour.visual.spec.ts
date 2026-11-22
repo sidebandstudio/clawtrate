@@ -96,7 +96,9 @@ test("F-035: left untouched, New bot sends no picture and the new bot gets the C
     "fill",
     AVATAR_COLORS[own.color],
   );
-  await expect(creature.locator('[data-part="eye"]')).toHaveCount(own.eyes === "single" ? 1 : 2);
+  await expect(creature.locator('[data-part="eye"]')).toHaveCount(
+    own.family === "clawling" && own.eyes === "single" ? 1 : 2,
+  );
 });
 
 test("F-035: the person's own picture replaces the creature; a file of 25 MB or more is refused", async ({
