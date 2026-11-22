@@ -54,6 +54,14 @@ function withdrawOpen(ledger, grant, now) {
 
 /** Expiry and retention, run at the start of every transition. */
 export function sweep(ledger, now) {
+  // A request whose own deadline came no later than its grant's expires; one
+  // still open when its grant expired is withdrawn with the grant, below.
+  for (const entry of Object.values(ledger.proposals)) {
+    const grant = entry.grant && own(ledger.grants, entry.grant.grant);
+    const grantEnd = grant && !grant.revoked ? grant.expiresAt : Infinity;
+    if (isOpen(entry) && entry.expiresAt <= now && entry.expiresAt <= grantEnd)
+      settle(entry, "expired", now);
+  }
   for (const [id, grant] of Object.entries(ledger.grants)) {
     if (!grant.revoked && grant.expiresAt <= now) revoke(ledger, id, now, "expired");
     if (grant.revoked && grant.revokedAt + RETAIN_MS <= now) delete ledger.grants[id];

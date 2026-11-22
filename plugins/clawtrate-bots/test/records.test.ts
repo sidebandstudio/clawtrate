@@ -475,4 +475,33 @@ describe("the plugin's methods", () => {
     expect(seen).toEqual([...ids].sort().reverse());
     expect(reasonOf(await host.call("proposals.list", { limit: 500 }))).toBe("invalid");
   });
+
+  it("reopened past both deadlines, a request whose own deadline came first reads expired, not withdrawn", async () => {
+    let now = T;
+    const [store, versions] = [memoryStore(), memoryStore({ maxEntries: 512 })];
+    const first = load({ store, versions, now: () => now });
+    const g = (
+      await first.call("relay.grants.set", {
+        scope: "suggest",
+        bots: ["pip"],
+        expiresAt: T + EXPIRES_MS + 5000,
+      })
+    ).payload!;
+    const p = (
+      await first.call("relay.propose", {
+        grant: g.id,
+        generation: 1,
+        bot: "pip",
+        fields: { label: "x" },
+      })
+    ).payload!;
+    now = T + EXPIRES_MS + 10_000;
+    const reopened = load({ store, versions, now: () => now });
+    expect((await reopened.call("proposals.get", { id: p.proposalId })).payload).toMatchObject({
+      state: "expired",
+    });
+    expect((await reopened.call("relay.grants.get", { id: g.id })).payload).toMatchObject({
+      revoked: "expired",
+    });
+  });
 });

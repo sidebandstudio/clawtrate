@@ -150,21 +150,25 @@ describe("decisions, expiry and size", () => {
   });
 
   it("refuses a new request when the records would be full, and every open one can still settle", () => {
-    const l = L.emptyLedger();
+    // Each admission runs on a copy, kept only when admitted, as a transaction keeps it.
+    let l = L.emptyLedger();
     const budget = 20_000;
     let admitted = 0;
-    for (
-      let i = 0;
-      i < 200 &&
-      reason(() => L.admit(l, proposal(`p${i}`, fromBot(`s${i % 10}`), bot(i)), T, budget)) ===
-        "admitted";
-      i += 1
-    )
+    for (let i = 0; i < 200; i += 1) {
+      const next = structuredClone(l);
+      if (
+        reason(() => L.admit(next, proposal(`p${i}`, fromBot(`s${i % 10}`), bot(i)), T, budget)) !==
+        "admitted"
+      )
+        break;
+      l = next;
       admitted += 1;
+    }
     expect(admitted).toBeLessThan(200);
-    expect(reason(() => L.admit(l, proposal("x", fromBot("x"), bot("x")), T, budget))).toBe(
-      "records-full",
-    );
+    expect(Object.keys(l.proposals)).toHaveLength(admitted);
+    expect(
+      reason(() => L.admit(structuredClone(l), proposal("x", fromBot("x"), bot("x")), T, budget)),
+    ).toBe("records-full");
     for (let i = 0; i < admitted; i += 1) L.decline(l, `p${i}`, `d-p${i}`, "0123456789abcdef", T);
     expect(Buffer.byteLength(JSON.stringify({ ...l, rev: 1e12 }))).toBeLessThanOrEqual(budget);
   });
