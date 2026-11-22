@@ -2,28 +2,38 @@
 // (F-227).
 
 import type { ConnectionState } from "@clawtrate/core";
+import { gatewayLabel } from "../../../../packages/ui/src/format.ts";
 import { failureTitle } from "./connect-words.ts";
 
-/** The connection's state, as the Gateway pane names it. */
-export function gatewayState(connection: ConnectionState): string {
+export const GATEWAY_APPEARANCE = {
+  connected: { label: "Connected", dot: "connected" },
+  pairing: { label: "Pairing pending", dot: "connecting" },
+  disconnected: { label: "Disconnected", dot: "disconnected" },
+  idle: { label: "Not connected", dot: "disconnected" },
+  offline: { label: "Offline", dot: "error" },
+  connecting: { label: "Connecting", dot: "connecting" },
+} as const;
+
+/** The connection's state as understood by the Gateway pane. */
+export function gatewayState(connection: ConnectionState): keyof typeof GATEWAY_APPEARANCE {
   switch (connection.status) {
     case "connected":
       // Re-pairing: the gateway holds this device's new authorization until its owner decides.
       return connection.upgrade.status === "requesting" || connection.upgrade.status === "pending"
-        ? "Pairing pending"
-        : "Connected";
+        ? "pairing"
+        : "connected";
     case "pairing":
-      return "Pairing pending";
+      return "pairing";
     case "disconnected":
-      return "Disconnected";
+      return "disconnected";
     case "idle":
-      return "Not connected";
+      return "idle";
     case "error":
-      return "Offline";
+      return "offline";
     case "connecting":
     case "reconnecting":
       // An attempt under way is connecting; waiting for the next one is offline.
-      return connection.retryAt === null ? "Connecting" : "Offline";
+      return connection.retryAt === null ? "connecting" : "offline";
   }
 }
 
@@ -64,17 +74,6 @@ export const SETTINGS_WORDS = {
   useAnother: "Use another gateway",
 } as const;
 
-/** The state's dot: connected, connecting, unreachable, or off. */
-export function gatewayDot(state: string): "connected" | "connecting" | "error" | "disconnected" {
-  return state === "Connected"
-    ? "connected"
-    : state === "Connecting" || state === "Pairing pending"
-      ? "connecting"
-      : state === "Offline"
-        ? "error"
-        : "disconnected";
-}
-
 /**
  * What the pane offers: Reconnect from Offline or Disconnected, Disconnect
  * (which keeps the pairing) while connected or trying to be, and Use another
@@ -87,7 +86,7 @@ export function gatewayActions(connection: ConnectionState): {
 } {
   const state = gatewayState(connection);
   return {
-    reconnect: state === "Offline" || state === "Disconnected",
+    reconnect: state === "offline" || state === "disconnected",
     disconnect:
       connection.status === "connected" ||
       connection.status === "connecting" ||
@@ -123,18 +122,8 @@ export function addressWords(url: string | null): string {
   }
 }
 
-/** The pane's last line: the pairing is kept, and what this device may do. */
-export function pairingNote(
-  gateway: string,
-  holds: { admin?: boolean; holdsAll: boolean; readOnly: boolean | undefined },
-): string {
-  return `${gateway} keeps this device's pairing while it is disconnected. ${
-    holds.admin
-      ? "This device holds admin access, which it asked for to change bots and accounts."
-      : holds.holdsAll
-        ? "This device can send, stop and answer."
-        : holds.readOnly
-          ? "This device asks for read access only."
-          : "This device reads. Re-pair to ask for sending, stopping and answering."
-  }`;
+/** The read-only pairing note, once the gateway has confirmed the pairing. */
+export function pairingNote(connection: ConnectionState): string | null {
+  if (!connection.paired || connection.gatewayUrl === null) return null;
+  return `${gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is disconnected. This device asks for read access only.`;
 }

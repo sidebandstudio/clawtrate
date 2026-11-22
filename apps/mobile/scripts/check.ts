@@ -120,18 +120,29 @@ async function closedPort(): Promise<number> {
 
 /**
  * Remove what a record names, each only once it is proven the run's own: the
- * device by the identifier and name the run recorded, the instance through the
+ * device by its recorded identity, the instance through the
  * dev tool with the run's id. A step that fails is reported and the record kept.
  */
 function clean(record: CheckRecord, env: NodeJS.ProcessEnv): boolean {
   let ok = true;
-  if (record.device) {
+  if (record.device !== null || record.deviceName !== undefined) {
     const devices = JSON.parse(simctl(env, "list", "devices", "-j")) as {
       devices: { [runtime: string]: Array<{ udid: string; name: string; state: string }> };
     };
-    const found = Object.values(devices.devices)
+    const matches = Object.values(devices.devices)
       .flat()
-      .find((d) => d.udid === record.device);
+      .filter((d) =>
+        record.device === null ? d.name === record.deviceName : d.udid === record.device,
+      );
+    if (matches.length > 1) {
+      console.error(`Multiple Simulator devices match run ${record.run}; they were left alone.`);
+      ok = false;
+    }
+    const found = matches.length === 1 ? matches[0] : undefined;
+    if (found && record.device === null) {
+      record.device = found.udid;
+      writeRecord(RECORD, record);
+    }
     if (found && !ownsDevice(record, found)) {
       console.error(
         `The device ${found.udid} is named "${found.name}", not this run's; it was left alone.`,
@@ -183,11 +194,13 @@ export async function main(): Promise<number> {
   }
 
   const run = newRun();
+  const name = deviceName(run);
   const record: CheckRecord = {
     run,
     pid: process.pid,
     started: startTime(process.pid) ?? "",
     device: null,
+    deviceName: name,
     instance: instanceName(run),
   };
   let child: ChildProcess | null = null;
@@ -209,11 +222,10 @@ export async function main(): Promise<number> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  // The run id is written before start. The device id is recorded as soon as create returns.
+  // Record the full device name before create and its identifier as soon as create returns.
   writeRecord(RECORD, record);
   try {
     const choice = chooseDevice(env);
-    const name = deviceName(run);
     record.device = simctl(env, "create", name, choice.type, choice.runtime).trim();
     writeRecord(RECORD, record);
     console.log(`Device: ${name} (${choice.label}), ${record.device}`);

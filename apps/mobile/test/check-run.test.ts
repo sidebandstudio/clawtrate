@@ -21,6 +21,7 @@ const record = (change: Partial<CheckRecord> = {}): CheckRecord => {
     pid: 4242,
     started: "Wed Nov 18 08:00:00 2026",
     device: "UDID-1",
+    deviceName: deviceName(run),
     instance: instanceName(run),
     ...change,
   };
@@ -37,6 +38,13 @@ describe("what the Simulator check touches", () => {
     expect(
       ownsDevice({ ...mine, device: null }, { udid: "UDID-1", name: deviceName(mine.run) }),
     ).toBe(false);
+  });
+
+  it("recognizes an older record with the exact original name and identifier", () => {
+    const { deviceName: _, ...legacy } = record();
+    const name = `Clawtrate checks ${legacy.run.slice(0, 12)}`;
+    expect(ownsDevice(legacy, { udid: "UDID-1", name })).toBe(true);
+    expect(ownsDevice({ ...legacy, device: null }, { udid: "UDID-1", name })).toBe(false);
   });
 
   it("names its instance after its run and gives the dev tool a run id it accepts", () => {
@@ -60,6 +68,8 @@ describe("what the Simulator check touches", () => {
       writeRecord(path, mine);
       expect(readRecord(path)).toEqual(mine);
       writeFileSync(path, JSON.stringify({ ...mine, instance: "someone-else" }));
+      expect(readRecord(path)).toBeNull();
+      writeFileSync(path, JSON.stringify({ ...mine, deviceName: "Someone else's Simulator" }));
       expect(readRecord(path)).toBeNull();
       writeFileSync(path, "{ half");
       expect(readRecord(path)).toBeNull();

@@ -137,6 +137,7 @@ export const scrollTo = (selector: Selector, direction: "UP" | "DOWN"): Step => 
 });
 
 type Node = { attributes?: Record<string, string>; children?: Node[] };
+const BOUNDS = /\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/;
 
 /**
  * Maestro's view of the screen, as JSON text. Like `steps`, a driver that did
@@ -177,7 +178,7 @@ export async function layout(): Promise<
   >();
   const walk = (node: Node) => {
     const a = node.attributes ?? {};
-    const m = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(a.bounds ?? "");
+    const m = BOUNDS.exec(a.bounds ?? "");
     if (a["resource-id"] && m) {
       const list = found.get(a["resource-id"]) ?? [];
       list.push({
@@ -204,7 +205,7 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
   const walk = (node: Node) => {
     if (found.viewport && found.link) return;
     const a = node.attributes ?? {};
-    const m = /\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/.exec(a.bounds ?? "");
+    const m = BOUNDS.exec(a.bounds ?? "");
     if (m) {
       const bounds = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
       if (a["resource-id"] === "transcript") found.viewport = bounds;

@@ -3,7 +3,7 @@
 // and name between them; then the status strip.
 
 import type { Bot, ClawtrateState } from "@clawtrate/core";
-import { gatewayDot, gatewayState } from "../presentation/gateway-state.ts";
+import { GATEWAY_APPEARANCE, gatewayState } from "../presentation/gateway-state.ts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
@@ -78,12 +78,11 @@ export function Top({
 /** Home's round Settings button, with the gateway's presence on it as the dot. */
 export function SettingsButton({ state, onPress }: { state: ClawtrateState; onPress: () => void }) {
   const { c } = useTheme();
-  const words = gatewayState(state.connection);
-  const dot = gatewayDot(words);
+  const { label, dot } = GATEWAY_APPEARANCE[gatewayState(state.connection)];
   return (
     <View>
       <RoundButton
-        label={`Settings. Gateway ${words.toLowerCase()}.`}
+        label={`Settings. Gateway ${label.toLowerCase()}.`}
         onPress={onPress}
         testID="settings-button"
       >

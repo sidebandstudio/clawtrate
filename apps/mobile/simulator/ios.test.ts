@@ -1193,7 +1193,9 @@ describe("the iOS app", () => {
   it("on iPhone, a paired gateway that repeats both of this device's tokens in its bots, tasks and version shows neither on any screen, in any accessible name, in the app's log or in its files", async () => {
     const since = Date.now();
     const tokens = [env.token, ""];
+    const version = "2026.10.6-simulator-echo";
     let echoing = false;
+    let echoedVersion = false;
     const upstream = new Set<WebSocket>();
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise((resolve) => server.once("listening", resolve));
@@ -1220,7 +1222,10 @@ describe("the iOS app", () => {
         if (issued) tokens[1] = issued;
         if (echoing && reply.ok) {
           const both = `${tokens[0]} ${tokens[1]}`;
-          if (reply.payload?.server) reply.payload.server.version += ` ${both}`;
+          if (reply.payload?.server) {
+            reply.payload.server.version = `${version} ${both}`;
+            echoedVersion = true;
+          }
           const otto = reply.payload?.agents?.find((agent) => agent.id === "otto");
           if (otto?.identity) {
             otto.identity.name = `Otto ${tokens[0]}`;
@@ -1255,7 +1260,17 @@ describe("the iOS app", () => {
         waitFor({ id: "bot-otto", text: `Otto ${lit(REDACTED)}.*` }, 120_000),
       ]);
       expect(await scan()).toEqual([false, false]);
-      await steps("echo-settings", [tap({ id: "settings-button" }), waitFor({ id: "settings" })]);
+      expect(echoedVersion).toBe(true);
+      await steps("echo-settings", [
+        tap({ id: "settings-button" }),
+        waitFor(
+          {
+            id: "gateway-version",
+            text: `${lit(`OpenClaw ${version} ${REDACTED} ${REDACTED} · protocol `)}\\d+`,
+          },
+          60_000,
+        ),
+      ]);
       expect(await scan()).toEqual([false, false]);
       await steps("echo-tasks", [
         tap({ id: "settings-close" }),

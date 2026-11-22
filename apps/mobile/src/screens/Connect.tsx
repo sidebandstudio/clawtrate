@@ -335,7 +335,7 @@ export function Address({
   const busy = addressAttemptInProgress(connection);
   const submit = async () => {
     if (submitting.current || addressAttemptInProgress(client.state.connection)) return;
-    const command = addressSubmission(connection.gatewayUrl, url, token);
+    const command = addressSubmission(connection.gatewayUrl, editedUrl, token);
     if (!command) {
       setSubmitError(W.missingAddress);
       return;

@@ -1,8 +1,8 @@
 // What `pnpm mobile:check` records about its own run, and how it proves that a
 // Simulator device, a gateway instance or a process is its own before it touches
-// it. A run has one random id. The device is named after it, and the record holds
-// the device's identifier, so a device is the run's only when both agree; the
-// gateway instance is started with the same id as the dev tool's run id
+// it. A run has one random id. The record names the device before creation and
+// adds its identifier once known. Cleanup requires both to match once recorded.
+// The gateway instance is started with the same id as the dev tool's run id
 // (`--run-id`), so the tool refuses to reset an instance another run holds under
 // that name; the runner is identified by its PID and the start time `ps` reports,
 // so a reused PID is not taken for the run. The record is written whole and
@@ -22,6 +22,8 @@ export type CheckRecord = {
   started: string;
   /** The device's identifier, once it exists. */
   device: string | null;
+  /** The name reserved before creation. Older records only have a device identifier. */
+  deviceName?: string;
   instance: string;
 };
 
@@ -30,7 +32,7 @@ export function newRun(): string {
 }
 
 export function deviceName(run: string): string {
-  return `${DEVICE_PREFIX}${run.slice(0, 12)}`;
+  return `${DEVICE_PREFIX}${run}`;
 }
 
 export function instanceName(run: string): string {
@@ -39,11 +41,8 @@ export function instanceName(run: string): string {
 
 /** A device is the run's when its identifier is the one the run recorded and its name is the run's. */
 export function ownsDevice(record: CheckRecord, device: { udid: string; name: string }): boolean {
-  return (
-    record.device !== null &&
-    device.udid === record.device &&
-    device.name === deviceName(record.run)
-  );
+  const named = record.deviceName ?? `${DEVICE_PREFIX}${record.run.slice(0, 12)}`;
+  return record.device !== null && device.udid === record.device && device.name === named;
 }
 
 export function readRecord(path: string): CheckRecord | null {
@@ -56,6 +55,7 @@ export function readRecord(path: string): CheckRecord | null {
       typeof value.started !== "string" ||
       typeof value.instance !== "string" ||
       value.instance !== instanceName(value.run) ||
+      (value.deviceName !== undefined && value.deviceName !== deviceName(value.run)) ||
       (value.device !== null && typeof value.device !== "string")
     )
       return null;

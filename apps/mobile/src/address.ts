@@ -1,5 +1,4 @@
 import type { BridgeCommand, ConnectionState } from "@clawtrate/core";
-import { addressWords } from "./presentation/gateway-state.ts";
 
 export function addressAttemptInProgress(connection: ConnectionState): boolean {
   return (
@@ -10,12 +9,11 @@ export function addressAttemptInProgress(connection: ConnectionState): boolean {
 
 export function addressSubmission(
   saved: string | null,
-  field: string,
+  editedUrl: string | null,
   token: string,
 ): Extract<BridgeCommand, { type: "connect" | "retry" }> | null {
-  const url = field.trim();
-  if (url === "") return null;
-  if (saved && url === addressWords(saved))
-    return token ? { type: "connect", url: saved, token } : { type: "retry" };
+  const url = editedUrl?.trim() ?? saved;
+  if (!url) return null;
+  if (url === saved && !token) return { type: "retry" };
   return { type: "connect", url, token: token || null };
 }

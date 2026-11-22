@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { addressAttemptInProgress, addressSubmission } from "../src/address.ts";
 import { homeModel, taskRows } from "../src/lists.ts";
 import { back, connectView, current, HOME, inShell, keptMismatch } from "../src/navigation.ts";
+import { gatewayActions, gatewayState, pairingNote } from "../src/presentation/gateway-state.ts";
 import { chatRows, runningWords } from "../src/transcript.ts";
 
 const LIVE = { connected: true, closed: false };
@@ -29,8 +30,8 @@ describe("submitting the iPhone gateway address", () => {
   const shown = "wss://gateway.example/route";
 
   it("keeps the saved endpoint and credential when the form is unchanged", () => {
-    expect(addressSubmission(saved, shown, "")).toEqual({ type: "retry" });
-    expect(addressSubmission(saved, shown, "replacement")).toEqual({
+    expect(addressSubmission(saved, null, "")).toEqual({ type: "retry" });
+    expect(addressSubmission(saved, null, "replacement")).toEqual({
       type: "connect",
       url: saved,
       token: "replacement",
@@ -38,6 +39,16 @@ describe("submitting the iPhone gateway address", () => {
   });
 
   it("uses the current form values after an edit", () => {
+    expect(addressSubmission(saved, shown, "replacement")).toEqual({
+      type: "connect",
+      url: shown,
+      token: "replacement",
+    });
+    expect(addressSubmission(saved, shown, "")).toEqual({
+      type: "connect",
+      url: shown,
+      token: null,
+    });
     expect(addressSubmission(saved, " wss://other.example ", "replacement")).toEqual({
       type: "connect",
       url: "wss://other.example",
@@ -51,6 +62,25 @@ describe("submitting the iPhone gateway address", () => {
     expect(addressAttemptInProgress(connection)).toBe(true);
     expect(addressAttemptInProgress({ ...connection, retryAt: NOW })).toBe(false);
     expect(addressAttemptInProgress({ ...connection, status: "error" })).toBe(false);
+  });
+});
+
+describe("iPhone gateway settings", () => {
+  it("shows a saved pairing only when the connection has confirmed one", () => {
+    const closed = {
+      ...initialState.connection,
+      gatewayUrl: "wss://gateway.example",
+      status: "disconnected" as const,
+    };
+    expect(pairingNote({ ...closed, paired: false })).toBeNull();
+    expect(pairingNote({ ...closed, paired: true })).toContain("keeps this device's pairing");
+  });
+
+  it("offers reconnect while offline between attempts", () => {
+    const trying = { ...initialState.connection, status: "reconnecting" as const, retryAt: NOW };
+    expect(gatewayState(trying)).toBe("offline");
+    expect(gatewayActions(trying).reconnect).toBe(true);
+    expect(gatewayActions({ ...trying, retryAt: null }).reconnect).toBe(false);
   });
 });
 

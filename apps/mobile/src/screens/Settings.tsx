@@ -6,11 +6,10 @@
 
 import type { ConnectionState } from "@clawtrate/core";
 import { isCleartext, scopeWords } from "../presentation/connect-words.ts";
-import { gatewayLabel } from "../../../../packages/ui/src/format.ts";
 import {
   addressWords,
+  GATEWAY_APPEARANCE,
   gatewayActions,
-  gatewayDot,
   gatewayProblem,
   gatewayState,
   grantedWords,
@@ -81,11 +80,11 @@ export function Settings({
   const { send, redact } = useRuntime();
   const { c } = useTheme();
   const [licenses, setLicenses] = useState(false);
-  const state = gatewayState(connection);
-  const dot = gatewayDot(state);
+  const { label: state, dot } = GATEWAY_APPEARANCE[gatewayState(connection)];
   const problem = gatewayProblem(connection);
   const actions = gatewayActions(connection);
   const server = serverWords(connection);
+  const pairing = pairingNote(connection);
   return (
     <Modal
       visible={visible}
@@ -181,7 +180,7 @@ export function Settings({
                 ))}
               {server && (
                 <Fact label={W.server}>
-                  <Txt>{redact(server)}</Txt>
+                  <Txt testID="gateway-version">{redact(server)}</Txt>
                 </Fact>
               )}
             </View>
@@ -240,14 +239,9 @@ export function Settings({
                 </Txt>
               )}
             </View>
-            {connection.gatewayUrl && (
+            {pairing && (
               <Txt size={S["text-sm"]} color="text-faint">
-                {redact(
-                  pairingNote(gatewayLabel(connection.gatewayUrl), {
-                    holdsAll: false,
-                    readOnly: true,
-                  }),
-                )}
+                {redact(pairing)}
               </Txt>
             )}
             <Button
