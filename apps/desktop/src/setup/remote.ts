@@ -149,6 +149,9 @@ const setupFailure = (kind: SetupFailure["kind"]): SetupFailure => ({
 /** One forward attempt's local socket, by the address the client is given for it. */
 type Channel = { url: string; local: string; gatewayPort: number; forward: ForwardSupervisor };
 
+/** What was saved for the route before this attempt started. */
+type PriorPairing = "no-record" | "unpaired" | "paired";
+
 /** What a Pair or Start dialog named, read again after the answer; used once, within its lifetime. */
 type Consent = {
   op: "pair" | "start";
@@ -209,7 +212,7 @@ export class RemoteSetup {
   private pending: {
     forward: ForwardSupervisor;
     record: SshRouteRecord;
-    fresh: boolean;
+    prior: PriorPairing;
     channel: Channel | null;
     /** The client's selection this attempt's connect made, once it was asked for. */
     selection: number | null;
@@ -916,9 +919,16 @@ export class RemoteSetup {
       // A token half saved without its gateway's identity is never reused: it goes, and the
       // new pairing's own takes its place once its gateway said who it is.
       if (this.options.routes.hasToken(key)) {
-        await this.options.client.dropRouteToken(key).catch(() => undefined);
-        this.options.routes.deleteToken(key);
-        if (attempt !== this.attempt) return;
+        if (this.options.routes.byKey(key)?.identity != null) {
+          this.publish({ ...this.state, phase: "found", look: { ...look, access: "paired" } });
+          return;
+        }
+        try {
+          this.options.routes.deleteToken(key);
+        } catch {
+          this.failThere({ kind: "route-not-saved", cause: null, exit: null });
+          return;
+        }
       }
       const made = await transport.runScript(route, "code", {
         profile: service.service.profile,
@@ -968,7 +978,8 @@ export class RemoteSetup {
     }
     // Step 2: the forward to the gateway's port there, up only after a LOOK names the same service.
     this.publish({ ...this.state, step: 1 });
-    const channel = await this.openChannel(route, fresh.found, record, !known, attempt);
+    const prior = !known ? "no-record" : access === "paired" ? "paired" : "unpaired";
+    const channel = await this.openChannel(route, fresh.found, record, prior, attempt);
     if (!channel) return;
     // The forward took its time: the consent and the route are still this attempt's, or nothing
     // is recorded or sent, and the forward goes.
@@ -1013,7 +1024,7 @@ export class RemoteSetup {
     route: Route,
     found: NonNullable<SshLook["found"]>,
     record: SshRouteRecord,
-    fresh: boolean,
+    prior: PriorPairing,
     attempt: number,
   ): Promise<Channel | null> {
     const transport = this.transport();
@@ -1028,7 +1039,7 @@ export class RemoteSetup {
       return null;
     }
     const forward = opened.forward;
-    this.pending = { forward, record, fresh, channel: null, selection: null };
+    this.pending = { forward, record, prior, channel: null, selection: null };
     const up = await this.waitUp(forward, attempt);
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
@@ -1158,16 +1169,15 @@ export class RemoteSetup {
   private acceptPairing(key: string, identity: string): void {
     const pending = this.pending;
     if (!pending || pending.record.key !== key) return;
-    if (!pending.fresh && pending.record.identity === identity) return;
+    if (pending.record.identity === identity) return;
     const record = { ...pending.record, identity };
     try {
       this.options.routes.put(record);
     } catch {
-      // A store that can't be written kept no token either: the attempt stays as it was.
+      // Leave the attempt pending. Promotion checks the write again before showing Done.
       return;
     }
     pending.record = record;
-    pending.fresh = false;
   }
 
   private stopWatching(): void {
@@ -1175,12 +1185,12 @@ export class RemoteSetup {
     this.watching = null;
   }
 
-  /** The setup attempt's forward and new record go, unless they became the live route. */
   private currentPending(): RemoteSetup["pending"] {
     return this.pending;
   }
 
-  private async letGoPending(): Promise<void> {
+  /** Release this attempt. Roll back its new pairing as well when the final save fails. */
+  private async letGoPending(discardNewPairing = false): Promise<void> {
     const pending = this.pending;
     this.pending = null;
     if (!pending) return;
@@ -1208,17 +1218,16 @@ export class RemoteSetup {
     const newer = this.currentPending();
     if (this.live?.forward !== pending.forward && newer?.forward !== pending.forward)
       await pending.forward.close();
-    // A route made by this attempt and never connected is forgotten with its token.
-    if (
-      pending.fresh &&
-      this.live?.record.id !== pending.record.id &&
-      newer?.record.id !== pending.record.id
-    ) {
-      try {
-        this.options.routes.remove(pending.record.id);
-      } catch {
-        this.log("Couldn't forget a route that never connected.");
-      }
+    // A later attempt may have taken over while the old forward was closing.
+    const id = pending.record.id;
+    if (this.live?.record.id === id || this.currentPending()?.record.id === id) return;
+    try {
+      if (pending.prior === "no-record" && (discardNewPairing || pending.record.identity === null))
+        this.options.routes.remove(id);
+      else if (discardNewPairing && pending.prior === "unpaired")
+        this.options.routes.deleteToken(pending.record.key);
+    } catch {
+      this.log("Couldn't remove this setup attempt's pairing data.");
     }
   }
 
@@ -1230,13 +1239,20 @@ export class RemoteSetup {
     const route = this.route;
     if (!pending?.channel || !route) return;
     // The identity the client read on this channel, after its hello: the route's from now on.
-    // Written while the attempt still owns its forward: a store that can't be written lets the
-    // attempt go, and nothing of the route is kept here.
+    // Save while the attempt still owns its forward so it can disconnect if the write fails.
     const record = { ...pending.record, identity, lastUsed: this.now() };
     try {
       this.options.routes.put(record);
     } catch {
-      await this.pairingNotKept(pending, attempt);
+      await this.letGoPending(true);
+      if (attempt === this.attempt) {
+        if (this.saved?.key === key) this.options.publishRoute(statusOf(record, "failed"));
+        this.failThere({
+          kind: pending.prior === "paired" ? "route-not-saved" : "pairing-not-kept",
+          cause: null,
+          exit: null,
+        });
+      }
       return;
     }
     this.pending = null;
@@ -1257,27 +1273,6 @@ export class RemoteSetup {
     this.followLive(live, key);
     this.setStatus(live, live.status);
     if (attempt === this.attempt) this.publish({ ...this.state, phase: "done", step: 3 });
-  }
-
-  /**
-   * The gateway accepted this device and the route couldn't be written here:
-   * the attempt's connection, forward and new record go, and so does the token
-   * its hello brought, so no half-saved route is left. The device stays
-   * listed on that gateway, and the screen says so.
-   */
-  private async pairingNotKept(
-    pending: NonNullable<RemoteSetup["pending"]>,
-    attempt: number,
-  ): Promise<void> {
-    if (this.pending === pending) await this.letGoPending();
-    await this.options.client.dropRouteToken(pending.record.key).catch(() => undefined);
-    try {
-      this.options.routes.deleteToken(pending.record.key);
-    } catch {
-      this.log("Couldn't drop a route's token.");
-    }
-    if (attempt === this.attempt)
-      this.failThere({ kind: "pairing-not-kept", cause: null, exit: null });
   }
 
   private setStatus(live: Live, status: RouteStatus): void {
@@ -1749,7 +1744,7 @@ export class RemoteSetup {
     }
     this.found = sshLook(look.ok ? look.facts : emptyFacts());
     this.publish({ ...this.state, step: 1 });
-    const channel = await this.openChannel(route, now, record, false, attempt);
+    const channel = await this.openChannel(route, now, record, "paired", attempt);
     if (!channel) {
       if (attempt === this.attempt)
         failRoute(this.state.there?.failure?.kind === "unreachable" ? "unreachable" : "failed");

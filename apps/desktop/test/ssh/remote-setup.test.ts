@@ -1778,6 +1778,67 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       await g.remote.closeAll();
     });
 
+    it("F-496: a saved pairing that appears during the Pair dialog gets its own consent", async () => {
+      const first = host();
+      await connected(first);
+      const [record] = first.routes.list();
+      const key = record!.key;
+      const token = first.routes.getToken(key, "device-1", "operator")!;
+      await first.remote.closeAll();
+      first.routes.deleteToken(key);
+      let restorePairing = () => {};
+      const again = host({
+        dir: first.dir,
+        storage: first.storage,
+        answer: (question) => {
+          if (question.confirm === "Pair") restorePairing();
+          return { confirmed: true, checked: false };
+        },
+      });
+      restorePairing = () => again.routes.setToken(key, "device-1", "operator", token);
+      await again.remote.there("devbox");
+      expect(again.setup().look?.access).toBe("new");
+      const start = stub.calls().length;
+      await again.remote.connect();
+      expect(again.setup().phase).toBe("found");
+      expect(again.setup().look?.access).toBe("paired");
+      expect(again.routes.getToken(key, "device-1", "operator")).toBe(token);
+      expect(
+        stub
+          .calls()
+          .slice(start)
+          .filter((call) => call.startsWith("qr ")),
+      ).toEqual([]);
+      expect(again.fake.connects).toEqual([]);
+      await again.remote.closeAll();
+    });
+
+    it("F-498: a remembered pairing survives a failed route update on restore", async () => {
+      const first = host();
+      await connected(first);
+      const [saved] = first.routes.list();
+      await first.remote.closeAll();
+      const again = host({ dir: first.dir, storage: first.storage });
+      await again.client.start();
+      const put = again.routes.put.bind(again.routes);
+      again.routes.put = () => {
+        throw new Error("route update failed");
+      };
+      try {
+        await again.remote.resume();
+        await until(() => again.setup().phase === "failed", 30_000);
+        expect(again.routes.byKey(saved!.key)?.identity).toBe(saved!.identity);
+        expect(again.routes.hasToken(saved!.key)).toBe(true);
+        expect(again.setup().there?.failure?.kind).toBe("route-not-saved");
+        expect(again.setup().route?.phase).toBe("failed");
+      } finally {
+        again.routes.put = put;
+      }
+      await again.remote.there("devbox");
+      expect(again.setup().look?.access).toBe("paired");
+      await again.remote.closeAll();
+    });
+
     it("an expired Connect sends and saves nothing: the dialog's lifetime passing while the forward opens records no route and sends no code", async () => {
       let clock = Date.now();
       const h = host({ now: () => clock });

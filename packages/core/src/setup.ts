@@ -190,9 +190,9 @@ export type SshFailureKind =
   | "code-failed"
   /** Remove couldn't delete the route's pinned key: nothing else was forgotten. */
   | "remove-failed"
-  /** The route couldn't be written on this computer before pairing: nothing was sent there. */
+  /** The route file on this computer could not be updated. */
   | "route-not-saved"
-  /** The gateway accepted this device and the route couldn't be written here: nothing was kept. */
+  /** The gateway accepted this device and the new pairing could not be saved here. */
   | "pairing-not-kept"
   /** OpenClaw's start command ran and exited with an error (`exit`). */
   | "start-failed"

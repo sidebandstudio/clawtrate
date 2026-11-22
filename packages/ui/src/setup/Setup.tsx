@@ -1031,14 +1031,14 @@ function sshFailureCopy(
     case "route-not-saved":
       return {
         lead: "Clawtrate couldn't save this route",
-        text: `Its route file on this computer couldn't be written, so nothing was sent to ${account} and the one-time code made there goes unused. Try again.`,
+        text: "Clawtrate couldn't update the route file on this computer. Try again.",
         next: null,
         retry: true,
       };
     case "pairing-not-kept":
       return {
         lead: "Clawtrate couldn't save this route",
-        text: `The gateway on ${account} accepted this device, but Clawtrate couldn't write the route on this computer, so it disconnected and kept no token for it here. The device stays listed on that gateway. Try again.`,
+        text: `The gateway on ${account} accepted this device, but Clawtrate couldn't write the route on this computer, so it disconnected. The device stays listed on that gateway. Try again.`,
         next: null,
         retry: true,
       };
