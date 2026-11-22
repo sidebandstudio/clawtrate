@@ -1,7 +1,7 @@
 // Changing a bot's picture (bots.md section 8): `agents.update` with the
 // picture, saved only once the gateway's bot list shows it, and only on admin.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { avatarFor, pictureWithChoice } from "../src/avatar.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
@@ -714,7 +714,13 @@ describe("a bot write is bound to its gateway to the end", () => {
     fake: AccountsGateway,
   ) {
     const original = fake.gateway.handlers["users.prefs.set"]!;
-    fake.gateway.handlers["users.prefs.set"] = () => new Promise(() => {});
+    const reply = deferred<void>();
+    onTestFinished(() => {
+      fake.gateway.handlers["users.prefs.set"] = original;
+      reply.resolve();
+      client.stop();
+    });
+    fake.gateway.handlers["users.prefs.set"] = () => reply.promise;
     const created = createBridgeSession(client)
       .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
       .then(
@@ -753,7 +759,6 @@ describe("a bot write is bound to its gateway to the end", () => {
     ).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.create")).toHaveLength(creates);
     expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
-    client.stop();
   });
 
   it("drops A's made bot once another gateway says who it is, after none had", async () => {
@@ -769,7 +774,6 @@ describe("a bot write is bound to its gateway to the end", () => {
     await until(() => client.state.connection.gatewayId === "gateway-b");
     expect(client.state.accounts.creation).toBeNull();
     expect(sentSince(fake, from)).toEqual([]);
-    client.stop();
   });
 
   it("sends nothing more, and keeps nothing, when its record of the account is cut off by another gateway", async () => {
@@ -782,7 +786,6 @@ describe("a bot write is bound to its gateway to the end", () => {
     expect(await created).toMatch("gateway changed");
     expect(sentSince(fake, from)).toEqual([]);
     expect(client.state.accounts.creation).toBeNull();
-    client.stop();
   });
 
   for (const [caller, outcome] of [
@@ -793,7 +796,16 @@ describe("a bot write is bound to its gateway to the end", () => {
     it(`a ${caller} Create retired by a reset leaves the newer Create and timer alone when its last task is ${outcome}`, async () => {
       const { client, fake } = await accountsClient();
       const original = fake.gateway.handlers["sessions.create"]!;
+      const made = fake.gateway.handlers["agents.create"]!;
       const task = deferred<void>();
+      const answer = deferred<void>();
+      onTestFinished(() => {
+        fake.gateway.handlers["sessions.create"] = original;
+        fake.gateway.handlers["agents.create"] = made;
+        task.resolve();
+        answer.resolve();
+        client.stop();
+      });
       fake.gateway.handlers["sessions.create"] = (params) =>
         task.promise.then(() => {
           if (outcome === "refused") throw new GatewayError({ code: "UNAVAILABLE", message: "no" });
@@ -813,15 +825,15 @@ describe("a bot write is bound to its gateway to the end", () => {
       );
       await until(() => fake.gateway.calls("sessions.create").length === 1);
       resetCreation(client);
-      const answer = deferred<void>();
-      const made = fake.gateway.handlers["agents.create"]!;
       fake.gateway.handlers["agents.create"] = (params) => answer.promise.then(() => made(params));
-      const second = createBridgeSession(client).apply({
-        type: "createBot",
-        ...input,
-        name: "Bee",
-        gatewayId: "gateway-a",
-      });
+      const second = createBridgeSession(client)
+        .apply({
+          type: "createBot",
+          ...input,
+          name: "Bee",
+          gatewayId: "gateway-a",
+        })
+        .catch((error: Error) => error);
       await until(() => fake.gateway.calls("agents.create").length === 2);
       task.resolve();
       await first;
@@ -831,7 +843,6 @@ describe("a bot write is bound to its gateway to the end", () => {
       fake.gateway.handlers["sessions.create"] = original;
       answer.resolve();
       expect(await second).toEqual({ botId: "bee", missing: [] });
-      client.stop();
     }, 15_000);
 
   it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
