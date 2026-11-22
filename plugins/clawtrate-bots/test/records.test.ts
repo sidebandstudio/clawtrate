@@ -183,9 +183,11 @@ describe("the records", () => {
     );
     const swept = records.sweepOrphans();
     await held.reached;
+    const conflicts = store.stats.conflicts;
     await records.publish("newer", digest, change("newer", digest));
     held.release();
     expect(await swept).toEqual([]);
+    expect(store.stats.conflicts).toBe(conflicts + 1);
     expect(await records.version("newer", digest)).toEqual({ id: "newer" });
     expect((await records.ledger()).sweeping).toBeNull();
   });
