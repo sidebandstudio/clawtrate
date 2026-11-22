@@ -648,6 +648,14 @@ function fullGrantValid(hello: Pick<HelloOk, "auth" | "protocol">): boolean {
   );
 }
 
+/** A signed request's scopes and what the hello answering it granted. */
+type SignedGrant = { asked: readonly string[]; granted: readonly string[] };
+
+/** A full pairing's held scopes after a hello: any it signed for and wasn't granted go. */
+function narrowedHeld(held: readonly string[], grant: SignedGrant): string[] {
+  return held.filter((scope) => !grant.asked.includes(scope) || grant.granted.includes(scope));
+}
+
 /** A first full pairing's record: the scopes of the signed request the gateway granted by name, in its order. */
 function fullRecord(
   token: string,
@@ -1023,10 +1031,15 @@ export class ClawtrateClient {
    */
   private fullAccess = false;
   /**
-   * A full pairing's saved token was refused: no attempt asks for the six again until
-   * the person chooses to connect again.
+   * Whether a first pairing may ask for the six: only in an attempt the person started
+   * (`connect`, `connectWithSetupCode`), and no longer once a saved token was refused or
+   * lost, from the moment the refusal is accepted, before its removal runs.
    */
-  private fullDeclined = false;
+  private fullEligible = false;
+  /** This attempt's plans have used a saved token: one gone since was lost. */
+  private planHadToken = false;
+  /** A gateway token the person typed for the current attempt, dropped when it ends. */
+  private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -1428,14 +1441,16 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-      // The person chose to connect: a new pairing may ask for full access again.
-      this.fullDeclined = false;
+      // The person chose to connect: a new pairing may ask for full access.
+      this.fullEligible = true;
+      this.planHadToken = false;
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
       await this.saveSettings({ url, token });
       // The selection changes only once this choice was valid and saved: a refused one leaves
       // the connection that stays open its own.
       this.selectionApplied = selection;
+      this.typedAttempt = token ? { url, token, selection } : null;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.setupCheck = null;
@@ -1463,8 +1478,10 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-      // The person chose to connect: a new pairing may ask for full access again.
-      this.fullDeclined = false;
+      // The person chose to connect: a new pairing may ask for full access.
+      this.fullEligible = true;
+      this.planHadToken = false;
+      this.typedAttempt = null;
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
       this.selectionApplied = selection;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -5720,6 +5737,9 @@ export class ClawtrateClient {
         rotationsAtPlan = this.writes.rotations.get(key) ?? 0;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
+        // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
+        if (token) this.planHadToken = true;
+        else if (this.planHadToken) this.fullEligible = false;
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -5809,7 +5829,8 @@ export class ClawtrateClient {
         // The saved token as it is after the last wait: still what the person agreed to, and still
         // the token the plan carries. One refused or replaced meanwhile is never sent, and the next
         // attempt plans again. A refusal accepted after this read stops the frame itself.
-        if (setup || plan.selectedAuth.usingStoredDeviceToken) {
+        const fullFirst = !token && requested.some((scope) => !READ_SCOPES.includes(scope));
+        if (setup || plan.selectedAuth.usingStoredDeviceToken || fullFirst) {
           refusalsAtRead = this.writes.refusals;
           const saved = await this.loadToken(settings.url, identity.deviceId, "operator");
           stillCurrent();
@@ -5826,6 +5847,11 @@ export class ClawtrateClient {
             saved?.token.trim() !== plan.selectedAuth.storedToken
           )
             throw new Error("the saved device token changed");
+          // The signed scopes against what the saved record holds now: a grant narrowed or a
+          // pairing that appeared since the plan means another plan.
+          const now = this.scopesToAsk(settings.url, saved);
+          if (!setup && now.join(",") !== requested.join(","))
+            throw new Error("the saved grant changed since the plan");
         }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
@@ -5910,12 +5936,15 @@ export class ClawtrateClient {
             () =>
               (this.writes.rotations.get(key) ?? 0) === rotationsAtPlan &&
               !(issued === sent && this.writes.refusals !== refusalsAtRead),
-            this.fullAccess && grantValid ? context.plan.scopes : undefined,
+            grantValid
+              ? { asked: context.plan.scopes, granted: hello.auth.scopes ?? [] }
+              : undefined,
           );
         }
         // A full pairing's record narrows to what this hello granted of what was signed for,
         // whether or not the token changed.
-        if (grantValid && context.plan.identity && live()) {
+        // A hello with a replacement token narrowed its record in that token's write, above.
+        if (!issued && grantValid && context.plan.identity && live()) {
           const ids = { deviceId: context.plan.identity.deviceId, role: hello.auth.role };
           const granted = hello.auth.scopes ?? [];
           const asked = context.plan.scopes;
@@ -5934,10 +5963,13 @@ export class ClawtrateClient {
             if ((this.writes.rotations.get(key) ?? 0) !== rotationsAtPlan) return;
             if (!tokenStore.ownsToken(ids.deviceId, ids.role)) return;
             const record = await this.loadToken(settings.url, ids.deviceId, ids.role);
+            // Everything again after that read: it may have waited while another socket took over.
+            if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+              return;
+            if ((this.writes.rotations.get(key) ?? 0) !== rotationsAtPlan) return;
+            if (!tokenStore.ownsToken(ids.deviceId, ids.role)) return;
             if (!record?.fullGrant || about === undefined || record.token.trim() !== about) return;
-            const held = record.heldScopes.filter(
-              (scope) => !asked.includes(scope) || granted.includes(scope),
-            );
+            const held = narrowedHeld(record.heldScopes, { asked, granted });
             if (held.length === record.heldScopes.length) return;
             await this.writeToken(settings.url, ids.deviceId, ids.role, {
               ...record,
@@ -6005,13 +6037,22 @@ export class ClawtrateClient {
               staged.role,
               !existing && grant === "within"
                 ? fullRecord(staged.token, staged.scopes, context.plan.scopes)
-                : {
-                    token: staged.token,
-                    grantedScopes: [...staged.scopes],
-                    heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
-                    ...(existing?.adminHeld ? { adminHeld: true } : {}),
-                    ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
-                  },
+                : existing?.fullGrant
+                  ? {
+                      ...existing,
+                      token: staged.token,
+                      heldScopes: narrowedHeld(existing.heldScopes, {
+                        asked: context.plan.scopes,
+                        granted: staged.scopes,
+                      }),
+                    }
+                  : {
+                      token: staged.token,
+                      grantedScopes: [...staged.scopes],
+                      heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
+                      ...(existing?.adminHeld ? { adminHeld: true } : {}),
+                      ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+                    },
             );
             return true;
           });
@@ -7898,7 +7939,7 @@ export class ClawtrateClient {
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
-    if (!token) return this.fullAccess && !this.fullDeclined ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (!token) return this.fullAccess && this.fullEligible ? [...FULL_SCOPES] : [...READ_SCOPES];
     // A full pairing's token is used for more than read only while full access holds.
     if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
     if (this.isSetup(url) && !this.fullAccess) return [...READ_SCOPES];
@@ -7982,7 +8023,7 @@ export class ClawtrateClient {
       params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
       keeps?: () => boolean,
-      asked?: readonly string[],
+      grant?: SignedGrant,
     ) => Promise<void>;
   } {
     const current = () => generation === this.generation && this.settings?.url === url;
@@ -7992,7 +8033,7 @@ export class ClawtrateClient {
       { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
       keeps = () => true,
-      asked?: readonly string[],
+      grant?: SignedGrant,
     ) => {
       if (!current() || !live()) return;
       // A setup connection's first token waits in memory for its grant to be checked.
@@ -8011,11 +8052,19 @@ export class ClawtrateClient {
         if (!ownsToken(deviceId, role)) return;
         // A first pairing that asked for more than read holds exactly what the gateway granted
         // of what it asked for: a narrower grant is kept as it is, and nothing asks again.
-        if (!existing && asked?.some((scope) => !READ_SCOPES.includes(scope))) {
-          await this.writeToken(url, deviceId, role, fullRecord(token, scopes, asked));
+        if (
+          !existing &&
+          this.fullAccess &&
+          grant?.asked.some((scope) => !READ_SCOPES.includes(scope))
+        ) {
+          await this.writeToken(url, deviceId, role, fullRecord(token, grant.granted, grant.asked));
           return;
         }
-        const held = existing?.heldScopes ?? [...READ_SCOPES];
+        // A full pairing's replacement token and its narrowed grant go in one write.
+        const held =
+          existing?.fullGrant && grant
+            ? narrowedHeld(existing.heldScopes, grant)
+            : (existing?.heldScopes ?? [...READ_SCOPES]);
         await this.writeToken(url, deviceId, role, {
           token,
           // A replacement token is held to what this client asks for, whatever it was granted.
@@ -8051,13 +8100,13 @@ export class ClawtrateClient {
         const key = this.tokenKey(url, deviceId, role);
         // Until the removal has run, loads skip the refused token, so a retry never sends it again.
         this.writes.rejected.set(key, (this.writes.rejected.get(key) ?? new Set()).add(rejected));
+        // And no retry asks for the six in its place: that takes the person's decision.
+        this.fullEligible = false;
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
           const existing = await this.loadToken(url, deviceId, role, true);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
-            // Asking for the six again takes the person's decision.
-            if (existing.fullGrant) this.fullDeclined = true;
           }
           const refused = this.writes.rejected.get(key);
           refused?.delete(rejected);
