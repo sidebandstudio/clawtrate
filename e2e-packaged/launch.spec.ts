@@ -350,12 +350,18 @@ test("hands a second launch to the running app instead of starting another", asy
 
 test("hands a link from a second launch to the running app, which checks it", async () => {
   // As Windows opens a Clawtrate link while the app runs, with the command the
-  // installer registers. An invalid link needs no gateway: the running app says
-  // so, and nothing else happens.
+  // installer registers, in the run's sandbox and place as the second launch above.
+  // An invalid link needs no gateway: the running app says so, and nothing else happens.
+  const place = launchPlace(process.env.CLAWTRATE_PACKAGED_PLACE!);
   const second = spawn(
     packagedExecutable(APP),
-    [`--user-data-dir=${USER_DATA}`, "--", "clawtrate://chat?bot=marlow&send=1"],
-    { env: appEnv(), stdio: "ignore" },
+    [
+      `--user-data-dir=${USER_DATA}`,
+      `--clawtrate-setup-sandbox=${SANDBOX}`,
+      "--",
+      "clawtrate://chat?bot=marlow&send=1",
+    ],
+    { cwd: place.cwd, env: place.env, stdio: "ignore" },
   );
   const exited = new Promise<number | null>((resolve) => second.once("exit", resolve));
   const code = await Promise.race([
