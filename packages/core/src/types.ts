@@ -269,6 +269,11 @@ export type TranscriptItem = {
    * message this client sent (`namesOutgoing`).
    */
   idempotencyKey?: string;
+  /**
+   * History places this user row inside a run that began before it: the gateway took it into
+   * that run as a steer (docs/research/steer-stop.md). Present and true only then.
+   */
+  steered?: boolean;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };

@@ -1324,9 +1324,12 @@ async function watchRun(page: Page) {
         steer: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
           (caption) => caption.textContent === "Steer requested",
         ),
-        joined: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
-          (caption) => caption.textContent === "Steer",
-        ),
+        // Steer on your bubble once the run took it in, or on its row once history shows that.
+        joined: [
+          ...document.querySelectorAll(
+            "[data-testid=outgoing] .msg-caption, [data-testid=transcript-turn] .msg-caption",
+          ),
+        ].some((caption) => caption.textContent === "Steer"),
       });
     }).observe(document.body, { subtree: true, childList: true, characterData: true });
   });
@@ -2241,6 +2244,10 @@ test("F-096 F-468: a steer sent while the run waits on an approval leaves the ap
   ).toHaveText("Steer requested");
   await card.getByRole("button", { name: "Allow once" }).click();
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  // Its row in the run, once history holds the run's reply after it, is captioned Steer.
+  await expect(
+    page.getByTestId("transcript-turn").filter({ hasText: text }).locator(".msg-caption"),
+  ).toHaveText("Steer", { timeout: 30_000 });
   // By the gateway's record it joined that run: its own id ended at once, and history answers
   // it inside the run it was sent into.
   expect(await runRecord(steerId)).toMatchObject({ status: "ok" });
@@ -2274,6 +2281,13 @@ test("F-096: a message sent while the run works is steered into it, captioned St
   await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  // Its row in the run, once history holds the run's reply after it, is captioned Steer.
+  await expect(
+    page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "Only the photos set, please." })
+      .locator(".msg-caption"),
+  ).toHaveText("Steer", { timeout: 30_000 });
   // Steer requested until the gateway's record says the run took it in, then Steer.
   const samples = await seen();
   const requested = samples.findIndex((sample) => sample.steer);

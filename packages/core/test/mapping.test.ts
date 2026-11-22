@@ -191,3 +191,24 @@ describe("a task's requested effort", () => {
     expect(mapSessionRow(row)).not.toHaveProperty("effort");
   });
 });
+
+describe("F-096: a steer history places inside a run", () => {
+  const row = (role: string, text: string, info: Record<string, unknown>) => ({
+    role,
+    content: [{ type: "text", text }],
+    __openclaw: info,
+  });
+
+  it("F-096: a user row followed by a run that began before it is captioned as a steer; a turn of its own is not", () => {
+    const items = mapHistory([
+      row("user", "Back up the photos.", { id: "u1", idempotencyKey: "run-1:user" }),
+      row("assistant", "Working on it.", { id: "a1", runId: "run-1" }),
+      row("user", "Only this year's.", { id: "u2", idempotencyKey: "steer-1:user" }),
+      row("assistant", "Only this year's, then.", { id: "a2", runId: "run-1" }),
+      row("user", "Then list the notes.", { id: "u3", idempotencyKey: "steer-2:user" }),
+      row("assistant", "Here are the notes.", { id: "a3", runId: "steer-2" }),
+    ]);
+    const users = items.filter((item) => item.role === "user");
+    expect(users.map((item) => item.steered === true)).toEqual([false, true, false]);
+  });
+});

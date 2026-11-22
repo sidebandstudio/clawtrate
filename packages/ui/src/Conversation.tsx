@@ -68,6 +68,11 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
           )}
         </MessageUnit>
       )}
+      {item.steered && (
+        <div className="msg-caption">
+          <span>Steer</span>
+        </div>
+      )}
       {incomplete && <IncompleteCaption />}
     </div>
   );

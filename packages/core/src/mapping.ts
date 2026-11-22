@@ -321,6 +321,9 @@ function gatewayTurnText(message: RawRecord): string | null {
 export function mapHistory(messages: unknown): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   let currentRun: string | null = null;
+  /** Runs whose rows came already, and the last user row no run's row has followed yet. */
+  const runsSeen = new Set<string>();
+  let lastUser: TranscriptItem | null = null;
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
   /** The item each pending call is in, so a cut result marks it. */
   const callItems = new Map<string, TranscriptItem>();
@@ -366,7 +369,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const messageId = str(info.id);
         const replyTo = replyReference(info);
         const idempotencyKey = str(info.idempotencyKey) ?? str(message.idempotencyKey);
-        items.push({
+        lastUser = {
           id,
           role: "user",
           timestamp,
@@ -376,7 +379,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
-        });
+        };
+        items.push(lastUser);
         return;
       }
       case "assistant": {
@@ -385,6 +389,12 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
         }
         const runId = str(info.runId);
+        if (runId !== null) {
+          // A user row followed by a run that began before it was taken into that run: a steer.
+          if (lastUser && runsSeen.has(runId)) lastUser.steered = true;
+          lastUser = null;
+          runsSeen.add(runId);
+        }
         const previous = items.at(-1);
         let item: TranscriptItem;
         if (previous?.role === "assistant" && runId !== null && runId === currentRun) {

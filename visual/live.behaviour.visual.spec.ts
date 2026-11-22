@@ -1047,6 +1047,37 @@ test.describe("steering, queueing and holding", () => {
       message.text === "Skip the photos folder" ? { ...message, steer: "joined" } : message,
     );
     await expect(steer.locator(".msg-caption")).toHaveText("Steer");
+    // A row history places inside a run that began before it is captioned Steer there too.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const last = transcript.items.findLast((item) => item.role === "user")!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              items: transcript.items.map((item) =>
+                item === last ? { ...item, steered: true } : item,
+              ),
+            },
+          },
+        };
+      });
+    });
+    await expect(
+      page
+        .getByTestId("transcript-turn")
+        .locator(".msg-caption")
+        .filter({ hasText: /^Steer$/ }),
+    ).toHaveCount(1);
   });
 
   test("F-097 F-468: Stop withdraws a steer the gateway still holds: it is Not sent, Send sends it again, and the note says nothing may still run", async ({

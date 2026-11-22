@@ -585,6 +585,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  steered: FLAG,
 });
 const reaction = object<MessageReaction>()({
   emoji: id(MAX_EMOJI_CHARS),
