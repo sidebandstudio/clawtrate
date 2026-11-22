@@ -22,7 +22,7 @@ for (const size of [DESKTOP, PHONE])
     test.describe(`${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
 
-      test("F-518: Clawtrate's mark and name, with the Beta pill on a Beta build", async ({
+      test("F-519: Clawtrate's mark and name, with the Beta pill on a Beta build", async ({
         page,
       }) => {
         await openFixture(page, "scene=main&updates=not-checked&buildTrack=nightly", theme);
@@ -46,7 +46,7 @@ for (const size of [DESKTOP, PHONE])
         );
       });
 
-      test("F-518: the window with the title bar, a ready update and a named gateway", async ({
+      test("F-519: the window with the title bar, a ready update and a named gateway", async ({
         page,
       }) => {
         await openFixture(
@@ -61,7 +61,7 @@ for (const size of [DESKTOP, PHONE])
         await expect(page).toHaveScreenshot(`titlebar/window-${size.name}-${theme}.png`);
       });
 
-      test("F-520: a gear named Settings opens Settings, and focus comes back to it", async ({
+      test("F-521: a gear named Settings opens Settings, and focus comes back to it", async ({
         page,
       }) => {
         await openFixture(page, "scene=main", theme);
@@ -82,7 +82,7 @@ for (const size of [DESKTOP, PHONE])
         await expect(gear).toBeFocused();
       });
 
-      test("F-521: naming the gateway from its menu shows the name over the address", async ({
+      test("F-522: naming the gateway from its menu shows the name over the address", async ({
         page,
       }) => {
         await openFixture(page, "scene=main", theme);
@@ -157,7 +157,7 @@ for (const size of [DESKTOP, PHONE])
     test.describe(`${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
       for (const [fixture, text, press] of STATES)
-        test(`F-519: the update button when ${fixture}`, async ({ page }) => {
+        test(`F-520: the update button when ${fixture}`, async ({ page }) => {
           await openFixture(page, `scene=main&updates=${fixture}`, theme);
           await showList(page);
           const button = updateButton(page);
@@ -208,34 +208,34 @@ test.describe("1440 dark", () => {
     ["updates=invalid&buildTrack=nightly", "a version that can't be read"],
     ["scene=main", "no update source at all"],
   ])
-    test(`F-518: ${why} shows no Beta pill`, async ({ page }) => {
+    test(`F-519: ${why} shows no Beta pill`, async ({ page }) => {
       await openFixture(page, `scene=main&${query}`, "dark");
       await expect(brand(page)).toContainText("Clawtrate");
       await expect(brand(page).getByText("Beta", { exact: true })).toHaveCount(0);
     });
 
   for (const state of ["not-checked", "checking", "nothing-newer", "pending", "preferences", "dev"])
-    test(`F-519: no update button while the update says nothing (${state})`, async ({ page }) => {
+    test(`F-520: no update button while the update says nothing (${state})`, async ({ page }) => {
       await openFixture(page, `scene=main&updates=${state}`, "dark");
       await expect(page.getByTestId("titlebar")).toBeVisible();
       await expect(updateButton(page)).toHaveCount(0);
     });
 
-  test("F-519: the button's new state is said once, without Open Updates", async ({ page }) => {
+  test("F-520: the button's new state is said once, without Open Updates", async ({ page }) => {
     await openFixture(page, "scene=main&updates=offered", "dark");
     await expect(page.getByTestId("update-announcer")).toHaveText(
       "Update available: Clawtrate 0.2.0",
     );
   });
 
-  test("F-519: Restarting turns, and stands still with reduced motion", async ({ page }) => {
+  test("F-520: Restarting turns, and stands still with reduced motion", async ({ page }) => {
     await openFixture(page, "scene=main&updates=preparing", "dark");
     await expect(page.locator(".update-spin:visible")).not.toHaveCSS("animation-name", "none");
     await openFixture(page, "scene=main&updates=preparing&motion=reduce", "dark");
     await expect(page.locator(".update-spin:visible")).toHaveCSS("animation-name", "none");
   });
 
-  test("F-521: a name given before shows on the card and in the menu", async ({ page }) => {
+  test("F-522: a name given before shows on the card and in the menu", async ({ page }) => {
     await openFixture(page, "scene=main&gatewayName=Devbox", "dark");
     await expect(card(page)).toHaveAccessibleName("Devbox, connected. Open the gateway menu.");
     await card(page).click();

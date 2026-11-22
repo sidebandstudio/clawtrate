@@ -17,7 +17,7 @@ import { FakeGateway, helloOk, memoryStorage, testHost, until } from "./fake-gat
 const URL = "ws://127.0.0.1:19001";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
 
-describe("F-521: gateway names", () => {
+describe("F-522: gateway names", () => {
   it("keys a name by the normalised address: host case, a default port and a trailing slash don't matter", () => {
     expect(gatewayAddress("wss://Devbox.Example.test:443/")).toBe("wss://devbox.example.test");
     expect(gatewayAddress("ws://127.0.0.1:19001/gw/")).toBe("ws://127.0.0.1:19001/gw");
