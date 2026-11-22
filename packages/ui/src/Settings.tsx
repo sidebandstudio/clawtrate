@@ -192,10 +192,13 @@ export function Settings({
   updateReading,
   onClose,
   route = null,
+  removeProblem = null,
 }: {
   connection: ConnectionState;
   /** The SSH route the app is connected through, when it is one (docs/design/setup.md §8). */
   route?: RouteStatus | null;
+  /** Why "Remove this gateway…" didn't finish, while the route it left is shown. */
+  removeProblem?: string | null;
   info: HostInfo;
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
@@ -451,6 +454,11 @@ export function Settings({
       {forgetProblem && (
         <div className="form-error" role="alert" data-testid="forget-problem">
           {forgetProblem}
+        </div>
+      )}
+      {route && removeProblem && (
+        <div className="form-error" role="alert" data-testid="remove-problem">
+          {`Clawtrate couldn't remove this route. ${removeProblem}`}
         </div>
       )}
       {canRePair && (

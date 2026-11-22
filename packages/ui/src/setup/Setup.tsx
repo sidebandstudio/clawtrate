@@ -320,6 +320,10 @@ const CANT_TELL: Record<string, string> = {
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
 };
 
+/** A Remove that didn't finish: what is left, and what to do. Settings says the same. */
+export const REMOVE_FAILED =
+  "Part of it couldn't be deleted from this computer (its trusted key, its saved connection or its record), so the route stays. Try Remove again.";
+
 /** Over SSH the version isn't read without running OpenClaw, so the look ran nothing there. */
 const SSH_READ_ONLY =
   "OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate found its program on that computer and ran nothing. Use Advanced with that gateway's address and a token.";
@@ -1045,7 +1049,7 @@ function sshFailureCopy(
     case "remove-failed":
       return {
         lead: "Clawtrate couldn't remove this route",
-        text: "Its trusted key couldn't be deleted from Clawtrate's own SSH files, so the route, its key and its token are kept. Try Remove again.",
+        text: REMOVE_FAILED,
         next: null,
         retry: false,
       };

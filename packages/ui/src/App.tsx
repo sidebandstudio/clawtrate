@@ -6,6 +6,7 @@ import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor, setupHolds } from "./screen.ts";
 import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings } from "./Settings.tsx";
+import { REMOVE_FAILED } from "./setup/Setup.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { showUpdateFooter } from "./Updates.tsx";
 import { Shell } from "./Shell.tsx";
@@ -125,6 +126,9 @@ export function App({
           checkIns={state.checkIns}
           bots={state.bots}
           route={state.setup?.route ?? null}
+          removeProblem={
+            state.setup?.there?.failure?.kind === "remove-failed" ? REMOVE_FAILED : null
+          }
           waitingMessages={restartWaitingMessages(state)}
           updateReading={updated}
           initialUpdates={openUpdates}

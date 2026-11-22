@@ -183,6 +183,14 @@ test.describe("behaviour", () => {
     await expect(settings.getByRole("button", { name: "Use another gateway" })).toHaveCount(0);
     await settings.getByRole("button", { name: "Remove this gateway…" }).click();
     expect(await sent(page)).toContain(JSON.stringify({ type: "setupRemoveRoute" }));
+    // A Remove that didn't finish is said in Settings, where it was asked, with the route kept.
+    await openFixture(page, "setup=there-remove-failed", "light");
+    await page.keyboard.press("ControlOrMeta+,");
+    const after = page.getByRole("dialog", { name: "Settings" });
+    await expect(after.getByTestId("remove-problem")).toContainText(
+      "Clawtrate couldn't remove this route.",
+    );
+    await expect(after.getByRole("button", { name: "Remove this gateway…" })).toBeVisible();
   });
 
   test("F-498 F-499: at launch, the saved route opens with its token and no QR step; one that couldn't be restored can be removed from its screen", async ({
