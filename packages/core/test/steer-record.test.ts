@@ -5,7 +5,7 @@
 // aborted and lifecycle end `aborted: true`, with no start, and never runs it.
 import { describe, expect, it } from "vitest";
 import { STEER_WITHDRAWAL_WAIT_MS, type ClientOptions } from "../src/client.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, URL_B } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 const RUN = "run-1";
@@ -249,6 +249,34 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     expect(task.transcript().outbox[1]!.steer).toBeUndefined();
     task.client.stop();
   });
+
+  it("F-097: a Stop whose gateway is switched while it waits on a withdrawal sends the run's abort to no other gateway", async () => {
+    const task = await steered();
+    const abort = task.gateway.handlers["chat.abort"]!;
+    task.gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId: string }).runId === RUN ? abort(params) : new Promise(() => {});
+    const stopping = task.client.stopRun(KEY, RUN);
+    await until(() => task.gateway.calls("chat.abort").length === 1);
+    await task.client.connect({ url: URL_B, token: "t" });
+    await stopping;
+    await sleep(STEER_WITHDRAWAL_WAIT_MS + 200);
+    expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: task.id }]);
+    task.client.stop();
+  }, 15_000);
+
+  it("F-097: a Stop whose connection comes back to the same gateway while it waits still aborts the run", async () => {
+    const task = await steered();
+    const abort = task.gateway.handlers["chat.abort"]!;
+    task.gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId: string }).runId === RUN ? abort(params) : new Promise(() => {});
+    const stopping = task.client.stopRun(KEY, RUN);
+    await until(() => task.gateway.calls("chat.abort").length === 1);
+    task.gateway.dropAll();
+    await stopping;
+    await until(() => run(task)?.state === "stopped", 10_000);
+    expect(task.gateway.calls("chat.abort")).toContainEqual({ sessionKey: KEY, runId: RUN });
+    task.client.stop();
+  }, 15_000);
 
   it("F-097: a withdrawal the gateway does not answer holds the run's Stop only briefly", async () => {
     const task = await steered();

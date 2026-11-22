@@ -2892,6 +2892,9 @@ export class ClawtrateClient {
    * many times as the connection drops, until the gateway answers or the run's end arrives.
    */
   private async abortRun(key: string, runId: string): Promise<void> {
+    // The Stop belongs to the gateway it began on: after the wait below, the person may have
+    // switched to another, which must never get this abort. A reconnect to the same one still does.
+    const gateway = this.settings?.url;
     try {
       // A withdrawal the gateway does not answer must not hold the Stop: after a short wait the
       // run is aborted anyway, and that steer stays as it was.
@@ -2901,6 +2904,7 @@ export class ClawtrateClient {
         new Promise<void>((resolve) => (waited = setTimeout(resolve, STEER_WITHDRAWAL_WAIT_MS))),
       ]);
       clearTimeout(waited);
+      if (this.settings?.url !== gateway) return;
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
