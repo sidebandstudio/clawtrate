@@ -113,7 +113,8 @@ Use the app’s existing loading screen, named “Loading conversation”, while
 
 ## 5. Parity row to reword
 
-F-248 stays `todo`. A Clawtrate link opens the bot’s chat on the matching
+F-248 is `desktop done`, and the phone half waits for the iPhone app. A
+Clawtrate link opens the bot’s chat on the matching
 connected gateway and fills its composer with editable, unsent text. Ask before
 replacing an existing draft. Explain when the link cannot open.
 
