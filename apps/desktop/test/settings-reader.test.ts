@@ -200,6 +200,12 @@ describe.skipIf(platform !== "darwin")("the macOS helper's ACL checks", () => {
     expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "acl" });
   });
 
+  it("refuses a file whose ACL grants another user anything", async () => {
+    const { path, file } = home();
+    acl(file, "root allow read");
+    expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "acl" });
+  });
+
   it("allows an ACL that grants only this account, or only denies", async () => {
     const { path, file } = home();
     acl(file, `${userInfo().username} allow read`);
@@ -296,6 +302,8 @@ describe.skipIf(!posix)("the helper's failures mean unverified", () => {
     ["no helper", () => null],
     ["a missing helper", () => join(scratch, "no-such-helper")],
     ["a helper that fails", () => fake("fails", "exit 3")],
+    ["an answer, then a failed exit", () => fake("answer-fails", "printf 'ok\\n{}'; exit 1")],
+    ["an answer, then a signal", () => fake("answer-killed", "printf 'ok\\n{}'; kill -9 $$")],
     ["malformed output", () => fake("malformed", "echo surprise")],
     ["an unknown refusal", () => fake("unknown", "echo 'refused maybe'")],
     ["no line end", () => fake("no-newline", "printf ok")],
@@ -421,7 +429,7 @@ describe.skipIf(!posix)("two profiles", () => {
 });
 
 describe("the token is held, not shown", () => {
-  it("prints and serializes as a placeholder, and is gone once dropped", () => {
+  it("never prints, inspects or serializes its value, and is gone once dropped", () => {
     const token = new HeldToken(TOKEN);
     for (const text of [JSON.stringify({ token }), String(token), `${token}`, inspect({ token })])
       expect(text).not.toContain(TOKEN);

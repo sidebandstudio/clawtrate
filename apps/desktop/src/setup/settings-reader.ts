@@ -14,7 +14,6 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import { resolve } from "node:path";
-import { inspect } from "node:util";
 import { Worker } from "node:worker_threads";
 import type { Extracted } from "./settings-extract.ts";
 import { accountHome, SANDBOX_MARKERS, SetupRefusedError } from "./world.ts";
@@ -43,8 +42,9 @@ export type OpenRefusal =
 export type Opened = { kind: "read"; bytes: Buffer } | ({ kind: "refused" } & OpenRefusal);
 
 /**
- * A token from the settings file, held for one bounded attempt. It prints and
- * serializes as a placeholder, so a log line or a message can't carry it.
+ * A token from the settings file, held for one bounded attempt. The value is
+ * a private field, so printing, inspecting or serializing the holder never
+ * shows it.
  */
 export class HeldToken {
   #value: string | null;
@@ -58,15 +58,6 @@ export class HeldToken {
   }
   drop(): void {
     this.#value = null;
-  }
-  toJSON(): string {
-    return "[token]";
-  }
-  toString(): string {
-    return "[token]";
-  }
-  [inspect.custom](): string {
-    return "[token]";
   }
 }
 
