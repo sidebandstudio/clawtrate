@@ -1182,6 +1182,8 @@ export class ClawtrateClient {
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
+    gateway: () => this.readGatewayIdentity(),
+    gatewayNow: () => this.state.connection.gatewayId,
     createMainTask: async (botId) => {
       const generation = this.generation;
       await this.request("sessions.create", {
@@ -4860,8 +4862,10 @@ export class ClawtrateClient {
    * gateway names none), nothing is sent unless it is still the gateway connected.
    */
   async createBot(input: CreateBotInput, gatewayId?: string | null): Promise<CreatedBot> {
-    if (gatewayId !== undefined) await this.requireSameGateway(gatewayId);
-    return this.accounts.createBot(input);
+    if (gatewayId === undefined) return this.accounts.createBot(input);
+    await this.requireSameGateway(gatewayId);
+    // Checked there: known, and the connected gateway's. The whole write stays bound to it.
+    return this.accounts.createBot(input, gatewayId as string);
   }
 
   /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
@@ -4897,8 +4901,9 @@ export class ClawtrateClient {
     avatar: string,
     gatewayId?: string | null,
   ): Promise<{ confirmed: boolean }> {
-    if (gatewayId !== undefined) await this.requireSameGateway(gatewayId);
-    return this.accounts.setBotPicture(botId, avatar);
+    if (gatewayId === undefined) return this.accounts.setBotPicture(botId, avatar);
+    await this.requireSameGateway(gatewayId);
+    return this.accounts.setBotPicture(botId, avatar, gatewayId as string);
   }
 
   /**

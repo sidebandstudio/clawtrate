@@ -74,12 +74,24 @@ export type AccountsContext = {
   admin(): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
+  /** The connected gateway's identity (`gateway.identity.get`), or null when it names none. */
+  gateway(): Promise<string | null>;
+  /** The identity the connection has read so far, without asking: null until it is known. */
+  gatewayNow(): string | null;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
   createMainTask(botId: string): Promise<void>;
   now(): number;
   randomId(): string;
   log(message: string): void;
 };
+
+/** A bot write retired because its gateway is no longer the one connected. */
+class WriteRetired extends Error {
+  constructor() {
+    super("The gateway changed before the bot was finished, so nothing more was sent.");
+    this.name = "WriteRetired";
+  }
+}
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
 export class AdminNeededError extends Error {
@@ -128,7 +140,12 @@ export class AccountsEngine {
     effort: string | null;
     intent: BindingIntent;
   } | null = null;
-  private readonly ctx: AccountsContext;
+  private ctx: AccountsContext;
+  /**
+   * The gateway the bot write under way was asked of. Every request, recovery read and change
+   * to the state it makes is checked against it; a reset retires it.
+   */
+  private bound: { gatewayId: string } | null = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -1109,7 +1126,65 @@ export class AccountsEngine {
    * sent again: the bot list is read first for the one it may have made, and
    * only a bot that was not there before the first Create can be that one.
    */
-  async createBot(input: CreateBotInput): Promise<CreatedBot> {
+  /**
+   * Run a bot write bound to one gateway: what it sends, reads back and publishes goes only to a
+   * connection whose identity is that gateway's, read and matched positively each time, as
+   * across a reconnect to the same gateway. Another gateway, an unknown identity, or a reset,
+   * retires it: nothing more is sent or published.
+   */
+  private async boundTo<T>(gatewayId: string | undefined, run: () => Promise<T>): Promise<T> {
+    if (gatewayId === undefined) return run();
+    const mark = { gatewayId };
+    const base = this.ctx;
+    const live = () => this.bound === mark;
+    const check = async () => {
+      if (!live()) throw new WriteRetired();
+      const here = await base.gateway();
+      if (!live() || here === null || here !== mark.gatewayId) {
+        if (live()) this.bound = null;
+        throw new WriteRetired();
+      }
+    };
+    this.bound = mark;
+    this.ctx = {
+      ...base,
+      request: async (method, params, options) => {
+        await check();
+        return base.request(method, params, options);
+      },
+      refreshBots: async () => {
+        await check();
+        return base.refreshBots();
+      },
+      createMainTask: async (botId) => {
+        await check();
+        return base.createMainTask(botId);
+      },
+      update: (change) => {
+        if (live() && base.gatewayNow() === mark.gatewayId) base.update(change);
+      },
+    };
+    try {
+      const result = await run();
+      if (!live()) throw new WriteRetired();
+      return result;
+    } catch (error) {
+      if (error instanceof WriteRetired || !live())
+        throw new Error(
+          "The gateway changed before the bot was finished, so nothing more was sent.",
+        );
+      throw error;
+    } finally {
+      this.ctx = base;
+      if (live()) this.bound = null;
+    }
+  }
+
+  async createBot(input: CreateBotInput, gatewayId?: string): Promise<CreatedBot> {
+    return this.boundTo(gatewayId, () => this.create(input));
+  }
+
+  private async create(input: CreateBotInput): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const { ctx } = this;
     const name = input.name.trim() || "New bot";
@@ -1192,7 +1267,15 @@ export class AccountsEngine {
    * and the picture, `agents.update` with it, the bot list read again, and a
    * comparison. `confirmed` is whether that list shows the picture sent.
    */
-  async setBotPicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
+  async setBotPicture(
+    botId: string,
+    avatar: string,
+    gatewayId?: string,
+  ): Promise<{ confirmed: boolean }> {
+    return this.boundTo(gatewayId, () => this.writePicture(botId, avatar));
+  }
+
+  private async writePicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
     this.requireAdmin("Changing a bot's picture");
     if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
     await this.ctx.request("agents.update", { agentId: botId, avatar });
@@ -1224,6 +1307,7 @@ export class AccountsEngine {
     };
     if (steps.includes("preference") && plan) {
       const error = await this.recordIntent(botId, plan.intent);
+      if (error instanceof WriteRetired) throw error;
       if (error !== null)
         failed("preference", "Clawtrate's record of its account was not saved", error);
     }
@@ -1236,6 +1320,7 @@ export class AccountsEngine {
           ]);
         this.unwritten.delete(botId);
       } catch (error) {
+        if (error instanceof WriteRetired) throw error;
         this.unwritten.add(botId);
         if (this.unwritten.size > MAX_ACCOUNTS)
           this.unwritten.delete(this.unwritten.values().next().value!);
@@ -1256,6 +1341,7 @@ export class AccountsEngine {
         await ctx.refreshBots();
         shown = ctx.bots().some((bot) => bot.id === botId);
       } catch (error) {
+        if (error instanceof WriteRetired) throw error;
         readError = error;
       }
       if (!shown)
@@ -1271,6 +1357,7 @@ export class AccountsEngine {
       try {
         await ctx.createMainTask(botId);
       } catch (error) {
+        if (error instanceof WriteRetired) throw error;
         failed("task", "its first task was not made", error);
       }
     }
@@ -1321,7 +1408,9 @@ export class AccountsEngine {
         try {
           await ctx.refreshBots();
           return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
-        } catch {
+        } catch (error) {
+          // Retired: bound to a gateway no longer connected, so nothing more is read for it.
+          if (error instanceof WriteRetired) throw error;
           // Not read: try again once the connection is back.
         }
       }
@@ -1554,6 +1643,8 @@ export class AccountsEngine {
 
   /** Another gateway: nothing read from this one is kept. */
   reset(): void {
+    // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
+    this.bound = null;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();

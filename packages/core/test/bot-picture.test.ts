@@ -198,3 +198,106 @@ describe("F-037: changing a bot's picture", () => {
     client.stop();
   });
 });
+
+describe("a bot write is bound to its gateway to the end", () => {
+  const input = {
+    name: "Viral",
+    avatar: null,
+    account: "acme:home",
+    provider: "acme",
+    model: "dev-1",
+    effort: null,
+  } as const;
+  /** Hold `agents.create`'s answer: the bot is made at once, the reply waits for `release`. */
+  function holdCreate(fake: AccountsGateway) {
+    const original = fake.gateway.handlers["agents.create"]!;
+    const answer = deferred<void>();
+    fake.gateway.handlers["agents.create"] = (params) => {
+      const made = original(params);
+      return answer.promise.then(() => made);
+    };
+    return () => answer.resolve();
+  }
+  const reconnected = async (
+    client: Awaited<ReturnType<typeof accountsClient>>["client"],
+    fake: AccountsGateway,
+  ) => {
+    const was = client.state.connection.connectedAt;
+    fake.gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.connection.connectedAt !== was,
+    );
+  };
+  const writes = [
+    "agents.create",
+    "config.patch",
+    "users.prefs.set",
+    "sessions.create",
+    "agents.update",
+  ];
+  const sentSince = (fake: AccountsGateway, from: number) =>
+    (fake.gateway as unknown as { requests: Array<{ method: string }> }).requests
+      .slice(from)
+      .map((each) => each.method)
+      .filter((method) => writes.includes(method));
+
+  it("sends and publishes nothing to another gateway that replaced it mid-way", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    const created = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    // Another gateway answers at the same address.
+    fake.identity = "gateway-b";
+    const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
+    await reconnected(client, fake);
+    release();
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    expect(client.state.accounts.creation?.status).not.toBe("created");
+    expect(client.state.accounts.creation?.status).not.toBe("partial");
+    client.stop();
+  });
+
+  it("finishes across a reconnect to the same gateway, its identity read and matched again", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    const created = createBridgeSession(client).apply({
+      type: "createBot",
+      ...input,
+      gatewayId: "gateway-a",
+    });
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
+    await reconnected(client, fake);
+    release();
+    expect((await created).botId).toBe("viral");
+    expect(sentSince(fake, from)).toContain("config.patch");
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    client.stop();
+  });
+
+  it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
+    const { client, fake } = await accountsClient();
+    const release = holdCreate(fake);
+    const created = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        () => "created",
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("agents.create").length === 1);
+    const from = (fake.gateway as unknown as { requests: unknown[] }).requests.length;
+    (client as unknown as { accounts: { reset(): void } }).accounts.reset();
+    release();
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    client.stop();
+  });
+});
