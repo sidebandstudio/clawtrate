@@ -117,7 +117,13 @@ describe("full access behind a flag", () => {
         error: {
           code: "NOT_PAIRED",
           message: "device pairing required",
-          details: { code: "PAIRING_REQUIRED", requestId: "req-1", deviceId: "device-1" },
+          details: {
+            code: "PAIRING_REQUIRED",
+            requestId: "req-1",
+            deviceId: "device-1",
+            // What the gateway reports is not what is shown: the signed request is.
+            requestedScopes: ["operator.read"],
+          },
         },
       };
     };
@@ -301,7 +307,7 @@ describe("full access behind a flag", () => {
       ok: true,
       payload: {
         ...helloOk([...FULL_SCOPES], ISSUED),
-        auth: { role: "node", scopes: [...FULL_SCOPES], deviceToken: ISSUED },
+        auth: { role: "operator", scopes: "operator.admin", deviceToken: ISSUED },
       },
     });
     const { client, storage } = fullClient(gateway);
