@@ -705,6 +705,32 @@ describe("one control socket's registration", () => {
     expect(afterThrow).toBe("failed");
   });
 
+  it("reports a storage failure when the commit and its cleanup cannot be confirmed", async () => {
+    const memory = new MemoryRegistrationStore();
+    const writes: string[] = [];
+    const registration = socket({
+      store: {
+        persist: (snapshot) => {
+          writes.push(snapshot.state);
+          if (snapshot.state === "failed") return Promise.reject(new Error("cleanup failed"));
+          return memory.persist(snapshot);
+        },
+        commitRegistered: (snapshot, attempt) => {
+          memory.commitRegistered(snapshot, attempt);
+          throw new Error("commit not confirmed");
+        },
+      },
+    });
+
+    expect(await registration.register(proofFor(registration))).toEqual({
+      ok: false,
+      code: "store_failed",
+    });
+    expect(registration.state).toBe("failed");
+    expect(memory.latest?.state).toBe("registered");
+    expect(writes.at(-1)).toBe("failed");
+  });
+
   it("a denial that arrives after the attempt ended reports why it ended", async () => {
     // The replay check waits; meanwhile the timer sees a clock rollback, an expired deadline,
     // or the socket closes. The clock then recovers and the replay check answers "seen".
