@@ -112,6 +112,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run apps/desktop/test/update/mac-inspection.test.ts
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
