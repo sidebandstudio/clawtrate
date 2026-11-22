@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
       }
     }
   });
-  const version = "1.2.0-nightly.20261104.10";
+  const version = "1.2.0-beta.20261104.10";
   it.each([
     "ok",
     "mac-archive",
