@@ -190,3 +190,153 @@ test("a picture the browser can't decode shows the bot's own Clawling instead", 
   await expect(row(page, "Marlow").locator("img")).toHaveCount(0);
   await expect(row(page, "Marlow").locator('svg.creature[data-family="clawling"]')).toBeVisible();
 });
+
+type Fixture = { clawtrateFixture: { setState(f: (s: Record<string, unknown>) => unknown): void } };
+/** Take admin away, as a revoked grant does, while the page is open. */
+const dropAdmin = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...(state.connection as object), canAdmin: false },
+    })),
+  );
+const openEdit = async (page: Page, query: string) => {
+  await openFixture(page, `${ADMIN}&panel=open${query}`, "dark");
+  await page.getByRole("button", { name: "Change Otto's picture" }).click();
+  return page.getByTestId("edit-picture");
+};
+
+test("F-037: Save waits for a change, says Saving… while the gateway hasn't answered, and the editor closes when admin goes", async ({
+  page,
+}) => {
+  const dialog = await openEdit(page, "&picturesave=hold");
+  const save = dialog.getByRole("button", { name: "Save" });
+  await expect(save).toBeDisabled();
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await save.click();
+  await expect(dialog.getByRole("button", { name: "Saving…" })).toBeDisabled();
+  await dropAdmin(page);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Change Otto's picture" })).toHaveCount(0);
+});
+
+test("F-037: a refused save says so in fixed words and keeps the changes; an unconfirmed one says the gateway hasn't confirmed it", async ({
+  page,
+}) => {
+  let dialog = await openEdit(page, "&picturesave=refused");
+  await dialog.getByRole("radio", { name: "Shellfolk" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "Couldn't save the picture. Your changes are still here.",
+  );
+  await expect(dialog.getByRole("radio", { name: "Shellfolk" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(dialog).not.toContainText("INVALID_REQUEST");
+  dialog = await openEdit(page, "&picturesave=unconfirmed");
+  await dialog.getByRole("radio", { name: "Shellfolk" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "The gateway hasn't confirmed this picture yet.",
+  );
+  await expect(dialog).toBeVisible();
+});
+
+test("F-037: a saved picture is announced by the Work pane after the editor closes", async ({
+  page,
+}) => {
+  const dialog = await openEdit(page, "");
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Picture saved");
+});
+
+/** Bytes that begin like a PNG of the size given, and nothing more. */
+const pngHeader = (width: number, height: number) => {
+  const bytes = Buffer.alloc(33);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).copy(bytes, 0);
+  bytes.write("IHDR", 12, "latin1");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+};
+
+test("F-035: an upload is checked before it is decoded: its real format, then its size in pixels", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  // Decoding is watched: nothing refused here may reach it.
+  await page.evaluate(() => {
+    const w = window as unknown as { decoded: number; createImageBitmap: typeof createImageBitmap };
+    w.decoded = 0;
+    const real = w.createImageBitmap.bind(window);
+    w.createImageBitmap = ((...args: Parameters<typeof createImageBitmap>) => {
+      w.decoded += 1;
+      return real(...args);
+    }) as typeof createImageBitmap;
+  });
+  const file = page.getByTestId("picture-file");
+  await file.setInputFiles({
+    name: "notes.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("plain text"),
+  });
+  await expect(page.getByRole("alert")).toHaveText("Choose a PNG, JPEG, WebP or GIF image.");
+  await file.setInputFiles({
+    name: "huge.png",
+    mimeType: "image/png",
+    buffer: pngHeader(9000, 100),
+  });
+  await expect(page.getByRole("alert")).toHaveText(
+    "Choose an image no wider or taller than 8,192 pixels and under 16 million pixels.",
+  );
+  await file.setInputFiles({
+    name: "wide.png",
+    mimeType: "image/png",
+    buffer: pngHeader(5000, 5000),
+  });
+  await expect(page.getByRole("alert")).toHaveText(
+    "Choose an image no wider or taller than 8,192 pixels and under 16 million pixels.",
+  );
+  expect(await page.evaluate(() => (window as unknown as { decoded: number }).decoded)).toBe(0);
+});
+
+test("F-035: Next waits while a picture is read, and a creature chosen meanwhile wins over the late picture", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  // The next decode is held until the check lets it finish.
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      release: () => void;
+      createImageBitmap: typeof createImageBitmap;
+    };
+    const real = w.createImageBitmap.bind(window);
+    w.createImageBitmap = ((...args: Parameters<typeof createImageBitmap>) =>
+      new Promise((resolve) => {
+        w.release = () => resolve(real(...args));
+      })) as typeof createImageBitmap;
+  });
+  await page.getByTestId("picture-file").setInputFiles({
+    name: "mine.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(await pngFile(page), "base64"),
+  });
+  const next = page.getByRole("button", { name: "Reading the picture…" });
+  await expect(next).toBeDisabled();
+  await page.getByRole("textbox", { name: "Name" }).press("Enter");
+  await expect(page.getByRole("heading", { name: "New bot", level: 2 })).toBeVisible();
+  await page.getByRole("radio", { name: "Shellfolk" }).click();
+  await expect(page.getByRole("button", { name: "Next" })).toBeEnabled();
+  await page.evaluate(() => (window as unknown as { release: () => void }).release());
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId("picture-preview").locator("img")).toHaveCount(0);
+  await expect(page.getByTestId("picture-preview").locator("svg")).toHaveAttribute(
+    "data-family",
+    "shellfolk",
+  );
+});

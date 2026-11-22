@@ -65,6 +65,7 @@ export function NewBot({
   );
   const [announcer, announce] = useAnnouncer();
   const [pictureFailed, setPictureFailed] = useState(false);
+  const [pictureBusy, setPictureBusy] = useState(false);
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -235,13 +236,15 @@ export function NewBot({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              setStep("account");
+              // Not while a chosen picture is still being read.
+              if (!pictureBusy) setStep("account");
             }
           }}
         />
         <AvatarPicker
           draft={shown}
           onChange={(picture) => setDraft((was) => ({ ...was, picture }))}
+          onBusy={setPictureBusy}
         />
       </>
     );
@@ -251,9 +254,10 @@ export function NewBot({
         className="button"
         data-variant="primary"
         data-size="lg"
+        disabled={pictureBusy}
         onClick={() => setStep("account")}
       >
-        Next
+        {pictureBusy ? "Reading the picture…" : "Next"}
       </button>
     );
   } else if (step === "account") {
