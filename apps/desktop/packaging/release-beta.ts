@@ -536,6 +536,43 @@ export function verifyApp(
   return { teamId: signature.teamId! };
 }
 
+/**
+ * Builds the update helper's ZIP preflight (mac/check-zip.m, which compiles
+ * inspect-archive.m) into `dir`, and returns a check that stops the release on
+ * a zip it refuses: every installed app runs that preflight before reading an update.
+ */
+export function zipCheck(runner: Run, dir: string): (zip: string) => void {
+  const checker = join(dir, "check-zip");
+  const source = join(APP_DIR, "packaging/mac/check-zip.m");
+  const built = runner("xcrun", [
+    "clang",
+    "-fobjc-arc",
+    "-Wall",
+    "-Werror",
+    "-O2",
+    "-mmacosx-version-min=12.0",
+    "-framework",
+    "Foundation",
+    "-framework",
+    "Security",
+    "-larchive.2",
+    source,
+    "-o",
+    checker,
+  ]);
+  if (built.status !== 0)
+    stop(
+      `Could not build the update helper's ZIP check: ${built.stderr.trim()}. Nothing was published.`,
+    );
+  return (zip) => {
+    const result = runner(checker, [zip]);
+    if (result.status !== 0)
+      stop(
+        `${basename(zip)} would be refused by the Mac updater's ZIP check: ${result.stdout.trim() || `the check exited ${result.status}`}. Nothing was published.`,
+      );
+  };
+}
+
 const sha = (algorithm: "sha256" | "sha512", bytes: Buffer, encoding: "hex" | "base64") =>
   createHash(algorithm).update(bytes).digest(encoding);
 
@@ -1083,6 +1120,7 @@ async function prepareLocked(
       );
     }
     let teamId: string | null = null;
+    const checkZip = zipCheck(runner, temp);
     for (const [arch, key] of Object.entries(MAC_ARCHITECTURES) as Array<
       [keyof typeof MAC_ARCHITECTURES, (typeof MAC_ARCHITECTURES)[keyof typeof MAC_ARCHITECTURES]]
     >) {
@@ -1125,6 +1163,8 @@ async function prepareLocked(
         unpack();
         checked = verifyApp(runner, app, { version, arch });
       }
+      // The zip as it will be staged, after any second stapling.
+      checkZip(zip);
       if (checked.teamId !== signing.teamId)
         stop(`${key} is signed by team ${checked.teamId}, not ${signing.teamId}.`);
       teamId = checked.teamId;

@@ -25,7 +25,7 @@ import { OUTPUT_VARIABLE, packageOutput } from "../packaging/output.ts";
 import { builderConfig } from "../packaging/config.ts";
 import { basename, dirname, join } from "node:path";
 import type * as Fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Two calls a test can make fail, to show what a setup step that fails
 // partway leaves; every other call is the real one.
@@ -53,6 +53,7 @@ import {
   readSecrets,
   readSignature,
   releaseNotes,
+  run,
   SECRET_NAMES,
   SECURITY,
   XCRUN,
@@ -61,6 +62,7 @@ import {
   Stop,
   verifyApp,
   withdraw,
+  zipCheck,
   type Net,
   type Places,
   type Run,
@@ -604,6 +606,8 @@ function tools(
       seen.searchList = [...searchList];
       return build(args[1]!, args[2]!, options!.env!);
     }
+    // The update helper's ZIP check that zipCheck builds: it passes every zip.
+    if (basename(command) === "check-zip") return overrides["check-zip"] ?? ok("ok\n");
     if (command === "ditto" && overrides[`ditto ${args[0]}`]) return overrides[`ditto ${args[0]}`]!;
     if (command === "ditto") {
       if (args[0] === "-x") mkdirSync(join(args.at(-1)!, "Clawtrate.app"), { recursive: true });
@@ -936,6 +940,141 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     const dirty: Run = (command, args, options) =>
       command === "git" && args[0] === "status" ? ok(" M file\n") : runner(command, args, options);
     expect(await stopped(() => prepare(dirty, NOW, place))).toContain("clean checkout");
+  });
+
+  it("checks both zips with the update helper's ZIP check, built from its source", async () => {
+    const { runner, calls } = tools(builds(place.appDir));
+    await prepare(runner, NOW, place);
+    const build = calls.find((call) => call.command === "xcrun" && call.args[0] === "clang")!;
+    expect(build.args).toContain(join(import.meta.dirname, "../packaging/mac/check-zip.m"));
+    const checker = build.args.at(-1)!;
+    expect(dirname(dirname(checker))).toBe(place.state);
+    const checked = calls.filter((call) => call.command === checker);
+    expect(checked.map((call) => basename(call.args[0]!))).toEqual(ZIPS);
+    // The private copies that were verified and then staged.
+    for (const call of checked) expect(dirname(call.args[0]!)).toBe(dirname(checker));
+  });
+
+  it.each(["mac-arm64", "mac-x64"])(
+    "stops before staging anything when the %s zip fails the ZIP check, and exits 1",
+    async (key) => {
+      const { runner, calls } = tools(builds(place.appDir));
+      const checking: Run = (command, args, options) =>
+        basename(command) === "check-zip" && args[0]!.endsWith(`-${key}.zip`)
+          ? (calls.push({ command, args }), fail("", "an archive comment\n"))
+          : runner(command, args, options);
+      // As the release job runs it, on today's date.
+      expect(await main([], checking, "darwin", place)).toBe(1);
+      expect(output.at(-1)).toMatch(
+        new RegExp(
+          `^Clawtrate-[0-9.]+-beta\\.[0-9.]+-${key}\\.zip would be refused by the Mac updater's ZIP check: an archive comment\\. Nothing was published\\.$`,
+        ),
+      );
+      // Nothing staged for publishing to take.
+      expect(readdirSync(place.staging)).toEqual([]);
+      // Its one GitHub call is the read of the releases, before the build.
+      expect(
+        calls.filter((call) => call.command === "gh").map((call) => call.args.slice(0, 2)),
+      ).toEqual([["api", "repos/sidebandstudio/clawtrate/releases"]]);
+    },
+  );
+
+  it("checks the zip it made again after stapling, not the one the build left", async () => {
+    let stapled = false;
+    const { runner, calls } = tools(builds(place.appDir));
+    const stapling: Run = (command, args, options) => {
+      if (command === "xcrun" && args.join(" ").startsWith("stapler validate") && !stapled)
+        return fail("does not have a ticket stapled");
+      if (command === "xcrun" && args[0] === "stapler" && args[1] === "staple") {
+        stapled = true;
+        return ok();
+      }
+      if (command === "ditto" && args[0] === "-c") {
+        calls.push({ command, args });
+        writeFileSync(args.at(-1)!, "stapled zip");
+        return ok();
+      }
+      if (basename(command) === "check-zip") {
+        calls.push({ command, args });
+        return readFileSync(args[0]!, "utf8") === "stapled zip"
+          ? fail("", "a ZIP64 locator\n")
+          : ok("ok\n");
+      }
+      return runner(command, args, options);
+    };
+    expect(await stopped(() => prepare(stapling, NOW, place))).toBe(
+      `${ZIPS[0]} would be refused by the Mac updater's ZIP check: a ZIP64 locator. Nothing was published.`,
+    );
+    const zipped = calls.findIndex((call) => call.command === "ditto" && call.args[0] === "-c");
+    const checked = calls.findIndex((call) => basename(call.command) === "check-zip");
+    expect(zipped).toBeGreaterThan(-1);
+    expect(checked).toBeGreaterThan(zipped);
+  });
+
+  it("stops when the ZIP check does not build", async () => {
+    const { runner } = tools(builds(place.appDir));
+    const failing: Run = (command, args, options) =>
+      command === "xcrun" && args[0] === "clang"
+        ? fail("check-zip.m: error: no such file")
+        : runner(command, args, options);
+    expect(await stopped(() => prepare(failing, NOW, place))).toBe(
+      "Could not build the update helper's ZIP check: check-zip.m: error: no such file. Nothing was published.",
+    );
+  });
+});
+
+// The ZIP check as the release builds and runs it, on zips made by macOS's own tools.
+describe.skipIf(process.platform !== "darwin")("the update helper's ZIP check, for real", () => {
+  let dir: string, check: (zip: string) => void;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "clawtrate-zip-check-"));
+    check = zipCheck(run, dir);
+    mkdirSync(join(dir, "Clawtrate.app", "Contents"), { recursive: true });
+    writeFileSync(join(dir, "Clawtrate.app", "Contents", "a.txt"), "hello hello hello\n");
+  }, 60000);
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const make = (name: string, command: string) => {
+    expect(spawnSync("/bin/sh", ["-c", command], { cwd: dir }).status).toBe(0);
+    return join(dir, name);
+  };
+  const ditto = (name: string) => make(name, `ditto -c -k --keepParent Clawtrate.app ${name}`);
+
+  it.each([
+    ["a ditto zip", () => ditto("plain.zip")],
+    [
+      "the re-stapled zip, extended attributes in __MACOSX",
+      () =>
+        make(
+          "sequester.zip",
+          "xattr -w dev.clawtrate.test 1 Clawtrate.app/Contents/a.txt && ditto -c -k --sequesterRsrc --keepParent Clawtrate.app sequester.zip",
+        ),
+    ],
+  ])("passes %s", (_, zip) => {
+    expect(() => check(zip())).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a zip -z comment",
+      () => make("comment.zip", "printf 'note\\n' | /usr/bin/zip -qrz comment.zip Clawtrate.app"),
+      "the last 22 bytes aren't an end record (a comment or trailing bytes, or not a ZIP)",
+    ],
+    [
+      "a comment length in the end record",
+      () => {
+        const zip = ditto("length.zip");
+        const bytes = readFileSync(zip);
+        bytes.writeUInt16LE(1, bytes.length - 2);
+        writeFileSync(zip, bytes);
+        return zip;
+      },
+      "an archive comment",
+    ],
+  ])("refuses %s, naming the zip and the check", async (_, zip, reason) => {
+    const file = zip();
+    expect(await stopped(() => check(file))).toBe(
+      `${basename(file)} would be refused by the Mac updater's ZIP check: ${reason}. Nothing was published.`,
+    );
   });
 });
 
