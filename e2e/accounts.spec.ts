@@ -13,6 +13,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { choiceFromPicture } from "../packages/core/src/avatar.ts";
 import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
@@ -188,7 +189,8 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   await expect(create).toBeVisible();
   await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
   await create.getByRole("textbox", { name: "Name" }).fill("Second");
-  await create.getByRole("radio", { name: "hex" }).click();
+  await create.getByRole("radio", { name: "Shellfolk" }).click();
+  await create.getByRole("radio", { name: "Turret" }).click();
   await create.getByRole("radio", { name: "Sky" }).click();
   await create.getByRole("button", { name: "Next" }).click();
   const account = dialog("Account");
@@ -219,13 +221,15 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   // Stored on the account, with an empty fallback list, and the picture chosen.
   const created = entry(await config(), "second")!;
   expect(created.model).toEqual({ primary: "acme/dev-1@acme:home", fallbacks: [] });
-  expect(String((created.identity as Json | undefined)?.avatar ?? "")).toMatch(
-    /^data:image\/png;base64,/,
-  );
+  const kept = String((created.identity as Json | undefined)?.avatar ?? "");
+  expect(kept).toMatch(/^data:image\/png;base64,/);
+  // The gateway keeps the picture byte for byte, so the creature chosen reads back from it.
+  expect(choiceFromPicture(kept)).toEqual({ family: "shellfolk", shell: "turret", color: "sky" });
   // The new bot is selected, on its first, empty task, with the composer ready.
   await expect(botRow("Second")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
-  // Drawn with the picture chosen, which the gateway keeps with the bot.
-  await expect(botRow("Second").locator("img")).toHaveAttribute("src", /^data:image\/png;base64,/);
+  // Drawn as the creature chosen, read back from the picture the gateway keeps with the bot.
+  await expect(botRow("Second").locator('svg.creature[data-family="shellfolk"]')).toBeVisible();
+  await expect(botRow("Second").locator("img")).toHaveCount(0);
   const field = page.getByTestId("composer-input");
   await expect(field).toBeVisible({ timeout: 20_000 });
 
@@ -238,6 +242,30 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   const requests = await requestsFor("agent:second:main");
   expect(requests[0]).toMatchObject({ account: "acme:home", status: 200 });
   expect(requests.every((each) => each.account === "acme:home")).toBe(true);
+});
+
+test("F-037: Edit picture saves a new creature on the gateway with agents.update, and it reads back", async () => {
+  // The bot just created is open; its picture in the Work pane opens Edit picture on admin.
+  await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("button", { name: "Change Second's picture" }).click();
+  const edit = page.getByTestId("edit-picture");
+  await expect(edit.getByRole("radio", { name: "Turret" })).toHaveAttribute("aria-checked", "true");
+  await edit.getByRole("radio", { name: "Lanterns" }).click();
+  await edit.getByRole("radio", { name: "Reach" }).click();
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(edit).toHaveCount(0, { timeout: 30_000 });
+  const kept = String(
+    (entry(await config(), "second")!.identity as Json | undefined)?.avatar ?? "",
+  );
+  expect(choiceFromPicture(kept)).toEqual({
+    family: "lantern",
+    body: "round",
+    lure: "reach",
+    eyes: "two",
+    color: "sky",
+  });
+  await expect(botRow("Second").locator('svg.creature[data-family="lantern"]')).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+\\");
 });
 
 test("F-472: a bot created with Let the gateway choose is stored with no account and an empty fallback list", async () => {
