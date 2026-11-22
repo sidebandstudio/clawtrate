@@ -7991,14 +7991,16 @@ export class ClawtrateClient {
   /**
    * The scopes a connect asks for. A read-only host asks for read. With no saved token, a
    * first pairing asks for all six with full access, and read otherwise. A saved token asks
-   * for exactly what it holds, except that a setup connection asks for read without full access.
+   * for exactly what it holds, except that a setup connection reusing it asks for read.
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
     if (!token) return this.fullAccess && this.fullEligible ? [...FULL_SCOPES] : [...READ_SCOPES];
     // A full pairing's token is used for more than read only while full access holds.
     if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
-    if (this.isSetup(url) && !this.fullAccess) return [...READ_SCOPES];
+    // A setup reusing this device's saved pairing asks for read alone, as its consent says,
+    // with full access too; ordinary reconnects ask for the saved grant.
+    if (this.isSetup(url)) return [...READ_SCOPES];
     return [...token.heldScopes];
   }
 

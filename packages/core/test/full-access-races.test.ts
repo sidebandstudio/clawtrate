@@ -355,4 +355,30 @@ describe("full access under interleavings", () => {
     });
     client.stop();
   });
+
+  it("a setup reusing a saved six-scope pairing asks for read alone, its retries too, and later ordinary reconnects for the saved grant", async () => {
+    const storage = memoryStorage({ [tokenKey(URL)]: fullRecord("token-A") });
+    const gateway = new FakeGateway();
+    let answered = 0;
+    gateway.connectReply = (params) => {
+      // The first socket drops before its hello: the setup retries.
+      if ((answered += 1) === 1) gateway.dropAll();
+      return { ok: true, payload: helloOk([...(params as ConnectParams).scopes], "token-A") };
+    };
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connectForSetup(URL);
+    await until(() => client.state.connection.status === "connected");
+    // The setup's first frame and its retries before its hello.
+    expect(gateway.connects.length).toBeGreaterThanOrEqual(2);
+    for (const each of gateway.connects as ConnectParams[])
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    expect(saved(storage)?.heldScopes).toEqual([...FULL_SCOPES]);
+    // Setup is over: an ordinary reconnect asks for the saved grant.
+    const before = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
+    client.stop();
+  });
 });
