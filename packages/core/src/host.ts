@@ -63,6 +63,11 @@ export type ClawtrateHost = {
    */
   secureCredentials?: () => Promise<boolean>;
   /**
+   * Where a host with secure storage keeps those credentials now: sealed, sealed with an
+   * earlier clear-text copy still to remove, for this session only, or unreadable.
+   */
+  credentialStatus?: () => Promise<"secure" | "cleanup-pending" | "session" | "locked">;
+  /**
    * How to approve a pairing request on this gateway. The host knows whether the
    * gateway is the local development one; core falls back to the generic command.
    */

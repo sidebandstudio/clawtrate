@@ -23,8 +23,11 @@ import type {
 export {
   createSecureCredentials,
   CREDENTIALS_FILE,
+  CredentialRecordInvalidError,
+  type CredentialStatus,
   DEVICE_KEY_FILE,
   isCredentialKey,
+  SavedSettingsInvalidError,
   SecureStorageUnavailableError,
   STATE_FILE,
   type SecretBox,
@@ -169,12 +172,14 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
         storage: createFileStore(join(options.dataDir, STATE_FILE)),
         signer: createFileSigner(join(options.dataDir, DEVICE_KEY_FILE)),
         secure: async () => false,
+        status: undefined,
       };
   return {
     createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
     storage: credentials.storage,
     signer: credentials.signer,
     secureCredentials: credentials.secure,
+    ...(credentials.status ? { credentialStatus: credentials.status } : {}),
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
