@@ -2261,13 +2261,13 @@ test("F-096 F-468: a steer sent while the run waits on an approval leaves the ap
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-096: a message sent while the run works is steered into it, captioned Steer once the gateway says the run took it in", async ({
+test("F-096: messages taken into a working run keep their Steer captions after reload", async ({
   page,
 }) => {
   // A twenty-second tool, then several reads of the gateway's record, each a command of its own.
   test.setTimeout(180_000);
   await openShell(page);
-  const { key } = await ownTask(page, "Steer");
+  const { key, title } = await ownTask(page, "Steer");
   const seen = await watchRun(page);
   await composer(page).fill("Start on the backup report. #slow-tool 20");
   await page.keyboard.press("Enter");
@@ -2277,14 +2277,17 @@ test("F-096: a message sent while the run works is steered into it, captioned St
   // release of its own to hold it longer.
   const runId = await inFlightRunId(key);
   await expect.poll(() => toolStarted(key, runId), { timeout: 30_000 }).toBe(true);
-  await composer(page).fill("Only the photos set, please.");
-  await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
-  await page.keyboard.press("Enter");
+  const messages = ["Only the photos set, please.", "Include the videos.", "Skip duplicates."];
+  for (const message of messages) {
+    await composer(page).fill(message);
+    await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
+    await enterUntilTaken(page);
+  }
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
   // Its row in the run, once history holds the run's reply after it, is captioned Steer.
   await expect(
     page
-      .getByTestId("transcript-turn")
+      .locator('[data-testid="transcript-turn"][data-role="user"]')
       .filter({ hasText: "Only the photos set, please." })
       .locator(".msg-caption"),
   ).toHaveText("Steer", { timeout: 30_000 });
@@ -2305,10 +2308,19 @@ test("F-096: a message sent while the run works is steered into it, captioned St
   const steerId = await sendIdOf(key, "Only the photos set, please.");
   expect(steerId).not.toBeNull();
   expect(await runRecord(steerId!)).toMatchObject({ status: "ok" });
-  await expect(
-    page.locator(".transcript").getByText("Only the photos set, please.", { exact: true }),
-  ).not.toHaveCount(0);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  await page.reload();
+  await openTask(page, "Otto", title);
+  for (const message of messages) {
+    const row = page
+      .locator('[data-testid="transcript-turn"][data-role="user"]')
+      .filter({ hasText: message });
+    await expect(row).toBeVisible();
+    const answer = await answeredInsideRun(key, message, runId);
+    expect(answer).not.toBe("none");
+    if (answer === "inside") await expect(row.locator(".msg-caption")).toHaveText("Steer");
+    else await expect(row.locator(".msg-caption").filter({ hasText: /^Steer$/ })).toHaveCount(0);
+  }
 });
 
 test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
