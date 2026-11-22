@@ -377,8 +377,12 @@ export function machineCommands(now: number, params: MachineParams) {
             !unreadable)
         )
           return new Promise(() => {});
-        // `agents.list` still answers when the settings file can't be read.
-        if (unreadable && command.part !== "workspace")
+        // The workspace uses agents.list. Below admin, credentials need no settings read either.
+        if (
+          unreadable &&
+          command.part !== "workspace" &&
+          (command.part !== "credentials" || admin(state))
+        )
           return later(0, () => {
             throw new Error(
               "The gateway reports that its settings file isn't valid, so it can't be read.",

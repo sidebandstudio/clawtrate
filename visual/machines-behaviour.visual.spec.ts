@@ -318,6 +318,8 @@ test("F-046: a save whose answer never came, on a gateway that can't read its se
   await expect(page.getByTestId("inventory-signins")).toHaveText(
     "Couldn't read: The gateway reports that its settings file isn't valid, so it can't be read.",
   );
+  await reconnect(page, false);
+  await expect(page.getByTestId("inventory-signins")).toHaveText("Needs admin access");
 });
 
 test("F-046 F-047: a plugin credential read that never answers leaves the rest of the page shown and usable, and the inventory says it is still reading", async ({
