@@ -24,9 +24,7 @@ import { appEnv, debuggingPort } from "./desktop-driver.ts";
 //
 // On Windows no development gateway runs, so the run starts no instances and
 // keeps no run record: it launches the app, the tests that need a gateway are
-// skipped, and the teardown asks the app to close and checks it did. Node puts
-// each process it starts in a job object that Windows closes when Node exits,
-// which ends the app if the run is killed.
+// skipped, and the teardown asks the app to close and checks it did.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -437,9 +435,8 @@ export default async function globalSetup() {
  * development gateway runs on Windows, so there are no instances, no run
  * record and no listeners to protect. The app is asked to close the way
  * Windows asks at sign-out (a close message to its windows), and the run
- * fails if it or a helper is still running 15 seconds later; the app, if it is
- * still running, is then ended by PID with its helpers so the machine is not
- * left with it.
+ * fails if it or a helper is still running 15 seconds later; anything left
+ * is then ended by PID so the machine is not left with it.
  */
 async function windowsSetup() {
   const app = packagedApp();
@@ -452,15 +449,12 @@ async function windowsSetup() {
   mkdirSync(userData);
   let appProcess: ChildProcess | null = null;
 
-  /**
-   * Ends the app by PID with its helpers if it is still running, and removes
-   * the folder. Synchronous, for the exit handler too. Until the app's exit
-   * event Node holds its handle, so its PID names no other process.
-   */
+  /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
   let finished = false;
   const finish = () => {
     if (finished) return;
     finished = true;
+    for (const pid of processesUsing(userData)) forceEnd(pid);
     if (appProcess?.pid && appProcess.exitCode === null) forceEnd(appProcess.pid);
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   };
