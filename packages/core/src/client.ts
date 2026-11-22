@@ -1064,6 +1064,8 @@ export class ClawtrateClient {
    * here. Kept current by every read and write, so an upgrade writes on the grant as it is then.
    */
   private lastGrant: { key: string; full: boolean; held: number } | null = null;
+  /** Token records this client has written: a read that began before the latest notes nothing. */
+  private grantWrites = 0;
   /** A gateway token the person typed for the current attempt, dropped when it ends. */
   private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
@@ -8058,9 +8060,17 @@ export class ClawtrateClient {
   }
 
   /** Notes the grant of a token record of the connected gateway just read or written (`lastGrant`). */
-  private noteGrant(url: string, key: string, record: StoredDeviceToken | null): void {
-    // Only the connected gateway's: a look at another address leaves it as it is.
+  private noteGrant(
+    url: string,
+    key: string,
+    record: StoredDeviceToken | null,
+    readSince?: number,
+  ): void {
+    // Only the connected gateway's: a look at another address leaves it as it is. A read that
+    // began before a later write (a passive read that finished late) leaves that write's grant.
     if (this.settings?.url !== url) return;
+    if (readSince === undefined) this.grantWrites += 1;
+    else if (readSince !== this.grantWrites) return;
     this.lastGrant = {
       key,
       full: record?.fullGrant === true,
@@ -8077,8 +8087,9 @@ export class ClawtrateClient {
     role: string,
     includeRejected = false,
   ): Promise<StoredDeviceToken | null> {
+    const since = this.grantWrites;
     const record = await this.readToken(url, deviceId, role, includeRejected);
-    this.noteGrant(url, this.tokenKey(url, deviceId, role), record);
+    this.noteGrant(url, this.tokenKey(url, deviceId, role), record, since);
     return record;
   }
 

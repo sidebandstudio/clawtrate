@@ -438,6 +438,16 @@ describe("full access under interleavings", () => {
     client.stop();
   });
 
+  /** Every value written to this device's token key, parsed. */
+  const tokenWrites = (storage: KeyValueStore & { data: Map<string, string> }) => {
+    const writes: Array<{ token: string; heldScopes: string[]; fullGrant?: boolean }> = [];
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === tokenKey(URL)) writes.push(JSON.parse(value));
+      return set(key, value);
+    };
+    return writes;
+  };
   const approvingGateway = () => {
     const gateway = new FakeGateway();
     const approval = deferred<unknown>();
@@ -487,10 +497,14 @@ describe("full access under interleavings", () => {
     const client = new ClawtrateClient(host(gateway, storage), FAST);
     await client.start();
     await until(() => saved(storage)?.heldScopes.includes("operator.pairing") === false);
-    await approveWhatWasAsked(client, gateway, approval, "admin");
-    await until(() => saved(storage)?.token === "token-U");
-    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({ fullGrant: true });
-    expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
+    const writes = tokenWrites(storage);
+    const wanted = await approveWhatWasAsked(client, gateway, approval, "admin");
+    // The request leaves pairing out, and so does the approval's own write, the first one.
+    expect(wanted).not.toContain("operator.pairing");
+    await until(() => writes.some((write) => write.token === "token-U"));
+    const first = writes.find((write) => write.token === "token-U")!;
+    expect(first.fullGrant).toBe(true);
+    expect(first.heldScopes).not.toContain("operator.pairing");
     client.stop();
   });
 
@@ -512,57 +526,13 @@ describe("full access under interleavings", () => {
     await client.connect({ url: URL, token: "shared" });
     await until(() => client.state.connection.status === "connected");
     await until(() => saved(storage)?.heldScopes.length === 1);
+    const writes = tokenWrites(storage);
     const wanted = await approveWhatWasAsked(client, gateway, approval);
-    await until(() => saved(storage)?.token === "token-U");
-    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({
+    await until(() => writes.some((write) => write.token === "token-U"));
+    expect(writes.find((write) => write.token === "token-U")).toMatchObject({
       fullGrant: true,
       heldScopes: FULL_SCOPES.filter((scope) => wanted.includes(scope)),
     });
-    client.stop();
-  });
-
-  it("an upgrade whose approval waited while a hello narrowed the grant builds on the narrowed grant", async () => {
-    const held = [
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-    ];
-    const storage = memoryStorage({
-      connection: JSON.stringify({ url: URL, token: null }),
-      [tokenKey(URL)]: fullRecord("token-A", held),
-    });
-    const { gateway, approval } = approvingGateway();
-    let narrow = false;
-    gateway.connectReply = (params) => {
-      const { scopes } = params as ConnectParams;
-      return {
-        ok: true,
-        payload: helloOk(
-          narrow ? scopes.filter((scope) => scope !== "operator.pairing") : [...scopes],
-        ),
-      };
-    };
-    const client = new ClawtrateClient(host(gateway, storage), FAST);
-    await client.start();
-    await until(() => client.state.connection.status === "connected");
-    void client.requestAccess("admin").catch(() => {});
-    await until(() => client.state.connection.upgrade.status === "pending");
-    // While the approval waits, a reconnect's hello narrows the record.
-    narrow = true;
-    gateway.dropAll();
-    await until(() => saved(storage)?.heldScopes.includes("operator.pairing") === false);
-    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
-      .scopes;
-    approval.resolve({
-      status: "approved",
-      requestId: "up-2",
-      deviceToken: "token-U",
-      scopes: wanted,
-    });
-    await until(() => saved(storage)?.token === "token-U");
-    expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
     client.stop();
   });
 
@@ -584,15 +554,17 @@ describe("full access under interleavings", () => {
     const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
       .scopes;
     expect(wanted).not.toContain("operator.pairing");
+    const writes = tokenWrites(storage);
     approval.resolve({
       status: "approved",
       requestId: "up-2",
       deviceToken: "token-U",
       scopes: [...wanted, "operator.pairing"],
     });
-    await until(() => saved(storage)?.token === "token-U");
-    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({ fullGrant: true });
-    expect(saved(storage)?.heldScopes).not.toContain("operator.pairing");
+    await until(() => writes.some((write) => write.token === "token-U"));
+    const first = writes.find((write) => write.token === "token-U")!;
+    expect(first.fullGrant).toBe(true);
+    expect(first.heldScopes).not.toContain("operator.pairing");
     // The next reconnect asks for what is held, without it.
     const before = gateway.connects.length;
     gateway.dropAll();
@@ -676,6 +648,110 @@ describe("full access under interleavings", () => {
     });
     await until(() => saved(storage)?.token === "token-U");
     expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({ fullGrant: true });
+    client.stop();
+  });
+
+  /** Delays the next read of the token key after it has read: its answer is from before. */
+  const delayNextRead = (storage: KeyValueStore & { data: Map<string, string> }) => {
+    const release = deferred<void>();
+    let armed = true;
+    let read = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      const value = await get(key);
+      if (armed && key === tokenKey(URL)) {
+        armed = false;
+        read = true;
+        await release.promise;
+      }
+      return value;
+    };
+    return { release: () => release.resolve(), read: () => read };
+  };
+
+  it("a passive read that began before the grant narrowed and lands while the upgrade waits doesn't put back a scope outside the request", async () => {
+    const held = [
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.questions",
+      "operator.pairing",
+    ];
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", held),
+    });
+    const { gateway, approval } = approvingGateway();
+    let narrow = false;
+    gateway.connectReply = (params) => {
+      const { scopes } = params as ConnectParams;
+      return {
+        ok: true,
+        payload: helloOk(
+          narrow ? scopes.filter((scope) => scope !== "operator.pairing") : [...scopes],
+        ),
+      };
+    };
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    // A passive read captures the grant with pairing, and waits.
+    const late = delayNextRead(storage);
+    const reading = client.deviceAccess(URL);
+    await until(() => late.read());
+    // A reconnect's hello narrows pairing away before the upgrade is asked for.
+    narrow = true;
+    gateway.dropAll();
+    await until(() => saved(storage)?.heldScopes.includes("operator.pairing") === false);
+    await until(() => client.state.connection.status === "connected");
+    const writes = tokenWrites(storage);
+    void client.requestAccess("admin").catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const wanted = (gateway.calls("device.scopes.requestUpgrade").at(-1) as { scopes: string[] })
+      .scopes;
+    expect(wanted).not.toContain("operator.pairing");
+    // The late read lands while the approval waits; then the approval.
+    late.release();
+    await reading;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => writes.some((write) => write.token === "token-U"));
+    const first = writes.find((write) => write.token === "token-U")!;
+    expect(first.fullGrant).toBe(true);
+    expect(first.heldScopes).not.toContain("operator.pairing");
+    client.stop();
+  });
+
+  it("a passive read from before a fresh full pairing that lands late doesn't cost the pairing its full grant", async () => {
+    const storage = memoryStorage();
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk(
+        (params as ConnectParams).auth?.deviceToken === "token-U"
+          ? [...(params as ConnectParams).scopes]
+          : [...READ_SCOPES],
+        (params as ConnectParams).auth?.deviceToken ?? "token-A",
+      ),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    // A passive read finds no pairing yet, and waits while the first pairing is saved.
+    const late = delayNextRead(storage);
+    const reading = client.deviceAccess(URL);
+    await until(() => late.read());
+    await until(() => JSON.parse(storage.data.get(tokenKey(URL)) ?? "{}").fullGrant === true);
+    late.release();
+    expect(await reading).toBe("new");
+    const writes = tokenWrites(storage);
+    await approveWhatWasAsked(client, gateway, approval);
+    await until(() => writes.some((write) => write.token === "token-U"));
+    expect(writes.find((write) => write.token === "token-U")?.fullGrant).toBe(true);
     client.stop();
   });
 });
