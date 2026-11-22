@@ -18,12 +18,13 @@ const io = vi.hoisted(() => ({
   reads: 0,
   truncateFails: false,
   appendFails: 0,
-  utimesFails: false,
   renameFails: false,
   /** Run once right after the next rename: another writer replacing the file. */
   afterRename: null as null | (() => void),
   /** Closing a temporary file fails this many more times, after it is closed. */
   tempCloseFails: 0,
+  /** Run once right after the next folder read: a file removed meanwhile. */
+  afterReaddir: null as null | (() => void),
   /** Run once right after a descriptor opened on `io.path` is next closed. */
   afterClose: null as null | (() => void),
   /** Run once just before `io.path` is next opened to be appended to or cut. */
@@ -83,10 +84,13 @@ vi.mock("node:fs", async (importOriginal) => {
       io.afterRename = null;
       after?.();
     },
-    utimesSync: (...args: Parameters<typeof real.utimesSync>) => {
-      if (io.utimesFails) throw Object.assign(new Error("injected"), { code: "ENOSPC" });
-      return real.utimesSync(...args);
-    },
+    readdirSync: ((...args: unknown[]) => {
+      const names = (real.readdirSync as (...a: unknown[]) => unknown)(...args);
+      const after = io.afterReaddir;
+      io.afterReaddir = null;
+      after?.();
+      return names;
+    }) as typeof real.readdirSync,
     ftruncateSync: (...args: Parameters<typeof real.ftruncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
       return real.ftruncateSync(...args);
@@ -105,8 +109,8 @@ afterEach(() => {
   io.truncateFails = false;
   io.appendFails = 0;
   io.renameFails = false;
-  io.utimesFails = false;
   io.afterRename = null;
+  io.afterReaddir = null;
   io.beforeWriteOpen = null;
   io.afterClose = null;
   io.tempCloseFails = 0;
@@ -495,14 +499,23 @@ describe("recovery of a decision record", () => {
     expect(ids(file)).toEqual([held]);
   });
 
-  it("writes what it held at the first maintenance that sets an oversized record aside", () => {
+  it("writes what it held at the first maintenance that sets an oversized record aside, and still says it was set aside", () => {
     const { dir, file } = seed();
     const { log, held } = holding(dir);
     actual.truncateSync(file, 64 * 1024 * 1024 + 1);
     log.prune();
     expect(log.problem).toBeNull();
     expect(ids(file)).toEqual([held]);
-    expect(actual.statSync(`${file}.oversize`).size).toBe(64 * 1024 * 1024 + 1);
+    const [aside] = log.listSetAside()!;
+    expect(aside).toEqual({
+      file: expect.stringMatching(/^decisions\.jsonl\.oversize-110-/),
+      setAsideAt: 110,
+    });
+    expect(actual.statSync(join(dir, aside!.file)).size).toBe(64 * 1024 * 1024 + 1);
+    log.add(fields);
+    expect(log.listSetAside()).toEqual([aside]);
+    actual.rmSync(join(dir, aside!.file));
+    expect(log.listSetAside()).toEqual([]);
   });
 
   it("says when the oversized record cannot be set aside, and sets it aside at the next maintenance", () => {
@@ -519,19 +532,6 @@ describe("recovery of a decision record", () => {
     expect(ids(file)).toEqual([held]);
   });
 
-  it("writes what it held though the set-aside record's time cannot be recorded, and records it later", () => {
-    const { dir, file } = seed();
-    const { log, held } = holding(dir);
-    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
-    io.utimesFails = true;
-    log.prune();
-    expect(log.problem).toBeNull();
-    expect(ids(file)).toEqual([held]);
-    io.utimesFails = false;
-    log.prune();
-    expect(actual.statSync(`${file}.oversize`).mtimeMs).toBe(110);
-  });
-
   it("leaves in place a record put there after the oversized one was looked at, and reads it", () => {
     const { dir, file } = seed();
     actual.truncateSync(file, 64 * 1024 * 1024 + 1);
@@ -541,21 +541,10 @@ describe("recovery of a decision record", () => {
       actual.renameSync(`${file}.new`, file);
     };
     const log = new DecisionLog(dir, { now: () => 110 });
-    expect(actual.existsSync(`${file}.oversize`)).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.includes("oversize"))).toEqual([]);
     expect(ids(file)).toEqual([outside.id]);
     expect(log.problem).toBeNull();
     expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual([outside.id]);
-  });
-
-  it("says a failed time on the set-aside record apart from a read error", () => {
-    const { dir, file } = seed();
-    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
-    io.utimesFails = true;
-    const log = new DecisionLog(dir, { now: () => 110 });
-    expect(log.problem).toMatch(
-      /set aside as decisions\.jsonl\.oversize, but when could not be recorded/,
-    );
-    expect(log.problem).not.toMatch(/cannot be read/);
   });
 });
 
@@ -644,5 +633,21 @@ describe("a decision record changed from outside", () => {
     expect(log.problem).toBeNull();
     expect(actual.readFileSync(file, "utf8")).not.toContain('"torn');
     expect(ids(file).sort()).toEqual([...seeded, next, "outside0000000000"].sort());
+  });
+});
+
+describe("a record set aside as oversized, removed while the folder is read", () => {
+  it("is not said, and the one still there is", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    actual.mkdirSync(dir, { recursive: true });
+    const gone = "decisions.jsonl.oversize-100-0123456789ab";
+    const kept = "decisions.jsonl.oversize-200-abcdef012345";
+    actual.writeFileSync(join(dir, gone), "");
+    actual.writeFileSync(join(dir, kept), "");
+    const log = new DecisionLog(dir, { now: () => 300 });
+    io.afterReaddir = () => actual.rmSync(join(dir, gone));
+    expect(log.listSetAside()).toEqual([{ file: kept, setAsideAt: 200 }]);
   });
 });
