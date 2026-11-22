@@ -754,4 +754,48 @@ describe("full access under interleavings", () => {
     expect(writes.find((write) => write.token === "token-U")?.fullGrant).toBe(true);
     client.stop();
   });
+
+  it("a refusal from the old gateway while a Connect to another is being saved leaves the new one asking for the six", async () => {
+    const URL_B = "ws://127.0.0.1:19963";
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params, url) =>
+      url === URL_B
+        ? { ok: true, payload: helloOk([...(params as ConnectParams).scopes], "token-B") }
+        : { ok: true, payload: helloOk([...(params as ConnectParams).scopes], "token-A") };
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared-A" });
+    await until(() => client.state.connection.status === "connected");
+    // The Connect to B waits at its save; meanwhile A refuses its saved token.
+    const saving = deferred<void>();
+    const set = storage.set;
+    let held = false;
+    storage.set = async (key, value) => {
+      if (key === "connection" && !held) {
+        held = true;
+        await saving.promise;
+      }
+      return set(key, value);
+    };
+    const connecting = client.connect({ url: URL_B, token: "shared-B" });
+    await until(() => held);
+    gateway.connectReply = (params, url) =>
+      url === URL_B
+        ? { ok: true, payload: helloOk([...(params as ConnectParams).scopes], "token-B") }
+        : refusal("AUTH_TOKEN_MISMATCH");
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_TOKEN_MISMATCH");
+    saving.resolve();
+    await connecting;
+    await until(
+      () =>
+        (gateway.connects as Array<ConnectParams & { url?: string }>).length > 0 &&
+        client.state.connection.gatewayUrl === URL_B,
+    );
+    await until(() => client.state.connection.status === "connected");
+    // B's first pairing asked for the six.
+    expect(client.state.connection.requestedScopes).toEqual([...FULL_SCOPES]);
+    client.stop();
+  });
 });

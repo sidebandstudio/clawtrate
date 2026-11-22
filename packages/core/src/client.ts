@@ -1059,6 +1059,12 @@ export class ClawtrateClient {
    */
   private eligibilityEnds = 0;
   /**
+   * The gateway the latest of those ended it for. While a Connect's save is pending, the
+   * selection is still the earlier one, so every end in that time is for the connected gateway:
+   * a Connect to another address isn't cancelled by it.
+   */
+  private lastEndUrl: string | null = null;
+  /**
    * The grant of the token record this client last read or wrote, by its key: whether it is a
    * full pairing's, and its held scopes as one bit per scope of `FULL_SCOPES`, so nothing grows
    * here. Kept current by every read and write, so an upgrade writes on the grant as it is then.
@@ -1479,7 +1485,7 @@ export class ClawtrateClient {
       this.typedAttempt = token ? { url, token, selection } : null;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibilityEnds === endsAtStart;
+      this.fullEligible = this.eligibilityEnds === endsAtStart || this.lastEndUrl !== url;
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
@@ -1513,7 +1519,7 @@ export class ClawtrateClient {
       this.selectionApplied = selection;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibilityEnds === endsAtStart;
+      this.fullEligible = this.eligibilityEnds === endsAtStart || this.lastEndUrl !== url;
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -1715,7 +1721,8 @@ export class ClawtrateClient {
   }
 
   /** Full-access eligibility ends now, and a Connect already under way doesn't grant it back. */
-  private endEligibility(): void {
+  private endEligibility(url: string | null = this.settings?.url ?? null): void {
+    this.lastEndUrl = url;
     this.fullEligible = false;
     this.eligibilityEnds += 1;
   }
@@ -1723,7 +1730,7 @@ export class ClawtrateClient {
   /** The attempt on this address ended: no full pairing by itself, and its typed token is done. */
   private endAttempt(url: string): void {
     if (this.settings?.url !== url) return;
-    this.endEligibility();
+    this.endEligibility(url);
     if (this.typedAttempt?.url === url) this.typedAttempt = null;
   }
 
@@ -8255,7 +8262,7 @@ export class ClawtrateClient {
         // Until the removal has run, loads skip the refused token, so a retry never sends it again.
         this.writes.rejected.set(key, (this.writes.rejected.get(key) ?? new Set()).add(rejected));
         // And no retry asks for the six in its place: that takes the person's decision.
-        this.endEligibility();
+        this.endEligibility(url);
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
           const existing = await this.loadToken(url, deviceId, role, true);
