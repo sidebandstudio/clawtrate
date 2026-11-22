@@ -158,7 +158,12 @@ export async function paintedFinal(page: Page): Promise<void> {
           );
           return new Set(layouts).size === 1 && atEnd;
         },
-        { message: "the transcript at its end and the shelf, unchanged for three frames" },
+        {
+          message: "the transcript at its end and the shelf, unchanged for three frames",
+          // A drawn frame can take longer than the default assertion timeout.
+          // Let the test deadline bound this wait, as it does for settle().
+          timeout: 0,
+        },
       )
       .toBe(true);
   } catch (error) {
