@@ -282,6 +282,36 @@ describe("a budget that ends the channel while it reserves", () => {
   }
 });
 
+describe("ending a channel while returning its receive budget", () => {
+  it.each([
+    ["join", 1],
+    ["fragments", 2],
+  ] as const)(
+    "discards the text and preserves the other channel's budget on %s release",
+    (_, release) => {
+      const budget = new ReceiveBudget(4 * MAX_RECORD_DATA_BYTES);
+      const other = pairWith({ budget });
+      const [part] = other.phone.sendText(TWO_RECORDS);
+      other.connector.receive(part!);
+
+      const pair = pairWith({ budget });
+      const give = budget.give.bind(budget);
+      let releases = 0;
+      vi.spyOn(budget, "give").mockImplementation((bytes) => {
+        give(bytes);
+        if (++releases === release) pair.connector.close();
+      });
+
+      const [frame] = pair.phone.sendText("hello");
+      expect(() => pair.connector.receive(frame!)).toThrow(
+        expect.objectContaining({ code: "closed" }),
+      );
+      expect(pair.connector.bufferedBytes).toBe(0);
+      expect(budget.usedBytes).toBe(other.connector.bufferedBytes);
+    },
+  );
+});
+
 describe("handshake state", () => {
   function secretsOf(channel: Initiator | Responder) {
     return IKHandshake.secretsForTests(

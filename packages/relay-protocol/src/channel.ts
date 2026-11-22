@@ -528,16 +528,19 @@ abstract class Channel {
       this.#budget?.give(total);
     }
     this.#dropPartial();
+    this.#checkUsable();
     // The returned text, and the host's own write queues, need bounds of their own.
     return [{ type: "text", text }];
   }
 
   #dropPartial(): void {
+    const bytes = this.#partBytes;
     for (const part of this.#parts) part.fill(0);
-    this.#budget?.give(this.#partBytes);
     this.#parts = [];
     this.#partBytes = 0;
     this.#partialSince = null;
+    // A host can close the channel inside give(). Retire the reservation first.
+    if (bytes > 0) this.#budget?.give(bytes);
   }
 
   #checkUsable(): void {

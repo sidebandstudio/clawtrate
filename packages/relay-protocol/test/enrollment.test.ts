@@ -258,8 +258,8 @@ describe("the gate's callable answers", () => {
   it("accepts a function as the candidate, and as the answer itself, reading eligible once", () => {
     const candidate = Object.assign(() => "offer", { id: 7 });
     let reads = 0;
-    const answer = Object.assign(() => undefined, {
-      get eligible() {
+    const answer = Object.defineProperty(() => undefined, "eligible", {
+      get() {
         reads++;
         return candidate;
       },
