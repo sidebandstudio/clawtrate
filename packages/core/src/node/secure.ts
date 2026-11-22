@@ -501,14 +501,16 @@ export function createSecureCredentials(options: {
     // An earlier build's key that can't be used is a damaged credential, not unreadable settings:
     // its recovery sets the whole folder aside, the key with it, and keeps it.
     if (pem !== null && !usableKey(pem)) throw new CredentialRecordInvalidError();
-    const credentials: Credentials = {
-      values: {
-        ...Object.fromEntries(tokenKeys.map((key) => [key, entries[key]!])),
-        // Kept for the pairing it was saved for, until a device token replaces it.
-        ...(savedSettings?.token != null ? { [SETTINGS_KEY]: entries[SETTINGS_KEY]! } : {}),
-      },
+    const tokens: Credentials = {
+      values: Object.fromEntries(tokenKeys.map((key) => [key, entries[key]!])),
       deviceKey: pem,
     };
+    // Kept for the pairing it was saved for, until a device token replaces it: one of this
+    // device's own for the same gateway already has, so the first record leaves it out.
+    const credentials: Credentials =
+      savedSettings?.token != null && !hasOwnToken(tokens, savedSettings.url)
+        ? { ...tokens, values: { ...tokens.values, [SETTINGS_KEY]: entries[SETTINGS_KEY]! } }
+        : tokens;
     if (available) {
       let mode: Mode | null = null;
       try {

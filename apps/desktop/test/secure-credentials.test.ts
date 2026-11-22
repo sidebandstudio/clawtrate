@@ -25,6 +25,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createDecipheriv } from "node:crypto";
 import type * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -41,8 +42,8 @@ const fsHooks = vi.hoisted(() => ({
   /** A rename to hold until its gate opens, and folder syncs to refuse right after a rename. */
   holdRename: null as null | { match: (to: string) => boolean; gate: Promise<void> },
   failSyncsAfterRename: null as null | ((to: string) => number),
-  /** Called once, when the next folder handle closes (after its sync). */
-  onFolderClose: null as null | (() => void),
+  /** Called once, right after the next rename onto a matching path completes. */
+  onRenamed: null as null | { match: (to: string) => boolean; run: () => void },
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -52,14 +53,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     const folder = args[1] === "r" && (await handle.stat()).isDirectory();
     return new Proxy(handle, {
       get(target, prop, receiver) {
-        if (prop === "close" && folder && fsHooks.onFolderClose) {
-          const hook = fsHooks.onFolderClose;
-          fsHooks.onFolderClose = null;
-          return async () => {
-            await target.close();
-            hook();
-          };
-        }
         if (prop === "sync" && folder && fsHooks.failFolderSyncs > 0)
           return () => {
             fsHooks.failFolderSyncs -= 1;
@@ -91,6 +84,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       await hold.gate;
     }
     await actual.rename(from, to);
+    const renamed = fsHooks.onRenamed;
+    if (renamed?.match(String(to))) {
+      fsHooks.onRenamed = null;
+      renamed.run();
+    }
     const fails = fsHooks.failSyncsAfterRename?.(String(to)) ?? 0;
     if (fails > 0) {
       fsHooks.failSyncsAfterRename = null;
@@ -140,7 +138,7 @@ afterEach(() => {
   fsHooks.failRm = null;
   fsHooks.holdRename = null;
   fsHooks.failSyncsAfterRename = null;
-  fsHooks.onFolderClose = null;
+  fsHooks.onRenamed = null;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -204,6 +202,21 @@ function expectNowhere(dir: string, secrets: string[]) {
     for (const { file, text } of temps) expect(text, `${secret} in ${file}`).not.toContain(secret);
     expect(logged.join("\n"), secret).not.toContain(secret);
   }
+}
+
+/** The values in the folder's sealed record, opened with `fakeBox`'s key as the app would. */
+async function sealedValues(dir: string): Promise<Record<string, string>> {
+  const outer = JSON.parse(readFileSync(join(dir, CREDENTIALS_FILE), "utf8")) as Record<
+    string,
+    string
+  >;
+  const field = (name: string) => Buffer.from(outer[name]!, "base64");
+  const key = Buffer.from(await fakeBox().box.decrypt(field("key")), "base64");
+  const decipher = createDecipheriv("aes-256-gcm", key, field("nonce"));
+  decipher.setAAD(Buffer.from("clawtrate credentials v2"));
+  decipher.setAuthTag(field("tag"));
+  const plain = Buffer.concat([decipher.update(field("data")), decipher.final()]);
+  return (JSON.parse(plain.toString("utf8")) as { values: Record<string, string> }).values;
 }
 
 /** The device token key of the device whose key this is, for `URL`. */
@@ -652,9 +665,38 @@ describe("this device's credentials in secure storage", () => {
     );
     const credentials = open(dir, fakeBox().box);
     expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    // The first sealed record already leaves it out, beside this device's own token.
+    const first = await sealedValues(dir);
+    expect(first).not.toHaveProperty("connection");
+    expect(first[own]).toBe(RECORD);
+    expect(JSON.stringify(first)).not.toContain(SHARED);
     await credentials.storage.delete(own);
     expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
+  it("an earlier build's token moved in beside another device's or another gateway's token stays in the first sealed record", async () => {
+    // Another device's token for the same gateway: the earlier folder's own `TOKEN_KEY`.
+    {
+      const { dir } = legacyFolder();
+      expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+      const first = await sealedValues(dir);
+      expect(first.connection).toBe(CONNECTION);
+      expect(first[TOKEN_KEY]).toBe(RECORD);
+    }
+    // This device's token for another gateway.
+    {
+      const { dir, pem } = legacyFolder();
+      const elsewhere = `deviceToken:${encodeURIComponent("ws://127.0.0.1:19009")}:${await deviceIdOf(pem)}:operator`;
+      writeFileSync(
+        join(dir, STATE_FILE),
+        JSON.stringify({ connection: CONNECTION, [elsewhere]: RECORD, "turn-limit-minutes": "30" }),
+      );
+      expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+      const first = await sealedValues(dir);
+      expect(first.connection).toBe(CONNECTION);
+      expect(first[elsewhere]).toBe(RECORD);
+    }
   });
 
   it("readers during a switch see the settings and their typed token together, never one without the other", async () => {
@@ -663,23 +705,28 @@ describe("this device's credentials in secure storage", () => {
     const a = JSON.stringify({ url: URL, token: "typed-A" });
     const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
     await credentials.storage.set("connection", a);
-    // Once the new settings' write has synced its folder, a read starts on each of the next
-    // microtasks: across the moment the settings and their typed token are published.
+    // From the moment the new settings' file is renamed into place, on every platform, a read
+    // starts at once and then on every turn of the event loop until the switch has returned:
+    // before, across and after the moment the settings and their typed token are published.
     const reads: Array<Promise<string | null>> = [];
-    fsHooks.onFolderClose = () => {
-      let left = 40;
-      const next = () => {
-        reads.push(credentials.storage.get("connection"));
-        if ((left -= 1) > 0) queueMicrotask(next);
-      };
-      queueMicrotask(next);
+    let switched = false;
+    fsHooks.onRenamed = {
+      match: (to) => to.endsWith(STATE_FILE),
+      run: () => {
+        const next = () => {
+          reads.push(credentials.storage.get("connection"));
+          if (!switched) setImmediate(next);
+        };
+        next();
+      },
     };
     await credentials.storage.set("connection", b);
-    await until(() => reads.length === 40);
+    switched = true;
+    await new Promise((resolve) => setImmediate(resolve));
     const seen = await Promise.all(reads);
-    expect(seen.length).toBe(40);
+    expect(seen[0]).toBe(a);
     expect(seen.filter((value) => value !== a && value !== b)).toEqual([]);
-    expect(seen).toContain(b);
+    expect(seen.at(-1)).toBe(b);
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
