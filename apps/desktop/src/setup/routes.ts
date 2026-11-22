@@ -17,6 +17,8 @@
 // folder proven private, as a plain file of this account's with one link,
 // closed to everyone else and small. Each record is bounded, and its key is
 // recomputed from what it names: a record whose key doesn't match is dropped.
+// A file that is there and can't be read, or read whole, is never taken for
+// an empty store: nothing is written over it, and the next call reads again.
 
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -103,6 +105,14 @@ export const NO_SEAL: TokenSeal = {
   open: () => null,
 };
 
+/** The route file is there and couldn't be read: nothing is written over it. */
+export class RouteStoreUnreadable extends Error {
+  override name = "RouteStoreUnreadable";
+  constructor() {
+    super("Clawtrate couldn't read its saved routes, so it changes none of them.");
+  }
+}
+
 export class TokenStorageUnavailable extends Error {
   override name = "TokenStorageUnavailable";
   constructor() {
@@ -166,7 +176,12 @@ export class RouteStore {
       : ensurePrivateDir(this.dir, { create: false }).ok;
   }
 
-  private load(): FileShape {
+  /**
+   * The routes as the file holds them; for a write, `forWrite`, only from a file
+   * read whole (or none there yet). Reads of a file that couldn't be read find
+   * no route, and nothing is cached, so the next call reads the file again.
+   */
+  private load(forWrite = false): FileShape {
     if (this.cache) return this.cache;
     const empty: FileShape = { version: 2, routes: [] };
     if (!this.folderIsPrivate()) {
@@ -174,17 +189,29 @@ export class RouteStore {
       // either, so a later read of the proven folder starts from its file, never from empty.
       return empty;
     }
-    const text = readPrivateFile(this.path, this.options.readAcl);
-    let parsed: unknown;
-    try {
-      parsed = text === null ? null : JSON.parse(text);
-    } catch {
-      parsed = null;
+    const read = readPrivateFile(this.path, this.options.readAcl);
+    if (read.kind === "refused") {
+      if (forWrite) throw new RouteStoreUnreadable();
+      return empty;
+    }
+    let parsed: unknown = null;
+    if (read.kind === "text") {
+      try {
+        parsed = JSON.parse(read.text);
+      } catch {
+        // Not a file this store wrote whole: never replaced by a write as if it were empty.
+        if (forWrite) throw new RouteStoreUnreadable();
+        return empty;
+      }
     }
     const shape = parsed as { version?: unknown; routes?: unknown } | null;
     // A store of an earlier draft kept its tokens unsealed: removed, in this proven folder, and
     // the person pairs again.
     if (shape?.version === 1) rmSync(this.path, { force: true });
+    else if (shape !== null && (shape.version !== 2 || !Array.isArray(shape.routes))) {
+      if (forWrite) throw new RouteStoreUnreadable();
+      return empty;
+    }
     const routes: Stored[] = [];
     if (shape && shape.version === 2 && Array.isArray(shape.routes)) {
       for (const each of shape.routes.slice(0, MAX_ROUTES)) {
@@ -192,7 +219,7 @@ export class RouteStore {
           validStored(each) &&
           !routes.some((other) => other.id === each.id || other.key === each.key)
         )
-          routes.push(each);
+          routes.push(storedOf(each));
       }
     }
     this.cache = { version: 2, routes };
@@ -206,6 +233,10 @@ export class RouteStore {
 
   private save(next: FileShape): void {
     if (!this.folderIsPrivate()) throw new Error("The route store's folder isn't proven private.");
+    // Measured before anything is written: a file larger than a read accepts would lose every route.
+    const data = Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8");
+    if (data.length > MAX_ROUTE_FILE_BYTES)
+      throw new Error("The routes are larger than a file keeps.");
     const temp = `${this.path}.${randomBytes(6).toString("hex")}.tmp`;
     const fd = openSync(
       temp,
@@ -215,7 +246,6 @@ export class RouteStore {
     let placed = false;
     try {
       try {
-        const data = Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8");
         let offset = 0;
         while (offset < data.length) offset += writeSync(fd, data, offset, data.length - offset);
         fsyncSync(fd);
@@ -259,22 +289,42 @@ export class RouteStore {
    * Keeps `record`, replacing the route with its id. A route whose key changed
    * (another key pinned, another port, another profile) loses its token: a
    * token is offered only on the route it was issued for. Another record with
-   * the same key is let go, with its pin and files.
+   * the same key is let go, with its pin and files. Returns the undo: what this
+   * put replaced or let go, put back as it was, token included.
    */
-  put(record: SshRouteRecord): void {
+  put(record: SshRouteRecord): () => void {
     if (!validRecord(record)) throw new Error("Not a route record.");
-    const data = this.load();
+    const data = this.load(true);
     const old = data.routes.find((route) => route.id === record.id);
     const others = data.routes.filter(
       (route) => route.id !== record.id && route.key !== record.key,
     );
     const token = old && old.key === record.key ? old.token : null;
-    this.keep([...others, { ...record, token }], data.routes);
+    const replaced = data.routes.filter(
+      (route) => route.id === record.id || route.key === record.key,
+    );
+    // Only the fields a record declares are kept, whatever else the caller's object carries.
+    this.keep([...others, { ...recordOf(record), token }], data.routes);
+    return () => this.restore(record, replaced);
+  }
+
+  /** In place of `record`, what its put replaced, with their tokens; nothing else changes. */
+  private restore(record: SshRouteRecord, replaced: Stored[]): void {
+    const data = this.load(true);
+    const back = (route: Stored) =>
+      replaced.some((each) => each.id === route.id || each.key === route.key);
+    const routes = [
+      ...data.routes.filter(
+        (route) => route.id !== record.id && route.key !== record.key && !back(route),
+      ),
+      ...replaced,
+    ].sort((a, b) => b.lastUsed - a.lastUsed);
+    this.save({ version: 2, routes: routes.slice(0, MAX_ROUTES) });
   }
 
   /** Forgets the route and its token. */
   remove(id: string): void {
-    const data = this.load();
+    const data = this.load(true);
     if (!data.routes.some((route) => route.id === id)) return;
     this.save({ version: 2, routes: data.routes.filter((route) => route.id !== id) });
   }
@@ -306,7 +356,7 @@ export class RouteStore {
   /** The route's one token, sealed; refused for a route the store has no record of, or unsealed. */
   setToken(key: string, deviceId: string, role: string, value: string): void {
     if (!this.seal.available()) throw new TokenStorageUnavailable();
-    const data = this.load();
+    const data = this.load(true);
     const route = data.routes.find((each) => each.key === key);
     if (!route) throw new Error("There is no such route to keep a token for.");
     const sealed = this.seal.seal(value);
@@ -320,12 +370,21 @@ export class RouteStore {
     });
   }
 
-  deleteToken(key: string): void {
-    const data = this.load();
-    if (!data.routes.some((each) => each.key === key && each.token)) return;
+  /**
+   * Forgets the route's token; with `deviceId` and `role`, only the token kept
+   * for that device and role, as `getToken` reads it.
+   */
+  deleteToken(key: string, deviceId?: string, role?: string): void {
+    const data = this.load(true);
+    const holds = (each: Stored) =>
+      each.key === key &&
+      each.token !== null &&
+      (deviceId === undefined || each.token.deviceId === deviceId) &&
+      (role === undefined || each.token.role === role);
+    if (!data.routes.some(holds)) return;
     this.save({
       version: 2,
-      routes: data.routes.map((each) => (each.key === key ? { ...each, token: null } : each)),
+      routes: data.routes.map((each) => (holds(each) ? { ...each, token: null } : each)),
     });
   }
 }
@@ -340,9 +399,10 @@ function safeList(dir: string): string[] {
 }
 
 /**
- * The store's text, through a descriptor that refuses a link: a plain file of
- * this account's with one link, closed to group and others, and small. Null
- * when there is none; anything else is not this store's and is not read.
+ * The store's text, through a descriptor that refuses a link (and doesn't
+ * wait on a pipe): a plain file of this account's with one link, closed to
+ * group and others, and small. `missing` when there is none; anything else
+ * that isn't read whole is `refused`, never taken for an empty store.
  */
 /**
  * Whether the file the descriptor holds is this account's alone, its access
@@ -380,15 +440,19 @@ function ownerOnlyAcl(
   return !reading.entries.some((entry) => entry.allow && entry.principal !== `user:${me}`);
 }
 
+type FileRead = { kind: "missing" } | { kind: "refused" } | { kind: "text"; text: string };
+
 function readPrivateFile(
   path: string,
   readAcl: (path: string, platform: NodeJS.Platform) => AclReading = readAclWithLs,
-): string | null {
+): FileRead {
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    return null;
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { kind: "missing" }
+      : { kind: "refused" };
   }
   try {
     const info = fstatSync(fd);
@@ -400,9 +464,10 @@ function readPrivateFile(
       info.nlink !== 1 ||
       info.size > MAX_ROUTE_FILE_BYTES
     )
-      return null;
+      return { kind: "refused" };
     // Its access control list too, on macOS and Linux, for the file this descriptor holds.
-    if (process.platform !== "win32" && !ownerOnlyAcl(fd, path, readAcl)) return null;
+    if (process.platform !== "win32" && !ownerOnlyAcl(fd, path, readAcl))
+      return { kind: "refused" };
     const buffer = Buffer.alloc(info.size);
     let offset = 0;
     while (offset < buffer.length) {
@@ -410,9 +475,10 @@ function readPrivateFile(
       if (read === 0) break;
       offset += read;
     }
-    return buffer.subarray(0, offset).toString("utf8");
+    if (offset !== buffer.length) return { kind: "refused" };
+    return { kind: "text", text: buffer.toString("utf8") };
   } catch {
-    return null;
+    return { kind: "refused" };
   } finally {
     closeSync(fd);
   }
@@ -438,9 +504,40 @@ export function routedStorage(base: KeyValueStore, routes: RouteStore): KeyValue
     },
     delete: async (key) => {
       if (!isRouteTokenKey(key)) return base.delete(key);
-      routes.deleteToken(parse(key).key);
+      // Only the token kept for that device and role: the key names all three.
+      const { key: route, deviceId, role } = parse(key);
+      routes.deleteToken(route, deviceId, role);
     },
   };
+}
+
+/** A record built from the fields it declares, and nothing else the object carries. */
+function recordOf(value: SshRouteRecord): SshRouteRecord {
+  return {
+    kind: "ssh",
+    id: value.id,
+    key: value.key,
+    destination: value.destination,
+    name: value.name,
+    account: value.account,
+    sshPort: value.sshPort,
+    endpoint: value.endpoint,
+    fingerprint: value.fingerprint,
+    profile: value.profile,
+    serviceLabel: value.serviceLabel,
+    configPath: value.configPath,
+    gatewayPort: value.gatewayPort,
+    identity: value.identity,
+    lastUsed: value.lastUsed,
+  };
+}
+
+/** A stored record as read from the file, built from its declared fields only. */
+function storedOf(value: Stored): Stored {
+  const token = value.token
+    ? { deviceId: value.token.deviceId, role: value.token.role, sealed: value.token.sealed }
+    : null;
+  return { ...recordOf(value), token };
 }
 
 function withoutToken(stored: Stored): SshRouteRecord {

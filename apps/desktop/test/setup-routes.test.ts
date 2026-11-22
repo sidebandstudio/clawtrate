@@ -43,11 +43,14 @@ import {
   type AclReading,
 } from "../src/setup/private-dir.ts";
 import {
+  MAX_ROUTE_FILE_BYTES,
   NO_SEAL,
   RouteStore,
+  RouteStoreUnreadable,
   routedStorage,
   sshRouteKey,
   type SshRouteRecord,
+  type TokenSeal,
 } from "../src/setup/routes.ts";
 import { sshLook } from "../src/setup/ssh-look.ts";
 import { tempDir, testSeal } from "./ssh/harness.ts";
@@ -168,6 +171,96 @@ describe.skipIf(process.platform === "win32")("the route store", () => {
         .sort(),
     ).toEqual(["r0123456789ab", "r999999999999"]);
     expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+  });
+
+  it("a route file that is there and can't be read is never taken for an empty store: nothing is written over it, the next call reads it again, and a missing file is a first save", async () => {
+    const dir = fresh("clawtrate-routes-unreadable-");
+    const one = record();
+    const writer = new RouteStore(dir, { seal: testSeal });
+    writer.put(one);
+    await routedStorage(memoryStorage(), writer).set(tokenKey(one.key), TOKEN);
+    const before = readFileSync(writer.path, "utf8");
+    // The file's ACL can't be read (it timed out, say): no route is listed, and no write goes.
+    let acl: AclReading = { kind: "unreadable" };
+    const store = new RouteStore(dir, { seal: testSeal, readAcl: () => acl });
+    expect(store.list()).toEqual([]);
+    const other = record({ id: "r999999999999", endpoint: "you@[elsewhere.example]:22" });
+    expect(() => store.put(other)).toThrow(RouteStoreUnreadable);
+    expect(() => store.remove(one.id)).toThrow(RouteStoreUnreadable);
+    expect(() => store.deleteToken(one.key)).toThrow(RouteStoreUnreadable);
+    expect(() => store.setToken(one.key, "device-1", "operator", TOKEN)).toThrow(
+      RouteStoreUnreadable,
+    );
+    expect(readFileSync(writer.path, "utf8")).toBe(before);
+    // Readable again: the next call reads the file, and both routes and the token are kept.
+    acl = { kind: "none" };
+    store.put(other);
+    expect(
+      store
+        .list()
+        .map((each) => each.id)
+        .sort(),
+    ).toEqual([one.id, other.id].sort());
+    expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+    // A file that isn't whole JSON, or isn't this store's shape, is refused the same way.
+    for (const text of ["{ not json", JSON.stringify({ version: 3, routes: [] })]) {
+      writeFileSync(writer.path, text);
+      const broken = new RouteStore(dir, { seal: testSeal });
+      expect(broken.list()).toEqual([]);
+      expect(() => broken.put(record({ id: "r888888888888" }))).toThrow(RouteStoreUnreadable);
+      expect(readFileSync(writer.path, "utf8")).toBe(text);
+    }
+    // No file at all is an empty store, and the first save makes it.
+    const first = new RouteStore(fresh("clawtrate-routes-first-"), { seal: testSeal });
+    expect(first.list()).toEqual([]);
+    first.put(one);
+    expect(first.list()).toEqual([one]);
+  });
+
+  it("keeps only the fields a record declares, refuses a file larger in UTF-8 bytes than a read accepts before replacing anything, and deletes a token only for its own device and role", async () => {
+    const dir = fresh("clawtrate-routes-shape-");
+    const store = new RouteStore(dir, { seal: testSeal });
+    const one = record();
+    // An object carrying more than a record declares: only the record is kept.
+    store.put({ ...one, extra: "x".repeat(260 * 1024) } as SshRouteRecord);
+    expect(readFileSync(store.path).length).toBeLessThan(MAX_ROUTE_FILE_BYTES);
+    expect(new RouteStore(dir, { seal: testSeal }).list()).toEqual([one]);
+    // Sealed tokens of three-byte characters: within the per-token limit in characters, past
+    // the file's limit in bytes once enough of them are kept. That write is refused, and the
+    // file stays one a read accepts, with every route and token kept before it.
+    const wide: TokenSeal = {
+      available: () => true,
+      seal: (plain) => `${"€".repeat(16_000)}${plain.length}`,
+      open: (sealed) => sealed,
+    };
+    const roomy = new RouteStore(fresh("clawtrate-routes-bytes-"), { seal: wide });
+    const routes = [0, 1, 2, 3, 4, 5].map((n) =>
+      record({ id: `r00000000000${n}`, endpoint: `you@[host${n}.example]:22` }),
+    );
+    for (const each of routes) roomy.put(each);
+    let kept = 0;
+    let refused = 0;
+    for (const each of routes) {
+      try {
+        roomy.setToken(each.key, "device-1", "operator", TOKEN);
+        kept += 1;
+      } catch {
+        refused += 1;
+      }
+    }
+    expect(refused).toBeGreaterThan(0);
+    expect(statSync(roomy.path).size).toBeLessThanOrEqual(MAX_ROUTE_FILE_BYTES);
+    const reread = new RouteStore(dirname(roomy.path), { seal: wide });
+    expect(reread.list()).toHaveLength(6);
+    expect(routes.filter((each) => reread.hasToken(each.key))).toHaveLength(kept);
+    // A token kept for device-1 isn't deleted by device-2's key, and is by its own.
+    const storage = routedStorage(memoryStorage(), store);
+    await storage.set(tokenKey(one.key), TOKEN);
+    await storage.delete(`deviceToken:route:${one.key}:device-2:operator`);
+    await storage.delete(`deviceToken:route:${one.key}:device-1:admin`);
+    expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+    await storage.delete(tokenKey(one.key));
+    expect(store.hasToken(one.key)).toBe(false);
   });
 
   it.skipIf(process.platform !== "darwin")(

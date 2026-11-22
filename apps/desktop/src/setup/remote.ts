@@ -216,6 +216,8 @@ export class RemoteSetup {
     channel: Channel | null;
     /** The client's selection this attempt's connect made, once it was asked for. */
     selection: number | null;
+    /** Puts back what this attempt's first write of its record replaced, token included. */
+    undo: (() => void) | null;
   } | null = null;
   private live: Live | null = null;
   /** The route the app's saved connection names while it isn't live: Remove and Review act on it. */
@@ -992,7 +994,8 @@ export class RemoteSetup {
     // The route is recorded before its first token, which only the store keeps. A store that
     // can't be written ends the attempt here: its forward goes and nothing is sent.
     try {
-      this.options.routes.put(record);
+      const undo = this.options.routes.put(record);
+      if (this.pending) this.pending.undo = undo;
     } catch {
       await this.letGoPending();
       if (attempt === this.attempt)
@@ -1039,7 +1042,7 @@ export class RemoteSetup {
       return null;
     }
     const forward = opened.forward;
-    this.pending = { forward, record, prior, channel: null, selection: null };
+    this.pending = { forward, record, prior, channel: null, selection: null, undo: null };
     const up = await this.waitUp(forward, attempt);
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
@@ -1222,10 +1225,17 @@ export class RemoteSetup {
     const id = pending.record.id;
     if (this.live?.record.id === id || this.currentPending()?.record.id === id) return;
     try {
-      if (pending.prior === "no-record" && (discardNewPairing || pending.record.identity === null))
-        this.options.routes.remove(id);
-      else if (discardNewPairing && pending.prior === "unpaired")
+      // A route this attempt recorded goes; what its record replaced (a route of the same id, on
+      // another gateway port or profile, with its token) comes back as it was.
+      if (
+        pending.prior === "no-record" &&
+        (discardNewPairing || pending.record.identity === null)
+      ) {
+        if (pending.undo) pending.undo();
+        else this.options.routes.remove(id);
+      } else if (discardNewPairing && pending.prior === "unpaired") {
         this.options.routes.deleteToken(pending.record.key);
+      }
     } catch {
       this.log("Couldn't remove this setup attempt's pairing data.");
     }

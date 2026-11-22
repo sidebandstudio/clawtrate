@@ -1718,6 +1718,42 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       await h.remote.closeAll();
     });
 
+    it("a Pair on another gateway port of a saved route's computer that can't be kept gives the saved route back as it was, with its token", async () => {
+      const h = host();
+      await connected(h);
+      const [saved] = h.routes.list();
+      const token = h.routes.getToken(saved!.key, "device-1", "operator");
+      expect(token).not.toBeNull();
+      await h.remote.closeAll();
+      // The same computer now runs its gateway on another port: the same route id, another key.
+      const second = await httpGateway();
+      stub.setStatus("default", statusJson({ port: second.port, home: t.home }));
+      const code = (port: number) =>
+        JSON.parse(qrJson(`ws://127.0.0.1:${port}`, BOOTSTRAP, Date.now() + 590_000));
+      stub.setCode("default", code(second.port));
+      const g = host({ dir: h.dir, storage: h.storage });
+      const put = g.routes.put.bind(g.routes);
+      g.routes.put = (record) => {
+        if (record.identity !== null) throw new Error("the disk is full");
+        return put(record);
+      };
+      try {
+        await g.remote.there("devbox");
+        expect(g.setup().look).toMatchObject({ outcome: "running", port: second.port });
+        await g.remote.connect();
+        await until(() => g.setup().phase === "failed", 30_000);
+      } finally {
+        g.routes.put = put;
+        stub.setStatus("default", running());
+        stub.setCode("default", code(gateway.port));
+        await second.close();
+      }
+      expect(g.setup().there?.failure?.kind).toBe("pairing-not-kept");
+      expect(g.routes.list()).toEqual([saved]);
+      expect(g.routes.getToken(saved!.key, "device-1", "operator")).toBe(token);
+      await g.remote.closeAll();
+    });
+
     it("a route the store can't write is never half saved: before pairing nothing is sent, after the gateway accepted Done isn't said, and either way the forward goes and nothing is kept", async () => {
       const forwardsSince = (from: number) =>
         started.slice(from).filter((run) => run.args.includes("-L"));
