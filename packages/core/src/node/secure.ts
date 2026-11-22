@@ -130,7 +130,17 @@ const record = (text: string): Record<string, unknown> | null => {
   }
 };
 
-type Settings = { url: string; token: string | null; suspended?: boolean };
+/**
+ * Gateway settings. `earlierRetired`, kept only in `state.json`, records in the settings commit
+ * itself that an earlier build's sealed token for this address was replaced: it is never used
+ * again, even if removing it failed or the process stopped before it was removed.
+ */
+type Settings = {
+  url: string;
+  token: string | null;
+  suspended?: boolean;
+  earlierRetired?: boolean;
+};
 
 function parseSettings(text: string): Settings | null {
   const parsed = record(text);
@@ -138,6 +148,7 @@ function parseSettings(text: string): Settings | null {
   const token = parsed.token ?? null;
   if (token !== null && typeof token !== "string") return null;
   if (parsed.suspended !== undefined && typeof parsed.suspended !== "boolean") return null;
+  if (parsed.earlierRetired !== undefined && parsed.earlierRetired !== true) return null;
   return { ...(parsed as Settings), token };
 }
 
@@ -317,7 +328,13 @@ function hasOwnToken(credentials: Credentials, url: string): boolean {
 function earlierToken(credentials: Credentials, saved: Settings | null): string | null {
   const kept = credentials.values[SETTINGS_KEY];
   const earlier = kept === undefined ? null : parseSettings(kept);
-  if (!earlier || !saved || earlier.url !== saved.url || hasOwnToken(credentials, earlier.url))
+  if (
+    !earlier ||
+    !saved ||
+    saved.earlierRetired === true ||
+    earlier.url !== saved.url ||
+    hasOwnToken(credentials, earlier.url)
+  )
     return null;
   return earlier.token;
 }
@@ -592,7 +609,9 @@ export function createSecureCredentials(options: {
         let token = typed?.url === saved.url ? typed.token : null;
         if (token === null && (await mode()).kind !== "locked")
           token = earlierToken(await credentials(), saved);
-        return JSON.stringify({ ...saved, token });
+        // The retirement mark is the store's own: never handed out.
+        const { earlierRetired: _retired, ...shown } = saved;
+        return JSON.stringify({ ...shown, token });
       },
       set: async (key, value) => {
         if (isCredentialKey(key)) {
@@ -622,11 +641,20 @@ export function createSecureCredentials(options: {
           (earlier.url !== next.url ||
             (next.token !== null && earlier.token !== next.token) ||
             hasOwnToken(await credentials(), earlier.url));
+        // The retirement is part of the settings commit, and stays while the address does.
+        const before =
+          settings[SETTINGS_KEY] === undefined ? null : parseSettings(settings[SETTINGS_KEY]);
+        const retired = replaced || (before?.earlierRetired === true && before.url === next.url);
+        const { earlierRetired: _asked, ...wanted } = next;
         await queued(async () => {
           await mode();
           await keepSettings({
             ...settings,
-            [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
+            [SETTINGS_KEY]: JSON.stringify({
+              ...wanted,
+              token: null,
+              ...(retired ? { earlierRetired: true } : {}),
+            }),
           });
           // A typed token stays in this process, for its address only, once its settings are kept.
           typed = next.token === null ? null : { url: next.url, token: next.token };

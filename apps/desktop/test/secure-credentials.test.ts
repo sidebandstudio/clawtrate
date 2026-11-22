@@ -348,6 +348,7 @@ describe("this device's credentials in secure storage", () => {
     expect(JSON.parse(state(dir).connection!)).toEqual({
       url: "ws://127.0.0.1:19002",
       token: null,
+      earlierRetired: true,
     });
     expect(await credentials.storage.get("connection")).toBe(a);
   });
@@ -558,6 +559,44 @@ describe("this device's credentials in secure storage", () => {
     },
   );
 
+  it("a same-address replacement retires the earlier token in its settings commit, so a failed or interrupted removal can't revive it", async () => {
+    const typed = JSON.stringify({ url: URL, token: "typed-new" });
+    const lockedAfterOpen = () => {
+      let reads = 0;
+      return fakeBox({
+        decrypt: async (data) => {
+          if ((reads += 1) > 1) throw new Error("locked");
+          return fakeBox().box.decrypt(data);
+        },
+      }).box;
+    };
+    // The earlier token's removal fails after the settings committed.
+    {
+      const { dir } = legacyFolder();
+      const one = open(dir, lockedAfterOpen());
+      expect(await one.storage.get("connection")).toBe(CONNECTION);
+      await one.storage.set("connection", typed);
+      expect(await one.storage.get("connection")).toBe(typed);
+      const relaunched = await open(dir, fakeBox().box).storage.get("connection");
+      expect(relaunched).toBe(NO_TOKEN);
+      expect(everything(dir)).not.toContain("typed-new");
+    }
+    // The process stops between the two writes: a fresh start while the removal is held.
+    {
+      const { dir } = legacyFolder();
+      const two = open(dir, fakeBox().box);
+      expect(await two.storage.get("connection")).toBe(CONNECTION);
+      const removal = deferred<void>();
+      fsHooks.holdRename = { match: (to) => to.endsWith(CREDENTIALS_FILE), gate: removal.promise };
+      const switching = two.storage.set("connection", typed);
+      await until(() => fsHooks.holdRename === null);
+      expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+      expect(everything(dir)).not.toContain("typed-new");
+      removal.resolve();
+      await switching.catch(() => {});
+    }
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
@@ -705,7 +744,7 @@ describe("this device's credentials in secure storage", () => {
       JSON.stringify({ url: "ws://127.0.0.1:19002", token: null }),
     );
     expect(state(dir).connection).toBe(
-      JSON.stringify({ url: "ws://127.0.0.1:19002", token: null }),
+      JSON.stringify({ url: "ws://127.0.0.1:19002", token: null, earlierRetired: true }),
     );
 
     // Once paired, the settings drop the token, and the earlier build's copy goes with it.
