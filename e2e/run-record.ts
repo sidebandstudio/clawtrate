@@ -7,7 +7,7 @@
 
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   processIdentity,
   processVerdict,
@@ -243,7 +243,7 @@ export function runIncludes(argv: readonly string[], file: string): boolean {
   const isOption = (arg: string | undefined) => arg !== undefined && arg.startsWith("-");
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "--") continue;
+    if (arg === "--") break;
     if (arg.startsWith("-")) {
       if (VALUE_OPTIONS.has(arg)) i++;
       else if (OPTIONAL_VALUE_OPTIONS.has(arg) && !isOption(args[i + 1])) i++;
@@ -253,11 +253,17 @@ export function runIncludes(argv: readonly string[], file: string): boolean {
     filters.push(/^(.*?):(\d+):?(\d+)?$/.exec(arg)?.[1] ?? arg);
   }
   if (filters.length === 0) return true;
+  const path = resolve(file);
+  const posixPath = path.split(sep).join("/");
   return filters.some((filter) => {
     try {
-      return new RegExp(filter).test(file);
+      const explicit = /^\/(.*)\/([gi]*)$/.exec(filter);
+      const pattern = explicit ? new RegExp(explicit[1]!, explicit[2]) : new RegExp(filter, "i");
+      if (pattern.test(path)) return true;
+      pattern.lastIndex = 0;
+      return posixPath !== path && pattern.test(posixPath);
     } catch {
-      return file.includes(filter);
+      return path.includes(filter) || posixPath.includes(filter);
     }
   });
 }

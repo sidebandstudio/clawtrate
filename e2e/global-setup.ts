@@ -182,7 +182,7 @@ export default async function globalSetup() {
   // The Computer tab's checks need the computer plugin: an instance of its own, started only
   // when this run can include them.
   const computer = `e2e-${run}-computer`;
-  const withComputer = runIncludes(process.argv, "e2e/work-computer.spec.ts");
+  const withComputer = runIncludes(process.argv, join(ROOT, "e2e/work-computer.spec.ts"));
   const own = [name, sentinel, accounts, computer];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;

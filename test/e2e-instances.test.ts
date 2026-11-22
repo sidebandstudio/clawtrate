@@ -1,5 +1,6 @@
 // The end-to-end run starts the instance with the computer plugin only when it can run the
 // Computer tab's checks: every run with no file filter, and a run whose filters match them.
+import { resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runIncludes } from "../e2e/run-record.ts";
 
@@ -29,6 +30,19 @@ describe("which end-to-end runs start the computer instance", () => {
     );
     expect(runIncludes(argv("--project", "a", "b", "-g", "x"), FILE)).toBe(true);
     expect(runIncludes(argv("--shuffle", "--project", "a", "work-computer"), FILE)).toBe(true);
+  });
+
+  it("ignores arguments after the Playwright separator", () => {
+    expect(runIncludes(argv("--", "run-label"), FILE)).toBe(true);
+    expect(runIncludes(argv("preview.spec.ts", "--", FILE), FILE)).toBe(false);
+  });
+
+  it("matches the absolute spec path and Playwright's regular-expression flags", () => {
+    const absolute = resolve(FILE).split(sep).join("/");
+    const escaped = absolute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(runIncludes(argv(`^${escaped}$`), FILE)).toBe(true);
+    expect(runIncludes(argv("WORK-COMPUTER"), FILE)).toBe(true);
+    expect(runIncludes(argv("/WORK-COMPUTER/"), FILE)).toBe(false);
   });
 
   it("a file filter with a line, or a line and column, still names its file", () => {

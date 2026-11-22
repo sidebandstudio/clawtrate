@@ -24,6 +24,7 @@ import {
   finishRun,
   newRun,
   readCommandPlace,
+  settleQuestionsOfEndedRuns,
   type ClawtrateState,
   type ComputerState,
   type QuestionCard,
@@ -438,7 +439,8 @@ export function computerFixture(
     answer: async (key, id, answers) => {
       await wait(300);
       const t = get().transcripts[key];
-      if (!t) throw new Error("gone");
+      if (!t?.questions.some((question) => question.id === id && question.status === "pending"))
+        throw new Error("The question is no longer pending.");
       // The option the person chose, by its label, as the gateway records it.
       const chosen = (q: QuestionCard) =>
         Object.fromEntries(
@@ -477,13 +479,16 @@ export function computerFixture(
       const update = (change: (run: Run) => Run) => {
         const t = get().transcripts[key];
         if (!t) return;
+        const runs = t.runs.map((run) => (runIds.includes(run.id) ? change(run) : run));
+        const { questions } = settleQuestionsOfEndedRuns({ ...t, runs });
         set({
           ...get(),
           transcripts: {
             ...get().transcripts,
             [key]: {
               ...t,
-              runs: t.runs.map((run) => (runIds.includes(run.id) ? change(run) : run)),
+              runs,
+              questions,
             },
           },
         });
@@ -585,7 +590,11 @@ export function computerFixture(
           leaseRenewed: generation.current !== "" && p.generation === generation.current,
         };
       case "clawtrate-computer.control.take": {
-        if (mode === "conflict" || mode === "conflict-window" || mode === "conflict-ends") {
+        if (
+          mode === "conflict" ||
+          mode === "conflict-window" ||
+          (mode === "conflict-ends" && !conflictEnded)
+        ) {
           // Another request is draining on the tab; in `conflict-ends` it ends after a moment.
           takes += 1;
           if (mode === "conflict-ends")

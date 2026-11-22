@@ -4,6 +4,7 @@
 // The fixture answers with the engine itself and a scripted computer plugin.
 // Test names carry the parity rows they prove.
 import { expect, test, type Page } from "@playwright/test";
+import type { ClawtrateBridge } from "../packages/core/src/bridge.ts";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
 import {
@@ -724,6 +725,26 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(page.getByTestId("computer-button")).toHaveCount(0);
   });
 
+  test("F-149: stopping a waiting fixture run closes its pending question", async ({ page }) => {
+    await openFixture(page, `${COMPUTER}&computer=stuck`, "light");
+    await tileReady(page);
+    const questionStatus = () =>
+      page.evaluate(() => {
+        const { clawtrateFixture } = window as unknown as { clawtrateFixture: ClawtrateBridge };
+        return clawtrateFixture
+          .getState()
+          .transcripts["agent:main:ebook-apps"]?.questions.find(
+            (question) => question.id === "ask_library_sign_in",
+          )?.status;
+      });
+    expect(await questionStatus()).toBe("pending");
+    await page.evaluate(() => {
+      const { clawtrateFixture } = window as unknown as { clawtrateFixture: ClawtrateBridge };
+      return clawtrateFixture.send({ type: "computerStopTask" });
+    });
+    await expect.poll(questionStatus).toBe("closed");
+  });
+
   test("F-149: after three refusals the viewer can stop the active run, wait for its end and take control", async ({
     page,
   }) => {
@@ -1335,6 +1356,8 @@ test.describe("closing edits", () => {
     );
     await expect(controlBar(page)).toHaveCount(0, { timeout: 10_000 });
     await expect(fullView(page).getByRole("button", { name: "Take control" })).toBeVisible();
+    await take(page);
+    await expect(controlBar(page)).toContainText("You have control");
   });
 
   test("F-142: scrolling reaches the page only while the picture has focus", async ({ page }) => {
