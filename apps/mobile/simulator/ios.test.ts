@@ -241,7 +241,7 @@ const HIDDEN_LINK_TEXT = "the quarterly report on heating costs";
 const HIDDEN_LINK = `[${HIDDEN_LINK_TEXT}](https://example.com/report)`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
 let browserUrl = "";
-let browserGet = false;
+let browserGet: { hasAuthorization: boolean; hasCookie: boolean } | undefined;
 let browserRequests = 0;
 /** A link on the listener whose text differs from its address only in the path's case. */
 const lookalike = () => ({
@@ -251,7 +251,10 @@ const lookalike = () => ({
 const browser = createServer((req, res) => {
   browserRequests += 1;
   if (req.method === "GET" && req.url === "/clawtrate-link-check") {
-    browserGet = req.headers.authorization === undefined && req.headers.cookie === undefined;
+    browserGet = {
+      hasAuthorization: req.headers.authorization !== undefined,
+      hasCookie: req.headers.cookie !== undefined,
+    };
   }
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("Clawtrate link check");
@@ -851,9 +854,12 @@ describe("the iOS app", () => {
     // the system starts Safari, which was not running before. The system says
     // so; the driver is not asked about a screen while Safari starts.
     expect(running(SAFARI)).toBe(false);
-    await steps("open-link", [tap(lit(browserUrl))]);
-    await until("Safari's loopback GET", async () => browserGet || null, 30_000);
-    await until("the browser to open the link", async () => running(SAFARI) || null, 30_000);
+    // The address wraps. Tap its first line, where the link glyphs are.
+    const address = (await boundsOf(new RegExp(`^${lit(browserUrl)}$`)))!;
+    await steps("open-link", [{ tapOn: { point: `${address.x1 + 24},${address.y1 + 10}` } }]);
+    await until("Safari to launch", async () => running(SAFARI), 90_000);
+    const request = await until("Safari's loopback GET", async () => browserGet, 90_000);
+    expect(request).toEqual({ hasAuthorization: false, hasCookie: false });
     // Back from the browser, the app is where it was.
     activate();
     await steps("back-from-browser", [
