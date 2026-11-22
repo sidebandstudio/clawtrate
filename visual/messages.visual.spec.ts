@@ -76,6 +76,45 @@ const unreached = (control: Locator) =>
     );
   });
 
+/**
+ * The points of a control's 44 px touch area, across its whole width, where a touch reaches a
+ * message's actions instead.
+ */
+const onBar = async (control: Locator, actions: Locator) =>
+  control.evaluate(
+    (el, bar) => {
+      const box = el.getBoundingClientRect();
+      const half = Math.max(box.width, 44) / 2;
+      const points: string[] = [];
+      for (let dx = 0.5 - half; dx < half; dx += 4)
+        for (const dy of [-21.5, -11, 0, 11, 21.5]) {
+          const x = box.left + box.width / 2 + dx;
+          const y = box.top + box.height / 2 + dy;
+          if (bar!.contains(document.elementFromPoint(x, y))) points.push(`${x},${y}`);
+        }
+      return points;
+    },
+    await actions.elementHandle(),
+  );
+
+/** The bubbles after a message that its actions lie over, by their first words. */
+const coversNext = (message: Locator) =>
+  message.evaluate((unit) => {
+    const bar = unit.querySelector(".msg-actions")!.getBoundingClientRect();
+    return [...document.querySelectorAll(".transcript .msg > .bubble")]
+      .filter((each) => unit.compareDocumentPosition(each) === Node.DOCUMENT_POSITION_FOLLOWING)
+      .filter((each) => {
+        const box = each.getBoundingClientRect();
+        return (
+          box.top < bar.bottom &&
+          box.bottom > bar.top &&
+          box.left < bar.right &&
+          box.right > bar.left
+        );
+      })
+      .map((each) => each.textContent!.slice(0, 30));
+  });
+
 /** A finger down on the screen at a point, as a phone's touch screen sends it, until it lifts. */
 async function fingerDown(page: Page, x: number, y: number): Promise<() => Promise<unknown>> {
   const cdp = await page.context().newCDPSession(page);
@@ -804,6 +843,7 @@ for (const width of [320, 390]) {
       const bar = (await actions.boundingBox())!;
       const box = (await bubble.boundingBox())!;
       expect(bar.y).toBeGreaterThanOrEqual(box.y + box.height);
+      expect(await coversNext(message)).toEqual([]);
     });
 
     test("F-066: when write access comes back while a held message's actions show, the wider bar moves so each button keeps its 44 px hit area", async ({
@@ -899,7 +939,7 @@ for (const width of [320, 390, 430]) {
       ["your", "row-6"],
       ["Otto's", "row-2"],
     ] as const)
-      test(`F-066 F-283: ${whose} message held just under the header shows its actions clear of its reactions and replies link, each control with its 44 px hit area`, async ({
+      test(`F-066 F-283: ${whose} message held just under the header shows its actions clear of its reactions and replies link and of the next message, each control with its 44 px hit area`, async ({
         page,
       }) => {
         await open(page);
@@ -924,6 +964,8 @@ for (const width of [320, 390, 430]) {
         const controls = message.locator('[data-testid="reaction"], [data-testid="replies-link"]');
         for (const control of [...(await buttons.all()), ...(await controls.all())])
           expect(await unreached(control)).toEqual([]);
+        // Not over the next message.
+        expect(await coversNext(message)).toEqual([]);
       });
 
     test("F-066 F-067 F-283: a held reply shows its actions clear of the quote over it and of the reactions over that, each button and reaction with its 44 px hit area", async ({
@@ -966,7 +1008,7 @@ for (const width of [320, 390, 430]) {
       ["read-only", "message-actions-read", 1],
       ["with write access", "message-actions", 3],
     ] as const)
-      test(`F-066: ${access}, when the screen gets shorter at its foot under a held message's actions, the bar moves so each button keeps its 44 px hit area`, async ({
+      test(`F-066: ${access}, when the screen gets shorter at its foot under a held message's actions, the bar moves so each button keeps its 44 px hit area, or shuts`, async ({
         page,
       }) => {
         await open(page, scene);
@@ -991,8 +1033,13 @@ for (const width of [320, 390, 430]) {
         await settle(page);
         for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
         await page.setViewportSize({ width, height: PHONE.height - 70 });
-        for (const button of await buttons.all())
-          await expect.poll(() => unreached(button)).toEqual([]);
+        // Where the message is left out of view, the bar shuts.
+        await expect
+          .poll(async () => {
+            if ((await actions.getAttribute("data-open")) !== "true") return [];
+            return (await Promise.all((await buttons.all()).map(unreached))).flat();
+          })
+          .toEqual([]);
       });
 
     test("F-066: lifting the finger that held a message presses nothing in its actions, though Reply opened under it", async ({
@@ -1044,6 +1091,36 @@ for (const width of [320, 390, 430]) {
       // A tap of its own on Reply opens the thread.
       await page.touchscreen.tap(x, y);
       await expect(page.getByRole("dialog", { name: "Thread" })).toBeVisible();
+    });
+
+    test("F-066 F-067 F-283: as a held reply scrolls toward the composer, its actions keep off the quote and the reactions over it, and shut once no clear place is left", async ({
+      page,
+    }) => {
+      await open(page);
+      const message = page.locator('[data-message="row-reply"]');
+      const actions = message.getByTestId("message-actions");
+      const buttons = actions.getByRole("button");
+      const quote = page
+        .getByTestId("transcript-turn")
+        .filter({ has: message })
+        .getByTestId("reply-quote");
+      const pills = page.locator('[data-message="row-9"]').getByTestId("reaction");
+      await expect(pills).toHaveCount(2);
+      await holdOn(message);
+      await expect(buttons).toHaveCount(3);
+      // 8 px at a time, until the reply, its quote and the reactions over it lie under the composer.
+      const transcript = page.locator(".transcript");
+      for (let step = 0; step < 40; step++) {
+        if ((await actions.getAttribute("data-open")) === "true")
+          for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+        for (const control of [quote, ...(await pills.all())])
+          expect(await onBar(control, actions)).toEqual([]);
+        await transcript.evaluate((el) => {
+          el.scrollTop -= 8;
+        });
+        await settle(page);
+      }
+      await expect(actions).not.toHaveAttribute("data-open", "true");
     });
   });
 }

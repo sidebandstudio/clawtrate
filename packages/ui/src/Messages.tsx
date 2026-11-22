@@ -171,24 +171,25 @@ export function MessageActions({
   /** The button whose menu is open, for focus to go back to. */
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
 
-  // Beside the message's bubble: to its right for the bot's, to its left for yours.
-  const measure = useCallback(() => {
+  // Beside the message's bubble: to its right for the bot's, to its left for yours. False, with
+  // the bar shut, when a finger's bar has no clear place.
+  const measure = useCallback((): boolean => {
     const turn = turnRef.current;
     const toolbar = bar.current;
-    if (!turn || !toolbar) return;
+    if (!turn || !toolbar) return false;
     const bubbles = turn.querySelectorAll<HTMLElement>(".msg > .bubble");
     const bubble = bubbles[bubbles.length - 1];
-    if (!bubble) return;
+    if (!bubble) return false;
     const turnBox = turn.getBoundingClientRect();
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
     // A bar a finger opened counts the touch areas its buttons reach past it, and keeps them 2 px
     // within what shows of the transcript, below the band kept clear for the header and the strip,
-    // which lie over it, and 2 px off those of the quotes, reactions and replies links: the
-    // message's own and its neighbours'. A mouse's or a pen's stays beside the bubble wherever
-    // there is room: above or below it, the pointer would leave the message on its way to the bar,
-    // and the bar would hide.
+    // which lie over it. It keeps them 2 px off those of the quotes, reactions and replies links
+    // near it, the message's own and its neighbours', and off the bubbles after the message. A
+    // mouse's or a pen's stays beside the bubble wherever there is room: above or below it, the
+    // pointer would leave the message on its way to the bar, and the bar would hide.
     const touch = toolbar.dataset.pointer === "touch";
     const clear = reachPast(toolbar) + 2;
     const scroller = turn.closest<HTMLElement>(".transcript");
@@ -228,20 +229,26 @@ export function MessageActions({
           }
       }
     }
-    const controls = rows
-      .flatMap((row) => [...row.querySelectorAll(".reply-quote, .reaction, .replies-link")])
-      .filter(near);
-    const taken = controls.map((control) => {
-      const area = touchArea(control);
-      return {
+    const all = (selector: string) =>
+      rows.flatMap((row) => [...row.querySelectorAll(selector)]).filter(near);
+    const controls = all(".reply-quote, .reaction, .replies-link");
+    const around = (area: { top: number; right: number; bottom: number; left: number }) => ({
+      top: area.top - turnBox.top - clear,
+      right: area.right - turnBox.left + clear,
+      bottom: area.bottom - turnBox.top + clear,
+      left: area.left - turnBox.left - clear,
+    });
+    const taken = [
+      ...controls.map((control) => ({
         // The message's own: the quote over it, and its reactions and replies link under it.
         side: control === quote ? "over" : turn.contains(control) ? "under" : null,
-        top: area.top - turnBox.top - clear,
-        right: area.right - turnBox.left + clear,
-        bottom: area.bottom - turnBox.top + clear,
-        left: area.left - turnBox.left - clear,
-      };
-    });
+        ...around(touchArea(control)),
+      })),
+      ...all(".msg > .bubble")
+        // After the message, and not its own.
+        .filter((each) => turn.compareDocumentPosition(each) === Node.DOCUMENT_POSITION_FOLLOWING)
+        .map((each) => ({ side: null, ...around(each.getBoundingClientRect()) })),
+    ];
     const over = taken.filter((area) => area.side === "over");
     const under = taken.filter((area) => area.side === "under");
     const fits = (top: number, left: number) =>
@@ -255,28 +262,27 @@ export function MessageActions({
             left + width <= area.left ||
             left >= area.right,
         ));
+    const fitted = (top: number, left: number) => (setPlace({ top, left }), true);
     const left =
       role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
     const max = turnBox.width - width;
     const top = box.top - turnBox.top;
-    if (left >= 0 && left <= max && fits(top, left)) return setPlace({ top, left });
+    if (left >= 0 && left <= max && fits(top, left)) return fitted(top, left);
     // Within the column: where there is no room beside it, it sits at the bubble's outer corner,
     // above the message, else below it, else inside it at the top of what shows of it, under its
-    // quote.
+    // quote. A finger's bar with none of these clear is shut: scrolled to the transcript's foot or
+    // under the header, a message leaves its bar no room.
     const corner = Math.max(
       0,
       Math.min(max, role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width),
     );
     const above = Math.min(top - 4, ...over.map((area) => area.top)) - height;
     const below = Math.max(box.bottom - turnBox.top + 4, ...under.map((area) => area.bottom));
-    setPlace({
-      top: fits(above, corner)
-        ? above
-        : fits(below, corner)
-          ? below
-          : Math.min(last, Math.max(first, top, ...over.map((area) => area.bottom))),
-      left: corner,
-    });
+    const inside = Math.max(first, top, ...over.map((area) => area.bottom));
+    for (const each of [above, below, inside]) if (fits(each, corner)) return fitted(each, corner);
+    setHeld(false);
+    setMenu(null);
+    return false;
   }, [turnRef, role]);
 
   // A bar whose width changes while it shows, as write access comes or goes, or whose column
@@ -340,7 +346,7 @@ export function MessageActions({
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
       timer = setTimeout(() => {
         if (bar.current) bar.current.dataset.pointer = "touch";
-        measure();
+        if (!measure()) return;
         setHeld(true);
         for (const type of events) window.addEventListener(type, swallow, true);
       }, LONG_PRESS_MS);
