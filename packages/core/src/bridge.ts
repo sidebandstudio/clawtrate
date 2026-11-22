@@ -13,6 +13,8 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
+import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -51,6 +53,12 @@ import {
   type RoutineWrite,
   type RunConversation,
 } from "./routines.ts";
+import {
+  MAX_SEARCH_QUERY_CHARS,
+  type FileSearch,
+  type MessageSearch,
+  type RoutineSearch,
+} from "./search.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
@@ -64,11 +72,13 @@ import {
   DEFAULTS_CHOICES,
   MAX_MACHINE_NAME_CHARS,
   MAX_PATH_CHARS,
+  PLACEMENT_PARTS,
   type ApprovalsFile,
-  type BotPlacement,
   type ConfigSave,
   type DefaultsChoice,
   type MachinesView,
+  type PlacementPart,
+  type PlacementParts,
 } from "./machines.ts";
 
 export type BridgeCommand =
@@ -87,6 +97,8 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
+  /** Read a task this viewer holds again, as the retry of a failed history read. */
+  | { type: "reloadSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
   | { type: "requestAccess"; tier?: "admin" | "pairing" }
@@ -315,6 +327,34 @@ export type BridgeCommand =
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
   | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  /**
+   * The Computer tab (`computer.ts`). `computerShow` makes this viewer's pane
+   * about one of its open tasks and answers the pane's id in
+   * `state.computer.panes`; the others act on that pane. Leaving gives
+   * control back first and ends the view.
+   */
+  | { type: "computerShow"; key: string }
+  | { type: "computerLeave" }
+  | { type: "computerTabs" }
+  | { type: "computerChoose"; targetId: string }
+  | { type: "computerWatch" }
+  | { type: "computerStopWatching" }
+  /** The view's newest frame once newer than `after`; null when there is none within the wait. */
+  | { type: "computerFrame"; n: number; after: number }
+  | { type: "computerTake" }
+  | { type: "computerCancelTake" }
+  /** Input for the held tab: sent only while this viewer holds the lease. */
+  | { type: "computerInput"; input: ComputerInput }
+  /** Give control back; with `answer`, the question's option goes once the release is confirmed. */
+  | {
+      type: "computerRelease";
+      answer: { questionId: string; itemId: string; option: number } | null;
+    }
+  | { type: "computerCheck" }
+  | { type: "computerDismiss" }
+  | { type: "computerStopTask" }
+  /** Where a task's bot runs its commands, and the named nodes' records, read now. */
+  | { type: "readMachine"; key: string; nodes: string[]; probe: boolean }
   /** A bot's usage, or every bot's (`botId` null), for a period in this person's time zone; read now. */
   | {
       type: "readUsage";
@@ -329,16 +369,24 @@ export type BridgeCommand =
   | { type: "refreshUsage" }
   /** The routines a budget can be set for, read now. */
   | { type: "listRoutines" }
+  // Search (search.md). Read now, never kept; the query is never logged.
+  /** `sessions.search` across bots, or one bot's with `botId`. */
+  | { type: "searchMessages"; query: string; botId: string | null }
+  /** One page of `cron.list` matching the query. */
+  | { type: "searchRoutines"; query: string; offset: number }
+  /** One bot's file names, through its newest listed task. */
+  | { type: "searchFiles"; query: string; botId: string }
   // Where a bot runs and Machines (controls.md sections 14 and 15). Read now, never kept;
   // writes are read back before they answer, and need admin (or pairing for names and removals).
-  | { type: "readPlacement"; botId: string }
+  /** One part of where a bot runs; the parts are read apart, so one that hangs holds back only itself. */
+  | { type: "readPlacement"; botId: string; part: PlacementPart }
   | { type: "readMachines" }
   | {
       type: "setCommandMachine";
       botId: string;
       host: "gateway" | "node";
       nodeId: string | null;
-      /** The configuration revision the page showed (`BotPlacement.configHash`). */
+      /** The configuration revision the page showed (the commands part's `configHash`). */
       baseHash: string | null;
     }
   | { type: "setBotWorkspace"; botId: string; path: string }
@@ -431,49 +479,84 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                       }
                                                                     ? BudgetRoutine[]
                                                                     : C extends {
-                                                                          type: "readPlacement";
+                                                                          type: "searchMessages";
                                                                         }
-                                                                      ? BotPlacement
+                                                                      ? MessageSearch
                                                                       : C extends {
-                                                                            type: "readMachines";
+                                                                            type: "searchRoutines";
                                                                           }
-                                                                        ? MachinesView
+                                                                        ? RoutineSearch
                                                                         : C extends {
-                                                                              type: "setCommandMachine";
+                                                                              type: "searchFiles";
                                                                             }
-                                                                          ? ConfigSave
+                                                                          ? FileSearch
                                                                           : C extends {
-                                                                                type: "setBotWorkspace";
+                                                                                type: "readPlacement";
+                                                                                part: infer P extends
+                                                                                  PlacementPart;
                                                                               }
-                                                                            ? {
-                                                                                workspace:
-                                                                                  string | null;
-                                                                                asTyped: boolean;
-                                                                              }
+                                                                            ? PlacementParts[P]
                                                                             : C extends {
-                                                                                  type: "setMachineDefaults";
+                                                                                  type: "readMachines";
                                                                                 }
-                                                                              ? ApprovalsFile
+                                                                              ? MachinesView
                                                                               : C extends {
-                                                                                    type: "refreshCheckIns";
-                                                                                    botId: string;
+                                                                                    type: "setCommandMachine";
                                                                                   }
-                                                                                ? CheckInRead | null
+                                                                                ? ConfigSave
                                                                                 : C extends {
-                                                                                      type: "listMemory";
+                                                                                      type: "setBotWorkspace";
                                                                                     }
-                                                                                  ? MemoryList
+                                                                                  ? {
+                                                                                      workspace:
+                                                                                        | string
+                                                                                        | null;
+                                                                                      asTyped: boolean;
+                                                                                    }
                                                                                   : C extends {
-                                                                                        type: "readMemory";
+                                                                                        type: "setMachineDefaults";
                                                                                       }
-                                                                                    ? MemoryDocument
+                                                                                    ? ApprovalsFile
                                                                                     : C extends {
-                                                                                          type:
-                                                                                            | "checkRoutineCreate"
-                                                                                            | "checkRoutineUpdate";
+                                                                                          type: "computerShow";
                                                                                         }
-                                                                                      ? RoutineSaveCheck
-                                                                                      : void;
+                                                                                      ? {
+                                                                                          viewer: string;
+                                                                                        }
+                                                                                      : C extends {
+                                                                                            type: "computerFrame";
+                                                                                          }
+                                                                                        ? ComputerFrame | null
+                                                                                        : C extends {
+                                                                                              type: "computerInput";
+                                                                                            }
+                                                                                          ? {
+                                                                                              sent: boolean;
+                                                                                            }
+                                                                                          : C extends {
+                                                                                                type: "readMachine";
+                                                                                              }
+                                                                                            ? MachineFacts
+                                                                                            : C extends {
+                                                                                                  type: "refreshCheckIns";
+                                                                                                  botId: string;
+                                                                                                }
+                                                                                              ? CheckInRead | null
+                                                                                              : C extends {
+                                                                                                    type: "listMemory";
+                                                                                                  }
+                                                                                                ? MemoryList
+                                                                                                : C extends {
+                                                                                                      type: "readMemory";
+                                                                                                    }
+                                                                                                  ? MemoryDocument
+                                                                                                  : C extends {
+                                                                                                        type:
+                                                                                                          | "checkRoutineCreate"
+                                                                                                          | "checkRoutineUpdate";
+                                                                                                      }
+                                                                                                    ? RoutineSaveCheck
+                                                                                                    : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -749,6 +832,18 @@ function providerId(value: unknown): string {
 
 function profileId(value: unknown): string {
   if (typeof value !== "string" || !PROFILE_PATTERN.test(value)) throw new Error("invalid account");
+  return value;
+}
+
+/** A search's text: trimmed, not empty, within the gateway's limit. Never part of an error. */
+function searchQuery(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_SEARCH_QUERY_CHARS ||
+    value.trim() !== value ||
+    value.length === 0
+  )
+    throw new Error("invalid search");
   return value;
 }
 
@@ -1232,6 +1327,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "openSession":
     case "closeSession":
+    case "reloadSession":
       return { type: command.type, key: sessionKey(command.key) };
     case "listTaskFiles":
       return { type: "listTaskFiles", key: sessionKey(command.key) };
@@ -1327,6 +1423,53 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "restoreTask":
     case "deleteTask":
       return { type: command.type, key: sessionKey(command.key) };
+    case "computerShow":
+      return { type: "computerShow", key: sessionKey(command.key) };
+    case "computerLeave":
+    case "computerTabs":
+    case "computerWatch":
+    case "computerStopWatching":
+    case "computerTake":
+    case "computerCancelTake":
+    case "computerCheck":
+    case "computerDismiss":
+    case "computerStopTask":
+      return { type: command.type };
+    case "computerChoose":
+      return { type: "computerChoose", targetId: id(command.targetId, "tab id") };
+    case "computerFrame":
+      return {
+        type: "computerFrame",
+        n: count(command.n, Number.MAX_SAFE_INTEGER, "view"),
+        after: count(command.after, Number.MAX_SAFE_INTEGER, "frame"),
+      };
+    case "computerInput":
+      return { type: "computerInput", input: parseInput(command.input) };
+    case "computerRelease": {
+      const answer = command.answer;
+      if (answer === null || answer === undefined) return { type: "computerRelease", answer: null };
+      const a = answer as Record<string, unknown>;
+      if (typeof a.itemId !== "string" || !QUESTION_ID_PATTERN.test(a.itemId))
+        throw new Error("invalid answers");
+      return {
+        type: "computerRelease",
+        answer: {
+          questionId: id(a.questionId, "question id"),
+          itemId: a.itemId,
+          option: count(a.option, MAX_PROTOCOL_OPTIONS - 1, "option"),
+        },
+      };
+    }
+    case "readMachine": {
+      const nodes = command.nodes;
+      if (!Array.isArray(nodes) || nodes.length > 8) throw new Error("invalid nodes");
+      return {
+        type: "readMachine",
+        key: sessionKey(command.key),
+        nodes: nodes.map((each) => id(each, "node")),
+        probe: command.probe === true,
+      };
+    }
     case "changeSidebar":
       return {
         type: "changeSidebar",
@@ -1353,8 +1496,30 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "refreshUsage":
     case "listRoutines":
       return { type: command.type };
+    case "searchMessages":
+      return {
+        type: "searchMessages",
+        query: searchQuery(command.query),
+        botId: command.botId === null ? null : botId(command.botId),
+      };
+    case "searchRoutines":
+      return {
+        type: "searchRoutines",
+        query: searchQuery(command.query),
+        offset: count(command.offset, 1_000_000, "offset"),
+      };
+    case "searchFiles":
+      return {
+        type: "searchFiles",
+        query: searchQuery(command.query),
+        botId: botId(command.botId),
+      };
     case "readPlacement":
-      return { type: "readPlacement", botId: botId(command.botId) };
+      return {
+        type: "readPlacement",
+        botId: botId(command.botId),
+        part: oneOf(command.part, PLACEMENT_PARTS, "part"),
+      };
     case "readMachines":
       return { type: "readMachines" };
     case "setCommandMachine": {
@@ -1437,6 +1602,8 @@ export type BridgeSession = {
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>>;
   /** The tasks this viewer has open: what its snapshots carry. */
   openTasks(): ReadonlySet<string>;
+  /** This viewer's pane in `state.computer.panes`, once it showed the Computer tab: the only one its snapshots carry. */
+  computerViewer(): string | null;
   dispose(): void;
 };
 
@@ -1453,14 +1620,19 @@ export function createBridgeSession(
  * find any it does not name.
  */
 class ViewerSession implements BridgeSession {
-  /** The tasks this viewer has open, at most `openLimit`. */
-  private readonly open = new Set<string>();
+  /**
+   * The tasks this viewer has open, at most `openLimit`, each with the owner of what this opening
+   * asked for: closing the task withdraws what the gateway has not been asked yet (a Stop).
+   */
+  private readonly open = new Map<string, object>();
   /** Task creations under way: they count against this viewer's open tasks before the gateway is asked. */
   private creating = 0;
   private disposed = false;
   private inFlight = 0;
   /** Names this viewer to the client, so what it asked for is withdrawn when it goes away. */
   private readonly owner = {};
+  /** This viewer's Computer pane, named the first time this viewer shows the Computer tab. */
+  private viewerId: string | null = null;
   private readonly client: ClawtrateClient;
   private readonly policy: BridgePolicy;
 
@@ -1471,6 +1643,11 @@ class ViewerSession implements BridgeSession {
     this.client = client;
     this.policy = policy;
     this.openLimit = hostLimit(policy.maxOpenTasks, MAX_VIEWER_OPEN_TASKS, "maxOpenTasks");
+  }
+
+  private get viewer(): string {
+    this.viewerId ??= this.client.computerViewer();
+    return this.viewerId;
   }
 
   /** Task commands act only on tasks this viewer has open. */
@@ -1505,7 +1682,7 @@ class ViewerSession implements BridgeSession {
     }
     // The client already counts this viewer's interest in the new task.
     if (this.disposed || this.open.has(key)) this.client.closeSession(key);
-    else this.open.add(key);
+    else this.open.set(key, {});
     return { key };
   }
 
@@ -1548,12 +1725,23 @@ class ViewerSession implements BridgeSession {
         if (!this.open.has(command.key)) {
           this.checkRoom();
           client.openSession(command.key);
-          this.open.add(command.key);
+          this.open.set(command.key, {});
         }
         return;
-      case "closeSession":
-        if (this.open.delete(command.key)) client.closeSession(command.key);
+      case "closeSession": {
+        const opening = this.open.get(command.key);
+        if (!opening) return;
+        this.open.delete(command.key);
+        client.withdraw(opening);
+        // This viewer's Computer pane on that task is left first: control is given back, the view ends.
+        if (this.viewerId && client.state.computer?.panes[this.viewerId]?.key === command.key)
+          client.computerLeave(this.viewerId);
+        client.closeSession(command.key);
         return;
+      }
+      case "reloadSession":
+        if (!this.open.has(command.key)) throw new Error("That task isn't open in this view.");
+        return client.reloadSession(command.key);
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":
@@ -1827,6 +2015,44 @@ class ViewerSession implements BridgeSession {
         return client.listArchived(command.botId);
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
+      case "computerShow":
+        client.computerShow(this.viewer, this.mine(command.key));
+        return { viewer: this.viewer };
+      case "computerLeave":
+        return client.computerLeave(this.viewer);
+      case "computerTabs":
+        return client.computerTabs(this.viewer);
+      case "computerChoose":
+        return client.computerChoose(this.viewer, command.targetId);
+      case "computerWatch":
+        return client.computerWatch(this.viewer);
+      case "computerStopWatching":
+        return client.computerStopWatching(this.viewer);
+      case "computerFrame":
+        return client.computerFrame(this.viewer, command.n, command.after);
+      case "computerTake":
+        return client.computerTake(this.viewer);
+      case "computerCancelTake":
+        return client.computerCancelTake(this.viewer);
+      case "computerInput":
+        return { sent: client.computerInput(this.viewer, command.input) };
+      case "computerRelease":
+        return client.computerRelease(this.viewer, command.answer);
+      case "computerCheck":
+        return client.computerCheck(this.viewer);
+      case "computerDismiss":
+        return client.computerDismiss(this.viewer);
+      case "computerStopTask": {
+        // Only the task of this viewer's pane, while this viewer has that task open.
+        const key = this.viewerId ? client.state.computer?.panes[this.viewerId]?.key : undefined;
+        if (key) this.mine(key);
+        // Asked for this opening of the task: closing it withdraws a Stop not yet sent.
+        return client.computerStopTask(this.viewer, {
+          owner: (key && this.open.get(key)) || owner,
+        });
+      }
+      case "readMachine":
+        return client.readMachine(this.mine(command.key), command.nodes, command.probe);
       case "readUsage":
         return client.readUsage({
           botId: command.botId,
@@ -1840,8 +2066,14 @@ class ViewerSession implements BridgeSession {
         return client.refreshUsage();
       case "listRoutines":
         return client.listRoutines();
+      case "searchMessages":
+        return client.searchMessages(command.query, command.botId);
+      case "searchRoutines":
+        return client.searchRoutines(command.query, command.offset);
+      case "searchFiles":
+        return client.searchFiles(command.query, command.botId);
       case "readPlacement":
-        return client.readPlacement(command.botId);
+        return client.readPlacement(command.botId, command.part);
       case "readMachines":
         return client.readMachines();
       case "setCommandMachine":
@@ -1884,7 +2116,11 @@ class ViewerSession implements BridgeSession {
   }
 
   openTasks(): ReadonlySet<string> {
-    return this.open;
+    return new Set(this.open.keys());
+  }
+
+  computerViewer(): string | null {
+    return this.viewerId;
   }
 
   dispose(): void {
@@ -1892,7 +2128,13 @@ class ViewerSession implements BridgeSession {
     this.disposed = true;
     // What this viewer asked for and the gateway has not been asked yet goes with it, now.
     this.client.withdraw(this.owner);
-    for (const key of this.open) this.client.closeSession(key);
+    // Control is given back and the view ends, as on leaving the tab.
+    const viewer = this.viewerId;
+    if (viewer) this.client.computerDispose(viewer);
+    for (const [key, opening] of this.open) {
+      this.client.withdraw(opening);
+      this.client.closeSession(key);
+    }
     this.open.clear();
   }
 }

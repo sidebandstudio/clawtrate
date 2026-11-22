@@ -38,7 +38,7 @@ Each of these is a rule a reviewer can check.
 
 ## 2. Tokens
 
-The token names the shell uses are kept, so its rules pick up the new values. `prototype/css/tokens.css` is the file to copy. The "Old" columns below are the values in `packages/ui/src/styles/tokens.css` when this was written; they show what changes and are not a patch to apply. In the app, keep the shell's selectors (`:root`, the `prefers-color-scheme` block and `:root[data-theme]`); the prototype scopes themes to any element with `data-theme` only so that its gallery can show both at once.
+The token names the shell uses are kept, so its rules pick up the new values. `prototype/css/tokens.css` is the file to copy. The "Old" columns below are the values in `packages/ui/src/styles/tokens.css` when this was written; they show what changes and are not a patch to apply. The app opens in the dark theme; Light and Match the system are offered in the gateway menu, and a stored choice wins. In the app, `:root` carries the dark tokens, `:root[data-theme="light"]` the light ones, and a `prefers-color-scheme: light` block gives the light ones to `:root[data-theme="system"]`. The prototype scopes themes to any element with `data-theme` only so that its gallery can show both at once.
 
 ### Colour, changed values
 
@@ -373,11 +373,11 @@ One row: a status dot, the gateway's name (14/500) with its state under it (12, 
 
 The row is a menu button. It opens the **gateway menu**, which replaces the shell's theme and disconnect icon buttons until Settings exists:
 
-| Part       | Content                                                                                    |
-| ---------- | ------------------------------------------------------------------------------------------ |
-| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version |
-| Theme      | Three radio items: "Match the system", "Light", "Dark". The current one has a check.       |
-| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.               |
+| Part       | Content                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Head       | The gateway's name; under it the state, the address and, when known, the gateway's version                                |
+| Theme      | Three radio items: "Match the system", "Light", "Dark". Dark carries the note "The default". The current one has a check. |
+| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen.                                              |
 
 - Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row. In the one-pane layout it opens downward from the round button at the top left, which carries the same status dot.
 - Keyboard: Enter, Space, Up or Down on either trigger (the footer row, or the round button in the one-pane layout) opens it and puts focus on the checked theme. Inside, Up and Down move between items, wrapping; Home and End go to the ends; Enter or Space chooses. Escape closes it and returns focus to the trigger that opened it; Tab or a click outside closes it.
@@ -696,7 +696,7 @@ Test ids stay on the element that takes over each role: `bot-list`, `bot`, `task
    - `useSelection`: selecting a task under any visible bot must be one operation. Replace `selectTask(key)`, which is bound to the current bot, with `selectTask(botId, key)`: mark the task being left as read, set the bot, store the task as that bot's remembered task, and persist both. `selectBot(id)` becomes "select that bot's remembered task, or else its first"; for a bot with no tasks it selects the bot alone. Keep `taskByBot`: it is the remembered task and it wins over the most recent. Exactly the selected task's session stays open on the host, as now. Add the set of bots unfolded by hand and whether the open bot was folded by hand, both persisted. Compute a bot's summary (latest activity, any unread by `isUnread`, failed before running) from all of its tasks; it must accept an empty list.
    - `Shell`: selecting a bot no longer sets `view` to `"list"`. In the one-pane layout a bot with several tasks unfolds in place, and selecting a task, or a bot with one task, sets `view` to `"detail"`. Change Back's label and title to "Back to bots" here, since the list it returns to is now the rail.
    - Footer: make `.gateway-pill` a menu button named "<gateway>, connected. Open the gateway menu." (the state word follows `statusLabel`), and add the gateway menu (section 7) with the gateway's details in its head, the three theme items and Disconnect, which sends the existing `disconnect`. Remove the two icon buttons.
-   - `preferences.ts`: `useTheme` returns the choice and a setter that takes a `ThemeChoice`, in place of the cycle function. Choosing "Match the system" stores no theme and removes `data-theme`, so the existing CSS that follows the OS applies; "Light" and "Dark" store and set it. `?theme=` still overrides. The radios never call a cycle.
+   - `preferences.ts`: `useTheme` returns the choice and a setter that takes a `ThemeChoice`, in place of the cycle function. With nothing stored the choice is "Dark". Each choice is stored and set as `data-theme`; "Match the system" turns light only where the OS asks for light. `?theme=` still overrides. The radios never call a cycle.
    - `.rail-tooltip`: show it for a task whose title is truncated (`scrollWidth` greater than `clientWidth`), on hover and on keyboard focus, at any width. Drop the `max-width: 979px` test in `showTip`.
    - After this step the app is two columns with the old conversation and the old Work pane in the second. Work still docks at 1320 px by the old rules, where the conversation is 720 px. At phone width the rail is the list and Back returns to it.
    - Tests: the table below, rows 1, 2, 3 and 5. `contrast.test.ts`: remove `bg-list` from `SURFACES`.
@@ -761,7 +761,7 @@ Test ids stay on the element that takes over each role: `bot-list`, `bot`, `task
 Additions, each in the step that makes it true:
 
 - Step 4: at 600 px, tapping a bot with several tasks unfolds it without leaving the list; tapping a task opens the conversation; "Back to bots" returns with the bot still unfolded. Folding the open bot leaves the conversation's `h1` unchanged.
-- Step 4: the gateway menu opens with ArrowUp and with ArrowDown from its button with focus on the checked theme; choosing "Dark" sets `data-theme="dark"` and survives a reload; "Match the system" removes it.
+- Step 4: the gateway menu opens with ArrowUp and with ArrowDown from its button with focus on the checked theme; with nothing stored the page is dark; choosing "Dark" sets `data-theme="dark"` and survives a reload; "Match the system" sets `data-theme="system"`.
 - Step 5: while the drawer is open the pane has `role="dialog"` and `.rail` is inert; Tab from the last control in the pane returns to its first. With the pane open and docked at 1440 px and focus in the conversation, resizing to 1100 px moves focus to "Close work panel"; resizing back leaves the pane open, removes the role, and does not move focus.
 - Step 6: with the bridge proxy's `reconnecting` state and Work open at 1240 px, the strip's centre is within 1 px of the conversation's centre, and the element at the centre of "Retry now" is that button. With the transcript scrolled, the transcript's computed mask is transparent down to the strip's foot.
 - Step 6: opening a tool call's group and then the call shows "Arguments" and "Result"; a call with an error shows "failed" and "Error".

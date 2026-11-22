@@ -9,6 +9,7 @@ import type { TaskActivity } from "./runs.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
+import type { ComputerState } from "./computer.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
 export type ConnectionStatus =
@@ -268,6 +269,11 @@ export type TranscriptItem = {
    * message this client sent (`namesOutgoing`).
    */
   idempotencyKey?: string;
+  /**
+   * History places this user row inside a run that began before it: the gateway took it into
+   * that run as a steer (docs/research/steer-stop.md). Present and true only then.
+   */
+  steered?: boolean;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
@@ -396,6 +402,13 @@ export type ClawtrateState = {
    */
   sidebar?: SidebarState;
   /**
+   * The Work pane's Computer tab (`computer.ts`): whether the gateway has the
+   * computer plugin, the latest control event of each bot's tab, and each
+   * viewer's pane. Never a ticket, a frame or a lease's generation of this
+   * device's own. Absent where a host does not show it.
+   */
+  computer?: ComputerState;
+  /**
    * Setting up on the host's own computer (`setup.ts`): the look's result and
    * where Connect stands. Written by the host alone; absent where a host
    * offers no setup.
@@ -501,5 +514,6 @@ export const initialState: ClawtrateState = {
   routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
+  computer: { plugin: null, control: [], panes: {} },
   usage: initialUsage,
 };

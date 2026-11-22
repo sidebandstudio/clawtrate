@@ -35,12 +35,13 @@ export async function leaveIdle(call: GatewayCall, since: number, waitMs = 60_00
       await call("chat.abort", { sessionKey: key }).catch(() => {});
       const history = await call<{
         inFlightRun?: unknown;
-        pendingInputs?: { items?: unknown[] };
+        pendingInputs?: { items?: Array<{ state?: string }> };
       }>("chat.history", { sessionKey: key, limit: 1 }).catch(() => null);
+      // An input the gateway withdrew stays listed, cancelled, and is not waiting.
       idle =
         history !== null &&
         !history.inFlightRun &&
-        (history.pendingInputs?.items ?? []).length === 0;
+        (history.pendingInputs?.items ?? []).every((item) => item.state === "cancelled");
       if (!idle) await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (!idle) left.push(`a run or held message in ${key}`);

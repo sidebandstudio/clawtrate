@@ -19,6 +19,7 @@ Every document in the repository, by what you want to do.
 - [Architecture](architecture.md): the pieces and how they talk to each other.
 - [Decisions](decisions.md): versions, protocol choices and the reasons behind them.
 - [The engine's guide](../packages/core/README.md): the bridge, the commands the interface sends and the state it reads, for building the interface on `@clawtrate/core`.
+- [The relay protocol](../packages/relay-protocol/README.md): frames, relay messages, the connector's register proof and the end-to-end Noise channel for reaching a gateway through the relay.
 - [The development gateway tool](../tools/dev-gateway/README.md): scripted provider accounts, sign-ins and the account checks.
 - [The computer plugin](../plugins/clawtrate-computer/README.md): a bot's own browser, watched live and taken over by a person.
 - [The rules plugin](../plugins/clawtrate-tool-rules/README.md): what each bot may do with its tools, asked first or never, while the plugin runs.
@@ -37,6 +38,7 @@ Every document in the repository, by what you want to do.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
+- [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
 ## Research
@@ -48,6 +50,10 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Search](research/search.md): what the gateway's message search matches, its order and limits, what a narrower search finds, its cost, and the file and routine lists, from OpenClaw's source and a development instance.
 - `research/search/`: the probe behind the search note.
+- [Steering and Stop](research/steer-stop.md): what the gateway records about a message sent during a run, how a held steer is withdrawn, and what Stop reaches, from OpenClaw's source and a development instance.
+- `research/steer-stop/`: the probe behind the steering and Stop note.
+- [Bots that manage themselves](research/bot-self-management.md): what an OpenClaw plugin can do to change bots, with whose authority, with no tools, and over MCP, from OpenClaw's source and a development instance.
+- `research/bot-self-management/`: a gateway-free stand-in for the contract that note leads to.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 

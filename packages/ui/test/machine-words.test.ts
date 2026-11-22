@@ -2,7 +2,7 @@
 // 14 and 15): the row's value as the stored setting by itself, a machine's
 // state as last seen, and an approvals file's levels as stored.
 import { describe, expect, it } from "vitest";
-import type { BotPlacement, CommandPlace, NodeFacts } from "@clawtrate/core";
+import type { CommandPlace, NodeFacts } from "@clawtrate/core";
 import { hostWords, levelsWords, nodeState, runsOnValue } from "../src/machines/words.ts";
 
 const node: NodeFacts = {
@@ -34,18 +34,11 @@ const place = (over: Partial<CommandPlace>): CommandPlace => ({
 
 describe("the machines' words", () => {
   it("F-046 F-272: the row names the stored command machine and the bots with the same setting", () => {
-    const placement = {
-      commands: place({ host: "node", hostSupported: true, node, nodeSelector: node.id }),
-      sameSetting: { machine: ["pip"], workspace: ["pip", "marlow"] },
-    } as unknown as BotPlacement;
-    expect(runsOnValue(placement, (id) => id[0]!.toUpperCase() + id.slice(1))).toBe(
-      "Command setting: media-box · Same setting as Pip and Marlow",
-    );
-    const unset = {
-      commands: place({}),
-      sameSetting: { machine: [], workspace: [] },
-    } as unknown as BotPlacement;
-    expect(runsOnValue(unset, (id) => id)).toBe("Command setting: not set");
+    const onNode = place({ host: "node", hostSupported: true, node, nodeSelector: node.id });
+    expect(
+      runsOnValue(onNode, ["pip", "pip", "marlow"], (id) => id[0]!.toUpperCase() + id.slice(1)),
+    ).toBe("Command setting: media-box · Same setting as Pip and Marlow");
+    expect(runsOnValue(place({}), [], (id) => id)).toBe("Command setting: not set");
   });
 
   it("F-046: a stored value is shown as stored: an unknown host marked, a node the list lacks by its id, auto as auto", () => {
