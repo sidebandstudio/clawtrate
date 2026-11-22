@@ -312,6 +312,42 @@ test("F-046: a save whose answer never came, on a gateway that can't read its se
   );
   await expect(page.getByTestId("runs-on-machine")).toHaveCount(0);
   await expect(announcer(page)).toHaveText("Save not confirmed");
+  // The workspace's own read doesn't need the settings file, and still answers; the parts that
+  // do say they couldn't be read.
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByTestId("inventory-signins")).toHaveText(
+    "Couldn't read: The gateway reports that its settings file isn't valid, so it can't be read.",
+  );
+});
+
+test("F-046 F-047: a plugin credential read that never answers leaves the rest of the page shown and usable, and the inventory says it is still reading", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&plugins=hang`, "light");
+  await expect(page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
+  await openRunsOn(page);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByTestId("runs-on-browser")).toHaveText("Allow: not set · Deny: browser");
+  await expect(page.getByTestId("inventory-secrets")).toHaveText(
+    "Names in the gateway's secret store: router-admin, nas-backup, camera-feed",
+  );
+  const signins = page.getByTestId("inventory-signins");
+  await expect(signins).toHaveText("Reading…");
+  await expect(signins.locator('[aria-busy="true"]')).toHaveCount(1);
+  // Meanwhile a save is answered and the page reads again, and the workspace form opens.
+  await select.click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Otto's command machine setting: the gateway's machine",
+  );
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await expect(page.getByRole("textbox", { name: /path on the gateway's machine/ })).toBeFocused();
+  await expect(signins).toHaveText("Reading…");
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({

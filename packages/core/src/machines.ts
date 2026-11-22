@@ -641,10 +641,7 @@ export class MachinesEngine {
   }
 
   /** Section 14, one part for one bot. Admin reads are asked only of an admin connection. */
-  async readPlacement<P extends PlacementPart>(
-    botId: string,
-    part: P,
-  ): Promise<PlacementParts[P]> {
+  async readPlacement<P extends PlacementPart>(botId: string, part: P): Promise<PlacementParts[P]> {
     this.connectedOrThrow();
     const parts: { [K in PlacementPart]: () => Promise<PlacementParts[K]> } = {
       commands: () => this.readCommandsPart(botId),
