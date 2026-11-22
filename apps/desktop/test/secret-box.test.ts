@@ -4,9 +4,12 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { mustSandbox } from "../src/setup/world.ts";
 import {
   keychainCheckName,
+  MOCK_KEYCHAIN_SWITCH,
   safeStorageBox,
   usesSecureStorage,
   type SafeStorageLike,
@@ -64,23 +67,94 @@ describe("the Keychain through safeStorage", () => {
       expect(keychainCheckName(sandbox, true, "darwin", value), value).toBe(null);
   });
 
+  it("Chromium's mock Keychain is never used: such a launch is sandboxed, and keeps no credentials there", () => {
+    const mock = (name: string) => name === MOCK_KEYCHAIN_SWITCH;
+    expect(mustSandbox({ packaged: true, env: {}, switches: mock })).toBe(true);
+    const hex = "0123456789abcdef";
+    for (const kind of ["production", "sandbox"]) {
+      expect(usesSecureStorage({ kind }, "darwin", null, true), kind).toBe(false);
+      expect(keychainCheckName({ kind }, true, "darwin", hex, true), kind).toBe(null);
+    }
+    expect(usesSecureStorage({ kind: "sandbox" }, "darwin", `Clawtrate Check ${hex}`, true)).toBe(
+      false,
+    );
+  });
+
   it("no shipped host or interface turns full access on", () => {
     const shipped = [
       ...sources(join(ROOT, "apps/desktop/src")),
       ...sources(join(ROOT, "packages/ui/src")),
       ...sources(join(ROOT, "packages/core/src")),
     ];
-    // Code, not comments: the lines that name it once comments are taken out.
-    const code = (file: string) =>
-      readFileSync(file, "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/\/\/.*$/gm, "");
-    const naming = shipped
-      .filter((file) => /\bfullAccess\b/.test(code(file)))
-      .map((file) => relative(ROOT, file).split(sep).join("/"));
-    // Only the client, which defines the option and reads it.
-    expect(naming).toEqual(["packages/core/src/client.ts"]);
+    const allowed = [
+      "packages/core/src/client.ts PropertySignature fullAccess?: boolean;",
+      "packages/core/src/client.ts PropertyDeclaration private fullAccess = false;",
+      "packages/core/src/client.ts assignment this.fullAccess = full && secure",
+      "packages/core/src/client.ts read this.options.fullAccess",
+    ];
+    const found: string[] = [];
+    const named = (name: ts.Node | undefined) =>
+      name !== undefined &&
+      (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isPrivateIdentifier(name)
+        ? name.text === "fullAccess"
+        : ts.isComputedPropertyName(name));
+    for (const file of shipped) {
+      const path = relative(ROOT, file).split(sep).join("/");
+      const text = readFileSync(file, "utf8");
+      if (!text.includes("fullAccess")) continue;
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node) => {
+        const say = (kind: string, at: ts.Node = node) =>
+          found.push(`${path} ${kind} ${at.getText(source).replace(/\s+/g, " ")}`);
+        if (
+          (ts.isPropertyAssignment(node) ||
+            ts.isShorthandPropertyAssignment(node) ||
+            ts.isPropertyDeclaration(node) ||
+            ts.isPropertySignature(node) ||
+            ts.isMethodDeclaration(node) ||
+            ts.isGetAccessorDeclaration(node) ||
+            ts.isSetAccessorDeclaration(node)) &&
+          named(node.name) &&
+          !ts.isComputedPropertyName(node.name)
+        )
+          say(ts.SyntaxKind[node.kind]!);
+        else if (ts.isStringLiteralLike(node) && node.text.includes("fullAccess")) say("string");
+        else if (
+          ts.isBinaryExpression(node) &&
+          node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+          (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left)) &&
+          node.left.getText(source).includes("fullAccess")
+        )
+          say("assignment");
+        else if (
+          ts.isPropertyAccessExpression(node) &&
+          node.name.text === "fullAccess" &&
+          !(
+            ts.isBinaryExpression(node.parent) &&
+            node.parent.left === node &&
+            node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+          ) &&
+          !ts.isPropertyAccessExpression(node.parent)
+        )
+          say("read");
+        else if (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) {
+          if (node.getText(source).includes("fullAccess")) say("computed");
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+    // The option's declaration, its one gated read, and the gated state's declaration and
+    // one assignment; reads of that state decide scopes, and set nothing.
+    const reads = found.filter((line) => line.endsWith("read this.fullAccess"));
+    expect(found.filter((line) => !line.endsWith("read this.fullAccess")).sort()).toEqual(
+      allowed.sort(),
+    );
+    expect(reads.every((line) => line.startsWith("packages/core/src/client.ts "))).toBe(true);
     const client = readFileSync(join(ROOT, "packages/core/src/client.ts"), "utf8");
-    expect(client.match(/\bfullAccess\s*[:=]\s*true/g)).toBe(null);
+    expect(client).toContain(
+      "const full = this.options.fullAccess === true && !this.options.readOnly;",
+    );
   });
 });

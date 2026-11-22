@@ -43,8 +43,10 @@ export function keychainCheckName(
   packaged: boolean,
   platform: string,
   value: string,
+  mockKeychain = false,
 ): string | null {
-  return launch.kind === "sandbox" &&
+  return !mockKeychain &&
+    launch.kind === "sandbox" &&
     packaged &&
     platform === "darwin" &&
     /^[0-9a-f]{16}$/.test(value)
@@ -62,6 +64,13 @@ export function usesSecureStorage(
   launch: { kind: string },
   platform: string,
   keychainCheck: string | null,
+  mockKeychain = false,
 ): boolean {
+  // Chromium's mock Keychain keeps its key in memory: a record sealed under it can't be
+  // opened after exit, so nothing may move there.
+  if (mockKeychain) return false;
   return platform === "darwin" && (launch.kind === "production" || keychainCheck !== null);
 }
+
+/** The switch that gives Chromium an in-memory stand-in for the Keychain. */
+export const MOCK_KEYCHAIN_SWITCH = "use-mock-keychain";

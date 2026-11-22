@@ -1430,6 +1430,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     "inspect-brk",
     "clawtrate-setup-sandbox",
     "clawtrate-keychain-check",
+    "use-mock-keychain",
   ];
 
   it("must sandbox a development build, any marker present at all, any switch, and a sandbox named by the environment", () => {

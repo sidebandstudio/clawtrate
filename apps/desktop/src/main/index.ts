@@ -33,6 +33,7 @@ import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   keychainCheckName,
   KEYCHAIN_CHECK_SWITCH,
+  MOCK_KEYCHAIN_SWITCH,
   safeStorageBox,
   usesSecureStorage,
 } from "./secret-box.ts";
@@ -145,6 +146,7 @@ const KEYCHAIN_CHECK = keychainCheckName(
   app.isPackaged,
   process.platform,
   switchValue(KEYCHAIN_CHECK_SWITCH),
+  hasSwitch(MOCK_KEYCHAIN_SWITCH),
 );
 if (KEYCHAIN_CHECK) app.setName(KEYCHAIN_CHECK);
 
@@ -377,7 +379,7 @@ async function main(): Promise<void> {
     displayName: "Clawtrate Desktop",
     dataDir: privateDataDir(),
     // This device's credentials in the Keychain: a person's app on macOS, or a launch check's.
-    ...(usesSecureStorage(SETUP, process.platform, KEYCHAIN_CHECK)
+    ...(usesSecureStorage(SETUP, process.platform, KEYCHAIN_CHECK, hasSwitch(MOCK_KEYCHAIN_SWITCH))
       ? { secretBox: safeStorageBox(safeStorage, process.platform) }
       : {}),
     // A sandboxed or refused start (every development build and automated run) has no
