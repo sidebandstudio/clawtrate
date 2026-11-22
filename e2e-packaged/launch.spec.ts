@@ -659,7 +659,7 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
       .poll(() => view!.contexts().flatMap((context) => context.pages()).length)
       .toBeGreaterThan(0);
     const shown = view.contexts().flatMap((context) => context.pages())[0]!;
-    await expect(shown.getByPlaceholder("Gateway address")).toBeVisible();
+    await expect(shown.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
     // Closed too soon, the copy could quit before it asks for the dictionary,
     // so wait until the log on disk shows the request. Chromium writes events
     // only once 15 are waiting, and an idle app logs none, so a request can
