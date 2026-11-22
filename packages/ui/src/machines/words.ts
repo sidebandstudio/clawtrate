@@ -5,7 +5,6 @@
 import {
   choiceOf,
   type ApprovalLevels,
-  type BotPlacement,
   type CommandPlace,
   type CredentialField,
   type DefaultsChoice,
@@ -52,11 +51,13 @@ export function hostWords(commands: CommandPlace): string {
 }
 
 /** The value of the "Where Otto runs" row: "Command setting: media-box · Same setting as Pip". */
-export function runsOnValue(placement: BotPlacement, nameOf: (id: string) => string): string {
-  const where = `Command setting: ${hostWords(placement.commands)}`;
-  const same = [
-    ...new Set([...placement.sameSetting.machine, ...placement.sameSetting.workspace]),
-  ].map(nameOf);
+export function runsOnValue(
+  commands: CommandPlace,
+  sameAs: readonly string[],
+  nameOf: (id: string) => string,
+): string {
+  const where = `Command setting: ${hostWords(commands)}`;
+  const same = [...new Set(sameAs)].map(nameOf);
   return same.length > 0 ? `${where} · Same setting as ${names(same)}` : where;
 }
 

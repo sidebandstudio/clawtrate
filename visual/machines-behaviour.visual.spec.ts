@@ -312,6 +312,94 @@ test("F-046: a save whose answer never came, on a gateway that can't read its se
   );
   await expect(page.getByTestId("runs-on-machine")).toHaveCount(0);
   await expect(announcer(page)).toHaveText("Save not confirmed");
+  // The workspace's own read doesn't need the settings file, and still answers; the parts that
+  // do say they couldn't be read.
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByTestId("inventory-signins")).toHaveText(
+    "Couldn't read: The gateway reports that its settings file isn't valid, so it can't be read.",
+  );
+  await reconnect(page, false);
+  await expect(page.getByTestId("inventory-signins")).toHaveText("Needs admin access");
+});
+
+test("F-046 F-047: a plugin credential read that never answers leaves the rest of the page shown and usable, and the inventory says it is still reading", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&plugins=hang`, "light");
+  await expect(page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
+  await openRunsOn(page);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByTestId("runs-on-browser")).toHaveText("Allow: not set · Deny: browser");
+  await expect(page.getByTestId("inventory-secrets")).toHaveText(
+    "Names in the gateway's secret store: router-admin, nas-backup, camera-feed",
+  );
+  const signins = page.getByTestId("inventory-signins");
+  await expect(signins).toHaveText("Reading…");
+  await expect(signins.locator('[aria-busy="true"]')).toHaveCount(1);
+  // Meanwhile a save is answered and the page reads again, and the workspace form opens.
+  await select.click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Otto's command machine setting: the gateway's machine",
+  );
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await expect(page.getByRole("textbox", { name: /path on the gateway's machine/ })).toBeFocused();
+  await expect(signins).toHaveText("Reading…");
+  // Below admin nothing is inspected, so nothing hangs: the page says which access it needs.
+  await reconnect(page, false);
+  await expect(signins).toHaveText("Needs admin access");
+});
+
+/** Answers every `readPlacement` of `part` with `change` applied, from now on. */
+const changePart = (page: Page, part: string, change: "fail-once" | "later") =>
+  page.evaluate(
+    ([part, change]) => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      let failures = 1;
+      fixture.invoke = async (command) => {
+        if (command.type !== "readPlacement" || (command as { part?: string }).part !== part)
+          return original(command);
+        if (change === "fail-once" && failures-- > 0)
+          throw new Error("The gateway did not answer.");
+        const result = (await original(command)) as { readAt: number };
+        return change === "later" ? { ...result, readAt: result.readAt + 120_000 } : result;
+      };
+    },
+    [part, change] as const,
+  );
+
+test("F-046 F-273: a browser read that fails says so and offers Try again once, and the other parts stay shown", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await changePart(page, "browser", "fail-once");
+  await openRunsOn(page);
+  await expect(page.getByTestId("runs-on-browser")).toHaveText(
+    "Couldn't read: The gateway did not answer.",
+  );
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: media-box · Connected",
+  );
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByTestId("runs-on-browser")).toHaveText("Allow: not set · Deny: browser");
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+});
+
+test("F-046 F-047: parts read at different times say so", async ({ page }) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await changePart(page, "credentials", "later");
+  await openRunsOn(page);
+  await expect(page.getByTestId("runs-on-read-at")).toContainText(
+    /, read from \d{1,2}:\d{2}\s[AP]M to \d{1,2}:\d{2}\s[AP]M\./,
+  );
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({

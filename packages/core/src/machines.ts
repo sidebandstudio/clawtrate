@@ -129,37 +129,62 @@ export type PluginCredentials = {
   fieldsOmitted: number;
 };
 
-/** Where a bot runs (section 14). */
-export type BotPlacement = {
-  botId: string;
-  readAt: number;
-  /** `config.get` `hash`, the revision this answer was read from; a save sends it back. */
-  configHash: string | null;
-  /** The gateway reports its active revision equal to its saved one; null when it doesn't report both. */
-  configActive: boolean | null;
-  commands: CommandPlace;
-  /** `agents.list` `workspace`, as the gateway reports it. */
-  workspace: string | null;
-  browser: BrowserSettings;
-  /** Other bots whose stored node or reported workspace path is the same as this bot's. */
-  sameSetting: { machine: string[]; workspace: string[] };
+/**
+ * Where a bot runs (section 14), in parts that are read apart, so a read that
+ * hangs holds back only its own part. Each part carries the time it was read.
+ */
+export type PlacementParts = {
+  /** `config.get` and `node.list`. */
+  commands: {
+    readAt: number;
+    /** `config.get` `hash`, the revision this answer was read from; a save sends it back. */
+    configHash: string | null;
+    /** The gateway reports its active revision equal to its saved one; null when it doesn't report both. */
+    configActive: boolean | null;
+    commands: CommandPlace;
+    /** Other bots whose stored node is the same as this bot's. */
+    sameMachine: string[];
+    /** The paired machines, for the choice of where its commands run. */
+    nodes: NodeFacts[];
+    nodesOmitted: number;
+  };
+  /** `agents.list`. */
+  workspace: {
+    readAt: number;
+    /** `agents.list` `workspace`, as the gateway reports it. */
+    workspace: string | null;
+    /** Other bots whose reported workspace path is the same as this bot's. */
+    sameWorkspace: string[];
+  };
+  /** `config.get`. */
+  browser: { readAt: number; browser: BrowserSettings };
   /** Inventory: what its settings name. Not whether it can use each. */
   inventory: {
+    readAt: number;
     accounts: InventoryAccount[] | Unavailable;
     toolServers: ToolServer[];
     /** The task whose listing `offered` comes from, and when it was read. */
     listing: { key: string; readAt: number } | null;
     secrets: string[] | Unavailable;
-    /** Enabled plugins' credential fields; empty when the settings enable no plugin. */
-    pluginCredentials: PluginCredentials[] | Unavailable;
-    pluginsOmitted: number;
     /** `tools.fs.workspaceOnly` as stored, the bot's own or every bot's. */
     workspaceOnly: { value: boolean; set: "bot" | "every-bot" } | null;
   };
-  /** The paired machines, for the choice of where its commands run. */
-  nodes: NodeFacts[];
-  nodesOmitted: number;
+  /** Enabled plugins' credential fields (admin), read one field after another. */
+  credentials: {
+    readAt: number;
+    /** Empty when the settings enable no plugin. */
+    plugins: PluginCredentials[] | Unavailable;
+    pluginsOmitted: number;
+  };
 };
+export type PlacementPart = keyof PlacementParts;
+export const PLACEMENT_PARTS: readonly PlacementPart[] = [
+  "commands",
+  "workspace",
+  "browser",
+  "inventory",
+  "credentials",
+];
 
 export type ApprovalLevels = { security: Security | null; ask: Ask | null };
 
@@ -589,12 +614,16 @@ const settle = async <T>(read: () => Promise<T>): Promise<T | Unavailable> => {
 const isUnavailable = (value: unknown): value is Unavailable =>
   typeof rec(value).status === "string" && !("hash" in rec(value));
 
+type ConfigRead = { config: RawRecord; hash: string | null; raw: RawRecord };
+
 /**
  * Reads and writes for these pages. It keeps no collection: each read is
  * answered and forgotten, each write is read back before it is reported.
  */
 export class MachinesEngine {
   private readonly ctx: MachinesContext;
+  /** The placement parts' `config.get` while it is out: parts read together send one. */
+  private sharedConfig: Promise<ConfigRead> | null = null;
 
   constructor(ctx: MachinesContext) {
     this.ctx = ctx;
@@ -604,7 +633,7 @@ export class MachinesEngine {
     if (!this.ctx.connected()) throw new Error("Not connected to the gateway.");
   }
 
-  private async config(): Promise<{ config: RawRecord; hash: string | null; raw: RawRecord }> {
+  private async config(): Promise<ConfigRead> {
     const raw = rec(await this.ctx.request("config.get", {}));
     // A settings file the gateway can't read or parse is answered `valid: false` with an empty
     // `config`: read as settings, that would be every setting unset.
@@ -615,87 +644,113 @@ export class MachinesEngine {
     return { config: rec(raw.config), hash: str(raw.hash, MAX_REASON_CHARS), raw };
   }
 
-  /** Section 14, for one bot. Admin reads are asked only of an admin connection. */
-  async readPlacement(botId: string): Promise<BotPlacement> {
+  private placementConfig(): Promise<ConfigRead> {
+    if (this.sharedConfig) return this.sharedConfig;
+    const read = this.config().finally(() => {
+      if (this.sharedConfig === read) this.sharedConfig = null;
+    });
+    this.sharedConfig = read;
+    return read;
+  }
+
+  /** Section 14, one part for one bot. Admin reads are asked only of an admin connection. */
+  async readPlacement<P extends PlacementPart>(botId: string, part: P): Promise<PlacementParts[P]> {
     this.connectedOrThrow();
+    const parts: { [K in PlacementPart]: () => Promise<PlacementParts[K]> } = {
+      commands: () => this.readCommandsPart(botId),
+      workspace: () => this.readWorkspacePart(botId),
+      browser: async () => {
+        const { config } = await this.placementConfig();
+        return { readAt: this.ctx.now(), browser: readBrowserSettings(config, botId) };
+      },
+      inventory: () => this.readInventoryPart(botId),
+      credentials: () => this.readCredentialsPart(),
+    };
+    return parts[part]();
+  }
+
+  private async readCommandsPart(botId: string): Promise<PlacementParts["commands"]> {
     const { ctx } = this;
-    const admin = ctx.admin();
-    const latest = ctx.latestTask(botId);
-    const [{ config, hash, raw }, workspaces, nodeList, status, listing, secrets] =
-      await Promise.all([
-        this.config(),
-        ctx.request("agents.list", {}).then(readWorkspaces),
-        ctx.request("node.list", {}).then(readNodes),
-        settle(() => ctx.request("models.authStatus", { agentId: botId })),
-        latest
-          ? ctx.request("tools.effective", { sessionKey: latest }).then(
-              (value) => ({ key: latest, value, readAt: ctx.now() }),
-              () => null,
-            )
-          : Promise.resolve(null),
-        admin
-          ? settle(() => ctx.request("secrets.store.list", {}).then(readSecretNames))
-          : Promise.resolve<Unavailable>({ status: "needs-admin" }),
-      ]);
-    const plugins = admin
-      ? await this.readPluginCredentials(config, hash)
-      : { credentials: { status: "needs-admin" } as const, omitted: 0 };
-    const { nodes, omitted } = nodeList;
-    const bots = ctx.bots().map((bot) => ({ ...bot, workspace: workspaces.get(bot.id) ?? null }));
+    const [{ config, hash, raw }, { nodes, omitted }] = await Promise.all([
+      this.placementConfig(),
+      ctx.request("node.list", {}).then(readNodes),
+    ]);
     const commands = readCommandPlace(config, botId, nodes);
-    // The requested bot's from the gateway's own list, even before the client lists its bots.
-    const workspace = workspaces.get(botId) ?? null;
-    const others = bots.filter((bot) => bot.id !== botId);
-    const sameSetting = {
-      machine:
+    return {
+      readAt: ctx.now(),
+      configHash: hash,
+      configActive:
+        typeof raw.appliedConfigHash === "string" && typeof raw.configRevisionHash === "string"
+          ? raw.appliedConfigHash === raw.configRevisionHash
+          : null,
+      commands,
+      sameMachine:
         commands.host === "node" && commands.nodeSelector !== null
-          ? others
+          ? ctx
+              .bots()
               .filter((bot) => {
+                if (bot.id === botId) return false;
                 const place = readCommandPlace(config, bot.id, nodes);
                 return place.host === "node" && place.nodeSelector === commands.nodeSelector;
               })
               .map((bot) => bot.id)
           : [],
-      workspace:
+      nodes,
+      nodesOmitted: omitted,
+    };
+  }
+
+  private async readWorkspacePart(botId: string): Promise<PlacementParts["workspace"]> {
+    const { ctx } = this;
+    const workspaces = readWorkspaces(await ctx.request("agents.list", {}));
+    // The requested bot's from the gateway's own list, even before the client lists its bots.
+    const workspace = workspaces.get(botId) ?? null;
+    return {
+      readAt: ctx.now(),
+      workspace,
+      sameWorkspace:
         workspace === null
           ? []
-          : others.filter((bot) => bot.workspace === workspace).map((bot) => bot.id),
+          : ctx
+              .bots()
+              .filter((bot) => bot.id !== botId && workspaces.get(bot.id) === workspace)
+              .map((bot) => bot.id),
     };
+  }
+
+  private async readInventoryPart(botId: string): Promise<PlacementParts["inventory"]> {
+    const { ctx } = this;
+    const latest = ctx.latestTask(botId);
+    const [{ config }, status, listing, secrets] = await Promise.all([
+      this.placementConfig(),
+      settle(() => ctx.request("models.authStatus", { agentId: botId })),
+      latest
+        ? ctx.request("tools.effective", { sessionKey: latest }).then(
+            (value) => ({ key: latest, value, readAt: ctx.now() }),
+            () => null,
+          )
+        : Promise.resolve(null),
+      ctx.admin()
+        ? settle(() => ctx.request("secrets.store.list", {}).then(readSecretNames))
+        : Promise.resolve<Unavailable>({ status: "needs-admin" }),
+    ]);
     const fsOnly = (tools: RawRecord) => rec(tools.fs).workspaceOnly;
     const ownOnly = fsOnly(rec(entryOf(config, botId).tools));
     const allOnly = fsOnly(toolsOf(config));
-    const active =
-      typeof raw.appliedConfigHash === "string" && typeof raw.configRevisionHash === "string"
-        ? raw.appliedConfigHash === raw.configRevisionHash
-        : null;
     return {
-      botId,
       readAt: ctx.now(),
-      configHash: hash,
-      configActive: active,
-      commands,
-      workspace,
-      browser: readBrowserSettings(config, botId),
-      sameSetting,
-      inventory: {
-        accounts: isUnavailable(status)
-          ? status
-          : (accountsUnavailable(status) ??
-            readInventoryAccounts(status, modelRefOf(config, botId))),
-        toolServers: readToolServers(config, botId, listing?.value ?? null),
-        listing: listing ? { key: listing.key, readAt: listing.readAt } : null,
-        secrets,
-        pluginCredentials: plugins.credentials,
-        pluginsOmitted: plugins.omitted,
-        workspaceOnly:
-          typeof ownOnly === "boolean"
-            ? { value: ownOnly, set: "bot" }
-            : typeof allOnly === "boolean"
-              ? { value: allOnly, set: "every-bot" }
-              : null,
-      },
-      nodes,
-      nodesOmitted: omitted,
+      accounts: isUnavailable(status)
+        ? status
+        : (accountsUnavailable(status) ?? readInventoryAccounts(status, modelRefOf(config, botId))),
+      toolServers: readToolServers(config, botId, listing?.value ?? null),
+      listing: listing ? { key: listing.key, readAt: listing.readAt } : null,
+      secrets,
+      workspaceOnly:
+        typeof ownOnly === "boolean"
+          ? { value: ownOnly, set: "bot" }
+          : typeof allOnly === "boolean"
+            ? { value: allOnly, set: "every-bot" }
+            : null,
     };
   }
 
@@ -705,10 +760,10 @@ export class MachinesEngine {
    * `plugins.credentials.inspect {pluginId, path, baseHash}`, which answers one
    * `credential`. A plugin whose read fails is unavailable, never empty.
    */
-  private async readPluginCredentials(
-    config: RawRecord,
-    baseHash: string | null,
-  ): Promise<{ credentials: PluginCredentials[]; omitted: number }> {
+  private async readCredentialsPart(): Promise<PlacementParts["credentials"]> {
+    if (!this.ctx.admin())
+      return { readAt: this.ctx.now(), plugins: { status: "needs-admin" }, pluginsOmitted: 0 };
+    const { config, hash: baseHash } = await this.placementConfig();
     const ids = Object.entries(rec(rec(config.plugins).entries))
       .filter(([, entry]) => rec(entry).enabled !== false)
       .map(([id]) => id);
@@ -753,7 +808,11 @@ export class MachinesEngine {
         });
       }
     }
-    return { credentials: out, omitted: Math.max(0, ids.length - MAX_PLUGINS) };
+    return {
+      readAt: this.ctx.now(),
+      plugins: out,
+      pluginsOmitted: Math.max(0, ids.length - MAX_PLUGINS),
+    };
   }
 
   /** Section 15. Approvals files with admin; paired devices with the pairing scope. */
@@ -827,6 +886,9 @@ export class MachinesEngine {
   }
 
   private requireWrite(scope: "admin" | "pairing", what: string): void {
+    // A read sent before a write, or while it is out, can answer from before it. The shared read is
+    // dropped when a write starts and again when a settings write settles, so a read after asks again.
+    this.sharedConfig = null;
     this.connectedOrThrow();
     if (this.ctx.readOnly())
       throw new PlacementWriteError("This host only reads; it changes nothing.");
@@ -874,10 +936,14 @@ export class MachinesEngine {
     let savedHash: string | null;
     let message: string | null = null;
     try {
-      const receipt = await this.ctx.request("config.patch", {
-        raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
-        ...(baseHash ? { baseHash } : {}),
-      });
+      const receipt = await this.ctx
+        .request("config.patch", {
+          raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
+          ...(baseHash ? { baseHash } : {}),
+        })
+        .finally(() => {
+          this.sharedConfig = null;
+        });
       savedHash = str(rec(receipt).hash, MAX_REASON_CHARS);
     } catch (error) {
       // The gateway can persist a change and not apply it; it says so with the saved config.
@@ -936,7 +1002,9 @@ export class MachinesEngine {
         ).workspace,
       );
     try {
-      await this.ctx.request("agents.update", { agentId: botId, workspace: path });
+      await this.ctx.request("agents.update", { agentId: botId, workspace: path }).finally(() => {
+        this.sharedConfig = null;
+      });
     } catch (error) {
       const now = await reported().catch(() => null);
       throw new PlacementWriteError(
