@@ -164,49 +164,17 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
   it("keeps the folders while the newer build has not exited, and says which process it is", async () => {
     const { stubborn, found } = await ignoringSigterm();
     const run = aRun(deadProcess());
-    recordSuccessor(recordPath(run.records, run.record.run), {
-      pid: stubborn.pid!,
-      identity: found.identity,
-    });
+    run.record.successor = { pid: stubborn.pid!, identity: found.identity };
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))?.successor).toEqual(
+      run.record.successor,
+    );
     const problems = cleanUp(run.records, run.record, run.reset, processIdentity, 300);
     expect(problems.join("\n")).toMatch(
-      /the copy a test started \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
+      /the newer build \(pid \d+\) did not exit after SIGTERM; its folders are kept/,
     );
     expect(run.kept()).toBe(true);
     stubborn.kill("SIGKILL");
-  });
-
-  it("stops every copy the run's tests recorded, so a later one does not replace an earlier", () => {
-    const first = liveProcess();
-    const second = liveProcess();
-    const run = aRun(deadProcess());
-    recordSuccessor(recordPath(run.records, run.record.run), first);
-    recordSuccessor(recordPath(run.records, run.record.run), second);
-    recoverDeadRuns(run.records, run.reset, run.log);
-    expect(processState(first.pid, first.identity, processIdentity)).toBe("dead");
-    expect(processState(second.pid, second.identity, processIdentity)).toBe("dead");
-    expect(run.gone()).toBe(true);
-  });
-
-  it("refuses a copy a test records once cleanup has begun, so its gate never opens", () => {
-    const host = liveProcess();
-    const run = aRun(deadProcess(), host);
-    let recorded: unknown;
-    // A test records a copy while cleanup is stopping the host.
-    const identify: Identify = (pid) => {
-      if (pid === host.pid && recorded === undefined) {
-        try {
-          recordSuccessor(recordPath(run.records, run.record.run), liveProcess());
-          recorded = "recorded";
-        } catch (error) {
-          recorded = error;
-        }
-      }
-      return processIdentity(pid);
-    };
-    expect(cleanUp(run.records, run.record, run.reset, identify)).toEqual([]);
-    expect(String(recorded)).toMatch(/the run's teardown has begun/);
-    expect(run.gone()).toBe(true);
   });
 
   it("removes the folders of a run whose host was pending: a gated host never ran", () => {

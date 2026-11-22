@@ -5,15 +5,7 @@
 // never authorises anything: the record and the temporary folders stay, and
 // the reason is reported.
 
-import {
-  appendFileSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -35,21 +27,14 @@ export type RunRecord = {
   /** Written before the preview host is spawned; it is gated until `host` is written. */
   hostPending?: true;
   host: Proc | null;
-  /** Written by cleanup before it reads the copies tests started: no copy may start after it. */
-  teardown?: true;
+  /** A newer build a test starts on the host's data folder, written before it runs. */
+  successor?: Proc;
   dirs: string[];
 };
 
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export const recordPath = (dir: string, run: string) => join(dir, `${run}.json`);
-
-/**
- * The copies of the app a run's tests started, such as a newer build on the
- * host's data folder, one per line beside the record. Tests only append to it
- * and never write the record, so no write replaces another.
- */
-const copiesPath = (recordFile: string) => recordFile.replace(/\.json$/, ".copies");
 
 export function saveRecord(dir: string, record: RunRecord): void {
   mkdirSync(dir, { recursive: true });
@@ -72,7 +57,7 @@ export function readRecord(path: string): RunRecord | null {
       /^[0-9a-f]{8}$/.test(record.run) &&
       isProc(record.runner) &&
       (record.host === null || isProc(record.host)) &&
-      (record.teardown === undefined || record.teardown === true) &&
+      (record.successor === undefined || isProc(record.successor)) &&
       (record.hostPending === undefined || record.hostPending === true) &&
       Array.isArray(record.instances) &&
       // Only this run's own instances, each with a run id of the tool's format.
@@ -94,36 +79,11 @@ export function readRecord(path: string): RunRecord | null {
   return null;
 }
 
-/**
- * Records a copy of the app a test started, before it runs, so the run's
- * cleanup stops it too. Throws once cleanup has begun, and the caller then
- * never lets the copy run: cleanup marks the record before it reads the
- * copies, and this reads the record after it appends, so a copy cleanup has
- * not seen always sees the mark.
- */
+/** Records a newer build started on the run's data folder, so the run's cleanup stops it too. */
 export function recordSuccessor(path: string, successor: Proc): void {
-  if (!readRecord(path)) throw new Error(`${path} is not a run record`);
-  appendFileSync(copiesPath(path), `${JSON.stringify(successor)}\n`);
-  if (readRecord(path)?.teardown !== undefined) throw new Error("the run's teardown has begun");
-}
-
-/** The copies a run's tests recorded. A line cut short is a copy whose gate never opened. */
-function recordedCopies(path: string): Proc[] {
-  let lines: string[];
-  try {
-    lines = readFileSync(copiesPath(path), "utf8").split("\n");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  return lines.flatMap((line) => {
-    try {
-      const copy: unknown = JSON.parse(line);
-      return isProc(copy) ? [copy] : [];
-    } catch {
-      return [];
-    }
-  });
+  const record = readRecord(path);
+  if (!record) throw new Error(`${path} is not a run record`);
+  saveRecord(dirname(path), { ...record, successor });
 }
 
 /** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */
@@ -132,10 +92,9 @@ export const isRunTempDir = (dir: unknown): dir is string =>
 
 /**
  * Remove everything a record lists, synchronously, so it also works from a
- * signal or exit handler. The record is first marked so that no test starts
- * another copy of the app. The preview host and each copy are signalled only
- * while still the recorded process, and the folders are removed only once
- * they are proven gone; if that cannot be determined, nothing of it is touched. Each
+ * signal or exit handler. The preview host is signalled only while it is
+ * still the recorded process, and its folders are removed only once it is
+ * proven gone; if that cannot be determined, nothing of it is touched. Each
  * instance goes through `reset` by name and run id, which proves
  * its processes itself. Returns what could not be cleaned up; the record is
  * removed only when nothing is left.
@@ -148,15 +107,11 @@ export function cleanUp(
   hostStopMs = 10_000,
 ): string[] {
   const problems: string[] = [];
-  saveRecord(dir, { ...record, teardown: true });
   // A pending host without a record never ran: its gate opens only after the record.
   let hostGone = true;
   const hosts = [
     ...(record.host ? [{ proc: record.host, label: "the preview host" }] : []),
-    ...recordedCopies(recordPath(dir, record.run)).map((proc) => ({
-      proc,
-      label: "the copy a test started",
-    })),
+    ...(record.successor ? [{ proc: record.successor, label: "the newer build" }] : []),
   ];
   for (const { proc, label } of hosts) {
     const { pid, identity } = proc;
@@ -191,10 +146,7 @@ export function cleanUp(
       problems.push(`reset ${name}: ${String(error)}`);
     }
   }
-  if (problems.length === 0) {
-    rmSync(copiesPath(recordPath(dir, record.run)), { force: true });
-    rmSync(recordPath(dir, record.run), { force: true });
-  }
+  if (problems.length === 0) rmSync(recordPath(dir, record.run), { force: true });
   return problems;
 }
 
