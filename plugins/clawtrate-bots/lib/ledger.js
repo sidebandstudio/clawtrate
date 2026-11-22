@@ -6,18 +6,20 @@
 // A proposal's entry: { digest, state, source, grant?, bot: { id, createdAt },
 // fields, createdAt, expiresAt, settledAt?, by? }. A grant's entry: { version,
 // digest, generation, revoked, expiresAt, revokedAt? }. `sweeping` is the one
-// version cleanup is deleting, which no publisher may publish; `rev` counts
+// version cleanup is deleting, which no publisher may publish. `orphanAges`
+// holds, for one process's epoch, when each version was first seen with
+// nothing referring to it, on that process's monotonic clock. `rev` counts
 // every stored change, so a mark and its clearing never restore an earlier row.
 
 export const LIMITS = Object.freeze({ open: 200, perSource: 20 });
 export const EXPIRES_MS = 24 * 60 * 60 * 1000;
 export const RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
-/** A version nothing has referred to for this long was never published, or was replaced or retired. */
+/** A version nothing has referred to for this long, continuously, was never published, or was replaced or retired. */
 export const ORPHAN_MS = 60 * 60 * 1000;
 /** The store's limit for one value, in UTF-8 bytes of JSON. */
 export const VALUE_MAX = 1024 * 1024;
 /** Room kept so every open proposal can settle and every grant can be revoked, whatever fills the rest. */
-const ROOM = { settle: 96, revoke: 64, ledger: 64 };
+const ROOM = { settle: 96, revoke: 64, ledger: 64, orphanAges: 40 * 1024 };
 const IDS = { p: /^p_[0-9a-f]{32}$/, g: /^g_[0-9a-f]{32}$/ };
 
 export class Refusal extends Error {
@@ -36,7 +38,7 @@ export function requireId(kind, value, what) {
 }
 const own = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
 
-/** @returns {{ rev: number, proposals: Record<string, any>, grants: Record<string, any>, sweeping?: string | null }} */
+/** @returns {{ rev: number, proposals: Record<string, any>, grants: Record<string, any>, sweeping?: string | null, orphanAges?: { epoch: string, since: Record<string, number> } }} */
 export const emptyLedger = () => ({ rev: 0, proposals: {}, grants: {}, sweeping: null });
 export const sourceKey = (source) =>
   source.kind === "agent" ? `agent:${source.grant}` : `bot:${source.bot}`;
@@ -94,7 +96,7 @@ export function fits(ledger, budget = VALUE_MAX) {
   const open = Object.values(ledger.proposals).filter(isOpen).length;
   const live = Object.values(ledger.grants).filter((g) => !g.revoked).length;
   const size = Buffer.byteLength(JSON.stringify(ledger));
-  return size + open * ROOM.settle + live * ROOM.revoke + ROOM.ledger <= budget;
+  return size + open * ROOM.settle + live * ROOM.revoke + ROOM.ledger + ROOM.orphanAges <= budget;
 }
 const full = () =>
   new Refusal(
@@ -203,14 +205,41 @@ export const referenced = (ledger) =>
     ...Object.values(ledger.grants).map((g) => g.version),
   ]);
 
-/** Marks one version nothing refers to for deletion; only one at a time. */
-export function markSweeping(ledger, version) {
+/**
+ * Records when each of `ids` was first seen with nothing referring to it, in
+ * this epoch. Ages from another epoch (another process) start again; an id
+ * that is referenced again loses its age.
+ */
+export function recordAges(ledger, ids, { epoch, now }) {
+  if (ledger.orphanAges?.epoch !== epoch) ledger.orphanAges = { epoch, since: {} };
+  const live = referenced(ledger);
+  const { since } = ledger.orphanAges;
+  for (const id of Object.keys(since)) if (live.has(id)) delete since[id];
+  for (const id of ids) if (!live.has(id) && !Object.hasOwn(since, id)) since[id] = now;
+  if (Object.keys(since).length === 0) delete ledger.orphanAges;
+}
+
+/** Marks one version for deletion: unreferenced, seen so for an hour in this epoch, and only one at a time. */
+export function markSweeping(ledger, version, { epoch, now }) {
   if ((ledger.sweeping ?? null) !== null && ledger.sweeping !== version) return false;
   if (referenced(ledger).has(version)) return false;
+  const ages = ledger.orphanAges;
+  if (ages?.epoch !== epoch || !Object.hasOwn(ages.since, version)) return false;
+  if (now - ages.since[version] < ORPHAN_MS) return false;
   ledger.sweeping = version;
   return true;
 }
 
+/** Clears the mark, and the version's age, once it is deleted. */
 export function clearSweeping(ledger, version) {
   if (ledger.sweeping === version) ledger.sweeping = null;
+  clearAge(ledger, version);
+}
+
+/** Forgets a version's age: published again, or deleted. An empty map is removed. */
+export function clearAge(ledger, version) {
+  const ages = ledger.orphanAges;
+  if (!ages || !Object.hasOwn(ages.since, version)) return;
+  delete ages.since[version];
+  if (Object.keys(ages.since).length === 0) delete ledger.orphanAges;
 }

@@ -84,6 +84,7 @@ export function createBots(api, options = {}) {
   const versions = options.versions ?? api.runtime.state.openKeyedStore(VERSIONS);
   const records = new Records(store, versions, {
     now,
+    ...(options.monotonic ? { monotonic: options.monotonic } : {}),
     // Empty: readers fetch again, and nothing about a request goes out.
     onChange: () => emit?.("changed", {}, { scope: "operator.read" }),
   });
@@ -289,7 +290,14 @@ export function createBots(api, options = {}) {
           version,
           digest,
           (l, t) => L.publishGrant(l, id, { version, digest, expiresAt }, expected, t),
-          () => expiresAt,
+          // An update lives no longer than the generation it read: until that
+          // grant's expiry, or the end of its retention once revoked.
+          (ledger) => {
+            const current = update ? own(ledger.grants, id) : undefined;
+            if (!current) return expiresAt;
+            const until = current.revoked ? current.revokedAt + L.RETAIN_MS : current.expiresAt;
+            return Math.min(expiresAt, until);
+          },
         );
         return { id, generation, ...details };
       },

@@ -1,4 +1,6 @@
-// A stand-in for the gateway's keyed stores and host, for the unit
+// A stand-in for the gateway's keyed stores and host. As the SDK does, a
+// comparison is the row's stored image, so two writes that leave the same
+// JSON compare equal. for the unit
 // tests. Every operation yields once, as the real store's worker does, so
 // concurrent callers interleave. compareAndApply refuses when the row changed
 // since it was observed, as the real one does in one SQLite transaction.
@@ -22,32 +24,53 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
     walk(value);
     return JSON.stringify(value);
   };
-  const mark = (key: string) => `${key}#${rows.get(key)?.rev ?? "absent"}`;
-  /** Holds reads or writes of keys with a prefix until released; `reached` resolves when one is held. */
-  const gates: { prefix: string; on: string; reach: () => void; wait: Promise<void> }[] = [];
-  const pass = async (key: string, on: string) => {
-    for (const gate of gates.filter((g) => g.on === on && key.startsWith(g.prefix))) {
+  const mark = (key: string) => `${key}#${rows.get(key)?.json ?? "absent"}`;
+  /**
+   * Holds reads, writes or compare-and-apply calls of keys with a prefix
+   * (and, for a compare-and-apply, an intent `when` accepts) until released;
+   * `reached` resolves when one is held.
+   */
+  type Gate = {
+    prefix: string;
+    on: string;
+    when: (value: unknown) => boolean;
+    reach: () => void;
+    wait: Promise<void>;
+  };
+  const gates: Gate[] = [];
+  const pass = async (key: string, on: string, value?: unknown) => {
+    for (const gate of gates.filter(
+      (g) => g.on === on && key.startsWith(g.prefix) && g.when(value),
+    )) {
       gate.reach();
       await gate.wait;
     }
   };
   const faults = { corrupt: new Set<string>(), beforeCommit: () => {}, failNextDelete: false };
+  const stats = { conflicts: 0 };
   type Intent = { action: string; value?: unknown };
   const apply = (key: string, comparison: string, intent: Intent) => {
-    if (mark(key) !== comparison)
+    if (mark(key) !== comparison) {
+      stats.conflicts += 1;
       return { status: "conflict", current: { value: read(key), comparison: mark(key) } };
+    }
     if (intent.action === "set") rows.set(key, { json: json(intent.value), rev: ++rev });
     return { status: "applied" };
   };
   const store = {
     rows,
     faults,
-    hold(prefix: string, on: "read" | "write" = "write") {
+    stats,
+    hold(
+      prefix: string,
+      on: "read" | "write" | "cas" = "write",
+      when: (value: unknown) => boolean = () => true,
+    ) {
       let reach = () => {};
       let release = () => {};
       const reached = new Promise<void>((resolve) => (reach = resolve));
       const wait = new Promise<void>((resolve) => (release = resolve));
-      const gate = { prefix, on, reach, wait };
+      const gate = { prefix, on, when, reach, wait };
       gates.push(gate);
       return { reached, release: () => (gates.splice(gates.indexOf(gate), 1), release()) };
     },
@@ -64,6 +87,7 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
     },
     async compareAndApply(key: string, comparison: string, intent: Intent) {
       await tick();
+      await pass(key, "cas", intent.value);
       return apply(key, comparison, intent);
     },
     /** The assertion is checked at the transaction and again at commit, as the real store does. */
@@ -73,6 +97,7 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
         async compareAndApply(key: string, comparison: string, intent: Intent) {
           assertCurrent();
           await tick();
+          await pass(key, "cas", intent.value);
           faults.beforeCommit();
           assertCurrent();
           return apply(key, comparison, intent);
@@ -122,7 +147,14 @@ export type Answer = {
 
 /** The plugin on a fake host: its methods, the events it emitted, and every method it dispatched. */
 export function load(
-  options: { store?: Store; versions?: Store; now?: () => number; bots?: Json[] } = {},
+  options: {
+    store?: Store;
+    versions?: Store;
+    now?: () => number;
+    monotonic?: () => number;
+    bots?: Json[];
+    startService?: boolean;
+  } = {},
 ) {
   const store = options.store ?? memoryStore();
   const versions = options.versions ?? memoryStore({ maxEntries: 512 });
@@ -139,13 +171,20 @@ export function load(
       handler: (opts: Json) => Promise<void>,
       opts: { scope: string },
     ) => handlers.set(name, { handler, scope: opts.scope }),
-    registerService: (service: { start(ctx: Json): Promise<void> }) =>
-      service.start({ gatewayEvents: { emit: (name: string) => events.push(name) } }),
+    registerService: (registered: Service) => {
+      service = registered;
+      if (options.startService !== false) void start();
+    },
   };
+  type Service = { start(ctx: Json): Promise<void>; stop(): void };
+  let service: Service | null = null;
+  const start = () =>
+    service!.start({ gatewayEvents: { emit: (name: string) => events.push(name) } });
   createBots(api, {
     store,
     versions,
     now: options.now,
+    monotonic: options.monotonic,
     sdk: {
       dispatchGatewayMethod: async (method: string) => {
         dispatched.push(method);
@@ -174,5 +213,15 @@ export function load(
     });
     return answer;
   }
-  return { store, versions, handlers, events, dispatched, call, bots };
+  return {
+    store,
+    versions,
+    handlers,
+    events,
+    dispatched,
+    call,
+    bots,
+    start,
+    stop: () => service!.stop(),
+  };
 }

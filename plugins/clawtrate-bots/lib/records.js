@@ -18,13 +18,15 @@
 // versions nothing refers to: unpublished ones, replaced grant versions, and
 // those of settled requests whose ledger entries retention has removed.
 
+import { randomBytes } from "node:crypto";
 import { canonical, digestOf } from "./canonical.js";
 import {
-  ORPHAN_MS,
   Refusal,
+  clearAge,
   clearSweeping,
   emptyLedger,
   markSweeping,
+  recordAges,
   referenced,
   sweep,
 } from "./ledger.js";
@@ -34,13 +36,22 @@ export const NAMESPACE = "records";
 export const VERSIONS = { namespace: "versions", maxEntries: 512, overflowPolicy: "reject-new" };
 const LEDGER = "ledger";
 const VERSION = "v:";
-const PAGE = 500;
+/**
+ * Versions read per scan page. The store decodes every row of a page, and a
+ * row is at most 1 MiB of JSON (the SDK's limit for one value), so a page is
+ * at most 16 MiB of JSON however large the bodies are.
+ */
+const PAGE = 16;
 /** compareAndApply retries before giving up; each retry means another change landed. */
 const ATTEMPTS = 50;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 export class Records {
-  constructor(store, versions, { now = Date.now, onChange = () => {} } = {}) {
+  constructor(
+    store,
+    versions,
+    { now = Date.now, monotonic = () => performance.now(), onChange = () => {} } = {},
+  ) {
     for (const need of ["observe", "compareAndApply", "withCurrent"])
       if (typeof store[need] !== "function")
         throw new Error(`clawtrate-bots needs the gateway's keyed store to offer ${need}.`);
@@ -52,6 +63,9 @@ export class Records {
     this.now = now;
     this.onChange = onChange;
     this.sweepRunning = false;
+    // Ages are measured on this process's monotonic clock, so they belong to this epoch alone.
+    this.epoch = randomBytes(8).toString("hex");
+    this.monotonic = monotonic;
   }
 
   /** @returns {Promise<ReturnType<typeof emptyLedger>>} */
@@ -128,7 +142,7 @@ export class Records {
       if (error?.code !== "PLUGIN_STATE_LIMIT_EXCEEDED") throw error;
       throw new Refusal(
         "records-full",
-        "Clawtrate has stored as many requests as its bots plugin keeps in this version, and nothing frees that space yet. New requests can't be recorded.",
+        "Clawtrate's request records on this gateway are full. Try again after the gateway clears older records.",
       );
     }
     if (!stored) throw new Error("A record with this id already exists.");
@@ -151,7 +165,7 @@ export class Records {
   /**
    * Publishes a stored version with `change`, checking after each observation
    * that it still exists and reads. The change itself refuses the version
-   * cleanup is deleting.
+   * cleanup is deleting; the same update clears the version's orphan age.
    * @template R
    * @param {string} id
    * @param {string} digest
@@ -161,7 +175,11 @@ export class Records {
    */
   publish(id, digest, change, deadline) {
     return this.transact(
-      change,
+      (ledger, now) => {
+        const result = change(ledger, now);
+        clearAge(ledger, id);
+        return result;
+      },
       async () => {
         if (!(await this.version(id, digest)))
           throw new Refusal("unpublishable", "Clawtrate couldn't record this. Try again.");
@@ -171,17 +189,21 @@ export class Records {
   }
 
   /**
-   * Reclaims versions nothing has referred to for an hour. One sweep at a
-   * time; a deletion an earlier sweep left marked is finished first.
+   * Reclaims versions nothing has referred to for an hour, continuously, as
+   * this process has seen them: each scanned page records when its
+   * unreferenced rows were first seen, and a row is marked for deletion only
+   * an hour after that. A restart starts a fresh observation. One sweep at a
+   * time; a deletion an earlier sweep (in any process) left marked is
+   * finished first.
    */
   async sweepOrphans() {
     if (this.sweepRunning) return [];
     this.sweepRunning = true;
     const removed = [];
+    const ages = () => ({ epoch: this.epoch, now: this.monotonic() });
     try {
       const pending = (await this.ledger()).sweeping;
       if (pending) await this.reclaim(pending, removed);
-      const now = this.now();
       let start = VERSION;
       for (;;) {
         const page = await this.versions.entriesInKeyRange({
@@ -190,11 +212,11 @@ export class Records {
           limit: PAGE,
         });
         const live = referenced(await this.ledger());
-        for (const { key, value } of page) {
-          const id = key.slice(VERSION.length);
-          if (live.has(id) || !(value?.storedAt + ORPHAN_MS <= now)) continue;
-          if (await this.transact((l) => markSweeping(l, id))) await this.reclaim(id, removed);
-        }
+        const ids = page.map(({ key }) => key.slice(VERSION.length)).filter((id) => !live.has(id));
+        if (ids.length) await this.transact((l) => recordAges(l, ids, ages()));
+        for (const id of ids)
+          if (await this.transact((l) => markSweeping(l, id, ages())))
+            await this.reclaim(id, removed);
         if (page.length < PAGE) return removed;
         start = `${page[page.length - 1].key}\u0000`;
       }

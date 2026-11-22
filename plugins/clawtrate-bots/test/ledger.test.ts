@@ -120,17 +120,27 @@ describe("grants", () => {
     );
   });
 
-  it("only a version nothing refers to can be marked for deletion, one at a time", () => {
+  it("only a version unreferenced for an hour in this epoch can be marked, one at a time", () => {
     const l = withGrant();
     L.admit(l, proposal("p", fromBot("pip")), T);
-    expect([L.markSweeping(l, "p"), L.markSweeping(l, "gv1")]).toEqual([false, false]);
-    expect(L.markSweeping(l, "orphan")).toBe(true);
-    expect(L.markSweeping(l, "other")).toBe(false);
+    const at = (now: number, epoch = "e") => ({ epoch, now });
+    L.recordAges(l, ["p", "gv1", "orphan", "other"], at(0));
+    expect(Object.keys(l.orphanAges!.since).sort()).toEqual(["orphan", "other"]);
+    expect([
+      L.markSweeping(l, "p", at(L.ORPHAN_MS)),
+      L.markSweeping(l, "gv1", at(L.ORPHAN_MS)),
+    ]).toEqual([false, false]);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS - 1))).toBe(false);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS, "another-process"))).toBe(false);
+    expect(L.markSweeping(l, "orphan", at(L.ORPHAN_MS))).toBe(true);
+    expect(L.markSweeping(l, "other", at(L.ORPHAN_MS))).toBe(false);
     expect(reason(() => L.admit(l, proposal("orphan", fromBot("main"), bot("main")), T))).toBe(
       "unpublishable",
     );
     L.clearSweeping(l, "orphan");
-    expect(L.markSweeping(l, "other")).toBe(true);
+    expect(Object.keys(l.orphanAges!.since)).toEqual(["other"]);
+    L.recordAges(l, [], at(5, "another-process"));
+    expect(l.orphanAges).toBeUndefined();
   });
 
   it("an expired grant is revoked, and a revoked grant leaves after 30 days", () => {
@@ -174,7 +184,7 @@ describe("decisions, expiry and size", () => {
   it("refuses a new request when the records would be full, and every open one can still settle", () => {
     // Each admission runs on a copy, kept only when admitted, as a transaction keeps it.
     let l = L.emptyLedger();
-    const budget = 20_000;
+    const budget = 60_000;
     let admitted = 0;
     for (let i = 0; i < 200; i += 1) {
       const next = structuredClone(l);
@@ -186,12 +196,22 @@ describe("decisions, expiry and size", () => {
       l = next;
       admitted += 1;
     }
+    expect(admitted).toBeGreaterThan(0);
     expect(admitted).toBeLessThan(200);
     expect(Object.keys(l.proposals)).toHaveLength(admitted);
     expect(
       reason(() => L.admit(structuredClone(l), proposal("x", fromBot("x"), bot("x")), T, budget)),
     ).toBe("records-full");
     for (let i = 0; i < admitted; i += 1) L.decline(l, `p${i}`, `d-p${i}`, "0123456789abcdef", T);
-    expect(Buffer.byteLength(JSON.stringify({ ...l, rev: 1e12 }))).toBeLessThanOrEqual(budget);
+    // Settled, with the largest age map the sweep can hold (one entry per version row), it still fits.
+    const since = Object.fromEntries(
+      Array.from({ length: 512 }, (_, n) => [`p_${n.toString(16).padStart(32, "0")}`, 1e15 + n]),
+    );
+    const orphanAges = { epoch: "f".repeat(16), since };
+    expect(
+      Buffer.byteLength(
+        JSON.stringify({ ...l, rev: 1e12, sweeping: `p_${"0".repeat(32)}`, orphanAges }),
+      ),
+    ).toBeLessThanOrEqual(budget);
   });
 });
