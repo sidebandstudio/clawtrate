@@ -7,6 +7,8 @@ export const GATEWAY_NAMES_KEY = "gateway-names";
 export const MAX_GATEWAY_NAME_CHARS = 40;
 /** Names kept; past this the oldest is dropped. */
 export const MAX_GATEWAY_NAMES = 32;
+/** The longest address a name can be given to. Real gateway addresses are far shorter. */
+export const MAX_NAMED_ADDRESS_CHARS = 2048;
 
 /** Oldest first. */
 export type GatewayNames = ReadonlyArray<{ address: string; name: string }>;
@@ -18,7 +20,8 @@ export type GatewayNames = ReadonlyArray<{ address: string; name: string }>;
 export function gatewayAddress(url: string): string | null {
   try {
     const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
+    const address = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
+    return address.length <= MAX_NAMED_ADDRESS_CHARS ? address : null;
   } catch {
     return null;
   }

@@ -22,6 +22,10 @@ describe("F-521: gateway names", () => {
     expect(gatewayAddress("wss://Devbox.Example.test:443/")).toBe("wss://devbox.example.test");
     expect(gatewayAddress("ws://127.0.0.1:19001/gw/")).toBe("ws://127.0.0.1:19001/gw");
     expect(gatewayAddress("not a url")).toBeNull();
+    expect(
+      gatewayAddress(`ws://127.0.0.1:19001/${"a".repeat(2048)}`),
+      "too long to name",
+    ).toBeNull();
     const names = withGatewayName([], "wss://devbox.example.test/", "Devbox");
     expect(gatewayNameFor(names, "wss://DEVBOX.example.test:443")).toBe("Devbox");
     expect(gatewayNameFor(names, "wss://devbox.example.test:8443")).toBeNull();
