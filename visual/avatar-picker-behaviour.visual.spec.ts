@@ -654,3 +654,36 @@ test("F-035: a JPEG whose frame header comes after more than 256 KiB of metadata
   await expect(page.getByTestId("picture-preview").locator("img")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+
+test("F-035: after a picture can't be drawn, Use the default picture creates the bot with its own Clawling", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.evaluate(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (
+      this: HTMLCanvasElement,
+      kind: string,
+      ...rest: unknown[]
+    ) {
+      return kind === "2d"
+        ? null
+        : (real as (...a: unknown[]) => unknown).call(this, kind, ...rest);
+    } as typeof real;
+  });
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("radio", { name: "Shellfolk" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Couldn't draw that picture. Choose it again, or choose another.",
+  );
+  await page.getByRole("button", { name: "Use the default picture" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  const create = (await sent(page)).find((each) => each.type === "createBot")!;
+  expect(create).toMatchObject({ name: "Viral", avatar: null });
+});
