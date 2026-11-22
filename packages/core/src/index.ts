@@ -16,6 +16,7 @@ export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
 export * from "./accounts.ts";
 export * from "./routines.ts";
+export * from "./search.ts";
 export {
   AdminNeededError,
   isActive as isSignInActive,
