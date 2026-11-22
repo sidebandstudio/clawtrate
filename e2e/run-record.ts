@@ -245,9 +245,12 @@ export function runIncludes(argv: readonly string[], file: string): boolean {
     const arg = args[i]!;
     if (arg === "--") break;
     if (arg.startsWith("-")) {
-      if (VALUE_OPTIONS.has(arg)) i++;
-      else if (OPTIONAL_VALUE_OPTIONS.has(arg) && !isOption(args[i + 1])) i++;
-      else if (LIST_OPTIONS.has(arg)) while (i + 1 < args.length && !isOption(args[i + 1])) i++;
+      // Playwright's only valueless short test flag is -x. In a group, -xj takes the next
+      // argument as its worker count, while -xj1 already carries its value.
+      const option = arg.replace(/^-x+/, "-");
+      if (VALUE_OPTIONS.has(option)) i++;
+      else if (OPTIONAL_VALUE_OPTIONS.has(option) && !isOption(args[i + 1])) i++;
+      else if (LIST_OPTIONS.has(option)) while (i + 1 < args.length && !isOption(args[i + 1])) i++;
       continue;
     }
     filters.push(/^(.*?):(\d+):?(\d+)?$/.exec(arg)?.[1] ?? arg);

@@ -32,6 +32,17 @@ describe("which end-to-end runs start the computer instance", () => {
     expect(runIncludes(argv("--shuffle", "--project", "a", "work-computer"), FILE)).toBe(true);
   });
 
+  it("handles grouped short options and their attached or separate values", () => {
+    const file = resolve(sep, FILE);
+    expect(runIncludes(argv("-xj", "1"), file)).toBe(true);
+    expect(runIncludes(argv("-x", "-j", "1"), file)).toBe(true);
+    expect(runIncludes(argv("-xxj", "1"), file)).toBe(true);
+    expect(runIncludes(argv("-xg", "work-computer", "preview.spec.ts"), file)).toBe(false);
+    expect(runIncludes(argv("-xj1", "preview.spec.ts"), file)).toBe(false);
+    expect(runIncludes(argv("-xu", "changed"), file)).toBe(true);
+    expect(runIncludes(argv("-xuchanged", FILE), file)).toBe(true);
+  });
+
   it("ignores arguments after the Playwright separator", () => {
     expect(runIncludes(argv("--", "run-label"), FILE)).toBe(true);
     expect(runIncludes(argv("preview.spec.ts", "--", FILE), FILE)).toBe(false);
