@@ -460,6 +460,24 @@ function bytesOf(data: unknown): Uint8Array | null {
   return null;
 }
 
+/** Browser pictures and their tickets may use plaintext only on the local loopback. */
+function streamGateway(address: string): URL | null {
+  let base: URL;
+  try {
+    base = new URL(address);
+  } catch {
+    return null;
+  }
+  if (base.protocol === "wss:") return base;
+  const host = base.hostname;
+  const loopback =
+    host === "localhost" ||
+    host === "localhost." ||
+    host === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(host);
+  return base.protocol === "ws:" && loopback ? base : null;
+}
+
 /**
  * The stream's address: the gateway's own origin and the plugin's path,
  * nothing else. A path that would leave the gateway's origin is refused, so
@@ -467,8 +485,8 @@ function bytesOf(data: unknown): Uint8Array | null {
  */
 export function streamUrl(gatewayUrl: string, wsPath: string): string | null {
   if (!wsPath.startsWith(`${STREAM_PATH}?ticket=`) || wsPath.includes("#")) return null;
-  const base = new URL(gatewayUrl);
-  if (base.protocol !== "ws:" && base.protocol !== "wss:") return null;
+  const base = streamGateway(gatewayUrl);
+  if (!base) return null;
   const url = new URL(wsPath, gatewayUrl);
   return url.host === base.host && url.protocol === base.protocol ? url.toString() : null;
 }
@@ -1152,6 +1170,16 @@ export class ComputerViews {
         frameAt: null,
       },
     }));
+    const gateway = this.ctx.gatewayUrl();
+    // The gateway returns the ticket on this connection before the stream socket opens.
+    if (!gateway || !streamGateway(gateway)) {
+      this.endView(
+        live,
+        "failed",
+        "Watching a remote browser requires a secure gateway connection (wss://).",
+      );
+      return;
+    }
     let answer: RawRecord | null;
     try {
       answer = asRecord(
@@ -1175,8 +1203,7 @@ export class ComputerViews {
     const streamId = str(answer?.streamId);
     // An answer for a view that has ended is disposed of: its ticket is never used.
     if (live.view !== view || view.ended) return;
-    const gateway = this.ctx.gatewayUrl();
-    const url = wsPath && gateway ? streamUrl(gateway, wsPath) : null;
+    const url = wsPath && gateway === this.ctx.gatewayUrl() ? streamUrl(gateway, wsPath) : null;
     if (!url || !streamId || !STREAM_ID.test(streamId)) {
       this.endView(live, "failed", "The plugin's answer gave no stream on this gateway.");
       return;
@@ -1831,9 +1858,14 @@ export class ComputerViews {
     const lease = live?.lease;
     const control = this.pane(viewer)?.control;
     const checked = control?.status;
-    if (!live || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
-    // Leaving the tab since retires the Check: a tab out of sight is not renewed again.
+    if (!live?.shown || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
     const closed = live.closed;
+    const sequence = lease.sequence;
+    const current = () =>
+      live.lease === lease &&
+      live.closed === closed &&
+      lease.sequence === sequence &&
+      this.pane(viewer)?.control.status === checked;
     const sentAt = this.ctx.now();
     try {
       const answer = asRecord(
@@ -1846,8 +1878,7 @@ export class ComputerViews {
           RENEW_DEADLINE_MS,
         ),
       );
-      const now = this.pane(viewer)?.control;
-      if (live.lease !== lease || now?.status !== checked || live.closed !== closed) return;
+      if (!current()) return;
       if (answer?.leaseRenewed === true) {
         // Too late to count, or already confirmed by a later request: the line stays as it is.
         if (!this.confirm(live, lease, sentAt)) return;
@@ -1857,8 +1888,7 @@ export class ComputerViews {
     } catch (error) {
       // Retired as a reply is: a Check from before the viewer left, or from a state since
       // replaced (a later hand-back), ends nothing.
-      const now = this.pane(viewer)?.control;
-      if (live.lease !== lease || now?.status !== checked || live.closed !== closed) return;
+      if (!current()) return;
       if (refusal(error).reason === "tab_not_in_bots_browser") this.leaseEnded(live, null);
       // Otherwise nothing is established: the line stays as it is.
     }
@@ -1932,8 +1962,18 @@ export class ComputerViews {
    * The connection dropped: every view ends, input stops, every queued step of
    * a hand-back is retired, and control held or being given back is "maybe held".
    */
-  connectionLost(): void {
+  connectionLost(keepPendingAnswer = false): void {
     for (const live of this.lives.values()) {
+      // Reopening with an approved scope is part of the answer itself.
+      if (!keepPendingAnswer && live.answerOwner) {
+        this.ctx.withdraw(live.answerOwner);
+        live.answerOwner = null;
+        if (live.answering !== null) {
+          live.answering = null;
+          if (this.pane(live.viewer)?.control.status === "answering")
+            this.patchControl(live.viewer, { ...noControl, outcome: "answer-failed" });
+        }
+      }
       if (live.take) live.take.abandoned = true;
       live.take = null;
       const pane = this.pane(live.viewer);

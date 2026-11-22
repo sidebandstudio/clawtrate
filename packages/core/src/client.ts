@@ -1752,7 +1752,7 @@ export class ClawtrateClient {
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
         this.quietReconnect = true;
-        void this.open();
+        void this.open({ keepPendingAnswer: true });
       },
     });
     this.scopeUpgrade = upgrade;
@@ -5345,8 +5345,8 @@ export class ClawtrateClient {
     return this.options.allowGatewayUrl ? this.options.allowGatewayUrl(url) : true;
   }
 
-  private async open(): Promise<void> {
-    this.close();
+  private async open(options?: { keepPendingAnswer: boolean }): Promise<void> {
+    this.close(options);
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
@@ -5979,7 +5979,7 @@ export class ClawtrateClient {
       this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
   }
 
-  private close(): void {
+  private close(options?: { keepPendingAnswer: boolean }): void {
     this.generation += 1;
     this.discoveryRead = null;
     this.selectionReady = -1;
@@ -5993,7 +5993,7 @@ export class ClawtrateClient {
     this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
-    this.computer.connectionLost();
+    this.computer.connectionLost(options?.keepPendingAnswer);
     this.streams.clear();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;

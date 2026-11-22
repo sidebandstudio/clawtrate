@@ -147,7 +147,7 @@ async function watch(page: Page) {
       () =>
         panel(page)
           .locator(".screen[data-state=live] canvas")
-          .evaluate((canvas: HTMLCanvasElement) => canvas.width)
+          .evaluate((canvas: HTMLCanvasElement) => Number(canvas.dataset.pageWidth) || 0)
           .catch(() => 0),
       { timeout: 30_000 },
     )
@@ -258,7 +258,7 @@ test("F-139 F-142: a bot opens a scripted loopback page in its own browser; the 
       .poll(() =>
         full(page)
           .locator("canvas")
-          .evaluate((canvas: HTMLCanvasElement) => canvas.width)
+          .evaluate((canvas: HTMLCanvasElement) => Number(canvas.dataset.pageWidth) || 0)
           .catch(() => 0),
       )
       .toBeGreaterThan(0);
@@ -479,6 +479,18 @@ test("F-142: when the gateway stops answering renewals, You have control ends wi
     await panel(page).getByRole("button", { name: "Open Pip's browser full window" }).click();
     await full(page).getByRole("button", { name: "Take control" }).click();
     await expect(bar(page)).toContainText("You have control", { timeout: 60_000 });
+    const ready = (await pageRecord()).seq;
+    await clickPage(page, 240, 130);
+    await page.keyboard.type("before pause");
+    await expect
+      .poll(
+        async () =>
+          (await pageRecord(ready)).events.some(
+            (e) => e.kind === "text" && e.value.endsWith("before pause"),
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
     const before = (await pageRecord()).seq;
     process.kill(pid!, "SIGSTOP");
     paused = true;
@@ -604,7 +616,7 @@ test("F-142 F-150: a dropped connection ends the view and control at once, and o
         () =>
           panel(page)
             .locator(".screen[data-state=live] canvas")
-            .evaluate((canvas: HTMLCanvasElement) => canvas.width)
+            .evaluate((canvas: HTMLCanvasElement) => Number(canvas.dataset.pageWidth) || 0)
             .catch(() => 0),
         { timeout: 30_000 },
       )

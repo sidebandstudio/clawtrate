@@ -593,6 +593,11 @@ export function computerFixture(
         };
       case "clawtrate-computer.control.take": {
         if (
+          (mode === "elsewhere" || mode === "elsewhere-taking") &&
+          p.targetId === TABS[0]!.targetId
+        )
+          throw refuse("UNAVAILABLE", "control_held");
+        if (
           mode === "conflict" ||
           mode === "conflict-window" ||
           (mode === "conflict-ends" && !conflictEnded)

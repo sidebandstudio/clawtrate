@@ -393,6 +393,24 @@ describe("a view from start to end (F-142, section 17)", () => {
     expect(streamUrl("http://127.0.0.1:1", "/clawtrate-computer/stream?ticket=x")).toBeNull();
   });
 
+  it("F-142: a remote stream needs TLS before the client asks for a ticket", async () => {
+    const path = "/clawtrate-computer/stream?ticket=x";
+    for (const host of ["127.0.0.2", "[::1]", "localhost"]) {
+      expect(streamUrl(`ws://${host}`, path)).toBe(`ws://${host}${path}`);
+    }
+    expect(streamUrl("wss://gateway.example", path)).toBe(`wss://gateway.example${path}`);
+    for (const host of ["gateway.example", "127.gateway.example", "192.0.2.1"]) {
+      expect(streamUrl(`ws://${host}`, path)).toBeNull();
+    }
+    const h = harness();
+    h.ctx.gatewayUrl = () => "ws://gateway.example";
+    await ready(h);
+    await h.views.watch(h.viewer);
+    expect(h.calls("clawtrate-computer.view.open")).toEqual([]);
+    expect(h.streams).toHaveLength(0);
+    expect(h.pane().view).toMatchObject({ status: "ended", end: "failed" });
+  });
+
   it("hands the viewer only the newest frame, once, and drops it when the view ends", async () => {
     const h = harness();
     await live(h);
@@ -1225,6 +1243,7 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
       renewWithinMs: 20_000,
     });
     const renewals = h.calls("clawtrate-computer.view.renew").length;
+    await h.views.check(h.viewer);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewals);
     // Switching task keeps the line.
@@ -1271,6 +1290,30 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     await vi.advanceTimersByTimeAsync(30_000);
     expect(h.calls("clawtrate-computer.view.renew")).toHaveLength(renewals);
   });
+
+  for (const reply of ["renewed", "tab gone"] as const) {
+    it(`F-145: a Check that answers ${reply} after a later refused hand-back leaves control unconfirmed`, async () => {
+      vi.useFakeTimers();
+      const renew = Promise.withResolvers<unknown>();
+      const h = harness({
+        "clawtrate-computer.control.release": () => {
+          throw refused("FORBIDDEN", "not_holder");
+        },
+        "clawtrate-computer.view.renew": () => renew.promise,
+      });
+      await granted(h);
+      h.views.release(h.viewer);
+      await vi.advanceTimersByTimeAsync(0);
+      const checking = h.views.check(h.viewer);
+      h.views.release(h.viewer);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.pane().control.status).toBe("unconfirmed");
+      if (reply === "renewed") renew.resolve({ leaseRenewed: true });
+      else renew.reject(refused("UNAVAILABLE", "tab_not_in_bots_browser"));
+      await checking;
+      expect(h.pane().control.status).toBe("unconfirmed");
+    });
+  }
 
   it("F-149: switching gateways drops the Stop line, and a Stop still out changes nothing on the new gateway", async () => {
     const h = harness();

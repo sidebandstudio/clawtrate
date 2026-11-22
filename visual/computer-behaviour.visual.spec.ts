@@ -499,6 +499,17 @@ test.describe("the full view on the desktop", () => {
     await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 1 min ago");
   });
 
+  for (const mode of ["elsewhere", "elsewhere-taking"]) {
+    test(`F-142: the full view refuses a take on the tab held by another device (${mode})`, async ({
+      page,
+    }) => {
+      await openFixture(page, `${COMPUTER}&computer=${mode}`, "light");
+      await openFull(page);
+      await take(page);
+      await expect.poll(async () => (await pane(page))?.control.status).toBe("conflict");
+    });
+  }
+
   test("F-142: another device's take that is still waiting for the bot is asking for control, never has control", async ({
     page,
   }) => {

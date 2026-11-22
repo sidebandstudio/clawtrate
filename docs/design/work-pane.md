@@ -668,6 +668,8 @@ Choosing Watch opens the view (F-140, F-143):
 
 ### A view from start to end
 
+Watching a remote gateway requires `wss://`. The device checks the address before requesting a stream ticket. A gateway on loopback can use `ws://`.
+
 Every Watch starts a new view, with its own number on this device. Every answer the gateway sends for a view (its ticket, its stream, its frames, its renewals) is matched to that number, and an answer for a view that has ended is disposed of at once. Nothing appears after the person has left.
 
 | The view is | Entered when                                                | If the person stops watching or leaves (any cause in "How a view ends")                                                                                                                                                                           |

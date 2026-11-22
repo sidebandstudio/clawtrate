@@ -188,6 +188,51 @@ describe("Give back control and answer: the answer is the viewer's that chose it
     }
   });
 
+  for (const drop of [false, true]) {
+    it(`F-145: ${drop ? "a dropped socket retires the answer waiting for access" : "the requested scope upgrade keeps the answer alive"}`, async () => {
+      const gateway = computerGateway(() => released);
+      const wait = deferred<unknown>();
+      gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+      gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+      const { client, transcript, viewer, other } = await inControl(gateway, [
+        "operator.read",
+        "operator.write",
+      ]);
+      const approval = {
+        status: "approved",
+        requestId: "up-1",
+        deviceToken: "rotated",
+        scopes: ["operator.read", "operator.write", "operator.questions"],
+      };
+      try {
+        await viewer.apply({ type: "computerRelease", answer: ANSWER });
+        await until(
+          () =>
+            client.state.connection.upgrade.status === "pending" && client.pendingAccessWaiters > 0,
+        );
+        if (drop) gateway.dropAll();
+        wait.resolve(approval);
+        if (drop) {
+          await until(
+            () => client.pendingAccessWaiters === 0 && !transcript().questions[0]?.submitting,
+          );
+          expect(gateway.calls("question.resolve")).toEqual([]);
+          expect(client.state.computer?.panes[viewer.computerViewer()!]?.control).toMatchObject({
+            status: "none",
+            outcome: "answer-failed",
+          });
+        } else {
+          await until(() => gateway.calls("question.resolve").length === 1);
+        }
+      } finally {
+        wait.resolve(approval);
+        viewer.dispose();
+        other.dispose();
+        client.stop();
+      }
+    });
+  }
+
   it("F-145: a viewer that stays sends the answer once the release is confirmed", async () => {
     const gateway = computerGateway(() => released);
     const { client, viewer, other } = await inControl(gateway);
