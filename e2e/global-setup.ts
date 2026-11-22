@@ -16,9 +16,9 @@
 // its record behind, and the next run in this checkout cleans it up once that
 // run's runner is proven gone.
 
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
@@ -91,9 +91,29 @@ export function runningOthers(own: string[], keep: string[] = []): string[] {
     .sort();
 }
 
-/** Reset one of this run's instances, only if it still holds the run this run gave it. */
-const resetInstance = (name: string, runId: string) => {
-  devGateway(name, "reset", "--run-id", runId);
+/**
+ * Reset one of this run's instances, only if it still holds the run this run
+ * gave it. A reset that fails throws with everything it printed, so a failed
+ * teardown says what kept the instance.
+ */
+export const resetInstance = (name: string, runId: string) => {
+  const args = ["reset", "--run-id", runId, "--instance", name];
+  const result = spawnSync(process.execPath, [CLI, ...args], {
+    cwd: ROOT,
+    env: cliEnv(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0) {
+    const printed = [result.stdout, result.stderr]
+      .map((text) => (text ?? "").trim())
+      .filter(Boolean)
+      .join("\n");
+    throw new Error(
+      `dev-gateway ${args.join(" ")} failed (${result.error?.message ?? result.status ?? result.signal})` +
+        (printed ? `:\n${printed}` : " and printed nothing"),
+    );
+  }
 };
 
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -232,7 +252,12 @@ export default async function globalSetup() {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  process.on("exit", () => void cleanUpOnce());
+  process.on("exit", () => {
+    const first = cleaned === null;
+    const problems = cleanUpOnce();
+    // Said only when nothing cleaned up before, and written at once: the process ends next.
+    if (first && problems.length > 0) sayNow(`${problems.join("\n")}\n`);
+  });
 
   /** A dev-gateway command, run so that signals are handled while it runs. */
   const cli = (instance: string, ...args: string[]) =>
@@ -375,4 +400,17 @@ export default async function globalSetup() {
     throw error;
   }
   return teardown;
+}
+
+/**
+ * Writes to standard error before the process ends. A short write is finished;
+ * a closed or full standard error loses the text, never the run's exit code.
+ */
+function sayNow(text: string): void {
+  const bytes = Buffer.from(text);
+  try {
+    for (let at = 0; at < bytes.length;) at += writeSync(2, bytes, at);
+  } catch {
+    // Nobody is reading what is left.
+  }
 }
