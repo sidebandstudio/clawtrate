@@ -623,3 +623,59 @@ test("F-248: once a link's chat is open, another chat opened drops the link's qu
   await expect(note()).toHaveText("");
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
+
+test("F-248: on the phone's list, a link's card with nothing to return to closes to the list", async () => {
+  await page.setViewportSize(PHONE);
+  await page.getByRole("button", { name: "Back to bots" }).click();
+  await expect(shell()).toHaveAttribute("data-view", "list");
+  // Nothing has focus, as when the system brings the app forward for the link.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await deliver(`${link("marlow", "Hi")}&send=1`);
+  await expectCantOpen("This Clawtrate link is invalid. Ask for a new link.");
+  // Not the conversation's heading, hidden behind the list.
+  await expect(page.locator(".rail :focus")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+test("F-248: a link that comes while the tasks load keeps the loading screen until they have", async () => {
+  await quit();
+  page = await launch();
+  /** Hold back a method's answers until `gate` opens; returns how to restore it. */
+  const hold = (method: string, gate: Promise<void>) => {
+    const answer = served.gateway.handlers[method]!;
+    served.gateway.handlers[method] = async (params) => {
+      await gate;
+      return answer(params);
+    };
+    return () => (served.gateway.handlers[method] = answer);
+  };
+  const bots = Promise.withResolvers<void>();
+  const tasks = Promise.withResolvers<void>();
+  const restore = [
+    hold("agents.list", bots.promise),
+    hold("sessions.subscribe", tasks.promise),
+    hold("sessions.list", tasks.promise),
+  ];
+  try {
+    await connect();
+    await expect(page.getByTestId("setup-steps").getByText("Loading bots")).toBeVisible({
+      timeout: 30_000,
+    });
+    await deliver(link("otto", "Hi"));
+    // The bots come and the tasks do not: the shell would show "No tasks yet".
+    bots.resolve();
+    await page.waitForTimeout(500);
+    await expect(page.getByRole("region", { name: "Loading conversation" })).toBeVisible();
+    await expect(shell()).toHaveCount(0);
+  } finally {
+    bots.resolve();
+    tasks.resolve();
+    for (const each of restore) each();
+  }
+  // Otto's chat has a draft from before, so the link asks.
+  await expect(field()).toHaveAttribute("aria-label", "Message Otto", { timeout: 30_000 });
+  await expect(choice()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(choice()).toHaveCount(0);
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});

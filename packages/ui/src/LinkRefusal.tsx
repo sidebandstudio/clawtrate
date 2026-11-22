@@ -6,7 +6,8 @@ import { LINK_REFUSALS, type LinkRefusal as Refusal } from "./chat-link.ts";
  * "Can't open link" (docs/design/links.md section 3): the confirmation card with
  * the reason and one Close button. Enter or Escape closes it. Focus returns to
  * the control that had it, or, when the app has just opened, to the heading or
- * first control of the screen shown when the card closes.
+ * first control of the screen shown when the card closes: the first one on
+ * screen, so not the conversation's while the phone layout shows the list.
  */
 export function LinkRefusal({
   refusal,
@@ -22,10 +23,11 @@ export function LinkRefusal({
   const fallback = useMemo<RefObject<HTMLElement | null>>(
     () => ({
       get current() {
-        return (
-          document.querySelector<HTMLElement>(".conversation h1[tabindex]") ??
-          document.querySelector<HTMLElement>(firstControl)
-        );
+        const shown = (selector: string) =>
+          [...document.querySelectorAll<HTMLElement>(selector)].find(
+            (each) => each.checkVisibility() && !each.closest("[inert]"),
+          ) ?? null;
+        return shown(".conversation h1[tabindex]") ?? shown(firstControl);
       },
     }),
     [firstControl],

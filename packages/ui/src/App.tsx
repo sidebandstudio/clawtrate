@@ -105,16 +105,7 @@ export function App({
   else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
     setMismatch(null);
   }
-  const screen = mismatch || setupHolds(info, state.setup) ? "connect" : screenFor(state);
-  // When one screen replaces another and takes focus with it, focus the first
-  // control of the new one. Not on launch: nothing had focus to lose.
-  const shown = useRef(screen);
-  useEffect(() => {
-    if (shown.current === screen) return;
-    shown.current = screen;
-    if (document.activeElement && document.activeElement !== document.body) return;
-    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
-  }, [screen]);
+  const settled = mismatch || setupHolds(info, state.setup) ? "connect" : screenFor(state);
   // Clawtrate links (docs/design/links.md). One waits at a time, a later one in
   // its place, while startup connects or a connection's bots and tasks load.
   // It then opens its chat, or the card says why it cannot; a refused link is
@@ -142,6 +133,20 @@ export function App({
       : null;
   // The chat opens in front of Settings, which would leave it unusable behind.
   if (opening && settingsOpen) setSettingsOpen(false);
+  // While a link waits, the loading screen stays up until the tasks are read as well as
+  // the bots, which would open the shell on "No tasks yet" (links.md section 3). A shell
+  // already up stays.
+  const [screen, setScreen] = useState(settled);
+  if (screen !== settled && !(screen === "connect" && outcome?.kind === "wait")) setScreen(settled);
+  // When one screen replaces another and takes focus with it, focus the first
+  // control of the new one. Not on launch: nothing had focus to lose.
+  const shown = useRef(screen);
+  useEffect(() => {
+    if (shown.current === screen) return;
+    shown.current = screen;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+  }, [screen]);
   // The link's text went in or the person kept their draft; or its chat or
   // connection changed before then, and the card says so.
   const linkDone = useCallback(
