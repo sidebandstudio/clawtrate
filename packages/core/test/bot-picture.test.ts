@@ -521,6 +521,34 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  it("retires the first gateway's partial when a later identity read identifies its replacement", async () => {
+    const { client, fake } = await accountsClient();
+    try {
+      const { created } = await heldAtTask(client, fake);
+      fake.identity = "";
+      await reconnected(client, fake);
+      await created;
+      await until(() => client.state.discovery.status === "ready");
+      expect(client.state.connection.gatewayId).toBeNull();
+      expect(client.state.accounts.creation).toMatchObject({ status: "partial", botId: "viral" });
+
+      // A delayed Finish from the original dialog prompts a fresh identity read.
+      fake.identity = "gateway-b";
+      const viewer = createBridgeSession(client);
+      const from = requested(fake);
+      await expect(
+        viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-a" }),
+      ).rejects.toThrow("another gateway");
+      expect(client.state.accounts.creation).toBeNull();
+      await expect(
+        viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-b" }),
+      ).rejects.toThrow("nothing left to finish");
+      expect(sentSince(fake, from)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("never runs A's Finish on the gateway that replaced it, once B has said who it is", async () => {
     const { client, fake } = await accountsClient();
     const { created } = await heldAtTask(client, fake);
@@ -561,7 +589,7 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
-  it("two windows finish the same first task only once while the returning gateway is being identified", async () => {
+  it("concurrent host callers finish the first task only once while the returning gateway is being identified", async () => {
     const { client, fake } = await accountsClient();
     const identity = deferred<unknown>();
     try {

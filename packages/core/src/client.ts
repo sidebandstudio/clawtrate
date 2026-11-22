@@ -4928,6 +4928,8 @@ export class ClawtrateClient {
     if (gatewayId === null)
       throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
     const here = await this.readGatewayIdentity();
+    // A bot command can be the first to identify this connection after discovery got no ID.
+    if (here !== null && alive()) this.accounts.onGateway(here);
     if (!alive()) throw new Error("The connection changed before the change was sent.");
     // `gatewayId` is known here, so a gateway that names none (null) never matches it.
     if (here !== gatewayId)
