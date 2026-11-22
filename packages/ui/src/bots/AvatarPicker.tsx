@@ -159,7 +159,10 @@ export async function pictureFor(
     const canvas = document.createElement("canvas");
     canvas.width = PICTURE_PX;
     canvas.height = PICTURE_PX;
-    canvas.getContext("2d")?.drawImage(image, 0, 0, PICTURE_PX, PICTURE_PX);
+    // Without a context nothing is drawn, and a blank canvas is not the creature chosen.
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.drawImage(image, 0, 0, PICTURE_PX, PICTURE_PX);
     return pictureWithChoice(canvas.toDataURL("image/png"), draft.choice);
   } catch {
     return null;
@@ -190,6 +193,46 @@ const MAX_UPLOAD_PIXELS = 16_000_000;
 /** How much of the file the format's header is looked for in. */
 const HEADER_BYTES = 256 * 1024;
 
+/**
+ * A GIF's size: its logical screen, once every frame's descriptor is read and
+ * found inside it. The frames' compressed data is stepped over, never expanded.
+ * Null for a GIF that is cut short, has a frame outside its screen or a side of
+ * zero, or holds a block GIF doesn't have. Give it the whole file.
+ */
+export function gifSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const le16 = (i: number) => (bytes[i] ?? 0) | ((bytes[i + 1] ?? 0) << 8);
+  if (bytes.length < 13) return null;
+  const width = le16(6);
+  const height = le16(8);
+  if (width < 1 || height < 1) return null;
+  const table = (packed: number) => (packed & 0x80 ? 3 * 2 ** ((packed & 7) + 1) : 0);
+  let at = 13 + table(bytes[10]!);
+  // Sub-blocks: a length byte, that many bytes, until a length of zero.
+  const skipBlocks = () => {
+    while (at < bytes.length) {
+      const size = bytes[at]!;
+      at += 1 + size;
+      if (size === 0) return true;
+    }
+    return false;
+  };
+  while (at < bytes.length) {
+    const block = bytes[at]!;
+    if (block === 0x3b) return { width, height };
+    if (block === 0x21) {
+      at += 2;
+      if (!skipBlocks()) return null;
+    } else if (block === 0x2c) {
+      if (at + 10 > bytes.length) return null;
+      const [left, top, w, h] = [le16(at + 1), le16(at + 3), le16(at + 5), le16(at + 7)];
+      if (w < 1 || h < 1 || left + w > width || top + h > height) return null;
+      at += 10 + table(bytes[at + 9]!) + 1;
+      if (!skipBlocks()) return null;
+    } else return null;
+  }
+  return null;
+}
+
 /** The real format and size of an image, from its first bytes, or null when it is none of the four. */
 export function imageHeader(
   bytes: Uint8Array,
@@ -202,8 +245,8 @@ export function imageHeader(
   // PNG: the signature, then IHDR's width and height.
   if ([137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => at(i) === b) && tag(12, "IHDR"))
     return { width: be32(16), height: be32(20) };
-  // GIF: the logical screen.
-  if (tag(0, "GIF87a") || tag(0, "GIF89a")) return { width: le16(6), height: le16(8) };
+  // GIF: the logical screen, and every frame inside it (`gifSize`).
+  if (tag(0, "GIF87a") || tag(0, "GIF89a")) return gifSize(bytes);
   // WebP: the first chunk is VP8 (lossy), VP8L (lossless) or VP8X (extended).
   if (tag(0, "RIFF") && tag(8, "WEBP")) {
     if (tag(12, "VP8 ")) return { width: le16(26) & 0x3fff, height: le16(28) & 0x3fff };
@@ -241,7 +284,11 @@ export function imageHeader(
 /** An image the person chose, checked before it is decoded, cropped to its centre square and made small enough to keep. */
 async function uploadedPicture(file: File): Promise<string> {
   if (file.size >= MAX_UPLOAD_BYTES) throw new UploadRefused("size");
-  const header = imageHeader(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
+  let head = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
+  // A GIF's frames can be anywhere in it: its whole file is read (under 25 MB) to check each.
+  if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && file.size > head.length)
+    head = new Uint8Array(await file.arrayBuffer());
+  const header = imageHeader(head);
   if (header === "unknown") throw new UploadRefused("type");
   if (!header || header.width < 1 || header.height < 1) throw new UploadRefused("read");
   if (
@@ -257,6 +304,9 @@ async function uploadedPicture(file: File): Promise<string> {
     throw new UploadRefused("read");
   }
   try {
+    // A second check, on what the decoder made: never more than the header said.
+    if (bitmap.width > header.width || bitmap.height > header.height)
+      throw new UploadRefused("pixels");
     const side = Math.min(bitmap.width, bitmap.height);
     for (const px of [PICTURE_PX, 96, 72, 56]) {
       const canvas = document.createElement("canvas");
