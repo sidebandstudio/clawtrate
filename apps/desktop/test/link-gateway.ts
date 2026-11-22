@@ -1,7 +1,8 @@
 // An in-memory gateway for the link check (e2e-desktop/links.spec.ts), behind a
 // WebSocket on 127.0.0.1 the app connects to: bots with a chat each, one with
-// none, and one with two, the newest marked unread, on a connection that may
-// write. Nothing here reaches another host.
+// none, and one with two, the newest marked unread. It grants what a connection
+// asks for, and approves an access request at once, so a new device that asks
+// may write. Nothing here reaches another host.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -12,9 +13,20 @@ export const GATEWAY_ID = "5ca1ab1e".repeat(8);
 
 export async function linkGateway() {
   const gateway = new FakeGateway();
-  gateway.connectReply = () => ({
-    ok: true,
-    payload: helloOk(["operator.read", "operator.write"]),
+  gateway.connectReply = (params) => {
+    const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+    return { ok: true, payload: helloOk(scopes, auth?.deviceToken ?? "device-token") };
+  };
+  let upgrade: string[] = [];
+  gateway.handlers["device.scopes.requestUpgrade"] = (params) => {
+    upgrade = (params as { scopes: string[] }).scopes;
+    return { requestId: "access" };
+  };
+  gateway.handlers["device.scopes.waitUpgrade"] = () => ({
+    status: "approved",
+    requestId: "access",
+    deviceToken: "upgraded",
+    scopes: upgrade,
   });
   gateway.handlers["gateway.identity.get"] = () => ({ deviceId: GATEWAY_ID });
   gateway.handlers["agents.list"] = () => ({

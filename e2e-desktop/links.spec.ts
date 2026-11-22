@@ -101,6 +101,38 @@ async function deliver(...given: string[]) {
   }
 }
 
+/** Connect to the in-memory gateway from the address form. */
+async function connect() {
+  // The first screen asks where OpenClaw runs; the address-and-token form is under Advanced.
+  await page.getByRole("button", { name: "Advanced" }).click();
+  await page.getByPlaceholder("Gateway address").fill(served.url);
+  await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
+}
+
+/**
+ * Connect, and deliver a link once the bots are loading, which the gateway holds
+ * back until the waiting screen has been seen.
+ */
+async function deliverWhileBotsLoad(given: string) {
+  const listed = Promise.withResolvers<void>();
+  const agents = served.gateway.handlers["agents.list"]!;
+  served.gateway.handlers["agents.list"] = async (params) => {
+    await listed.promise;
+    return agents(params);
+  };
+  try {
+    await connect();
+    await expect(page.getByTestId("setup-steps").getByText("Loading bots")).toBeVisible({
+      timeout: 30_000,
+    });
+    await deliver(given);
+    await expect(page.getByRole("region", { name: "Loading conversation" })).toBeVisible();
+  } finally {
+    listed.resolve();
+    served.gateway.handlers["agents.list"] = agents;
+  }
+}
+
 const field = () => page.getByTestId("composer-input");
 const note = () => page.getByTestId("link-note");
 const shell = () => page.locator(".shell");
@@ -186,9 +218,14 @@ test.beforeAll(async () => {
     for (const child of [...started]) await stopElectron(child);
   });
   page = await launch();
-  await page.getByPlaceholder("Gateway address").fill(served.url);
-  await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
+  await connect();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  // A new device only reads until it asks for access. Later launches connect with what it holds.
+  await page
+    .getByRole("region", { name: "Access" })
+    .getByRole("button", { name: "Request access" })
+    .click();
+  await expect(field()).toBeVisible({ timeout: 30_000 });
 });
 
 test.afterAll(async () => {
@@ -413,24 +450,26 @@ test("F-248: a link Windows split in two is invalid, and its second half is no s
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
-test("F-248: a link that starts the app waits for its connection, then opens the chat", async () => {
+test("F-248: a link that starts the app says so when no gateway is connected", async () => {
   await quit();
-  // The bots load only when the check lets them, so the waiting screen can be seen.
-  const listed = Promise.withResolvers<void>();
-  const agents = served.gateway.handlers["agents.list"]!;
-  served.gateway.handlers["agents.list"] = async (params) => {
-    await listed.promise;
-    return agents(params);
-  };
-  try {
-    page = await launch("--", link("otto", "Check the release notes."));
-    await expect(page.getByRole("region", { name: "Loading conversation" })).toBeVisible({
-      timeout: 30_000,
-    });
-  } finally {
-    listed.resolve();
-    served.gateway.handlers["agents.list"] = agents;
-  }
+  // An automated launch never reopens the gateway its data folder remembers
+  // (docs/development/setup.md), so this one opens on the connect screen.
+  page = await launch("--", link("otto", "Check the release notes."));
+  await expect(refusal()).toBeVisible({ timeout: 30_000 });
+  await expectCantOpen(
+    "Clawtrate isn't connected to a gateway. Connect to the right gateway, then open the link again.",
+  );
+  // Nothing had focus when the app opened: the screen's first control has it now (App.tsx).
+  await expect(
+    page
+      .locator(".app :is(input, button, [tabindex='0']):not([disabled], [tabindex='-1'])")
+      .first(),
+  ).toBeFocused();
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: a link that comes while the bots load waits for them, then opens the chat", async () => {
+  await deliverWhileBotsLoad(link("otto", "Check the release notes."));
   await expect(field()).toHaveAttribute("aria-label", "Message Otto", { timeout: 30_000 });
   await expect(field()).toHaveValue("Check the release notes.");
   await expect(note()).toHaveText(ADDED);
@@ -441,9 +480,11 @@ test("F-248: a link that starts the app waits for its connection, then opens the
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
-test("F-248: closing the card of a link that started the app focuses the screen's heading", async () => {
+test("F-248: closing the card of a link that waited focuses the heading of the screen shown", async () => {
   await quit();
-  page = await launch("--", link("nobody", "Hi"));
+  page = await launch();
+  // The card opens as the chat replaces the waiting screen.
+  await deliverWhileBotsLoad(link("nobody", "Hi"));
   await expect(refusal()).toBeVisible({ timeout: 30_000 });
   await expectCantOpen(
     "This bot isn't on the connected gateway. Check the link or ask for a new one.",
