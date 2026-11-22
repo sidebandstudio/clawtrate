@@ -192,16 +192,45 @@ export function MessageActions({
     const touch = toolbar.dataset.pointer === "touch";
     const clear = reachPast(toolbar) + 2;
     const scroller = turn.closest<HTMLElement>(".transcript");
+    const inner = scroller?.firstElementChild;
     const view = scroller?.getBoundingClientRect();
-    const band = scroller
-      ? Number.parseFloat(getComputedStyle(scroller.firstElementChild ?? scroller).paddingTop) || 0
-      : 0;
+    const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
     const first = view ? view.top + band + clear - turnBox.top : -Infinity;
     const last = view ? view.bottom - clear - height - turnBox.top : Infinity;
     const quote = turn.previousElementSibling;
-    const controls = touch
-      ? [...(scroller ?? turn).querySelectorAll(".reply-quote, .reaction, .replies-link")]
-      : [];
+    // Only what lies within a bar and its reach of the message and its quote is looked at: the
+    // message's row of the transcript, and the rows next to it out to that far. A 44 px touch area
+    // reaches at most 22 px past its control.
+    const margin = height + 2 * clear + 44;
+    const from = Math.min(turnBox.top, quote?.getBoundingClientRect().top ?? Infinity) - margin;
+    const to = turnBox.bottom + margin;
+    const near = (element: Element) => {
+      const each = element.getBoundingClientRect();
+      return each.bottom > from && each.top < to;
+    };
+    const rows: Element[] = [];
+    if (touch) {
+      let row: Element = turn;
+      while (inner?.contains(row) && row.parentElement !== inner) row = row.parentElement!;
+      rows.push(row);
+      if (row.parentElement === inner) {
+        // A row that is not drawn has no place, and is passed over.
+        const drawn = (each: Element) => each.getClientRects().length > 0;
+        for (let each = row.previousElementSibling; each; each = each.previousElementSibling)
+          if (drawn(each)) {
+            if (each.getBoundingClientRect().bottom <= from) break;
+            rows.push(each);
+          }
+        for (let each = row.nextElementSibling; each; each = each.nextElementSibling)
+          if (drawn(each)) {
+            if (each.getBoundingClientRect().top >= to) break;
+            rows.push(each);
+          }
+      }
+    }
+    const controls = rows
+      .flatMap((row) => [...row.querySelectorAll(".reply-quote, .reaction, .replies-link")])
+      .filter(near);
     const taken = controls.map((control) => {
       const area = touchArea(control);
       return {
@@ -251,26 +280,34 @@ export function MessageActions({
   }, [turnRef, role]);
 
   // A bar whose width changes while it shows, as write access comes or goes, or whose column
-  // changes width, is placed again, and so is one whose transcript is resized or scrolled, as
-  // when the screen gets shorter. It shows while the stylesheet lets it take the pointer.
+  // changes width, is placed again. It shows while the stylesheet lets it take the pointer.
   useEffect(() => {
     const turn = turnRef.current;
     const toolbar = bar.current;
     if (!turn || !toolbar) return;
-    const again = () => {
+    const observer = new ResizeObserver(() => {
       if (getComputedStyle(toolbar).pointerEvents !== "none") measure();
-    };
-    const scroller = turn.closest<HTMLElement>(".transcript");
-    const observer = new ResizeObserver(again);
+    });
     observer.observe(toolbar);
     observer.observe(turn);
-    if (scroller) observer.observe(scroller);
-    scroller?.addEventListener("scroll", again, { passive: true });
-    return () => {
-      observer.disconnect();
-      scroller?.removeEventListener("scroll", again);
-    };
+    return () => observer.disconnect();
   }, [turnRef, measure]);
+
+  // An open bar is placed again as its transcript is resized or scrolled, as when the screen gets
+  // shorter. A shut one listens for none of it.
+  const open = held || menu !== null;
+  useEffect(() => {
+    const scroller = turnRef.current?.closest<HTMLElement>(".transcript");
+    if (!open || !scroller) return;
+    const again = () => measure();
+    const resized = new ResizeObserver(again);
+    resized.observe(scroller);
+    scroller.addEventListener("scroll", again, { passive: true });
+    return () => {
+      resized.disconnect();
+      scroller.removeEventListener("scroll", again);
+    };
+  }, [open, turnRef, measure]);
 
   // After the commit: the turn's own ref is set only once its children's layout effects ran.
   useEffect(() => {
