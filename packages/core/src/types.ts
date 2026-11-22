@@ -6,6 +6,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
@@ -221,6 +222,11 @@ export type TranscriptBlock =
        * rows shows several bubbles, each with its own.
        */
       messageId?: string;
+      /**
+       * The gateway's id of the message this bubble's row answers (`openclawDelivery.replyToId`):
+       * its thread. OpenClaw 2026.10.6 keeps one only on a row with no tool call.
+       */
+      replyToId?: string;
     }
   | { kind: "reasoning"; text: string }
   | {
@@ -254,9 +260,14 @@ export type TranscriptItem = {
   messageId?: string;
   /**
    * The message this user row replies to, as the gateway's history says (`__openclaw.replyToId`),
-   * with its preview of it. A bot's turn carries none here (see `replyReference` in `mapping.ts`).
+   * with its preview of it. A bot's turn carries none here: each of its bubbles has its own.
    */
   replyTo?: ReplyReference;
+  /**
+   * The key the gateway stored this user row under (`__openclaw.idempotencyKey`): what ties it to a
+   * message this client sent (`namesOutgoing`).
+   */
+  idempotencyKey?: string;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
@@ -384,6 +395,12 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * Setting up on the host's own computer (`setup.ts`): the look's result and
+   * where Connect stands. Written by the host alone; absent where a host
+   * offers no setup.
+   */
+  setup?: SetupState;
   /**
    * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
    * their own settings and the save under way. Absent until a screen reads them

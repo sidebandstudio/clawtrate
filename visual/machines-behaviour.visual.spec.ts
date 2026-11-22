@@ -7,7 +7,7 @@
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
+import { contextFor, hold, openFixture, OTTO_DISK, release, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PANE = `scene=main&${OTTO_DISK}&panel=open&tab=settings`;
@@ -55,9 +55,11 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
     "Choosing or creating a browser profile isn't offered here.",
   );
   await select.click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
-  // The fixture answers after 300 ms; nothing is announced before.
+  // Nothing is announced before the answer.
   await expect(announcer(page)).not.toHaveText(/Saved/);
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved and applied. Otto's command machine setting: the gateway's machine",
   );
@@ -81,9 +83,11 @@ test("F-046: a save that completes after Back still brings the Runs on row up to
   await openFixture(page, `${PANE}&access=admin`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
-  // Back before the fixture answers (300 ms).
+  // Back before the fixture answers.
   await page.getByRole("button", { name: "Back to settings" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-value")).toHaveText(
     "Command setting: the gateway's machine",
   );
@@ -95,7 +99,9 @@ test("F-046: a save the gateway hasn't applied is said as saved, not applied, an
   await openFixture(page, `${PANE}&access=admin&mwrite=pending`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved. The gateway doesn't report it applied yet. Otto's command machine setting: the gateway's machine",
   );
@@ -103,7 +109,9 @@ test("F-046: a save the gateway hasn't applied is said as saved, not applied, an
   await openFixture(page, `${PANE}&access=admin&mwrite=notapplied`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
     "Saved, but not applied. The gateway answered: config.patch persisted but was not applied to the active Gateway (failed)",
   );
@@ -164,11 +172,13 @@ test("F-274: a workspace form stays while its save is pending", async ({ page })
   await page.getByRole("button", { name: "Change…" }).click();
   const field = page.getByRole("textbox", { name: /path on the gateway's machine/ });
   await field.fill("/srv/clawtrate/workspaces/otto-3");
+  await hold(page);
   await page.getByRole("button", { name: "Save folder" }).click();
-  // The fixture answers after 300 ms: neither Escape nor Cancel ends the form before.
+  // Neither Escape nor Cancel ends the form before the answer.
   await expect(page.getByRole("button", { name: "Cancel" })).toBeDisabled();
   await field.press("Escape");
   await expect(field).toBeVisible();
+  await release(page);
   await expect(announcer(page)).toHaveText(
     "Saved. Otto's workspace: /srv/clawtrate/workspaces/otto-3",
   );
@@ -238,20 +248,70 @@ test("F-046: the Runs on row is drawn from its own read while the account read h
   );
 });
 
-test("F-046: a refused save says what the gateway answered, and the setting shown stays as it was", async ({
+test("F-046: a refused save says nothing was saved and what the gateway answered, and the setting shown stays as it was", async ({
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin&mwrite=refused`, "light");
   await openRunsOn(page);
   await page.getByTestId("runs-on-machine").click();
+  await hold(page);
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
-    /The gateway answered: invalid config/,
+    "Nothing was saved. The gateway answered: invalid config: agents.entries.otto.tools.exec.node",
   );
-  await expect(announcer(page)).toHaveText("Save not confirmed");
+  await expect(announcer(page)).toHaveText("Couldn't save");
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
     "Otto's command machine: media-box · Connected",
   );
+});
+
+test("F-046: a save whose answer never came says it couldn't be confirmed and what reading it back shows, never saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unanswered`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "Read back afterwards, Otto's command machine setting is the gateway's machine.",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+  // The page reads again and shows the stored setting, still without saying it was saved.
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: The gateway's machine",
+  );
+  await expect(announcer(page)).toHaveText("Save not confirmed");
+});
+
+test("F-046: a save whose answer never came, on a gateway that can't read its settings file, says the setting couldn't be read, and still does once the page reads again", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&mwrite=unreadable`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await hold(page);
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await release(page);
+  // The read after the save fails too: the page says so, and the save's outcome stays with it.
+  const failed = page.getByTestId("runs-on-error");
+  await expect(failed.getByRole("heading")).toHaveText("Couldn't load where Otto runs");
+  await expect(failed).toContainText(
+    "The gateway reports that its settings file isn't valid, so it can't be read.",
+  );
+  await expect(page.getByTestId("runs-on-error-line")).toHaveText(
+    "The save couldn't be confirmed: gateway request timed out after 30000ms: config.patch",
+  );
+  await expect(page.getByTestId("runs-on-save-note")).toHaveText(
+    "The setting couldn't be read back either.",
+  );
+  await expect(page.getByTestId("runs-on-machine")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("Save not confirmed");
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({
@@ -404,18 +464,12 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   );
   // One explanation: the bar asks, the section says why.
   await expect(page.getByTestId("device-bar")).not.toContainText("needs device access");
-  // The owner's approval is held and then let through by the check, not left to a page timer: on a
-  // loaded machine that timer can stay unfired for longer than the check waits (#248).
-  await page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
-  );
+  await hold(page);
   await page.getByTestId("device-bar").getByRole("button", { name: "Request access" }).click();
   expect((await sent(page)).filter((c) => c.type === "requestAccess")).toEqual([
     { type: "requestAccess", tier: "pairing" },
   ]);
-  await page.evaluate(() =>
-    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
-  );
+  await release(page);
   const list = page.getByTestId("device-list");
   await expect(list).toBeVisible();
   await expect(list.locator("dt").first()).toHaveText("This device");

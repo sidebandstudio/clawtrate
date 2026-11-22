@@ -1,3 +1,4 @@
+import type { VerifiedArtifact } from "./install.ts";
 // The update engine: reads the feed, compares versions, downloads the file for
 // this system and keeps it only when its size and SHA-512 are the feed's. It
 // reports typed states for the update screens and installs nothing.
@@ -17,7 +18,13 @@ import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { inspectUpdateFile } from "../inspect-update-file.ts";
-import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
+import {
+  checkFeedAddress,
+  GITHUB_RELEASE_ASSETS,
+  releaseAssetRedirect,
+  type LoopbackHttpForTests,
+  type ReleaseAssets,
+} from "./address.ts";
 import { FILE_EXTENSION, fileKeyFor, parseFeed, type FeedFile, type FileKey } from "./feed.ts";
 import { FetchRefused, open, readAll, Transfer, type FetchCause } from "./fetch.ts";
 import { formatVersion, isNewer, parseVersion, type Version } from "./version.ts";
@@ -125,6 +132,8 @@ export interface UpdateEngineOptions {
   readonly onState?: (state: UpdateState) => void;
   /** Tests only: allow `http://127.0.0.1:<port>`. */
   readonly loopbackHttpForTests?: LoopbackHttpForTests;
+  /** Tests only: a stand-in for the project's GitHub release downloads. */
+  readonly releaseAssetsForTests?: ReleaseAssets;
   /** Tests only: smaller bounds. Each is capped at its default. */
   readonly limits?: Partial<Limits>;
 }
@@ -147,15 +156,7 @@ class DownloadFailed extends Error {
 export class UpdateEngine {
   private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
-  private kept: {
-    offerId: string | null;
-    track: UpdateTrack;
-    version: string;
-    path: string;
-    identity: string;
-    sha512: string;
-    size: number;
-  } | null = null;
+  private kept: VerifiedArtifact | null = null;
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
   private readonly options: UpdateEngineOptions;
@@ -225,6 +226,11 @@ export class UpdateEngine {
     return false;
   }
 
+  async verifiedArtifact(id: string, track: UpdateTrack | null, version: string) {
+    const kept = this.kept;
+    return (await this.recheckFile(id, track, version)) && this.kept === kept ? kept : null;
+  }
+
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
     if (this.busy) return this.busy;
     // Publish the shared promise before work synchronously reports its first state.
@@ -250,6 +256,10 @@ export class UpdateEngine {
     } catch {
       // A failed notification cannot interrupt a transfer or change its outcome.
     }
+  }
+
+  private get releases(): ReleaseAssets {
+    return this.options.releaseAssetsForTests ?? GITHUB_RELEASE_ASSETS;
   }
 
   private get userAgent(): string {
@@ -286,7 +296,14 @@ export class UpdateEngine {
       transfer.done();
     }
     this.options.onFeedRead?.();
-    const read = parseFeed(text, address.url, this.key, loopback, this.options.track);
+    const read = parseFeed(
+      text,
+      address.url,
+      this.key,
+      loopback,
+      this.options.track,
+      this.releases,
+    );
     if (!read.ok) return this.report({ kind: "failed", stage: "check", cause: read.cause });
     const { version, releaseDate, file } = read.feed;
     if (!isNewer(version, this.running)) {
@@ -339,7 +356,21 @@ export class UpdateEngine {
         throw new DownloadFailed("write-failed");
       }
       // A declared length other than the feed's is refused before a byte is written.
-      const response = await open(file.url, transfer, this.limits.maxDownloadBytes, this.userAgent);
+      // A release download follows its one redirect to the asset host; the
+      // bytes are still counted and hashed against the feed's.
+      const response = await open(
+        file.url,
+        transfer,
+        this.limits.maxDownloadBytes,
+        this.userAgent,
+        (location) =>
+          releaseAssetRedirect(
+            file.url,
+            location,
+            this.releases,
+            this.options.loopbackHttpForTests,
+          ),
+      );
       response.once("close", () => {
         if (!response.complete) transfer.recordCause("unreachable");
       });

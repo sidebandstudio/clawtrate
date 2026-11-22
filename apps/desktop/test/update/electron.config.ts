@@ -12,6 +12,9 @@ export default {
     define: { ...config.main?.define, __TEST_FEED_PORT__: String(port) },
     resolve: {
       alias: {
+        "../private-update-directory.ts": fileURLToPath(
+          new URL("./screen-test-directory.ts", import.meta.url),
+        ),
         "./update/build-info.ts": fileURLToPath(new URL("./screen-test-host.ts", import.meta.url)),
       },
     },

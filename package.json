@@ -23,6 +23,7 @@
     "package:win": "pnpm --filter @clawtrate/desktop package:win",
     "test:desktop-updates": "playwright test -c playwright.updates.config.ts",
     "check:packaged": "playwright test -c playwright.packaged.config.ts",
+    "release:beta": "node apps/desktop/packaging/release-beta.ts",
     "dev-gateway": "node tools/dev-gateway/src/cli.ts",
     "brand:icons": "node tools/brand/src/make-icons.ts",
     "brand:strip": "node tools/brand/src/strip-logo.ts"

@@ -49,11 +49,12 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           pendingTrack: null,
           tracks: [
             { track: "stable", source: "stable.example" },
-            { track: "nightly", source: "nightly.example" },
+            { track: "nightly", source: "beta.example" },
           ],
           lastCheck: null,
           preferenceIssue: null,
-          install: { kind: "unavailable-in-this-build" },
+          lastAttempt: null,
+          install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
           state: { kind: "not-checked" },
         };
         const probe: Probe = {
@@ -93,6 +94,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
             };
           },
           check: (track) => send("check " + track),
+          restart: (id) => send("restart " + id),
           download: (id) => send("download " + id),
           chooseTrack: (track) => send("choose " + track),
         };
@@ -174,7 +176,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await expect(radio).toBeFocused();
   expect(await page.evaluate(() => window.updateProbe.mutations)).toBe(0);
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeFocused();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeFocused();
   await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
   await expect(status).toHaveText("Changing the update track…");
   await page.evaluate(() => window.updateProbe.emit(8, { kind: "not-checked" }, "nightly"));
@@ -183,13 +185,13 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await expect(radio).toBeChecked();
   const line = page.locator(".update-result dd");
   await page.evaluate(() => window.updateProbe.emit(9, { kind: "not-checked" }, null, "nightly"));
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(status).toHaveText("Not checked yet.");
   await expect(page.locator(".updates-section")).not.toContainText("Saving");
   const check = page.getByRole("button", { name: "Check for Updates" });
   await expect(check).toBeVisible();
   await expect(check).toHaveAccessibleDescription(
-    "Checks nightly.example for a newer build, only when you choose to.",
+    "Checks beta.example for a newer build, only when you choose to.",
   );
   await radio.click();
   await expect(status).toHaveText("Changing the update track…");
@@ -206,10 +208,10 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await page.evaluate(() =>
     window.updateProbe.emit(11, { kind: "not-checked" }, null, "nightly", "track-not-saved"),
   );
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(line).toHaveText("Not checked yet.");
   await expect(page.locator(".update-result p").first()).toHaveText(
-    "Couldn't save the track. Nightly is still selected.",
+    "Couldn't save the track. Beta is still selected.",
   );
   await expect(check).toBeVisible();
   await expect(status).not.toContainText("Saving");
@@ -239,4 +241,97 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   );
   await entry.click();
   await expect(page.locator(".update-result dd")).toHaveText("Couldn't check for updates.");
+});
+
+type OfferProbe = Window & {
+  publishOffer: (snapshot: DesktopUpdateSnapshot) => void;
+  updateCalls: string[];
+  clawtrateFixture: { desktopUpdates: DesktopUpdates };
+};
+
+for (const reason of [
+  "build-not-signed",
+  "windows-install-pending-trial",
+  "no-installer-path",
+] as const) {
+  test.describe(reason, () => {
+    test("F-231: a stale Download control sends nothing after a permanent refusal", async ({
+      page,
+    }) => {
+      await page.addInitScript(() => {
+        const w = window as unknown as OfferProbe;
+        w.updateCalls = [];
+        Object.defineProperty(w, "clawtrateFixture", {
+          configurable: true,
+          set(bridge: { desktopUpdates: DesktopUpdates }) {
+            Object.defineProperty(w, "clawtrateFixture", { value: bridge });
+            const host = bridge.desktopUpdates;
+            const subscribe = host.subscribe;
+            host.subscribe = (listener) => {
+              w.publishOffer = listener;
+              return subscribe(listener);
+            };
+            const { check, download } = host;
+            host.check = (track, revision) => {
+              w.updateCalls.push(`check ${track} ${revision}`);
+              return check(track, revision);
+            };
+            host.download = (id) => {
+              w.updateCalls.push(`download ${id}`);
+              return download(id);
+            };
+          },
+        });
+      });
+      await openFixture(page, "scene=main&updates=offered", "light");
+      await page.getByRole("button", { name: "Open Updates" }).click();
+      const download = page.getByRole("button", { name: "Download", exact: true });
+      await download.evaluate(async (button, reason) => {
+        const w = window as unknown as OfferProbe;
+        const offer = await w.clawtrateFixture.desktopUpdates.get();
+        w.publishOffer({
+          ...offer,
+          revision: offer.revision + 1,
+          install: { kind: "unavailable-in-this-build", reason },
+        });
+        (button as HTMLButtonElement).click();
+      }, reason);
+      await expect(download).toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as OfferProbe).updateCalls)).toEqual([]);
+      await page.getByRole("button", { name: "Check for Updates" }).click();
+      expect(await page.evaluate(() => (window as unknown as OfferProbe).updateCalls)).toEqual([
+        "check stable 1",
+      ]);
+    });
+  });
+}
+
+test("F-231: an unanswered check leaves the startup retry advice out", async ({ page }) => {
+  await openFixture(page, "scene=main&updates=not-checked&after=old-version-running", "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const result = page.getByRole("group", { name: "Update status" });
+  await expect(result).toContainText(
+    "Clawtrate 0.1.0 is running, not 0.2.0. Check for updates to try again.",
+  );
+  const revision = await page.evaluate(async () => {
+    const host = (window as unknown as OfferProbe).clawtrateFixture.desktopUpdates;
+    host.check = async () => {
+      throw new Error("Missing reply");
+    };
+    return (await host.get()).revision;
+  });
+  expect(revision).toBe(0);
+  await page.getByRole("button", { name: "Check for Updates" }).click();
+  await expect(result).toContainText("Couldn't get a reply to the update check.");
+  await expect(
+    page
+      .locator(".updates-section .facts div")
+      .filter({ has: page.getByText("Version", { exact: true }) })
+      .locator("dd"),
+  ).toContainText("Clawtrate 0.1.0");
+  await expect(page.locator(".updates-section")).not.toContainText("not 0.2.0");
+  await expect(page.locator(".updates-section")).not.toContainText(
+    "Check for updates to try again.",
+  );
 });

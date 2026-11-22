@@ -66,6 +66,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - `tools/dev-gateway` starts, seeds and resets development gateways and runs the scripted model. `tools/brand` makes the icons from the logo.
 - `e2e/` holds the end-to-end tests, `e2e-packaged/` the launch check for a packaged app, `visual/` the visual tests and their macOS baselines, and `test/` the repository-wide unit tests, such as the parity check.
 - `docs/` holds the plan, the definition of done, the design, the research and the decisions. [docs/README.md](docs/README.md) lists them.
+- `site/` is the website at clawtrate.dev: static files with no build step, and `site/install.sh`, the optional Terminal install for the Mac beta.
 
 Workspace packages are named under the `@clawtrate` scope. Build on the official `@openclaw/gateway-client` and `@openclaw/gateway-protocol` packages, pinned to an exact version and tested against the gateway version named in `docs/decisions.md`.
 
