@@ -1131,9 +1131,14 @@ export function accountCommand(
         done();
         return Promise.resolve({ botId: command.botId, missing: [] });
       }
-      // finish=release: the answer comes when the page calls `releaseFinish()`.
+      // A second Finish cannot take the answer already held for the first caller.
+      const fixture = globalThis as unknown as { releaseFinish?: () => void };
+      if (fixture.releaseFinish)
+        return Promise.reject(new Error("That bot is already being finished."));
       return new Promise((resolve, reject) => {
-        (globalThis as unknown as { releaseFinish: () => void }).releaseFinish = () => {
+        const release = () => {
+          if (fixture.releaseFinish !== release) return;
+          delete fixture.releaseFinish;
           if (params.finish === "release-failed") {
             reject(new Error("Could not finish the bot."));
             return;
@@ -1141,6 +1146,7 @@ export function accountCommand(
           done();
           resolve({ botId: command.botId, missing: [] });
         };
+        fixture.releaseFinish = release;
       });
     }
     case "dismissBotCreation":

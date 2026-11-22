@@ -75,11 +75,19 @@ export function NewBot({
   // that grants admin access, keeps the dialog's work, and an unknown identity never counts.
   const [gateway] = useState(() => connection.gatewayUrl);
   const [firstConnection] = useState(() => connection.connectedAt);
-  const openedOn = useRef(connection.gatewayId);
+  const [openedOn, setOpenedOn] = useState(connection.gatewayId);
+  if (
+    openedOn === null &&
+    connection.gatewayId !== null &&
+    connection.gatewayUrl === gateway &&
+    connection.connectedAt === firstConnection
+  )
+    setOpenedOn(connection.gatewayId);
   const now$ = useRef(connection);
   const latest = useRef(draft);
   const pending = useRef(false);
   const [preparing, setPreparing] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   // Layout effects, so the guard changes as the dialog is committed, before a Create can resume.
   useLayoutEffect(() => {
     open.current = true;
@@ -90,24 +98,14 @@ export function NewBot({
   useLayoutEffect(() => {
     now$.current = connection;
     latest.current = draft;
-    if (
-      openedOn.current === null &&
-      connection.gatewayUrl === gateway &&
-      connection.connectedAt === firstConnection
-    )
-      openedOn.current = connection.gatewayId;
   });
-  /** Still this opening, connected to a gateway whose identity is positively the one it opened on. */
-  const onItsConnection = () => {
-    const now = now$.current;
-    return (
-      open.current &&
-      now.status === "connected" &&
-      now.gatewayUrl === gateway &&
-      now.gatewayId !== null &&
-      now.gatewayId === openedOn.current
-    );
-  };
+  const matchesGateway = (now: ConnectionState) =>
+    now.status === "connected" &&
+    now.gatewayUrl === gateway &&
+    now.gatewayId !== null &&
+    now.gatewayId === openedOn;
+  const canSubmitHere = matchesGateway(connection);
+  const onItsConnection = () => open.current && matchesGateway(now$.current);
   const stands = () => onItsConnection() && latest.current === draft;
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
@@ -244,7 +242,8 @@ export function NewBot({
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
     // Bound as Create is: this opening, on the gateway it was opened on.
-    if (!partial?.botId || !onItsConnection()) return;
+    if (!partial?.botId || finishing || !stands()) return;
+    setFinishing(true);
     try {
       const { botId, missing } = await bridge.invoke({
         type: "finishBot",
@@ -252,13 +251,14 @@ export function NewBot({
         // The host refuses it unless this is still the gateway it names.
         gatewayId: now$.current.gatewayId,
       });
-      // An answer for an opening that has gone, or from a gateway since replaced, changes nothing.
-      if (!onItsConnection() || missing.length > 0) return;
+      if (!stands() || missing.length > 0) return;
       announce(`Created ${partial.name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      if (onItsConnection()) announce(`Could not finish ${partial.name}`);
+      if (stands()) announce(`Could not finish ${partial.name}`);
+    } finally {
+      if (open.current) setFinishing(false);
     }
   };
 
@@ -507,6 +507,7 @@ export function NewBot({
                 className="button"
                 data-variant="primary"
                 data-size="sm"
+                disabled={!canSubmitHere || finishing}
                 onClick={() => void finish()}
               >
                 Finish {partial.name}
@@ -541,16 +542,19 @@ export function NewBot({
             !draft.account ||
             !listedChoice ||
             !draft.model ||
-            connection.gatewayId === null
+            !canSubmitHere
           }
           onClick={() => void create()}
           data-testid="create"
         >
           {busy || preparing ? "Creating…" : "Create"}
         </button>
-        {connection.gatewayId === null && (
+        {!canSubmitHere && (
           <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
-            Waiting for the gateway to say which gateway it is.
+            {connection.gatewayUrl !== gateway ||
+            (connection.status === "connected" && connection.gatewayId !== null)
+              ? "Reopen New bot to use this gateway. Your draft is kept."
+              : "Waiting for the gateway to say which gateway it is."}
           </p>
         )}
         {!draft.account && !busy && (

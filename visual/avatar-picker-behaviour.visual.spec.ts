@@ -3,6 +3,7 @@
 // person's own picture instead; and Edit picture from the Work pane on admin.
 import { AVATAR_COLORS, choiceFromPicture, defaultAvatar } from "../packages/core/src/avatar.ts";
 import { expect, test, type Page } from "@playwright/test";
+import type { ClawtrateBridge } from "../packages/core/src/bridge.ts";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -898,3 +899,68 @@ for (const outcome of ["release", "release-failed"] as const)
     );
     await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
   });
+
+test("F-034: switching gateways disables Create and keeps the draft for reopening", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await identify(page, "gateway-a");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("First");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  const create = page.getByTestId("create");
+  await expect(create).toBeEnabled();
+  await identify(page, "gateway-b", true);
+  await expect(create).toBeDisabled();
+  await expect(
+    page.getByText("Reopen New bot to use this gateway. Your draft is kept."),
+  ).toBeVisible();
+  await identify(page, "gateway-a", true);
+  await expect(create).toBeEnabled();
+  await identify(page, "gateway-b", true);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(create).toBeEnabled();
+  await page.getByRole("button", { name: "Back to the picture" }).click();
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("First");
+});
+
+for (const outcome of ["release", "release-failed"] as const)
+  test(`F-034: editing the draft while Finish waits keeps the edits after ${outcome}`, async ({
+    page,
+  }) => {
+    await heldFinish(page, outcome);
+    await page.getByRole("button", { name: "Back to the picture" }).click();
+    const name = page.getByRole("textbox", { name: "Name" });
+    await name.fill("Second");
+    await releaseFinish(page);
+    await settled(page);
+    await expect(name).toHaveValue("Second");
+    await expect(page.getByTestId("b-announcer")).not.toHaveText(
+      /^Created Viral$|Could not finish/,
+    );
+    expect((await sent(page)).map((each) => each.type)).not.toContain("dismissBotCreation");
+    await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
+  });
+
+test("F-034: a second Finish cannot take the first fixture answer", async ({ page }) => {
+  await heldFinish(page, "release");
+  const duplicate = await page.evaluate(() => {
+    const held = window as unknown as { clawtrateFixture: ClawtrateBridge; releaseFinish(): void };
+    const fixture = held.clawtrateFixture;
+    const second = fixture.invoke({
+      type: "finishBot",
+      gatewayId: fixture.getState().connection.gatewayId,
+      botId: "viral",
+    });
+    held.releaseFinish();
+    return second.then(
+      () => "accepted",
+      (error: Error) => error.message,
+    );
+  });
+  expect(duplicate).toMatch(/already being finished/);
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Viral/);
+});
