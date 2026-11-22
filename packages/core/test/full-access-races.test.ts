@@ -277,7 +277,7 @@ describe("full access under interleavings", () => {
     client.stop();
   });
 
-  it("a token lost right after the first full pairing ends that pairing's request for the six", async () => {
+  it("a token lost right after the first full pairing ends that pairing's request for the six, and the retry doesn't send the typed token", async () => {
     const storage = memoryStorage();
     const gateway = new FakeGateway();
     gateway.connectReply = (params) => ({
@@ -289,14 +289,19 @@ describe("full access under interleavings", () => {
     await client.connect({ url: URL, token: "shared" });
     await until(() => client.state.connection.status === "connected");
     await until(() => saved(storage) !== null);
+    // Paired: the typed token is dropped from the saved settings.
+    await until(() => JSON.parse(storage.data.get("connection")!).token === null);
     // Lost before any later plan read it.
     storage.data.delete(tokenKey(URL));
     gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
     const before = gateway.connects.length;
     gateway.dropAll();
     await until(() => gateway.connects.length >= before + 1);
-    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+    // The same connection's retry plans afresh: read alone, and no typed token after pairing.
+    for (const each of (gateway.connects as ConnectParams[]).slice(before)) {
       expect(each.scopes).toEqual([...READ_SCOPES]);
+      expect(each.auth?.token).toBeUndefined();
+    }
     client.stop();
   });
 

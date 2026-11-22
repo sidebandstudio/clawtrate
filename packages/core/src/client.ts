@@ -5904,7 +5904,10 @@ export class ClawtrateClient {
             ? this.setupCode.bootstrapToken
             : null;
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
-        const bootstrap = token || code ? null : settings.token;
+        // It is the one the settings carry now, not as this socket opened: dropped once a
+        // pairing saved this device's token, so a retry after that token is lost sends none.
+        const typed = this.settings?.url === settings.url ? this.settings.token : null;
+        const bootstrap = token || code ? null : typed;
         // Exactly the scopes this client means to hold, never what the token happens to allow;
         // a setup connection asks for read alone, a token that arrived meanwhile included,
         // unless full access holds.
