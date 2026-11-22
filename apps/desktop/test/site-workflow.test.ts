@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -89,10 +90,14 @@ function deploysOffMain(text: string): string[] {
 function runtimeImports(path: string): string[] {
   const text = readFileSync(path, "utf8");
   const found: string[] = [];
-  for (const match of text.matchAll(
-    /^\s*(import|export)\s+(type\s+)?(?:[\s\S]*?\sfrom\s+)?["']([^"']+)["'];?/gm,
-  )) {
-    if (!match[2]) found.push(match[3]!);
+  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest);
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly) continue;
+    if (ts.isExportDeclaration(statement) && statement.isTypeOnly) continue;
+    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) {
+      const specifier = statement.moduleSpecifier;
+      if (specifier && ts.isStringLiteral(specifier)) found.push(specifier.text);
+    }
   }
   for (const match of text.matchAll(/\bimport\s*\(\s*(?:(["'])([^"'`]+)\1\s*\))?/g))
     found.push(match[2] ?? "<dynamic>");
@@ -134,12 +139,16 @@ describe("the Site workflow and the feed assembler", () => {
       const entry = join(dir, "entry.ts");
       writeFileSync(
         entry,
-        'import { a } from "./a.ts";\nconst yaml = await import("js-yaml");\nawait import(name);\n',
+        'import { a } from "./a.ts";\nexport type X = string;\nimport value from "pkg";\nconst yaml = await import("js-yaml");\nawait import(name);\n',
       );
       writeFileSync(join(dir, "a.ts"), 'export const a = await import("./b.ts");\n');
       writeFileSync(join(dir, "b.ts"), "export {};\n");
       const found = loaded(relative(ROOT, entry));
-      expect(found.packages.map((each) => each.split(": ")[1])).toEqual(["js-yaml", "<dynamic>"]);
+      expect(found.packages.map((each) => each.split(": ")[1])).toEqual([
+        "pkg",
+        "js-yaml",
+        "<dynamic>",
+      ]);
       expect(found.files.map((file) => file.split("/").at(-1))).toEqual([
         "a.ts",
         "b.ts",
