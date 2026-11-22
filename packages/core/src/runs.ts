@@ -1494,7 +1494,15 @@ export function registerSteerAlias(
   // own run, and no alias is recorded; an empty one (the bare acknowledgement, or history's
   // in-flight id with nothing under it) is only the steer, and goes.
   const shown = findRun(activity, aliasId);
-  if (shown && (shown.steps.length > 0 || shown.text || shown.origin === "local")) return activity;
+  if (
+    shown &&
+    (shown.steps.length > 0 ||
+      shown.text ||
+      shown.origin === "local" ||
+      // The gateway's events reported its start: a run of its own, if nothing of it shows yet.
+      (shown.origin === "gateway" && shown.reportedStartAt !== null))
+  )
+    return activity;
   return {
     ...activity,
     runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,

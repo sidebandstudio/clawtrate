@@ -2936,11 +2936,14 @@ export class ClawtrateClient {
    */
   private async withdrawSteers(key: string, runId: string): Promise<void> {
     // A steer whose frame left counts, answered or not: the gateway may have queued it already.
-    const steers = (this.state.transcripts[key]?.outbox ?? []).filter(
+    // One whose answer never came has no run named; the alias its key got as it left still does.
+    const transcript = this.state.transcripts[key] ?? emptyActivity;
+    const steers = transcript.outbox.filter(
       (message) =>
         message.mode === "steer" &&
-        message.runId === runId &&
-        (message.status === "sent" || (message.status === "sending" && message.leftAt !== null)) &&
+        (message.runId === runId || transcript.steerAliases[message.id] === runId) &&
+        message.leftAt !== null &&
+        ["sending", "sent", "checking", "unknown"].includes(message.status) &&
         message.steer === undefined,
     );
     await Promise.all(

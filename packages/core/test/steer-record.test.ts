@@ -4,7 +4,7 @@
 // goes on; one it holds can be withdrawn with `chat.abort` naming that id, which ends it `chat`
 // aborted and lifecycle end `aborted: true`, with no start, and never runs it.
 import { describe, expect, it } from "vitest";
-import { STEER_WITHDRAWAL_WAIT_MS } from "../src/client.ts";
+import { STEER_WITHDRAWAL_WAIT_MS, type ClientOptions } from "../src/client.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
@@ -13,7 +13,10 @@ const RUN = "run-1";
 type Send = { message: string; idempotencyKey: string };
 
 /** A run under way, steered into; `withdraws` is what the gateway answers an abort of a steer. */
-async function steered(withdraws: (id: string) => boolean = () => true) {
+async function steered(
+  withdraws: (id: string) => boolean = () => true,
+  client: ClientOptions = {},
+) {
   const gateway = grantingGateway();
   gateway.handlers["chat.send"] = (params) => ({
     runId: (params as Send).idempotencyKey,
@@ -31,7 +34,7 @@ async function steered(withdraws: (id: string) => boolean = () => true) {
     }, 0);
     return { ok: true, aborted: true, runIds: [runId] };
   };
-  const task = await openTask({ gateway });
+  const task = await openTask({ gateway, client });
   gateway.emit("agent", agentEvent(RUN, 1, "lifecycle", { phase: "start" }));
   await until(() => task.transcript().runs[0]?.state === "running");
   const id = task.client.sendMessage(KEY, "Only the notes folder.");
@@ -206,6 +209,46 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     expect(task.transcript().outbox[0]!.steer).toBe("withdrawn");
     task.client.stop();
   }, 15_000);
+
+  it("F-097 F-468: Stop withdraws a steer whose send got no answer in time, by the key recorded as it left", async () => {
+    const task = await steered(() => true, { requestTimeoutMs: 300 });
+    // The run goes on, as the gateway's history says while the client checks the send.
+    task.gateway.handlers["chat.history"] = () => ({
+      messages: [],
+      hasMore: false,
+      inFlightRun: { runId: RUN },
+    });
+    task.gateway.handlers["chat.send"] = () => new Promise(() => {});
+    const id = task.client.sendMessage(KEY, "Skip the hidden files.");
+    // Its send's answer never comes: whether the gateway took it is being checked.
+    await until(() => ["checking", "unknown"].includes(task.transcript().outbox[1]?.status ?? ""));
+    expect(task.transcript().outbox[1]!.runId).toBeNull();
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    const aborts = task.gateway.calls("chat.abort") as Array<{ runId: string }>;
+    expect(aborts.map((each) => each.runId)).toContain(id);
+    await until(() => task.transcript().outbox[1]?.status === "not-sent");
+    expect(task.transcript().outbox[1]!.steer).toBe("withdrawn");
+    task.client.stop();
+  });
+
+  it("F-097 F-468: a steer whose own run started before its send was answered stays its own run, and is not withdrawn", async () => {
+    const task = await steeredUnanswered();
+    task.gateway.emit("agent", agentEvent(task.id, 1, "lifecycle", { phase: "start" }));
+    await until(() => run(task, task.id)?.state === "running");
+    task.answer({ runId: task.id, status: "started" });
+    await until(() => task.transcript().outbox[1]?.status === "sent");
+    // The answer does not take the run away or make it a steer again.
+    expect(run(task, task.id)?.state).toBe("running");
+    expect(task.transcript().steerAliases[task.id]).toBeUndefined();
+    // So a stop that names it does not shelve a message the gateway ran.
+    task.gateway.handlers["chat.send"] = () => ({ ok: true, aborted: true, runIds: [task.id] });
+    task.client.sendMessage(KEY, "/stop");
+    await until(() => task.transcript().outbox[2]?.status === "handled");
+    expect(task.transcript().outbox[1]).toMatchObject({ status: "sent" });
+    expect(task.transcript().outbox[1]!.steer).toBeUndefined();
+    task.client.stop();
+  });
 
   it("F-097: a withdrawal the gateway does not answer holds the run's Stop only briefly", async () => {
     const task = await steered();
