@@ -241,7 +241,7 @@ describe("full access behind a flag", () => {
       expiresAtMs: Date.now() + 600_000,
     });
     await until(() => client.state.connection.status === "error");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
     expect(stored(storage)).toBe(null);
     for (const each of gateway.connects as ConnectParams[])
       expect(each.scopes).toEqual([...FULL_SCOPES]);
@@ -308,7 +308,7 @@ describe("full access behind a flag", () => {
     await client.start();
     await client.connect({ url: URL, token: SHARED });
     await until(() => gateway.connects.length >= 1);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
     expect(stored(storage)).toBe(null);
     client.stop();
   });
