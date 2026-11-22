@@ -195,25 +195,33 @@ export async function layout(): Promise<
   return found;
 }
 
-/** Where the first element whose text matches is on screen, in points, from Maestro's view of the app. */
-export async function boundsOf(
-  pattern: RegExp,
-): Promise<{ x1: number; y1: number; x2: number; y2: number } | null> {
+/** Tap the glyphs on a link's first line, inside the scroll view's visible area. */
+export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
   const stdout = await hierarchy();
   const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
-  let found: { x1: number; y1: number; x2: number; y2: number } | null = null;
+  type Bounds = { x1: number; y1: number; x2: number; y2: number };
+  const found: { viewport?: Bounds; link?: Bounds } = {};
   const walk = (node: Node) => {
-    if (found) return;
+    if (found.viewport && found.link) return;
     const a = node.attributes ?? {};
-    const m = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(a.bounds ?? "");
-    if (m && (pattern.test(a.accessibilityText ?? "") || pattern.test(a.text ?? ""))) {
-      found = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
-      return;
+    const m = /\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/.exec(a.bounds ?? "");
+    if (m) {
+      const bounds = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
+      if (a["resource-id"] === "transcript") found.viewport = bounds;
+      if (!found.link && (pattern.test(a.accessibilityText ?? "") || pattern.test(a.text ?? "")))
+        found.link = bounds;
     }
     for (const child of node.children ?? []) walk(child);
   };
   walk(tree);
-  return found;
+  const { viewport, link } = found;
+  if (!viewport || !link) throw new Error(`Could not locate ${pattern} in the transcript`);
+  const x = link.x1 + 24;
+  const y = link.y1 + 10;
+  if (x < viewport.x1 || x >= viewport.x2 || y < viewport.y1 || y >= viewport.y2) {
+    throw new Error(`Link ${pattern}: tap (${x}, ${y}) is outside ${JSON.stringify(viewport)}`);
+  }
+  return { tapOn: { point: `${x},${y}` } };
 }
 
 /**

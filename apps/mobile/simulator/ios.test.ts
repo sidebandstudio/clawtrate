@@ -30,7 +30,6 @@ import { DARK, LIGHT } from "../src/theme/tokens.ts";
 import {
   activate,
   appLog,
-  boundsOf,
   closeWithin,
   containerHits,
   deadPort,
@@ -67,6 +66,7 @@ import {
   switcherSnapshot,
   tap,
   textSize,
+  transcriptLinkTap,
   until,
   waitFor,
   waitGone,
@@ -821,9 +821,9 @@ describe("the iOS app", () => {
       scrollTo({ text: `${lit(HIDDEN_LINK_TEXT)} \\(example\\.com\\)` }, "DOWN"),
     ]);
     // It asks before leaving: the link's own words start the paragraph, which may wrap.
-    const hidden = (await boundsOf(new RegExp(`^${lit(HIDDEN_LINK_TEXT)} \\(example`)))!;
+    const lookalikeText = `${lit(lookalike().text)} \\(${lit(new URL(browserUrl).host)}\\)`;
     await steps("hidden-link", [
-      { tapOn: { point: `${hidden.x1 + 24},${hidden.y1 + 10}` } },
+      await transcriptLinkTap(new RegExp(`^${lit(HIDDEN_LINK_TEXT)} \\(example`)),
       waitFor(lit(LINK_WORDS.ask), 10_000),
       see(lit("https://example.com/report")),
       tap(lit(LINK_WORDS.cancel)),
@@ -837,29 +837,28 @@ describe("the iOS app", () => {
       // The token the bot repeated is not shown.
       scrollTo({ text: lit("The setup token was •••.") }, "DOWN"),
       notSee(`.*${lit(env.token)}.*`),
-      scrollTo({ text: lit(browserUrl) }, "DOWN"),
+      // Swipe the last two messages above the read-only footer.
+      "scroll",
+      waitGone({ id: "jump-to-latest" }, 20_000),
+      see({ text: lookalikeText }),
+      see(lit(browserUrl)),
     ]);
     // A link whose text is another address asks too; Cancel sends the listener nothing.
-    const lookalikeText = `${lit(lookalike().text)} \\(${lit(new URL(browserUrl).host)}\\)`;
-    await steps("lookalike-in-view", [scrollTo({ text: lookalikeText }, "UP")]);
-    const asking = (await boundsOf(new RegExp(`^${lookalikeText}`)))!;
     await steps("lookalike-link", [
-      { tapOn: { point: `${asking.x1 + 24},${asking.y1 + 10}` } },
+      await transcriptLinkTap(new RegExp(`^${lookalikeText}`)),
       waitFor(lit(LINK_WORDS.ask), 10_000),
       see(lit(lookalike().url)),
       tap(lit(LINK_WORDS.cancel)),
       waitGone(lit(LINK_WORDS.ask), 10_000),
       see({ id: "transcript" }),
-      scrollTo({ text: lit(browserUrl) }, "DOWN"),
+      see(lit(browserUrl)),
     ]);
     expect(browserRequests).toBe(0);
     // An address written as itself opens in the system browser without asking:
     // the system starts Safari, which was not running before. The system says
     // so; the driver is not asked about a screen while Safari starts.
     expect(running(SAFARI)).toBe(false);
-    // The address wraps. Tap its first line, where the link glyphs are.
-    const address = (await boundsOf(new RegExp(`^${lit(browserUrl)}$`)))!;
-    await steps("open-link", [{ tapOn: { point: `${address.x1 + 24},${address.y1 + 10}` } }]);
+    await steps("open-link", [await transcriptLinkTap(new RegExp(`^${lit(browserUrl)}$`))]);
     await until("Safari to launch", async () => running(SAFARI), 90_000);
     const request = await until("Safari's loopback GET", async () => browserGet, 90_000);
     expect(request).toEqual({ hasAuthorization: false, hasCookie: false });
