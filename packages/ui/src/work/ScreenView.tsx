@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Avatar } from "../Avatar.tsx";
+import { dialogOpen } from "../bots/Dialog.tsx";
 import { CollapseIcon, HandIcon, KeyboardIcon, MinusIcon, PlusIcon } from "../icons.tsx";
 import { ONE_PANE_BELOW, useElementWidth } from "../layout.ts";
 import { drawnPage, pictureWords, type FrameCanvases, type Picture } from "./frames.ts";
@@ -286,13 +287,16 @@ export function ScreenView(props: ScreenViewProps) {
     }
   };
 
-  // Caught before anything else on the page sees it (the shell listens on the window).
+  // Caught before anything else on the page sees it (the shell listens on the window),
+  // except under a dialog opened over the view, whose keys are its own.
   const keys = useRef(onKeyDown);
   useLayoutEffect(() => {
     keys.current = onKeyDown;
   });
   useEffect(() => {
-    const listener = (event: KeyboardEvent) => keys.current(event);
+    const listener = (event: KeyboardEvent) => {
+      if (!dialogOpen()) keys.current(event);
+    };
     window.addEventListener("keydown", listener, true);
     return () => window.removeEventListener("keydown", listener, true);
   }, []);

@@ -290,20 +290,55 @@ test("F-248: a link into a chat with a draft asks before replacing it", async ()
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
-test("F-248: while a link asks about a draft, the shortcuts behind it do nothing", async () => {
+test("F-248: while a link's card is open, the shortcuts behind it do nothing", async () => {
+  // One message in the chat, so that ⌘F has something to find in it.
+  const history = served.gateway.handlers["chat.history"]!;
+  served.gateway.handlers["chat.history"] = (params) =>
+    (params as { sessionKey?: string }).sessionKey === "agent:marlow:main"
+      ? { messages: [{ role: "user", content: "Hello", __openclaw: { id: "u1", seq: 1 } }] }
+      : history(params);
+  served.gateway.emit("session.message", { sessionKey: "agent:marlow:main" });
+  await expect(page.getByTestId("transcript")).toContainText("Hello");
+  served.gateway.handlers["chat.history"] = history;
+  /** ⌘T would start a new task, ⌘1 to ⌘4 open another bot's chat, ⌘N New bot, ⌘F find, ⌘K search. */
+  const pressAll = async () => {
+    await page.keyboard.press("ControlOrMeta+t");
+    for (const digit of "1234") await page.keyboard.press(`ControlOrMeta+${digit}`);
+    await page.keyboard.press("ControlOrMeta+n");
+    await page.keyboard.press("ControlOrMeta+f");
+    await page.keyboard.press("ControlOrMeta+k");
+    await frames();
+  };
+  const nothingMoved = async () => {
+    await expect(field()).toHaveAttribute("aria-label", "Message Marlow");
+    await expect(field()).toHaveValue("Start over.");
+    expect(served.gateway.calls("chat.send")).toEqual([]);
+    expect(served.gateway.calls("sessions.create")).toEqual([]);
+    await expect(page.getByTestId("new-bot")).toHaveCount(0);
+    await expect(page.getByTestId("find-bar")).toHaveCount(0);
+    await expect(page.getByTestId("search-palette")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Close settings" })).toHaveCount(0);
+  };
+
   await deliver(link("marlow", "Other words."));
   await expect(choice()).toBeVisible();
   // ⌘↵ or Ctrl+Enter would send the draft from anywhere else in the window.
   await page.keyboard.press("ControlOrMeta+Enter");
-  // ⌘N or Ctrl+N would open New bot over it.
-  await page.keyboard.press("ControlOrMeta+n");
-  await frames();
-  await expect(field()).toHaveValue("Start over.");
-  expect(served.gateway.calls("chat.send")).toEqual([]);
-  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await pressAll();
+  await nothingMoved();
   await expect(choice()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(choice()).toHaveCount(0);
+
+  await deliver(`${link("marlow", "Hi")}&send=1`);
+  await expect(refusal()).toBeVisible();
+  // ⌘, would open Settings over the card.
+  await page.keyboard.press("ControlOrMeta+,");
+  await pressAll();
+  await nothingMoved();
+  await expect(refusal()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(refusal()).toHaveCount(0);
   await expect(field()).toHaveValue("Start over.");
 });
 

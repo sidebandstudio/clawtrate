@@ -23,6 +23,7 @@ import {
 import { AccessBar } from "./AccessBar.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
+import { dialogOpen } from "./bots/Dialog.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
@@ -836,7 +837,7 @@ export function Conversation({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
-      if (event.key.toLowerCase() !== "f" || inert || !canFind) return;
+      if (event.key.toLowerCase() !== "f" || inert || !canFind || dialogOpen()) return;
       if (!sectionRef.current?.checkVisibility()) return;
       event.preventDefault();
       if (!finding) findOpener.current = document.activeElement as HTMLElement | null;

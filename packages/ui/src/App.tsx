@@ -1,5 +1,6 @@
 import type { ChatLinkDelivery, ConnectionError, HostInfo } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { dialogOpen } from "./bots/Dialog.tsx";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { connectionSettled, resolveChatLink, type LinkRefusal as Refusal } from "./chat-link.ts";
 import { ConnectScreen } from "./ConnectScreen.tsx";
@@ -87,6 +88,7 @@ export function App({
   }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (dialogOpen()) return;
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === ",") {
         event.preventDefault();
         openSettings();

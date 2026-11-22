@@ -5,6 +5,14 @@
 
 import { useEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 
+/**
+ * A native modal dialog is open: what is behind it is inert, the window's
+ * shortcuts too. Every window-wide key handler checks it.
+ */
+export function dialogOpen(): boolean {
+  return document.querySelector("dialog[open]") !== null;
+}
+
 export function Dialog({
   kind,
   fallbackFocus,

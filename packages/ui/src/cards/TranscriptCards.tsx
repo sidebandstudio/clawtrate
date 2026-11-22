@@ -15,6 +15,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { dialogOpen } from "../bots/Dialog.tsx";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { ApprovalCardView } from "./ApprovalCard.tsx";
 import {
@@ -207,7 +208,7 @@ export function CardScope({
   // ⌘[ goes back to where "Open in <bot>" was chosen.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "[" && openTask) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "[" && openTask && !dialogOpen()) {
         if (goBack(taskKey, openTask)) event.preventDefault();
       }
     };

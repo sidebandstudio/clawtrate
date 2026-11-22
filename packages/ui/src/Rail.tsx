@@ -19,6 +19,7 @@ import {
   type MouseEvent,
 } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { dialogOpen } from "./bots/Dialog.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
@@ -940,7 +941,7 @@ export function Rail({
 
   // Shortcuts that work anywhere in the shell: ⌘⇧F searches bots, ⌘1 to ⌘9
   // open a bot, Alt+Up and Alt+Down or Control+Tab and Control+Shift+Tab
-  // move to the previous or next bot. The drawer, while open, keeps them out.
+  // move to the previous or next bot. The drawer or a dialog, while open, keeps them out.
   useEffect(() => {
     const open = (bot: Bot) => {
       // Routines covers the conversation: the selected bot's is not on screen yet.
@@ -951,7 +952,7 @@ export function Rail({
       if (inList) focusAfter.current = "selected";
     };
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (inert) return;
+      if (inert || dialogOpen()) return;
       const command = event.metaKey || event.ctrlKey;
       const typing = (event.target as HTMLElement | null)?.closest?.("input, textarea") != null;
       if (command && event.shiftKey && event.key.toLowerCase() === "f") {

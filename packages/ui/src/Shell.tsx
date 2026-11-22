@@ -20,6 +20,7 @@ import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStri
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
+import { dialogOpen } from "./bots/Dialog.tsx";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -39,11 +40,6 @@ function canFocus(element: HTMLElement | null): element is HTMLElement {
     !element.closest("[inert]") &&
     element.getClientRects().length > 0
   );
-}
-
-/** A native modal dialog is open: what is behind it is inert, its shortcuts too. */
-function dialogOpen(): boolean {
-  return document.querySelector("dialog[open]") !== null;
 }
 
 /** How long "Access granted" stays on the strip. */
@@ -200,6 +196,7 @@ export function Shell({
   useEffect(() => {
     if (inert || newBot || shortcuts || searchOpen) return;
     const onKey = (event: KeyboardEvent) => {
+      if (dialogOpen()) return;
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
         !event.shiftKey &&
