@@ -3,12 +3,14 @@
 
 import { createHash } from "node:crypto";
 import {
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   truncateSync,
   utimesSync,
   writeFileSync,
@@ -411,6 +413,23 @@ describe("a decision record set aside as oversized", () => {
     expect(setAside(dir)).toEqual([]);
     expect(log.listSetAside()).toEqual([]);
   });
+
+  // Windows makes links only with a privilege the test cannot count on.
+  it.skipIf(process.platform === "win32")(
+    "is not made of a link to an oversized record, which stays in place and is said",
+    () => {
+      const dir = folder();
+      const elsewhere = folder();
+      oversize(elsewhere);
+      mkdirSync(dir, { recursive: true });
+      symlinkSync(join(elsewhere, "decisions.jsonl"), join(dir, "decisions.jsonl"));
+      const log = new DecisionLog(dir, { now: () => 1_000 * day });
+      expect(log.problem).toMatch(/could not be set aside \(not a plain file\)/);
+      expect(lstatSync(join(dir, "decisions.jsonl")).isSymbolicLink()).toBe(true);
+      expect(setAside(dir)).toEqual([]);
+      expect(log.listSetAside()).toEqual([]);
+    },
+  );
 
   it("is not said for a folder with a set-aside record's name", () => {
     const dir = folder();

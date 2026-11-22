@@ -25,6 +25,7 @@ import {
   fstatSync,
   fsyncSync,
   ftruncateSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -549,15 +550,19 @@ export class DecisionLog {
   #setAside(expected) {
     // When it was set aside is in its name, which its removal counts from.
     const name = `${DECISIONS_FILE}.oversize-${this.now()}-${randomBytes(6).toString("hex")}`;
+    let why;
     try {
       if (statKey(statOrNull(this.path)) !== expected) return CHANGED;
-      renameSync(this.path, join(this.dir, name));
+      // A link would be moved itself, not the record it names, and could be neither listed nor removed.
+      if (!lstatSync(this.path).isFile()) why = "not a plain file";
+      else renameSync(this.path, join(this.dir, name));
     } catch (error) {
-      this.loaded = false;
-      this.problem = `the decision record is larger than ${MAX_DECISIONS_BYTES} bytes and could not be set aside (${error.code ?? "error"}); nothing is written until it is`;
-      return null;
+      why = error.code ?? "error";
     }
-    return true;
+    if (why === undefined) return true;
+    this.loaded = false;
+    this.problem = `the decision record is larger than ${MAX_DECISIONS_BYTES} bytes and could not be set aside (${why}); nothing is written until it is`;
+    return null;
   }
 
   /**
@@ -776,27 +781,28 @@ export class DecisionLog {
    * it cannot be looked at. Null when the folder cannot be read.
    */
   listSetAside() {
-    let entries;
+    let names;
     try {
-      entries = readdirSync(this.dir, { withFileTypes: true });
+      // Names only: each is looked at below, as it is now, not as the folder read it.
+      names = readdirSync(this.dir);
     } catch (error) {
       return error?.code === "ENOENT" ? [] : null;
     }
     const found = [];
-    for (const entry of entries) {
-      const file = entry.name;
+    for (const file of names) {
       const match = SET_ASIDE.exec(file);
-      // A folder with such a name is no record, and pruning could not remove it.
-      if (!match || !entry.isFile()) continue;
-      let setAsideAt = match[1] === undefined ? null : Number(match[1]);
-      if (setAsideAt === null) {
-        try {
-          setAsideAt = statSync(join(this.dir, file)).mtimeMs;
-        } catch (error) {
-          if (error?.code === "ENOENT") continue;
-        }
+      if (!match) continue;
+      let stats = null;
+      try {
+        stats = lstatSync(join(this.dir, file));
+      } catch (error) {
+        // Removed since the folder was read: no longer beside it.
+        if (error?.code === "ENOENT") continue;
       }
-      found.push({ file, setAsideAt });
+      // A folder or a link with such a name is no record, and pruning could not remove it.
+      if (stats && !stats.isFile()) continue;
+      const stamped = match[1] === undefined ? null : Number(match[1]);
+      found.push({ file, setAsideAt: stamped ?? stats?.mtimeMs ?? null });
     }
     return found.sort((a, b) => (a.setAsideAt ?? 0) - (b.setAsideAt ?? 0));
   }

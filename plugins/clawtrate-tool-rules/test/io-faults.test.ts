@@ -23,6 +23,8 @@ const io = vi.hoisted(() => ({
   afterRename: null as null | (() => void),
   /** Closing a temporary file fails this many more times, after it is closed. */
   tempCloseFails: 0,
+  /** Run once right after the next folder read: a file removed meanwhile. */
+  afterReaddir: null as null | (() => void),
   /** Run once right after a descriptor opened on `io.path` is next closed. */
   afterClose: null as null | (() => void),
   /** Run once just before `io.path` is next opened to be appended to or cut. */
@@ -82,6 +84,13 @@ vi.mock("node:fs", async (importOriginal) => {
       io.afterRename = null;
       after?.();
     },
+    readdirSync: ((...args: unknown[]) => {
+      const names = (real.readdirSync as (...a: unknown[]) => unknown)(...args);
+      const after = io.afterReaddir;
+      io.afterReaddir = null;
+      after?.();
+      return names;
+    }) as typeof real.readdirSync,
     ftruncateSync: (...args: Parameters<typeof real.ftruncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
       return real.ftruncateSync(...args);
@@ -101,6 +110,7 @@ afterEach(() => {
   io.appendFails = 0;
   io.renameFails = false;
   io.afterRename = null;
+  io.afterReaddir = null;
   io.beforeWriteOpen = null;
   io.afterClose = null;
   io.tempCloseFails = 0;
@@ -623,5 +633,21 @@ describe("a decision record changed from outside", () => {
     expect(log.problem).toBeNull();
     expect(actual.readFileSync(file, "utf8")).not.toContain('"torn');
     expect(ids(file).sort()).toEqual([...seeded, next, "outside0000000000"].sort());
+  });
+});
+
+describe("a record set aside as oversized, removed while the folder is read", () => {
+  it("is not said, and the one still there is", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    actual.mkdirSync(dir, { recursive: true });
+    const gone = "decisions.jsonl.oversize-100-0123456789ab";
+    const kept = "decisions.jsonl.oversize-200-abcdef012345";
+    actual.writeFileSync(join(dir, gone), "");
+    actual.writeFileSync(join(dir, kept), "");
+    const log = new DecisionLog(dir, { now: () => 300 });
+    io.afterReaddir = () => actual.rmSync(join(dir, gone));
+    expect(log.listSetAside()).toEqual([{ file: kept, setAsideAt: 200 }]);
   });
 });
