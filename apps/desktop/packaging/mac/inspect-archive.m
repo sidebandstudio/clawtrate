@@ -212,8 +212,12 @@ int main(int argc, char **argv) {
     alarm(120);
     BOOL classify = argc == 3 && strcmp(argv[1], "--running-signature") == 0;
     if (!classify && argc != 5) return 1;
-    // No RLIMIT_DATA: macOS rejects every finite value with EINVAL. The reader's own
-    // limits bound memory, and a helper that dies still reads as inspection-failed.
+    // No RLIMIT_DATA: macOS rejects every finite value with EINVAL. The reader bounds
+    // entries seen and paths created (32,768 each), regular-file bytes (2 GiB in all,
+    // streamed through a 64 KiB buffer), Info.plist (1 MiB), names (1,024 characters,
+    // 48 parts) and time (the 120 s alarm). libarchive's own index of the central
+    // directory is built before those limits apply and isn't capped by them (#330).
+    // A helper that dies prints nothing, which the app reads as inspection-failed.
     @autoreleasepool {
         if (classify) puts(inspect(nil, @(argv[2]), nil, nil));
         else puts(inspect(@(argv[1]), @(argv[2]), @(argv[3]), @(argv[4])));
