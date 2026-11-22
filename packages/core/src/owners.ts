@@ -35,6 +35,7 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
+  MAX_ROUTE_HELD_WRITE_CHARS,
   MAX_ROUTE_HELD_WRITES,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
@@ -244,8 +245,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
-  // A routed connection's token writes, functions held until its identity matched, then dropped.
-  routeHeldWrites: { max: MAX_ROUTE_HELD_WRITES, each: 0, row: null },
+  // A routed connection's token writes, held until its identity matched, then dropped: each keeps
+  // a device token record in its closure, at most `MAX_ROUTE_HELD_WRITE_CHARS`.
+  routeHeldWrites: {
+    max: MAX_ROUTE_HELD_WRITES,
+    each: MAX_ROUTE_HELD_WRITE_CHARS,
+    row: "bookkeeping",
+  },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Each failed request's log policy; an entry lives only as long as that error object.

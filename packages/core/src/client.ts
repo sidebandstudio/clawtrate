@@ -472,6 +472,12 @@ const PAIRING_RETRY_MS = 3000;
 const SETTINGS_KEY = "connection";
 /** Token writes a routed connection holds until its identity matched (`holdForRoute`). */
 export const MAX_ROUTE_HELD_WRITES = 4;
+/**
+ * What one held write keeps in memory at most, in JSON characters: a device
+ * token record (its token, device id, role and scopes). A gateway's token is
+ * well under it; a write past it is not held, so its token isn't kept.
+ */
+export const MAX_ROUTE_HELD_WRITE_CHARS = 8 * 1024;
 
 export type ConnectionSettings = {
   url: string;
@@ -5979,7 +5985,8 @@ export class ClawtrateClient {
             });
           };
           // A route keeps the token only once its gateway said who it is (checkRouteIdentity).
-          if (!this.holdForRoute(helloSocket, commit)) await commit();
+          if (!this.holdForRoute(helloSocket, commit, JSON.stringify(staged).length))
+            await commit();
           return;
         }
         // A setup that reused this device's pairing saves its gateway once its hello is in.
@@ -5998,7 +6005,8 @@ export class ClawtrateClient {
               }
               await this.saveSettings(current);
             });
-          if (!this.holdForRoute(helloSocket, saveReuse)) await saveReuse();
+          // It captures nothing but this connection's own fields: the settings are read when it runs.
+          if (!this.holdForRoute(helloSocket, saveReuse, 0)) await saveReuse();
           return;
         }
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
@@ -7549,10 +7557,12 @@ export class ClawtrateClient {
    * Holds a write of a routed connection's token in memory until its gateway's
    * identity matches, and says so; false when nothing is held back.
    */
-  private holdForRoute(socket: number, write: () => Promise<void>): boolean {
+  private holdForRoute(socket: number, write: () => Promise<void>, size: number): boolean {
     if (!this.settings?.route || this.routeVerified === socket) return false;
     // A socket replaced since keeps nothing: its write is dropped, never held for another.
     if (socket !== this.routeSocket) return true;
+    // Nor is a write larger than one held write keeps (`MAX_ROUTE_HELD_WRITE_CHARS`).
+    if (size > MAX_ROUTE_HELD_WRITE_CHARS) return true;
     if (this.routeHeldFor !== socket) {
       this.routeHeldFor = socket;
       this.routeHeldWrites = [];
@@ -7945,7 +7955,10 @@ export class ClawtrateClient {
           });
         });
       // A route's token from this hello waits in memory until its gateway's identity matched.
-      if (!this.holdForRoute(socket, write)) await write();
+      if (
+        !this.holdForRoute(socket, write, JSON.stringify({ deviceId, role, token, scopes }).length)
+      )
+        await write();
     };
     return {
       save,
@@ -7978,7 +7991,14 @@ export class ClawtrateClient {
             await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
           });
         // Nor does a route's gateway that hasn't said who it is make this device forget its token.
-        if (!this.holdForRoute(this.routeSocket, forget)) await forget();
+        if (
+          !this.holdForRoute(
+            this.routeSocket,
+            forget,
+            JSON.stringify({ deviceId, role, rejected }).length,
+          )
+        )
+          await forget();
       },
     };
   }

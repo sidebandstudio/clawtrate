@@ -1904,6 +1904,200 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     });
   });
 
+  describe("a route's teardown and its attempts' ownership", () => {
+    type Internals = {
+      closeLive: (...args: unknown[]) => Promise<boolean>;
+      live: { forward: { close: () => Promise<void> } } | null;
+    };
+    const lsAlive = (from: number) =>
+      started.slice(from).filter((run) => run.args.includes("-L") && alive(run.pid!));
+
+    it("a replaced key's Look doesn't start once Back was pressed while the old route closed", async () => {
+      const h = host({
+        answer: (question) => ({ confirmed: true, checked: Boolean(question.checkbox) }),
+      });
+      await connected(h);
+      const old = sshd.hostKey;
+      const fresh = join(root, `host-key-back-${count}`);
+      keygen(fresh);
+      await sshd.stop();
+      await sshd.start(fresh);
+      try {
+        await until(() => h.setup().route?.phase === "key-changed", 30_000);
+        await h.remote.there("devbox");
+        expect(h.setup().phase).toBe("key");
+        const r = h.remote as unknown as Internals;
+        const close = r.closeLive.bind(h.remote);
+        r.closeLive = async (...args: unknown[]) => {
+          // Back, while the old route is let go for the new key.
+          h.remote.cancel();
+          return close(...args);
+        };
+        const from = started.length;
+        await h.remote.replaceKey();
+        expect(started.slice(from).filter((run) => run.args.includes("/bin/sh"))).toEqual([]);
+        expect(h.setup().phase).not.toBe("looking");
+        expect(h.setup().phase).not.toBe("found");
+      } finally {
+        await sshd.stop();
+        await sshd.start(old);
+        await h.remote.closeAll();
+      }
+    });
+
+    it("a connect refused before it was selected ends that attempt only: its forward goes, what it wrote goes, and the screen says so", async () => {
+      const h = host();
+      const from = started.length;
+      await lookOnDevbox(h);
+      const connectRoute = h.client.connectRoute.bind(h.client);
+      h.client.connectRoute = async () => {
+        throw new Error("That SSH route's channel isn't current.");
+      };
+      try {
+        await h.remote.connect();
+      } finally {
+        h.client.connectRoute = connectRoute;
+      }
+      expect(h.setup().phase).toBe("failed");
+      expect(h.setup().there?.failure?.kind).toBe("ssh-stopped");
+      expect(h.routes.list()).toEqual([]);
+      await until(() => lsAlive(from).length === 0, 10_000);
+      await h.remote.closeAll();
+    });
+
+    it("with SSH refused at launch, the saved route is shown failed with the refusal, and Remove still forgets it", async () => {
+      const h = host();
+      await connected(h);
+      await h.remote.closeAll();
+      const again = host({
+        dir: h.dir,
+        storage: h.storage,
+        transport: () => ({ refused: "app-files-unsafe" }),
+      });
+      await again.client.start();
+      await again.remote.resume();
+      expect(again.setup().there?.failure?.kind).toBe("app-files-unsafe");
+      expect(again.setup().route?.phase).toBe("failed");
+      await again.remote.removeRoute();
+      expect(again.routes.list()).toEqual([]);
+      expect(again.setup().route ?? null).toBeNull();
+    });
+
+    it("a failed pairing of another computer leaves the saved route's strip as it was", async () => {
+      const h = host();
+      await connected(h);
+      await h.client.suspend();
+      await until(() => h.setup().route?.phase === "disconnected", 10_000);
+      await h.remote.there("devbox-local");
+      if (h.setup().phase === "key") await h.remote.trustKey();
+      expect(h.setup().phase).toBe("found");
+      const identity = h.fake.handlers["gateway.identity.get"]!;
+      h.fake.handlers["gateway.identity.get"] = () => {
+        throw new Error("no identity");
+      };
+      try {
+        await h.remote.connect();
+        await until(() => h.setup().phase === "failed", 30_000);
+      } finally {
+        h.fake.handlers["gateway.identity.get"] = identity;
+      }
+      expect(h.setup().route?.phase).toBe("disconnected");
+      await h.remote.closeAll();
+    });
+
+    it("Remove closes the forward whatever fails, says what is left, and a retry carries on from there", async () => {
+      // The saved connection can't be forgotten: the forward closes all the same.
+      const storage = memoryStorage();
+      const remove = storage.delete;
+      let failing = false;
+      storage.delete = async (key) => {
+        if (failing && key === "connection") throw new Error("the disk is full");
+        return remove(key);
+      };
+      const h = host({ storage });
+      const from = started.length;
+      await connected(h);
+      const [record] = h.routes.list();
+      failing = true;
+      await h.remote.removeRoute();
+      expect(h.setup().there?.failure?.kind).toBe("remove-failed");
+      expect(h.setup().route?.phase).toBe("failed");
+      expect(h.routes.list()).toHaveLength(1);
+      await until(() => lsAlive(from).length === 0, 10_000);
+      failing = false;
+      await h.remote.removeRoute();
+      expect(h.routes.list()).toEqual([]);
+      expect(storage.data.has("connection")).toBe(false);
+      // The pin goes, then the record can't be removed: the retry, with the pin gone, finishes.
+      const g = host();
+      await connected(g);
+      const routesRemove = g.routes.remove.bind(g.routes);
+      g.routes.remove = () => {
+        throw new Error("the disk is full");
+      };
+      try {
+        await g.remote.removeRoute();
+      } finally {
+        g.routes.remove = routesRemove;
+      }
+      expect(g.setup().there?.failure?.kind).toBe("remove-failed");
+      expect(g.pins()).toEqual([]);
+      expect(g.routes.list()).toHaveLength(1);
+      await g.remote.removeRoute();
+      expect(g.routes.list()).toEqual([]);
+      expect(record).toBeDefined();
+    });
+
+    it("the strip isn't cleared by a route let go after another took it", async () => {
+      const h = host();
+      await connected(h);
+      const r = h.remote as unknown as Internals;
+      const first = r.live!.forward;
+      const close = first.close.bind(first);
+      let release = () => {};
+      const slow = new Promise<void>((resolve) => (release = resolve));
+      first.close = async () => {
+        await slow;
+        return close();
+      };
+      await h.remote.there("devbox-local");
+      if (h.setup().phase === "key") await h.remote.trustKey();
+      await h.remote.connect();
+      await until(() => h.setup().phase === "done" && h.setup().route?.phase === "up", 30_000);
+      release();
+      await sleep(300);
+      expect(h.setup().route?.phase).toBe("up");
+      await h.remote.closeAll();
+    });
+
+    it("Disconnect while a saved route is restored at launch ends the restore: nothing is sent, the route stays chosen and disconnected, and Reconnect opens it", async () => {
+      const h = host();
+      await connected(h);
+      await h.remote.closeAll();
+      const again = host({ dir: h.dir, storage: h.storage });
+      await again.client.start();
+      const from = started.length;
+      onSpawn = (args) => {
+        if (args.includes("-L")) {
+          onSpawn = null;
+          void again.client.suspend();
+        }
+      };
+      try {
+        await again.remote.resume();
+      } finally {
+        onSpawn = null;
+      }
+      await until(() => again.setup().route?.phase === "disconnected", 10_000);
+      expect(again.fake.connects).toEqual([]);
+      expect(JSON.parse(again.storage.data.get("connection")!)).toMatchObject({ suspended: true });
+      await until(() => lsAlive(from).length === 0, 10_000);
+      await again.client.retryNow();
+      await until(() => again.client.state.connection.status === "connected", 30_000);
+      await again.remote.closeAll();
+    });
+  });
+
   it("closing waits for every forward's ssh to end", async () => {
     const h = host();
     const before = started.length;

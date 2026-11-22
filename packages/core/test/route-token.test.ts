@@ -11,6 +11,7 @@ import {
   ClawtrateClient,
   ROUTE_IDENTITY_CHANGED,
   ROUTE_IDENTITY_UNREAD,
+  MAX_ROUTE_HELD_WRITE_CHARS,
   ROUTE_NOT_SAVED,
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_GONE,
@@ -562,6 +563,20 @@ describe("a routed connection's settings, selection and waiters", () => {
     );
     await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
     expect(await Promise.race([settled, sleep(500).then(() => "pending")])).toBe("rejected");
+  });
+
+  it("holds a token write only up to MAX_ROUTE_HELD_WRITE_CHARS: a larger token from a hello is never kept", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "t".repeat(MAX_ROUTE_HELD_WRITE_CHARS)),
+    });
+    await client.start();
+    await client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1" });
+    await until(() => client.state.connection.status === "connected");
+    await sleep(100);
+    expect(JSON.parse(storage.data.get(ROUTE_TOKEN)!).token).toBe("token-1");
   });
 
   it("saves a route's reused pairing only once that socket's gateway said who it is, and a save that fails ends the attempt as not saved", async () => {
