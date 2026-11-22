@@ -7,9 +7,11 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -18,7 +20,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { Avatar } from "./Avatar.tsx";
+import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
@@ -107,6 +109,13 @@ function useMinuteClock(): number {
   return now;
 }
 
+/** The creature's pose for a row's state: done with failures is done, a queued task idle. */
+function faceFor(state: RunState | null): FaceState {
+  if (state === "done-with-failures") return "done";
+  if (state === null || state === "queued") return "idle";
+  return state;
+}
+
 /** The 12 px mark for a state. Done with failures shows the failed mark. */
 function StateMark({ state }: { state: RunState | null }) {
   if (!state) return null;
@@ -119,15 +128,29 @@ function StateMark({ state }: { state: RunState | null }) {
  * right when it needs you or something failed, and the primary bot's star at
  * the lower right.
  */
+/**
+ * Watches a rail presence for whether it is in the bot list's view. The list
+ * marks the ones that are with `data-onscreen`; the others stay still.
+ */
+const OnscreenContext = createContext<((element: Element) => () => void) | null>(null);
+
 function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; primary: boolean }) {
+  const observe = useContext(OnscreenContext);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !observe) return;
+    return observe(element);
+  }, [observe]);
   return (
     <span
+      ref={ref}
       className="presence"
       data-state={state ?? "idle"}
-      data-kind={bot.avatarUrl ? "image" : "character"}
+      data-kind={avatarFor(bot).kind === "image" ? "image" : "character"}
       aria-hidden="true"
     >
-      <Avatar bot={bot} />
+      <Avatar bot={bot} state={faceFor(state)} />
       {state && state !== "working" && <StateMark state={state} />}
       {primary && (
         <span className="primary-star" data-testid="primary-star">
@@ -569,6 +592,50 @@ export function Rail({
     null,
   );
   const listRef = useRef<HTMLUListElement>(null);
+  // One observer for every presence in the list: only those in view move. Presences register
+  // before the observer exists (their effects run first), so the set is observed when it starts.
+  const watched = useRef(new Set<Element>());
+  const observer = useRef<IntersectionObserver | null>(null);
+  const observeOnscreen = useCallback((element: Element) => {
+    watched.current.add(element);
+    if (observer.current) observer.current.observe(element);
+    else if (typeof IntersectionObserver === "undefined") element.setAttribute("data-onscreen", "");
+    return () => {
+      watched.current.delete(element);
+      observer.current?.unobserve(element);
+    };
+  }, []);
+  useEffect(() => {
+    const root = listRef.current;
+    if (!root || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries)
+          entry.target.toggleAttribute("data-onscreen", entry.isIntersecting);
+      },
+      { root },
+    );
+    observer.current = io;
+    for (const element of watched.current) io.observe(element);
+    return () => {
+      io.disconnect();
+      observer.current = null;
+    };
+  }, []);
+  // A hidden page moves nothing.
+  useEffect(() => {
+    const mark = () =>
+      document.documentElement.toggleAttribute(
+        "data-page-hidden",
+        document.visibilityState === "hidden",
+      );
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => {
+      document.removeEventListener("visibilitychange", mark);
+      document.documentElement.removeAttribute("data-page-hidden");
+    };
+  }, []);
   const gateway = gatewayLabel(connection.gatewayUrl);
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
@@ -1979,100 +2046,102 @@ export function Rail({
           </div>
         )}
       </div>
-      <ul
-        className="bot-list"
-        data-testid="bot-list"
-        data-dragging={drag ? "true" : undefined}
-        ref={listRef}
-        onKeyDown={onListKey}
-        onScroll={() => setTip(null)}
-        aria-busy={discovery.status === "loading" && bots.length === 0 ? true : undefined}
-      >
-        {bots.length === 0 &&
-          (discovery.status === "loading" ? (
-            <li className="rail-empty">
-              <strong>Loading bots</strong>Loading this gateway's bots.
-            </li>
-          ) : (
-            <li className="rail-empty">
-              <strong>No bots</strong>Bots appear here once the gateway has one.
-            </li>
-          ))}
-        {matches ? (
-          <>
-            {bots.length > 0 && matches.length === 0 && (
-              <li className="rail-empty" role="status">
-                <strong>No bots match</strong>No bot's name contains "{query?.trim()}".
+      <OnscreenContext.Provider value={observeOnscreen}>
+        <ul
+          className="bot-list"
+          data-testid="bot-list"
+          data-dragging={drag ? "true" : undefined}
+          ref={listRef}
+          onKeyDown={onListKey}
+          onScroll={() => setTip(null)}
+          aria-busy={discovery.status === "loading" && bots.length === 0 ? true : undefined}
+        >
+          {bots.length === 0 &&
+            (discovery.status === "loading" ? (
+              <li className="rail-empty">
+                <strong>Loading bots</strong>Loading this gateway's bots.
               </li>
-            )}
-            {matches.map((bot) => renderRow(bot, "search"))}
-          </>
-        ) : (
-          <>
-            {arranged.pinned.length > 0 && (
-              <li>
-                <ul className="pin-grid" aria-label="Pinned bots">
-                  {arranged.pinned.map(renderPin)}
-                </ul>
-              </li>
-            )}
-            {owner && (
-              <li className="pin-tasks">
-                <p className="pin-tasks-label" aria-hidden="true">
-                  <Avatar bot={owner} />
-                  {owner.name}
-                </p>
-                <TaskRows
-                  bot={owner}
-                  tasks={tasksByBot[owner.id] ?? []}
-                  routineRuns={recentRoutineRuns(owner, routines, now)}
-                  onOpenRoutineRun={onOpenRoutineRun}
-                  selection={selection}
-                  onOpenTask={openTask}
-                  onTip={setTip}
-                  onTaskMenu={openTaskMenu}
-                  actions={taskActions}
-                  archived={archivedProps(owner)}
-                  cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
-                  now={now}
-                  onScreenKey={onScreenKey}
-                />
-              </li>
-            )}
-            {arranged.list.map((bot) => renderRow(bot, "list"))}
-            {arranged.sections.map((section) => (
-              <li key={`section:${section.name}`} className="rail-section-group">
-                <p className="rail-section" id={`section-${section.name}`}>
-                  {section.name}
-                </p>
-                <ul className="section-list" aria-labelledby={`section-${section.name}`}>
-                  {section.bots.map((bot) => renderRow(bot, "section"))}
-                </ul>
+            ) : (
+              <li className="rail-empty">
+                <strong>No bots</strong>Bots appear here once the gateway has one.
               </li>
             ))}
-            {arranged.hidden.length > 0 && (
-              <li className="rail-hidden">
-                <button
-                  type="button"
-                  className="hidden-toggle"
-                  aria-expanded={showHidden}
-                  onClick={() => setShowHidden((open) => !open)}
-                >
-                  <ChevronIcon />
-                  Hidden bots
-                  <span className="hidden-count">{arranged.hidden.length}</span>
-                </button>
-                {showHidden && (
-                  <ul className="hidden-list" aria-label="Hidden bots">
-                    {arranged.hidden.map((bot) => renderRow(bot, "hidden"))}
+          {matches ? (
+            <>
+              {bots.length > 0 && matches.length === 0 && (
+                <li className="rail-empty" role="status">
+                  <strong>No bots match</strong>No bot's name contains "{query?.trim()}".
+                </li>
+              )}
+              {matches.map((bot) => renderRow(bot, "search"))}
+            </>
+          ) : (
+            <>
+              {arranged.pinned.length > 0 && (
+                <li>
+                  <ul className="pin-grid" aria-label="Pinned bots">
+                    {arranged.pinned.map(renderPin)}
                   </ul>
-                )}
-              </li>
-            )}
-          </>
-        )}
-        {discovery.partial && <li className="list-note">Showing the most recent tasks only.</li>}
-      </ul>
+                </li>
+              )}
+              {owner && (
+                <li className="pin-tasks">
+                  <p className="pin-tasks-label" aria-hidden="true">
+                    <Avatar bot={owner} />
+                    {owner.name}
+                  </p>
+                  <TaskRows
+                    bot={owner}
+                    tasks={tasksByBot[owner.id] ?? []}
+                    routineRuns={recentRoutineRuns(owner, routines, now)}
+                    onOpenRoutineRun={onOpenRoutineRun}
+                    selection={selection}
+                    onOpenTask={openTask}
+                    onTip={setTip}
+                    onTaskMenu={openTaskMenu}
+                    actions={taskActions}
+                    archived={archivedProps(owner)}
+                    cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
+                    now={now}
+                    onScreenKey={onScreenKey}
+                  />
+                </li>
+              )}
+              {arranged.list.map((bot) => renderRow(bot, "list"))}
+              {arranged.sections.map((section) => (
+                <li key={`section:${section.name}`} className="rail-section-group">
+                  <p className="rail-section" id={`section-${section.name}`}>
+                    {section.name}
+                  </p>
+                  <ul className="section-list" aria-labelledby={`section-${section.name}`}>
+                    {section.bots.map((bot) => renderRow(bot, "section"))}
+                  </ul>
+                </li>
+              ))}
+              {arranged.hidden.length > 0 && (
+                <li className="rail-hidden">
+                  <button
+                    type="button"
+                    className="hidden-toggle"
+                    aria-expanded={showHidden}
+                    onClick={() => setShowHidden((open) => !open)}
+                  >
+                    <ChevronIcon />
+                    Hidden bots
+                    <span className="hidden-count">{arranged.hidden.length}</span>
+                  </button>
+                  {showHidden && (
+                    <ul className="hidden-list" aria-label="Hidden bots">
+                      {arranged.hidden.map((bot) => renderRow(bot, "hidden"))}
+                    </ul>
+                  )}
+                </li>
+              )}
+            </>
+          )}
+          {discovery.partial && <li className="list-note">Showing the most recent tasks only.</li>}
+        </ul>
+      </OnscreenContext.Provider>
       <p className="visually-hidden" role="status">
         {announcement}
       </p>

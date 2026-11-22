@@ -226,6 +226,76 @@
   gap: 6px 14px;
 }
 
+/* new: the picker's groups, frozen together while the picture is saved. */
+.b-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.b-picker:disabled {
+  opacity: 0.6;
+}
+
+/* new: the three creature families, a creature over its name. */
+.b-families {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 96px));
+  justify-content: center;
+  gap: 8px;
+}
+
+.b-family {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 4px 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.b-family svg {
+  width: 40px;
+  height: 40px;
+}
+
+.b-family:hover {
+  background: var(--bg-hover);
+}
+
+.b-family[aria-checked="true"] {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+  color: var(--text);
+}
+
+.b-upload {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+.b-upload .b-field-error {
+  flex-basis: 100%;
+  text-align: center;
+}
+
+.b-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 .b-colors {
   display: flex;
   flex-wrap: wrap;

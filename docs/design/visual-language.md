@@ -167,30 +167,52 @@ Sizes: 40 px default, 48 px (`data-size="lg"`, full width) on the connection scr
 
 ## 5. Avatars
 
-Avatars are characters, and they carry the colour in the app. A character is three choices:
+Avatars are creatures, drawn for Clawtrate, and they carry the colour in the app. There are three families. Each has a part of its own that does the acting, and that part comes from Clawtrate: a claw, a shell, the white ball of the logo.
 
-- a **body**: one of eight flat shapes (pebble, block, arch, bloom, disc, hex, drop, gem);
-- a **colour**: one flat fill;
-- a **face**: a dark visor with two round eyes. The visor's tilt and the direction the eyes look give each bot its own expression.
+- **Clawlings**, the default: a soft body with a small mouth, eyes on stalks and a pair of pincers. Parts: a body (dome, tall, wide, round), eyes (two, splayed, short stalks, one eye) and claws (even, a fiddler's one big claw, big).
+- **Shellfolk**: one shy cream critter, the same on every bot, wearing a shell in the bot's colour (spiral, turret, dome, spotted). The shell tells bots apart; the critter acts.
+- **Lanterns**: round deep-sea critters whose curved antenna ends in the logo's white ball, held like a conductor's baton. Parts: a body (round, bell, oval, box), a lure (hook, flick, wave, reach) and one or two eyes.
 
-The construction is in `prototype/js/icons.js`: a 40-unit grid, the body filling it, a visor 22.4 × 9.6 units with fully round ends in `#16181b`, and eyes of radius 2.05 in white. The visor and eyes are the same in light and dark, since they sit on the body's colour.
+Every family takes one of eight colours: green `#58c26f`, blue `#5b8dff`, orchid `#cf7ee8`, violet `#a98bff`, yellow `#f6bd3b`, pink `#ff6f9c`, sky `#45bdf5`, lime `#a5d955`. Pupils and mouths are `#16181b`, eye whites `#ffffff`, the ball `#f6f5f2` with a `#c9c6bf` rim so it holds on a light page. These are the same in light and dark.
 
-| Use                | Size                | Token           |
-| ------------------ | ------------------- | --------------- |
-| Rail row           | 40 px (44 on touch) | `--avatar-row`  |
-| Pinned tile        | 56 px               | `--avatar-pin`  |
-| Work pane          | 64 px               | `--avatar-hero` |
-| Title pill         | 22 px               | `--avatar-pill` |
-| Empty conversation | 64 px               |                 |
+**The palette guard.** No creature is drawn in a red lobster's colours (OpenClaw's mascot) or an orange crab's (Rust's Ferris): no saturated, mid-light hue from red through orange, 345° to 38°. Orange left the palette for orchid. Bodies stay abstract, never shellfish.
+
+The construction is in `packages/core/src/avatar.ts`, which the app and the iPhone share: every shape as path data, circles, ellipses and rects on a 40-unit grid, the motions as keyframes, the choice and how it is kept. `prototype/avatars.html` shows each family in each state at each size, dark and light.
+
+| Use                   | Size                | Token             |
+| --------------------- | ------------------- | ----------------- |
+| Message card          | 18 px               |                   |
+| Title pill            | 22 px               | `--avatar-pill`   |
+| Rail row              | 40 px (44 on touch) | `--avatar-row`    |
+| Pinned tile           | 56 px               | `--avatar-pin`    |
+| Work pane             | 64 px               | `--avatar-hero`   |
+| Empty conversation    | 64 px               |                   |
+| New bot, Edit picture | 104 px              | `--avatar-create` |
+
+Every creature stays inside the circle an avatar is cropped to, in every state and every pose its motions reach, so nothing pokes through the state ring and the saved picture loses nothing. Each creature has its own fit, a scale and a shift that are the same in every state, so it keeps its size and place while it acts. `node packages/core/test/make-avatar-fit.ts` writes the fits, and a unit test measures every scene.
+
+Below 21 px a creature drops its fine detail: mouths, the glint in waiting eyes, and the lines on shells, all under a pixel wide there. Silhouette, eyes, claws, lure and shell spots stay.
+
+**States.** The creature acts out the state that `conversation.md` section 4 gives the avatar. The ring and the badge stay as that section draws them. Failed looks blocked; stopped looks idle.
+
+| State    | Clawlings                                 | Shellfolk                             | Lanterns                                 |
+| -------- | ----------------------------------------- | ------------------------------------- | ---------------------------------------- |
+| idle     | Blinks, claws at rest                     | Out of its shell, blinking            | Blinks, lure still                       |
+| thinking | Sways, stalks lean, eyes up               | Tilts its head, eyes up               | Watches its lure sway; the ball glows    |
+| working  | Snaps its claws and bobs                  | Crawls along                          | Conducts with the lure and bobs          |
+| waiting  | Waves a claw at you, eyes wide            | Stretches up toward you               | The ball lights with a ping, eyes on you |
+| blocked  | Stalks and claws droop, colour fades      | Hides in its shell, only its eyes out | The lure droops and the ball goes dark   |
+| done     | Hops with both claws up, holding the ball | Pops out happy                        | A happy bounce                           |
+
+**Reduced motion.** Under the system's setting or the app's own, and while the connection is lost, nothing moves. Each state then holds a still pose that says the same thing, never a frame from the middle of a motion: the waving claw is held up, the drooping parts stay drooped, the lit ball keeps its halo.
 
 Rules:
 
-- No frame, ring, shadow or emoji badge.
-- A bot whose gateway identity carries an image shows that image cropped to a circle at the same sizes.
-- A bot with no image gets a body and colour chosen from a stable hash of its id, so it looks the same on every device until the user picks one. The picker (eight bodies, a row of colours) is a later flow; this document fixes only how a character is drawn.
+- No frame, ring, shadow or emoji badge beyond the state ring and badge.
+- A bot whose gateway identity carries its own picture, uploaded or made elsewhere, shows that picture cropped to a circle at the same sizes, with the ring and badge.
+- A bot with no picture gets a Clawling chosen from a stable hash of its id, so it looks the same on every device until someone picks one.
+- A chosen creature is kept with the bot as its picture (`bots.md` section 3).
 - Avatars do not appear beside messages. In a one-to-one conversation the bot is identified by the title pill.
-
-Prototype palette, for the builder who adds the picker: `#58c26f`, `#5b8dff`, `#ff8552`, `#a98bff`, `#f6bd3b`, `#ff6f9c`, `#45bdf5`, `#a5d955`. The visor reads against every one of them at 5.6:1 or better.
 
 ## 6. Layout and widths
 
@@ -503,7 +525,7 @@ One centred column, 360 px wide, on the bare stage. No card, no border, no shado
 - A default button "Check now" ("Checking…" and disabled while it checks) and a quiet button "Use another gateway".
 - A footer line (12, faint) with the request id and the device id, for support.
 
-**The bots.** A row of characters stands along the foot of both screens, cropped by the bottom edge, at different sizes and tilts. They are decoration: `aria-hidden`, not interactive, and they do not move. They are in the page's flow, after the form with 24 px between, so they can never sit over it; when the form is tall, the page scrolls and they follow it. Below 640 px of height they are not shown at all, so the command, the waiting line and the way out always fit by themselves.
+**The bots.** A row of creatures from all three families stands along the foot of both screens, cropped by the bottom edge, at different sizes and tilts. They are decoration: `aria-hidden`, not interactive, and they do not move. They are in the page's flow, after the form with 24 px between, so they can never sit over it; when the form is tall, the page scrolls and they follow it. Below 640 px of height they are not shown at all, so the command, the waiting line and the way out always fit by themselves.
 
 ## 11. The status strip
 
@@ -621,7 +643,7 @@ The prototype runs on local fixtures and can send, create and pin. The app canno
 | Work pane facts                                                                                                | Nothing new                                                                           | Model is `bot.model` (the row is omitted when it is null); last activity is `task.updatedAt`. "Runs on" and the routines group are omitted. Files and Computer show their empty states.                                                                                                                                                    |
 | The gateway menu's theme choice                                                                                | An explicit setter in `preferences.ts`                                                | Built in step 4.                                                                                                                                                                                                                                                                                                                           |
 | Which bots are unfolded, by hand                                                                               | Nothing new                                                                           | Built with `readPreference` and `writePreference`.                                                                                                                                                                                                                                                                                         |
-| Characters as avatars                                                                                          | Nothing new                                                                           | Built. A bot whose gateway identity has an image shows the image.                                                                                                                                                                                                                                                                          |
+| Creatures as avatars                                                                                           | Nothing new                                                                           | Built: Clawlings, Shellfolk and Lanterns (section 5). A bot whose gateway identity has its own image shows the image.                                                                                                                                                                                                                      |
 
 ### What moves where
 

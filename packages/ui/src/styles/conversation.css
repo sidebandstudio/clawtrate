@@ -139,41 +139,6 @@
   height: 100%;
 }
 
-.presence > .avatar svg {
-  transform-origin: 50% 85%;
-}
-
-.presence .eyes {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.presence[data-state="idle"] .eyes {
-  animation: blink var(--loop-blink) linear infinite;
-}
-
-.presence[data-state="thinking"] > .avatar svg {
-  animation: sway var(--loop-think) var(--ease-in-out) infinite;
-}
-
-.presence[data-state="working"] > .avatar svg {
-  animation: bob calc(var(--loop-work) / 2) var(--ease-in-out) infinite alternate;
-}
-
-.presence[data-state="waiting"] > .avatar svg {
-  transform-origin: 50% 50%;
-  animation: lean var(--loop-nudge) var(--ease-in-out) infinite;
-}
-
-.presence[data-state="blocked"] > .avatar svg,
-.presence[data-state="failed"] > .avatar svg {
-  transform: translateY(5%) rotate(5deg);
-}
-
-.presence[data-state="done"] > .avatar svg {
-  animation: nod var(--dur-settle) var(--ease-out) both;
-}
-
 /* The ring: an arc 4 px outside the avatar that travels while a tool runs. */
 .presence::before {
   content: "";
@@ -895,58 +860,6 @@
   }
   50% {
     opacity: 0.35;
-  }
-}
-
-@keyframes blink {
-  0%,
-  96%,
-  100% {
-    transform: none;
-  }
-  98% {
-    transform: scaleY(0.1);
-  }
-}
-
-@keyframes sway {
-  0%,
-  100% {
-    transform: rotate(-4deg);
-  }
-  50% {
-    transform: rotate(4deg);
-  }
-}
-
-@keyframes bob {
-  from {
-    transform: translateY(3%);
-  }
-  to {
-    transform: translateY(-6%);
-  }
-}
-
-@keyframes lean {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
-}
-
-@keyframes nod {
-  0% {
-    transform: none;
-  }
-  40% {
-    transform: translateY(7%) rotate(4deg);
-  }
-  100% {
-    transform: none;
   }
 }
 

@@ -4,7 +4,7 @@
 // through each ending, the read after a sign-in, the bounds, and a typed key
 // leaving no trace.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ACCOUNTS,
   accountWord,
@@ -389,12 +389,16 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
   });
 });
 
+/** A real 2×2 PNG: a picture the gateway can keep and Clawtrate can read back. */
+const PICTURE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DAAMIM/4EAAB/uBfsL2WiLAAAAAElFTkSuQmCC";
+
 describe("creating a bot", () => {
   it("on an account: the model with its suffix, an empty fallback list, and the bot read back", async () => {
     const { client, fake, accounts } = await accountsClient();
     const { botId } = await client.createBot({
       name: "Viral",
-      avatar: "data:image/png;base64,iVBORw0KGgo=",
+      avatar: PICTURE,
       account: "acme:home",
       provider: "acme",
       model: "dev-1",
@@ -405,7 +409,7 @@ describe("creating a bot", () => {
       {
         name: "Viral",
         model: "acme/dev-1@acme:home",
-        avatar: "data:image/png;base64,iVBORw0KGgo=",
+        avatar: PICTURE,
       },
     ]);
     const patch = fake.gateway.calls("config.patch").at(-1) as {
@@ -716,6 +720,44 @@ describe("a bot left half-made", () => {
     expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
     expect(fake.gateway.calls("agents.create")).toHaveLength(1);
     client.stop();
+  });
+
+  it("keeps an uncertain Create when every recovery read fails and finishes it once the list returns", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const viewer = createBridgeSession(client);
+    const command = { type: "createBot", ...input, gatewayId: "gateway-a" } as const;
+    const list = fake.gateway.handlers["agents.list"]!;
+    const create = fake.gateway.handlers["agents.create"]!;
+    try {
+      fake.gateway.handlers["agents.create"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "create answer unavailable" });
+      };
+      await expect(viewer.apply(command)).rejects.toThrow("create answer unavailable");
+      fake.bots.push({ id: "viral", name: "Viral" });
+      fake.gateway.handlers["agents.create"] = create;
+      fake.gateway.handlers["agents.list"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "list unavailable" });
+      };
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const retry = viewer.apply(command).catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+      expect(await retry).toMatchObject({ message: "The gateway's bot list could not be read." });
+      expect(accounts().creation).toMatchObject({
+        status: "failed",
+        uncertain: true,
+        error: expect.stringContaining("bot list could not be read"),
+      });
+
+      vi.useRealTimers();
+      fake.gateway.handlers["agents.list"] = list;
+      expect(await viewer.apply(command)).toEqual({ botId: "viral", missing: [] });
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      client.stop();
+    }
   });
 
   it("a refusal that establishes nothing was written fails at once, and is not uncertain", async () => {
