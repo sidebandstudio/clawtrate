@@ -945,6 +945,8 @@ The site is published only together with the first signed beta, through the Site
 
 `CLAWTRATE_FEED`, `CLAWTRATE_RELEASES` and `CLAWTRATE_ASSETS` point it at stand-ins on `http://127.0.0.1` for tests, and `CLAWTRATE_APPLICATIONS` at another folder to install into.
 
+After the last line of a good install, and only then, a person at a terminal sees the Claw moment: about a second in which a Clawling (blue, dome body, eyes on stalks, after `packages/core/src/avatar.ts`) waves, the Clawtrate wordmark appears beside it, and it hops with the white ball. It is drawn in half-block characters with `printf`, in 24-bit colour where `COLORTERM` says so and the nearest of the 256 otherwise, and redrawn in place with cursor movement. It plays only when stdout is a terminal, and not when `CI` or `CLAWTRATE_NO_ANIMATION` is set, `TERM` is `dumb` or unset, the locale is not UTF-8, or the terminal is narrower than its 64 columns; `NO_COLOR` keeps the motion without colour. It hides the cursor, and the `EXIT` trap shows it again on every way out. A signal during it ends it early and the installer exits 0, because the install is done. Every check, message and exit code is as before; with stdout not a terminal the output is byte for byte what it was. `test/site-install-animation.test.ts` runs whole installs on macOS against stand-ins (`test/install-stand-ins.ts`: a loopback feed and release, an unsigned stand-in app, and stand-ins for `file`, `codesign` and `spctl`), under `sh` and `dash`, with stdout piped and inside a pseudo-terminal, and interrupts one mid-animation.
+
 ## Not done yet
 
 - The Work pane shows the task's details; its Files and Computer tabs are empty states until those flows exist.
