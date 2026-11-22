@@ -4,4 +4,5 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { extractSettings } from "./settings-extract.ts";
 
-parentPort?.postMessage(extractSettings(typeof workerData === "string" ? workerData : ""));
+const { text, profile } = workerData as { text: string; profile: "default" | "clawtrate" };
+parentPort?.postMessage(extractSettings(text, profile));

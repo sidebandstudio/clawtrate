@@ -4,7 +4,11 @@
 // each fixture differs from an accepted file by that one fault.
 
 import { describe, expect, it } from "vitest";
-import { extractSettings, TOKEN_MAX_BYTES } from "../src/setup/settings-extract.ts";
+import {
+  extractSettings,
+  TOKEN_MAX_BYTES,
+  type SettingsProfile,
+} from "../src/setup/settings-extract.ts";
 import { LEXER_LIMITS, lexSettings } from "../src/setup/settings-lexer.ts";
 
 const TOKEN = "dev-token.0123456789abcdef";
@@ -12,6 +16,8 @@ const TOKEN = "dev-token.0123456789abcdef";
 const withGateway = (gateway: string) => `{ gateway: ${gateway} }`;
 const tokenAuth = (auth: string) => withGateway(`{ mode: "local", port: 19555, auth: ${auth} }`);
 const refused = (reason: string, why: string) => ({ kind: "refused", reason, why });
+const extract = (text: string, profile: SettingsProfile = "default") =>
+  extractSettings(text, profile);
 
 describe("the lexer", () => {
   it.each([
@@ -20,6 +26,7 @@ describe("the lexer", () => {
     ["trailing commas", `{ a: [1, 2,], b: { c: 'x', }, }`],
     ["JSON5 numbers", `{ a: 0x1F, b: .5, c: +Infinity, d: -NaN, e: 5. }`],
     ["escapes in values", `{ a: "line\\nnext \\u0041 \\"q\\"", b: 'it\\'s', c: "cont\\\nued" }`],
+    ["escaped line and paragraph separators", `{ a: "x\\u2028y\\u2029z", b: "cont\\\u2028ued" }`],
     ["an include outside gateway", `{ agents: { $include: "./agents.json5" } }`],
     ["the same key in two objects", `{ a: { x: 1 }, b: { x: 2 } }`],
     ["empty containers", `{ a: {}, b: [] }`],
@@ -64,6 +71,8 @@ describe("the lexer", () => {
     ["in gateway", withGateway(`{ $include: "./gateway.json5" }`)],
     ["deep under gateway", withGateway(`{ auth: { "$include": "./auth.json5" } }`)],
     ["in an array under gateway", withGateway(`{ list: [{ $include: "./x.json5" }] }`)],
+    ["under env", `{ env: { $include: "./env.json5" } }`],
+    ["under env.vars", `{ env: { vars: { "$include": "./vars.json5" } } }`],
   ])("refuses $include %s", (_, text) => {
     expect(lexSettings(text)).toBe("include");
   });
@@ -82,6 +91,8 @@ describe("the lexer", () => {
     ["an unterminated string", `{ a: "x }`],
     ["a newline in a string", `{ a: "x\ny" }`],
     ["an unterminated comment", `{} /*`],
+    ["a raw line separator in a string", `{ a: "x\u2028y" }`],
+    ["a raw paragraph separator in a string", `{ a: 'x\u2029y' }`],
     ["a close after a colon", `{ a: }`],
     ["nothing", ``],
   ])("refuses %s as malformed", (_, text) => {
@@ -91,7 +102,7 @@ describe("the lexer", () => {
 
 describe("what is taken from the settings", () => {
   it("takes a local gateway's literal token and port", () => {
-    expect(extractSettings(tokenAuth(`{ mode: "token", token: "${TOKEN}" }`))).toEqual({
+    expect(extract(tokenAuth(`{ mode: "token", token: "${TOKEN}" }`))).toEqual({
       kind: "found",
       token: TOKEN,
       port: 19555,
@@ -99,7 +110,7 @@ describe("what is taken from the settings", () => {
   });
 
   it("takes an absent mode, an absent auth mode and the default port", () => {
-    expect(extractSettings(withGateway(`{ auth: { token: "${TOKEN}" } }`))).toEqual({
+    expect(extract(withGateway(`{ auth: { token: "${TOKEN}" } }`))).toEqual({
       kind: "found",
       token: TOKEN,
       port: 18789,
@@ -109,7 +120,7 @@ describe("what is taken from the settings", () => {
   it("trims as OpenClaw does and keeps ordinary punctuation", () => {
     const token = `a-b_c.d~e!f@g#h%i^j&k*l(m)n+o=p[q]r{s}t|u;v:w'x"y,z<>?/`;
     const quoted = JSON.stringify(`  ${token}\t`);
-    expect(extractSettings(tokenAuth(`{ token: ${quoted} }`))).toMatchObject({ token });
+    expect(extract(tokenAuth(`{ token: ${quoted} }`))).toMatchObject({ token });
   });
 
   // A token and a password, with the mode absent, token, or password: never a token.
@@ -119,13 +130,52 @@ describe("what is taken from the settings", () => {
     ["an empty password", `{ mode: "token", token: "${TOKEN}", password: "" }`],
     ["a null password", `{ token: "${TOKEN}", password: null }`],
   ])("never stages a token beside a password: %s", (_, auth) => {
-    expect(extractSettings(tokenAuth(auth))).toEqual(refused("credential", "password"));
+    expect(extract(tokenAuth(auth))).toEqual(refused("credential", "password"));
+  });
+
+  // With the mode absent, a password OpenClaw could resolve elsewhere would make it password mode.
+  it.each([
+    [
+      "a remote password",
+      withGateway(`{ remote: { password: "pw" }, auth: { token: "${TOKEN}" } }`),
+    ],
+    [
+      "a password in env",
+      `{ env: { OPENCLAW_GATEWAY_PASSWORD: "pw" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a password in env.vars",
+      `{ env: { vars: { OPENCLAW_GATEWAY_PASSWORD: "pw" } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a lower-case key in env",
+      `{ env: { openclaw_gateway_password: "" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+  ])("refuses an implicit mode beside %s", (_, text) => {
+    expect(extract(text)).toEqual(refused("credential", "password"));
+  });
+
+  it.each([
+    [
+      "a remote password",
+      withGateway(`{ remote: { password: "pw" }, auth: { mode: "token", token: "${TOKEN}" } }`),
+    ],
+    [
+      "a password in env",
+      `{ env: { OPENCLAW_GATEWAY_PASSWORD: "pw" }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a password in env.vars",
+      `{ env: { vars: { OPENCLAW_GATEWAY_PASSWORD: "pw" } }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+  ])("takes an explicit token beside an unused %s", (_, text) => {
+    expect(extract(text)).toEqual({ kind: "found", token: TOKEN, port: 18789 });
   });
 
   it.each(["password", "none", "trusted-proxy", "", "TOKEN"])(
     "refuses the auth mode %j",
     (mode) => {
-      expect(extractSettings(tokenAuth(`{ mode: "${mode}", token: "${TOKEN}" }`))).toEqual(
+      expect(extract(tokenAuth(`{ mode: "${mode}", token: "${TOKEN}" }`))).toEqual(
         refused("credential", "auth-mode"),
       );
     },
@@ -142,6 +192,10 @@ describe("what is taken from the settings", () => {
     ["$NAME", '"$OPENCLAW_TOKEN"', "indirect"],
     ["a legacy env marker", `"secretref-env:OPENCLAW_TOKEN"`, "indirect"],
     ["an older env marker", `"__env__:OPENCLAW_TOKEN"`, "indirect"],
+    ["OpenClaw's example token", `"change-me-to-a-long-random-token"`, "placeholder"],
+    ["OpenClaw's short example", `" change-me-now "`, "placeholder"],
+    ["the word undefined", `"undefined"`, "placeholder"],
+    ["the word null", `"null"`, "placeholder"],
     ["the redaction sentinel", `"__OPENCLAW_REDACTED__"`, "redacted"],
     ["the sentinel with spaces", `" __OPENCLAW_REDACTED__ "`, "redacted"],
     ["another display marker", `"[REDACTED]"`, "redacted"],
@@ -154,12 +208,19 @@ describe("what is taken from the settings", () => {
     ["DEL", `"abc\\u007fdef"`, "control"],
     ["a C1 control", `"abc\\u0085def"`, "control"],
   ])("refuses %s as the token", (_, value, why) => {
-    expect(extractSettings(tokenAuth(`{ token: ${value} }`))).toEqual(refused("credential", why));
+    expect(extract(tokenAuth(`{ token: ${value} }`))).toEqual(refused("credential", why));
   });
+
+  it.each(["$cost-2026", "$lower_case", "$1ABC", "a$NAME", "$"])(
+    "keeps a literal %j that isn't OpenClaw's $NAME shorthand",
+    (token) => {
+      expect(extract(tokenAuth(`{ token: "${token}" }`))).toMatchObject({ kind: "found", token });
+    },
+  );
 
   it("allows a token at the length limit", () => {
     const token = "x".repeat(TOKEN_MAX_BYTES);
-    expect(extractSettings(tokenAuth(`{ token: "${token}" }`))).toMatchObject({ token });
+    expect(extract(tokenAuth(`{ token: "${token}" }`))).toMatchObject({ token });
   });
 
   it.each([
@@ -167,11 +228,11 @@ describe("what is taken from the settings", () => {
     ["no auth", withGateway(`{ port: 19555 }`), "no-token"],
     ["no token", tokenAuth(`{ mode: "token" }`), "no-token"],
   ])("finds no credential with %s", (_, text, why) => {
-    expect(extractSettings(text)).toEqual(refused("credential", why));
+    expect(extract(text)).toEqual(refused("credential", why));
   });
 
   it.each(["remote", "Local", ""])("refuses the gateway mode %j", (mode) => {
-    expect(extractSettings(withGateway(`{ mode: "${mode}", auth: { token: "a" } }`))).toEqual(
+    expect(extract(withGateway(`{ mode: "${mode}", auth: { token: "a" } }`))).toEqual(
       refused("address", "remote"),
     );
   });
@@ -179,29 +240,55 @@ describe("what is taken from the settings", () => {
   it.each(["0", "65536", "-1", "19555.5", `"19555"`, "Infinity", "NaN", "null"])(
     "refuses the port %s",
     (port) => {
-      expect(extractSettings(withGateway(`{ port: ${port}, auth: { token: "a" } }`))).toEqual(
+      expect(extract(withGateway(`{ port: ${port}, auth: { token: "a" } }`))).toEqual(
         refused("address", "port"),
       );
     },
   );
+
+  it("takes each profile's own default port when the file names none", () => {
+    const text = withGateway(`{ auth: { token: "${TOKEN}" } }`);
+    expect(extract(text, "default")).toMatchObject({ port: 18789 });
+    expect(extract(text, "clawtrate")).toMatchObject({ port: 22768 });
+    expect(
+      extract(withGateway(`{ port: 19556, auth: { token: "a" } }`), "clawtrate"),
+    ).toMatchObject({ port: 19556 });
+  });
+
+  it.each([
+    [
+      "env",
+      `{ env: { OPENCLAW_GATEWAY_PORT: "19999" }, gateway: { port: 19555, auth: { token: "a" } } }`,
+    ],
+    [
+      "env.vars",
+      `{ env: { vars: { OPENCLAW_GATEWAY_PORT: "19999" } }, gateway: { auth: { token: "a" } } }`,
+    ],
+    [
+      "a lower-case key",
+      `{ env: { openclaw_gateway_port: "19999" }, gateway: { auth: { token: "a" } } }`,
+    ],
+  ])("refuses a port the file's %s could override", (_, text) => {
+    expect(extract(text)).toEqual(refused("address", "port"));
+  });
 
   it.each([
     ["a root that isn't an object", `[1]`],
     ["a gateway that isn't an object", `{ gateway: [] }`],
     ["auth that isn't an object", withGateway(`{ auth: "token" }`)],
   ])("refuses %s", (_, text) => {
-    expect(extractSettings(text)).toEqual(refused("unreadable", "shape"));
+    expect(extract(text)).toEqual(refused("unreadable", "shape"));
   });
 
   it("refuses what the lexer refuses before parsing it", () => {
-    expect(extractSettings(tokenAuth(`{ token: "a", token: "b" }`))).toEqual(
+    expect(extract(tokenAuth(`{ token: "a", token: "b" }`))).toEqual(
       refused("unreadable", "duplicate"),
     );
-    expect(extractSettings(`{ $include: "./x.json5" }`)).toEqual(refused("unreadable", "include"));
+    expect(extract(`{ $include: "./x.json5" }`)).toEqual(refused("unreadable", "include"));
   });
 
   it("refuses what json5 itself can't parse", () => {
     // Leading zeros pass the lexer's number shape; json5 refuses them.
-    expect(extractSettings(`{ a: 01 }`)).toEqual(refused("unreadable", "malformed"));
+    expect(extract(`{ a: 01 }`)).toEqual(refused("unreadable", "malformed"));
   });
 });

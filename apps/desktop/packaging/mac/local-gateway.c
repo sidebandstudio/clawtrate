@@ -1,11 +1,12 @@
 // Reads OpenClaw's settings file for the host (docs/design/setup-effortless.md
-// §3, "The settings reader"). It walks from the home folder by held
-// descriptors, follows no link, checks what it opened, and writes the file's
-// bytes to stdout. It never writes, repairs or runs anything.
+// §3, "The settings reader"). It walks from the home folder the host opened,
+// checked and passed as descriptor 3, by held descriptors, follows no link,
+// checks what it opened, and writes the file's bytes to stdout. It never
+// writes, repairs or runs anything.
 //
-//   ClawtrateLocalGateway read <home> <profile folder> <file>
+//   ClawtrateLocalGateway read <profile folder> <file>   (fd 3: the home folder)
 //
-// stdout is one line, "ok" followed by the file's bytes, or "refused <why>".
+// stdout is "ok\n" followed by the file's bytes, or one line "refused <why>\n".
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <errno.h>
 #include <fcntl.h>
@@ -91,44 +92,54 @@ static const char *readBounded(int fd, char *buffer, size_t *length) {
 }
 
 static int refuse(const char *why) {
-    printf("refused %s\n", why);
-    return 0;
+    return printf("refused %s\n", why) > 0 && fflush(stdout) == 0 ? 0 : 1;
 }
 
-static int readSettings(const char *home, const char *folderName, const char *fileName) {
-    if (home[0] != '/' || !component(folderName) || !component(fileName)) return 2;
-    // The home folder is the account's, from the system; nothing below it is followed.
-    int root = open(home, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (root < 0) return refuse("failed");
-    int folder = openat(root, folderName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    const char *why = folder < 0 ? openFailure(root, folderName) : checkOpened(folder, 1);
-    close(root);
-    if (why) {
-        if (folder >= 0) close(folder);
-        return refuse(why);
+/** Refuses a link, a device or a FIFO by its no-follow stat, before anything opens it. */
+static const char *preflight(int folder, const char *name) {
+    struct stat st;
+    if (fstatat(folder, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return openFailure(folder, name);
+    if (S_ISLNK(st.st_mode)) return "link";
+    return S_ISREG(st.st_mode) ? NULL : "type";
+}
+
+/** The file's bytes, or why not; on success the caller owns and wipes the buffer. */
+static const char *readSettings(int home, const char *folderName, const char *fileName,
+                                char **buffer, size_t *length) {
+    *buffer = NULL;
+    *length = 0;
+    int folder = openat(home, folderName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const char *why = folder < 0 ? openFailure(home, folderName) : checkOpened(folder, 1);
+    if (!why) why = preflight(folder, fileName);
+    // Nonblocking and no controlling terminal; the checks run again on what was opened.
+    int file = why ? -1
+                   : openat(folder, fileName,
+                            O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
+    if (!why && file < 0) why = openFailure(folder, fileName);
+    if (folder >= 0) close(folder);
+    if (!why) why = checkOpened(file, 0);
+    if (!why) *buffer = malloc(SETTINGS_LIMIT + 1);
+    if (!why) why = *buffer ? readBounded(file, *buffer, length) : "failed";
+    if (file >= 0) close(file);
+    if (why && *buffer) {
+        memset_s(*buffer, SETTINGS_LIMIT + 1, 0, SETTINGS_LIMIT + 1);
+        free(*buffer);
+        *buffer = NULL;
     }
-    // Nonblocking: a FIFO opens at once and fails the regular-file check.
-    int file = openat(folder, fileName, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    if (file < 0) why = openFailure(folder, fileName);
-    close(folder);
-    if (file < 0) return refuse(why);
-    why = checkOpened(file, 0);
-    char *buffer = why ? NULL : malloc(SETTINGS_LIMIT + 1);
-    size_t length = 0;
-    if (!why) why = buffer ? readBounded(file, buffer, &length) : "failed";
-    close(file);
-    if (why) {
-        free(buffer);
-        return refuse(why);
-    }
-    fputs("ok\n", stdout);
-    fwrite(buffer, 1, length, stdout);
-    memset_s(buffer, length, 0, length);
-    free(buffer);
-    return fflush(stdout) == 0 ? 0 : 1;
+    return why;
 }
 
 int main(int argc, char **argv) {
-    if (argc == 5 && strcmp(argv[1], "read") == 0) return readSettings(argv[2], argv[3], argv[4]);
-    return 2;
+    if (argc != 4 || strcmp(argv[1], "read") != 0 || !component(argv[2]) || !component(argv[3]))
+        return 2;
+    char *buffer;
+    size_t length;
+    const char *why = readSettings(3, argv[2], argv[3], &buffer, &length);
+    close(3);
+    if (why) return refuse(why);
+    int written = fputs("ok\n", stdout) >= 0 && fwrite(buffer, 1, length, stdout) == length &&
+                  fflush(stdout) == 0;
+    memset_s(buffer, SETTINGS_LIMIT + 1, 0, SETTINGS_LIMIT + 1);
+    free(buffer);
+    return written ? 0 : 1;
 }

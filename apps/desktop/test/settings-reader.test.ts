@@ -1,11 +1,11 @@
 // The bounded settings reader on real files (docs/design/setup-effortless.md
 // §3, "The settings reader"): each opening rejection with its own fixture, the
-// native helper's failures, the parse worker's deadline, two profiles, and
-// the guard that keeps a test away from the account's real home. Every home
-// here is a temporary folder of the test's own; on macOS the helper is built
-// with packaging's own flags.
+// home folder's checks, the native helper's failures and output, the parse
+// worker's bounds, two profiles, and the guard that keeps a test away from the
+// account's real home. Every home here is a temporary folder of the test's
+// own; on macOS the helper is built with packaging's own flags.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -18,6 +18,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,11 +28,18 @@ import { join, relative, sep } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../packaging/config.ts";
-import { FS_SAFE_NATIVE_SHA256 } from "../src/setup/openclaw-pins.ts";
 import {
+  FS_SAFE_NATIVE_SHA256,
+  PINNED_FS_SAFE_VERSION,
+  PINNED_OPENCLAW_VERSION,
+} from "../src/setup/openclaw-pins.ts";
+import {
+  checkOpened,
   HeldToken,
+  holdHome,
   openSettingsFile,
   parseInWorker,
+  preflight,
   readBounded,
   readLocalSettings,
   SETTINGS_LIMIT,
@@ -44,11 +52,32 @@ const TOKEN = "dev-token.0123456789abcdef";
 const SETTINGS = `{ gateway: { mode: "local", port: 19555, auth: { token: "${TOKEN}" } } }`;
 const platform = process.platform;
 const posix = platform === "darwin" || platform === "linux";
+const unsafe = (why: string) => ({ kind: "refused", reason: "unsafe", why });
+const unverified = unsafe("helper");
+const workerFailed = { kind: "refused", reason: "unreadable", why: "worker" };
+
+/** Stand-in helpers, written before any test starts one. */
+const FAKES: Record<string, string> = {
+  fails: "exit 3",
+  "answer-fails": "printf 'ok\\n{}'; exit 1",
+  "answer-killed": "printf 'ok\\n{}'; kill -9 $$",
+  malformed: "echo surprise",
+  unknown: "echo 'refused maybe'",
+  "no-newline": "printf ok",
+  "refusal-no-newline": "printf 'refused absent'",
+  "refusal-body": "printf 'refused absent\\nmore'",
+  "two-refusals": "printf 'refused absent\\nrefused link\\n'",
+  "over-cap": `printf 'ok\\n'; head -c ${SETTINGS_LIMIT + 1} /dev/zero`,
+  "at-cap": `printf 'ok\\n'; head -c ${SETTINGS_LIMIT} /dev/zero`,
+  slow: "exec sleep 5",
+};
 
 let scratch: string;
 let helper: string | null = null;
 beforeAll(() => {
   scratch = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-settings-")));
+  for (const [name, body] of Object.entries(FAKES))
+    writeFileSync(join(scratch, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
   if (platform === "darwin") {
     helper = join(scratch, LOCAL_GATEWAY_HELPER);
     execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
@@ -57,11 +86,12 @@ beforeAll(() => {
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 let homes = 0;
-/** A new home with a profile folder and settings file, both private unless a test says otherwise. */
+/** A new home with a profile folder and settings file, all private unless a test says otherwise. */
 function home(options: { text?: string; folder?: string } = {}) {
   const path = join(scratch, `home-${++homes}`);
   const folder = join(path, options.folder ?? ".openclaw");
   mkdirSync(folder, { recursive: true, mode: 0o700 });
+  chmodSync(path, 0o700);
   chmodSync(folder, 0o700);
   const file = join(folder, "openclaw.json");
   writeFileSync(file, options.text ?? SETTINGS, { mode: 0o600 });
@@ -93,8 +123,6 @@ describe.skipIf(!posix)("opening the settings file", () => {
     rmSync(file);
     expect(await openIn(path)).toEqual({ kind: "refused", reason: "absent" });
   });
-
-  const unsafe = (why: string) => ({ kind: "refused", reason: "unsafe", why });
 
   it("refuses a profile folder that is a link, even to a private folder", async () => {
     const { path, folder } = home();
@@ -150,11 +178,6 @@ describe.skipIf(!posix)("opening the settings file", () => {
     expect(await openIn(path)).toEqual(unsafe("mode"));
   });
 
-  it("refuses a folder that belongs to another account", async () => {
-    // A system folder of root's, which no test can create: the owner is checked before the mode.
-    expect(await openIn("/", "usr", "openclaw.json")).toEqual(unsafe("owner"));
-  });
-
   it("refuses an unreadable file as denied", async () => {
     const { path, file } = home();
     chmodSync(file, 0o200);
@@ -185,25 +208,109 @@ describe.skipIf(!posix)("opening the settings file", () => {
   });
 });
 
-describe.skipIf(platform !== "darwin")("the macOS helper's ACL checks", () => {
+describe.skipIf(!posix)("the home folder", () => {
+  it("refuses a home or a name that isn't one plain step, before opening anything", async () => {
+    const { path } = home();
+    for (const [where, folder, file] of [
+      [`${path}/../${relative(scratch, path)}`, ".openclaw", "openclaw.json"],
+      [`${path}/./`, ".openclaw", "openclaw.json"],
+      ["relative/home", ".openclaw", "openclaw.json"],
+      [path, "..", "openclaw.json"],
+      [path, ".openclaw/../.openclaw", "openclaw.json"],
+      [path, "", "openclaw.json"],
+      [path, ".openclaw", "../openclaw.json"],
+      [path, ".openclaw", "."],
+      [path, ".openclaw", "a\0b"],
+    ])
+      expect(await openIn(where!, folder, file), `${where} ${folder} ${file}`).toEqual(
+        unsafe("path"),
+      );
+  });
+
+  // Every run of this file is sandboxed (VITEST is set): its homes must be the guard's kind.
+  it.each([
+    ["a missing home", () => join(scratch, "no-such-home")],
+    [
+      "a linked home",
+      () => {
+        const link = join(scratch, `link-${++homes}`);
+        symlinkSync(home().path, link);
+        return link;
+      },
+    ],
+    [
+      "a home others may enter",
+      () => {
+        const { path } = home();
+        chmodSync(path, 0o755);
+        return path;
+      },
+    ],
+    ["a home outside the temporary roots", () => "/usr"],
+    ["a temporary root itself", () => realpathSync(tmpdir())],
+  ])("refuses %s in a sandboxed run", async (_, path) => {
+    await expect(openIn(path())).rejects.toBeInstanceOf(SetupRefusedError);
+  });
+
+  it("holds the home without following a link, and checks what it opened", async () => {
+    const { path } = home();
+    const link = join(scratch, `held-link-${++homes}`);
+    symlinkSync(path, link);
+    expect(await holdHome(link)).toEqual(unsafe("link"));
+    const shared = join(scratch, `shared-${++homes}`);
+    mkdirSync(shared, { mode: 0o700 });
+    chmodSync(shared, 0o770);
+    expect(await holdHome(shared)).toEqual(unsafe("mode"));
+    expect(await holdHome(join(path, ".openclaw", "openclaw.json"))).toEqual(unsafe("type"));
+    // A system folder of root's, which no test can make.
+    expect(await holdHome("/usr")).toEqual(unsafe("owner"));
+    const held = await holdHome(path);
+    expect(held).toHaveProperty("handle");
+    if ("handle" in held) await held.handle.close();
+  });
+
+  it("checks an opened folder's owner before its mode", async () => {
+    const usr = await open("/usr", "r");
+    try {
+      expect(await checkOpened(usr, true)).toEqual(unsafe("owner"));
+    } finally {
+      await usr.close();
+    }
+  });
+
+  it("refuses a device, a FIFO or a link by its no-follow stat, before opening it", async () => {
+    const { folder, file } = home();
+    expect(await preflight("/dev/null")).toEqual(unsafe("type"));
+    const fifo = join(folder, "fifo");
+    execFileSync("mkfifo", ["-m", "600", fifo]);
+    expect(await preflight(fifo)).toEqual(unsafe("type"));
+    const link = join(folder, "link");
+    symlinkSync(file, link);
+    expect(await preflight(link)).toEqual(unsafe("link"));
+    expect(await preflight(join(folder, "missing"))).toEqual({ kind: "refused", reason: "absent" });
+    expect(await preflight(file)).toBe(null);
+  });
+});
+
+describe.skipIf(platform !== "darwin")("the macOS helper", () => {
   const acl = (path: string, entry: string) => execFileSync("/bin/chmod", ["+a", entry, path]);
 
   it("refuses a file whose ACL grants another account anything", async () => {
     const { path, file } = home();
     acl(file, "everyone allow read");
-    expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "acl" });
+    expect(await openIn(path)).toEqual(unsafe("acl"));
   });
 
   it("refuses a folder whose ACL grants another account anything", async () => {
     const { path, folder } = home();
     acl(folder, "staff allow list");
-    expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "acl" });
+    expect(await openIn(path)).toEqual(unsafe("acl"));
   });
 
   it("refuses a file whose ACL grants another user anything", async () => {
     const { path, file } = home();
     acl(file, "root allow read");
-    expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "acl" });
+    expect(await openIn(path)).toEqual(unsafe("acl"));
   });
 
   it("allows an ACL that grants only this account, or only denies", async () => {
@@ -213,19 +320,31 @@ describe.skipIf(platform !== "darwin")("the macOS helper's ACL checks", () => {
     expect(await openIn(path)).toMatchObject({ kind: "read" });
   });
 
-  it("refuses a file over 1 MiB by its size, and one that grew past it by the bytes read", () => {
-    const harness = join(scratch, "grow.c");
+  /** The helper's own functions, driven one at a time. */
+  const harness = () => {
+    const binary = join(scratch, "harness");
+    if (existsSync(binary)) return binary;
+    const source = join(scratch, "harness.c");
     writeFileSync(
-      harness,
+      source,
       `#define main helper_main
 #include "local-gateway.c"
 #undef main
 int main(int argc, char **argv) {
-  (void)argc;
-  int fd = open(argv[1], O_RDONLY);
+  if (argc == 3 && strcmp(argv[1], "folder") == 0) {
+    const char *why = checkOpened(open(argv[2], O_RDONLY | O_DIRECTORY), 1);
+    puts(why ? why : "ok");
+    return 0;
+  }
+  if (argc == 4 && strcmp(argv[1], "preflight") == 0) {
+    const char *why = preflight(open(argv[2], O_RDONLY | O_DIRECTORY), argv[3]);
+    puts(why ? why : "ok");
+    return 0;
+  }
+  int fd = open(argv[2], O_RDONLY);
   const char *why = checkOpened(fd, 0);
   if (why) { printf("checked: %s\\n", why); return 0; }
-  FILE *grow = fopen(argv[1], "a");
+  FILE *grow = fopen(argv[2], "a");
   for (int i = 0; i <= SETTINGS_LIMIT; ++i) fputc('x', grow);
   fclose(grow);
   size_t length;
@@ -235,38 +354,67 @@ int main(int argc, char **argv) {
   return 0;
 }`,
     );
-    const binary = join(scratch, "grow");
     execFileSync("/usr/bin/xcrun", [
       "clang",
       "-Wno-unused-function",
       "-I",
       join(ROOT, "apps/desktop/packaging/mac"),
-      harness,
+      source,
       "-o",
       binary,
     ]);
-    const run = (file: string) => execFileSync(binary, [file], { encoding: "utf8" }).trim();
+    return binary;
+  };
+  const run = (...args: string[]) => execFileSync(harness(), args, { encoding: "utf8" }).trim();
+
+  it("refuses a file over 1 MiB by its size, and one that grew past it by the bytes read", () => {
     const large = home().file;
     writeFileSync(large, "x".repeat(SETTINGS_LIMIT + 1));
-    expect(run(large)).toBe("checked: large");
-    expect(run(home().file)).toBe("read: large");
+    expect(run("grow", large)).toBe("checked: large");
+    expect(run("grow", home().file)).toBe("read: large");
   });
 
-  // Only on a discarded hosted runner, where sudo needs no password: a file root owns that
-  // this account may read through an ACL, so that only the owner check refuses it.
-  it.skipIf(process.env.CLAWTRATE_HOSTED_MAC_RUNNER !== "1")(
+  it("checks an opened folder's owner before its mode, and refuses a device before opening it", () => {
+    expect(run("folder", "/usr")).toBe("owner");
+    expect(run("preflight", "/dev", "null")).toBe("type");
+    expect(run("preflight", home().folder, "openclaw.json")).toBe("ok");
+  });
+
+  it("fails when it can't write its answer", () => {
+    const { path } = home();
+    // stdout closed: the answer can't be written, so the exit isn't a success.
+    const result = spawnSync(
+      "/bin/sh",
+      ["-c", 'exec "$0" read .openclaw openclaw.json 3<"$1" >&-', helper!, path],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(1);
+  });
+
+  it("reads only from the home it was handed, and takes no path of its own", () => {
+    const { path } = home();
+    const answer = (args: string[]) =>
+      spawnSync("/bin/sh", ["-c", 'exec "$0" "$@" 3<"$HOME_DIR"', helper!, ...args], {
+        env: { HOME_DIR: path, PATH: "/usr/bin:/bin" },
+      });
+    expect(answer(["read", ".openclaw", "openclaw.json"]).stdout.toString()).toBe(
+      `ok\n${SETTINGS}`,
+    );
+    for (const args of [
+      ["read", path, ".openclaw", "openclaw.json"],
+      ["read", "..", "openclaw.json"],
+      ["read", ".openclaw", "a/b"],
+    ])
+      expect(answer(args).status, args.join(" ")).toBe(2);
+  });
+
+  // Only where CI's fixture step made it, on a discarded GitHub-hosted runner: a file root owns
+  // that this account may read through an ACL, so that only the owner check refuses it. This
+  // test reads that fixture and changes nothing.
+  it.skipIf(!process.env.CLAWTRATE_OWNER_FIXTURE_HOME)(
     "refuses a file that belongs to another account",
     async () => {
-      const { path, file } = home();
-      execFileSync("/usr/bin/sudo", ["-n", "/usr/sbin/chown", "root", file]);
-      execFileSync("/usr/bin/sudo", [
-        "-n",
-        "/bin/chmod",
-        "+a",
-        `${userInfo().username} allow read`,
-        file,
-      ]);
-      expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "owner" });
+      expect(await openIn(process.env.CLAWTRATE_OWNER_FIXTURE_HOME!)).toEqual(unsafe("owner"));
     },
   );
 });
@@ -276,17 +424,11 @@ describe.skipIf(platform !== "linux")("Linux ACLs", () => {
   it.skipIf(!setfacl)("refuses a file whose ACL names another account, by its mode", async () => {
     const { path, file } = home();
     execFileSync(setfacl!, ["-m", "u:nobody:r", file]);
-    expect(await openIn(path)).toEqual({ kind: "refused", reason: "unsafe", why: "mode" });
+    expect(await openIn(path)).toEqual(unsafe("mode"));
   });
 });
 
 describe.skipIf(!posix)("the helper's failures mean unverified", () => {
-  /** A stand-in helper: a shell script of the test's own. */
-  const fake = (name: string, body: string) => {
-    const path = join(scratch, name);
-    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
-    return path;
-  };
   const viaFake = (path: string | null, deadlineMs?: number) =>
     openSettingsFile({
       home: home().path,
@@ -296,75 +438,140 @@ describe.skipIf(!posix)("the helper's failures mean unverified", () => {
       helper: path,
       ...(deadlineMs === undefined ? {} : { deadlineMs }),
     });
-  const unverified = { kind: "refused", reason: "unsafe", why: "helper" };
+  const fake = (name: string) => join(scratch, name);
 
   it.each([
-    ["no helper", () => null],
-    ["a missing helper", () => join(scratch, "no-such-helper")],
-    ["a helper that fails", () => fake("fails", "exit 3")],
-    ["an answer, then a failed exit", () => fake("answer-fails", "printf 'ok\\n{}'; exit 1")],
-    ["an answer, then a signal", () => fake("answer-killed", "printf 'ok\\n{}'; kill -9 $$")],
-    ["malformed output", () => fake("malformed", "echo surprise")],
-    ["an unknown refusal", () => fake("unknown", "echo 'refused maybe'")],
-    ["no line end", () => fake("no-newline", "printf ok")],
-    ["output over its limit", () => fake("large", `printf 'ok\\n'; head -c 1050000 /dev/zero`)],
-  ])("refuses with %s", async (_, path) => {
-    expect(await viaFake(path())).toEqual(unverified);
+    ["no helper", null],
+    ["a missing helper", "no-such-helper"],
+    ["a helper that fails", "fails"],
+    ["an answer, then a failed exit", "answer-fails"],
+    ["an answer, then a signal", "answer-killed"],
+    ["malformed output", "malformed"],
+    ["an unknown refusal", "unknown"],
+    ["no line end", "no-newline"],
+    ["a refusal with no line end", "refusal-no-newline"],
+    ["a refusal with more after it", "refusal-body"],
+    ["two refusals", "two-refusals"],
+    ["a file of more than 1 MiB", "over-cap"],
+  ])("refuses with %s", async (_, name) => {
+    expect(await viaFake(name === null ? null : fake(name))).toEqual(unverified);
+  });
+
+  it("takes a file of exactly 1 MiB", async () => {
+    const answer = await viaFake(fake("at-cap"));
+    expect(answer.kind === "read" && answer.bytes.length).toBe(SETTINGS_LIMIT);
   });
 
   it("refuses a helper that passes its deadline, and stops it", async () => {
     const started = Date.now();
-    expect(await viaFake(fake("slow", "exec sleep 5"), 200)).toEqual(unverified);
+    expect(await viaFake(fake("slow"), 200)).toEqual(unverified);
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
-  it("passes no token, file name or environment of the host's to the helper", async () => {
-    const out = join(scratch, "seen");
-    const seen = fake("seen", `echo "$@" > ${out}; env >> ${out}; echo 'refused absent'`);
+  it("hands the helper the held home and two names, with no environment of the host's", async () => {
+    const marker = join(scratch, "seen.json");
+    const seen = join(scratch, "seen");
+    writeFileSync(
+      seen,
+      `#!${process.execPath}
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
+  argv: process.argv.slice(2),
+  // macOS sets this one for every process it starts; nothing else may come through.
+  env: Object.keys(process.env).filter((key) => key !== "__CF_USER_TEXT_ENCODING"),
+  home: fs.fstatSync(3).ino,
+}));
+process.stdout.write("refused absent\\n");
+`,
+      { mode: 0o700 },
+    );
+    const { path } = home();
     process.env.CLAWTRATE_TEST_SECRET = "must-not-pass";
+    let answer;
     try {
-      expect(await viaFake(seen)).toEqual({ kind: "refused", reason: "absent" });
+      answer = await openSettingsFile({
+        home: path,
+        folder: ".openclaw",
+        file: "openclaw.json",
+        platform: "darwin",
+        helper: seen,
+      });
     } finally {
       delete process.env.CLAWTRATE_TEST_SECRET;
     }
-    const lines = readFileSync(out, "utf8").trim().split("\n");
-    expect(lines[0]).toMatch(/^read \S+ \.openclaw openclaw\.json$/);
-    expect(lines.slice(1).filter((line) => !/^(PATH|PWD|SHLVL|_)=/.test(line))).toEqual([]);
+    // The fixture ran (its marker first), then its one refusal line was taken as it is.
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({
+      argv: ["read", ".openclaw", "openclaw.json"],
+      env: ["PATH"],
+      home: statSync(path).ino,
+    });
+    expect(answer).toEqual({ kind: "refused", reason: "absent" });
   });
 });
 
 describe("the parse worker", () => {
+  const write = (name: string, body: string) => {
+    const path = join(scratch, name);
+    writeFileSync(path, body);
+    return new URL(`file://${path}`);
+  };
+  /** A worker that answers with exactly this message. */
+  const answering = (name: string, message: unknown) =>
+    write(
+      name,
+      `import { parentPort } from "node:worker_threads";
+parentPort.postMessage(${JSON.stringify(message)});\n`,
+    );
+
   it("answers with what the rules found", async () => {
-    expect(await parseInWorker(SETTINGS, WORKER)).toEqual({
+    expect(await parseInWorker(SETTINGS, "default", WORKER)).toEqual({
       kind: "found",
       token: TOKEN,
       port: 19555,
     });
   });
 
-  it("refuses when the worker passes its deadline, and ends it", async () => {
-    const spin = join(scratch, "spin.mjs");
-    writeFileSync(spin, "for (;;) {}\n");
+  it("refuses a malformed number in linear time", async () => {
+    const text = `{ gateway: { port: ${"1".repeat(400_000)}x } }`;
     const started = Date.now();
-    expect(await parseInWorker(SETTINGS, new URL(`file://${spin}`), 300)).toEqual({
+    expect(await parseInWorker(text, "default", WORKER)).toEqual({
       kind: "refused",
       reason: "unreadable",
-      why: "worker",
+      why: "malformed",
     });
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it("refuses when the worker passes its deadline, and ends it", async () => {
+    const started = Date.now();
+    expect(
+      await parseInWorker(SETTINGS, "default", write("spin.mjs", "for (;;) {}\n"), 300),
+    ).toEqual(workerFailed);
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
-  const write = (name: string, body: string) => {
-    const path = join(scratch, name);
-    writeFileSync(path, body);
-    return new URL(`file://${path}`);
-  };
+  it("refuses text over 1 MiB without starting a worker", async () => {
+    const spin = write("spin-large.mjs", "for (;;) {}\n");
+    const started = Date.now();
+    expect(await parseInWorker("x".repeat(SETTINGS_LIMIT + 1), "default", spin, 5_000)).toEqual({
+      kind: "refused",
+      reason: "unreadable",
+      why: "large",
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 
-  it("runs with resource limits and an empty environment", async () => {
+  it("refuses a worker that can't start", async () => {
+    expect(
+      await parseInWorker("", "default", new URL("http://127.0.0.1:9/settings-parse.mjs")),
+    ).toEqual(workerFailed);
+  });
+
+  it("runs with resource limits, no Node options and an empty environment", async () => {
     const report = `import { parentPort, resourceLimits } from "node:worker_threads";
-const token = JSON.stringify({ resourceLimits, env: Object.keys(process.env) });
+const token = JSON.stringify({ resourceLimits, execArgv: process.execArgv, env: Object.keys(process.env) });
 parentPort.postMessage({ kind: "found", token, port: 1 });\n`;
-    const answer = await parseInWorker("", write("report.mjs", report));
+    const answer = await parseInWorker("", "default", write("report.mjs", report));
     if (answer.kind !== "found") throw new Error("the worker didn't answer");
     expect(JSON.parse(answer.token)).toEqual({
       resourceLimits: expect.objectContaining({
@@ -372,38 +579,85 @@ parentPort.postMessage({ kind: "found", token, port: 1 });\n`;
         maxYoungGenerationSizeMb: 8,
         stackSizeMb: 4,
       }) as unknown,
+      execArgv: [],
       env: [],
     });
   });
 
-  it("refuses a worker that fails, runs out of memory or answers with another shape", async () => {
-    const failed = { kind: "refused", reason: "unreadable", why: "worker" };
-    expect(await parseInWorker("", write("throws.mjs", "throw new Error('x');\n"))).toEqual(failed);
+  it("refuses a worker that fails or runs out of memory", async () => {
+    expect(
+      await parseInWorker("", "default", write("throws.mjs", "throw new Error('x');\n")),
+    ).toEqual(workerFailed);
     const grow = "const a = []; for (;;) a.push(new Array(1e6).fill(1));\n";
-    expect(await parseInWorker("", write("grows.mjs", grow), 10_000)).toEqual(failed);
-    const odd = `import { parentPort } from "node:worker_threads";
-parentPort.postMessage({ kind: "found", token: 1, port: "x" });\n`;
-    expect(await parseInWorker("", write("odd.mjs", odd))).toEqual(failed);
+    expect(await parseInWorker("", "default", write("grows.mjs", grow), 10_000)).toEqual(
+      workerFailed,
+    );
   }, 15_000);
+
+  it.each([
+    ["a token that isn't text", { kind: "found", token: 1, port: 19555 }],
+    ["a port out of range", { kind: "found", token: TOKEN, port: 0 }],
+    ["a port that isn't whole", { kind: "found", token: TOKEN, port: 19555.5 }],
+    ["an empty token", { kind: "found", token: "", port: 19555 }],
+    ["a token with a control character", { kind: "found", token: "a\nb", port: 19555 }],
+    ["a token over 4 KiB", { kind: "found", token: "x".repeat(4097), port: 19555 }],
+    ["a reason the rules never give", { kind: "refused", reason: "other", why: "port" }],
+    ["a why from another reason", { kind: "refused", reason: "address", why: "empty" }],
+    ["a why the rules never give", { kind: "refused", reason: "credential", why: "nope" }],
+  ])("refuses an answer with %s", async (name, message) => {
+    expect(await parseInWorker("", "default", answering(`${name}.mjs`, message))).toEqual(
+      workerFailed,
+    );
+  });
+
+  it("keeps only a refusal's fixed fields", async () => {
+    const message = { kind: "refused", reason: "credential", why: "empty", secret: TOKEN };
+    expect(await parseInWorker("", "default", answering("extra.mjs", message))).toStrictEqual({
+      kind: "refused",
+      reason: "credential",
+      why: "empty",
+    });
+  });
 });
 
 describe.skipIf(!posix)("two profiles", () => {
+  /** Adds the clawtrate profile's folder and file to a home. */
+  const clawtrate = (path: string, text: string, mode = 0o700) => {
+    const other = join(path, ".openclaw-clawtrate");
+    mkdirSync(other, { mode });
+    chmodSync(other, mode);
+    writeFileSync(join(other, "openclaw.json"), text, { mode: 0o600 });
+  };
+
   it("shows both by name when both qualify", async () => {
     const { path } = home();
-    const other = join(path, ".openclaw-clawtrate");
-    mkdirSync(other, { mode: 0o700 });
-    writeFileSync(
-      join(other, "openclaw.json"),
-      `{ gateway: { port: 19556, auth: { token: "other" } } }`,
-      {
-        mode: 0o600,
-      },
-    );
+    clawtrate(path, `{ gateway: { port: 19556, auth: { token: "other" } } }`);
     const results = await read(path);
     expect(results.map((result) => result.profile)).toEqual(["default", "clawtrate"]);
     expect(results.map((result) => result.outcome)).toMatchObject([
       { kind: "found", port: 19555 },
       { kind: "found", port: 19556 },
+    ]);
+  });
+
+  it("gives each profile its own port when its file names none", async () => {
+    const { path } = home({ text: `{ gateway: { auth: { token: "${TOKEN}" } } }` });
+    clawtrate(path, `{ gateway: { auth: { token: "other" } } }`);
+    expect(await read(path)).toMatchObject([
+      { profile: "default", outcome: { kind: "found", port: 18789 } },
+      { profile: "clawtrate", outcome: { kind: "found", port: 22768 } },
+    ]);
+  });
+
+  it("refuses a port the profile's own file could override", async () => {
+    const { path } = home();
+    clawtrate(
+      path,
+      `{ env: { OPENCLAW_GATEWAY_PORT: "19999" }, gateway: { auth: { token: "a" } } }`,
+    );
+    expect(await read(path)).toMatchObject([
+      { profile: "default", outcome: { kind: "found", port: 19555 } },
+      { profile: "clawtrate", outcome: { kind: "refused", reason: "address", why: "port" } },
     ]);
   });
 
@@ -418,9 +672,7 @@ describe.skipIf(!posix)("two profiles", () => {
 
   it("reports each profile's own refusal", async () => {
     const { path } = home({ text: `{ gateway: { mode: "remote" } }` });
-    const other = join(path, ".openclaw-clawtrate");
-    mkdirSync(other, { mode: 0o755 });
-    writeFileSync(join(other, "openclaw.json"), SETTINGS, { mode: 0o600 });
+    clawtrate(path, SETTINGS, 0o755);
     expect(await read(path)).toMatchObject([
       { profile: "default", outcome: { reason: "address", why: "remote" } },
       { profile: "clawtrate", outcome: { reason: "unsafe", why: "mode" } },
@@ -446,7 +698,7 @@ describe("the account's real home", () => {
     const marker = join(scratch, "helper-ran");
     const spy = join(scratch, "spy");
     writeFileSync(spy, `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o700 });
-    for (const path of [real!, `${real!}/`, `${real!}/./`]) {
+    for (const path of [real!, `${real!}/`]) {
       await expect(
         openSettingsFile({
           home: path,
@@ -494,15 +746,27 @@ it("nothing in a shipped host reaches the reader yet", () => {
   expect(importers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([]);
 });
 
-// CI installs the pinned OpenClaw from npm and names its folder; the module it carries for
-// this platform must match the hash taken from the published package.
+// CI installs the pinned OpenClaw from npm and names its folder: it must be the pinned version,
+// carry this platform's own module, and every module it carries must match its pin.
 it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
   "the pinned hashes match the installed OpenClaw's own modules",
   () => {
-    const scope = join(process.env.CLAWTRATE_PINNED_OPENCLAW!, "node_modules/@openclaw");
-    const found = readdirSync(scope).filter((name) => name.startsWith("fs-safe-"));
-    expect(found.length).toBeGreaterThan(0);
+    const root = process.env.CLAWTRATE_PINNED_OPENCLAW!;
+    const version = (path: string) =>
+      (JSON.parse(readFileSync(join(path, "package.json"), "utf8")) as { version: string }).version;
+    expect(version(root)).toBe(PINNED_OPENCLAW_VERSION);
+    const scope = join(root, "node_modules/@openclaw");
+    const found = readdirSync(scope).filter((name) => /^fs-safe-.+/.test(name));
+    const libc =
+      platform !== "linux"
+        ? ""
+        : (process.report.getReport() as { header?: { glibcVersionRuntime?: string } }).header
+              ?.glibcVersionRuntime
+          ? "-gnu"
+          : "-musl";
+    expect(found).toContain(`fs-safe-${platform}-${process.arch}${libc}`);
     for (const name of found) {
+      expect(version(join(scope, name)), name).toBe(PINNED_FS_SAFE_VERSION);
       const file = readFileSync(join(scope, name, "fs-safe-native.node"));
       const hash = createHash("sha256").update(file).digest("hex");
       expect(hash, name).toBe(FS_SAFE_NATIVE_SHA256[name.slice("fs-safe-".length)]);

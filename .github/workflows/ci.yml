@@ -123,11 +123,20 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec vitest run apps/desktop/test/update/mac-inspection.test.ts
-      # The settings reader's macOS helper. Only this discarded runner, where sudo needs no
-      # password, makes the file another account owns.
+      # A settings file another account owns, for the settings reader's owner check: made only on
+      # a discarded GitHub-hosted runner, where sudo needs no password. The test only reads it.
+      - if: runner.environment == 'github-hosted'
+        run: |
+          fixture=$(realpath "$(mktemp -d)")
+          mkdir -m 700 "$fixture/home" "$fixture/home/.openclaw"
+          file="$fixture/home/.openclaw/openclaw.json"
+          printf '{}' > "$file"
+          chmod 600 "$file"
+          sudo -n chown root "$file"
+          sudo -n chmod +a "$(id -un) allow read" "$file"
+          echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/home" >> "$GITHUB_ENV"
+      # The settings reader's macOS helper, built with packaging's flags.
       - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
-        env:
-          CLAWTRATE_HOSTED_MAC_RUNNER: "1"
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
