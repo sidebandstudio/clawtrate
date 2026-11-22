@@ -1,8 +1,10 @@
 #!/bin/sh
-# Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet.
-# Download it whole, then run it:
+# An incomplete download that ends before main is called runs nothing and fails.
+trap 'exit 1' EXIT
+
+# Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet:
 #
-#   sh -c 'f=$(mktemp) && trap "rm -f \"\$f\"" EXIT && c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
+#   curl -fsSL https://clawtrate.dev/install.sh | sh
 #
 # It reads the Beta feed, takes the build for this Mac's processor, and checks
 # the download's SHA-256, the archive's layout, the app's bundle id, version and
@@ -13,14 +15,16 @@
 # and changes no system setting. Nothing runs until the whole file has arrived:
 # the last line calls main with the one argument main requires.
 #
+# At a terminal, a good install ends with a Clawling, about a second long,
+# after its last line. CLAWTRATE_NO_ANIMATION=1 turns it off; so do CI and
+# TERM=dumb, and it never plays when the output is not a terminal. NO_COLOR
+# keeps it without colour.
+#
 # For tests only, these point it at stand-ins on this Mac's loopback address:
 # CLAWTRATE_FEED (the feed), CLAWTRATE_RELEASES (the release download prefix)
 # and CLAWTRATE_ASSETS (the origin a release download redirects to), each
 # http://127.0.0.1:<port>/...; and CLAWTRATE_APPLICATIONS, the folder to
 # install into.
-
-# An incomplete download that ends before main is called runs nothing and fails.
-trap 'exit 1' EXIT
 
 # The Developer ID team that signs Clawtrate's releases.
 CLAWTRATE_TEAM_ID="9X79V37Q89"
@@ -46,6 +50,7 @@ stop() {
 finish() {
   status=$?
   trap '' INT TERM HUP
+  if [ -n "$CURSOR_HIDDEN" ]; then printf '\033[0m\033[?25h' || :; fi
   if [ "$PHASE" != installed ]; then
     if [ -n "$STAGED_ID" ] && [ -d "$TARGET" ] && [ ! -L "$TARGET" ] &&
       [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
@@ -381,11 +386,228 @@ already_installed() {
   stop "Clawtrate is already installed at $TARGET. Update it from Settings, or move it to the Trash and run this again."
 }
 
+# The Claw moment, after the last message of a good install. The art is a
+# Clawling, the default Claw (blue, dome body, eyes on a pair of stalks), drawn
+# two pixels to a character cell: . is empty, B its blue, W eye white, K pupil,
+# M mouth, L the white ball and R its rim, # the wordmark in the terminal's own
+# text colour.
+ART_IDLE='
+....................
+.....BBB....BBB.....
+....BWWWB..BWWWB....
+....BWKKB..BWKKB....
+....BWKKB..BWKKB....
+.....BBB....BBB.....
+.......B....B.......
+BB.B...B....B...B.BB
+BB.B....B..B....B.BB
+BBBB..BBBBBBBB..BBBB
+.BB..BBBBBBBBBB..BB.
+...BBBBBBBBBBBBBB...
+....BBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBMMBBBBB....
+....BBBBBBBBBBBB....
+.....BBBBBBBBBB.....
+....................'
+ART_WAVE_HIGH='
+....................
+.....BBB....BBB.....
+....BWWWB..BWWWB.B.B
+....BWKKB..BWKKB.B.B
+....BWKKB..BWKKB.BBB
+.....BBB....BBB...B.
+.......B....B....B..
+BB.B...B....B....B..
+BB.B....B..B....B...
+BBBB..BBBBBBBB..B...
+.BB..BBBBBBBBBBB....
+...BBBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBMMBBBBB....
+....BBBBBBBBBBBB....
+.....BBBBBBBBBB.....
+....................'
+ART_WAVE_LOW='
+....................
+.....BBB....BBB.....
+....BWWWB..BWWWB....
+....BWKKB..BWKKB....
+....BWKKB..BWKKB.B.B
+.....BBB....BBB..B.B
+.......B....B....BBB
+BB.B...B....B.....B.
+BB.B....B..B.....B..
+BBBB..BBBBBBBB..B...
+.BB..BBBBBBBBBBB....
+...BBBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBMMBBBBB....
+....BBBBBBBBBBBB....
+.....BBBBBBBBBB.....
+....................'
+ART_DONE='
+....................
+.....BBB....BBB...L.
+B.B.BWWWB..BWWWB.LLR
+B.B.BWKWB..BWKWB.BRB
+BBB.BKWKB..BKWKB.BBB
+.B...BBB....BBB...B.
+..B....B....B....B..
+..B....B....B....B..
+...B....B..B....B...
+...B..BBBBBBBB..B...
+....BBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBBBBBBBBB....
+....BBBBMBBMBBBB....
+....BBBBBMMBBBBB....
+....BBBBBBBBBBBB....
+.....BBBBBBBBBB.....
+....................'
+ART_WORDMARK='
+.........................................
+.###.#..............#.............#......
+#....#..............#.............#......
+#....#...##..#...#.###.#.##..##..###..##.
+#....#.....#.#...#..#..##......#..#..#..#
+#....#...###.#.#.#..#..#.....###..#..####
+#....#..#..#.#.#.#..#..#....#..#..#..#...
+.###..#..###..#.#....#.#.....###...#..##.'
+
+# Sets art_s, an SGR parameter list, to add colour letter $2 as text ($1 38) or
+# background ($1 48), in 24-bit colour or the nearest of the 256.
+art_code() {
+  case "$2" in
+    B) set -- "$1" '91;141;255' 69 ;;
+    W) set -- "$1" '255;255;255' 231 ;;
+    K | M) set -- "$1" '22;24;27' 234 ;;
+    L) set -- "$1" '246;245;242' 255 ;;
+    R) set -- "$1" '201;198;191' 251 ;;
+    *) return 0 ;;
+  esac
+  if [ -n "$ART_RGB" ]; then art_s="$art_s;$1;2;$2"; else art_s="$art_s;$1;5;$3"; fi
+}
+
+# Sets art_line to pixel rows $1 (top) and $2 (bottom) as one line of at most
+# $3 half-block cells. Without colour, eye whites and the mouth stay open so
+# the shape still reads.
+art_cells() {
+  art_t="$1" art_b="$2" art_n="$3" art_line="" art_last=""
+  while [ -n "$art_t" ] && [ "$art_n" -gt 0 ]; do
+    art_p="${art_t%"${art_t#?}"}" art_q="${art_b%"${art_b#?}"}"
+    art_t="${art_t#?}" art_b="${art_b#?}" art_n=$((art_n - 1))
+    if [ -z "$ART_COLOR" ]; then
+      case "$art_p" in [.WM]) art_p=. ;; *) art_p=x ;; esac
+      case "$art_q" in [.WM]) art_q=. ;; *) art_q=x ;; esac
+    fi
+    art_s=0
+    if [ "$art_p" = . ] && [ "$art_q" = . ]; then
+      art_g=' '
+    elif [ "$art_q" = . ]; then
+      art_g='▀'
+      art_code 38 "$art_p"
+    elif [ "$art_p" = . ]; then
+      art_g='▄'
+      art_code 38 "$art_q"
+    elif [ "$art_p" = "$art_q" ]; then
+      art_g='█'
+      art_code 38 "$art_p"
+    else
+      art_g='▀'
+      art_code 38 "$art_p"
+      art_code 48 "$art_q"
+    fi
+    if [ -n "$ART_COLOR" ] && [ "$art_s" != "$art_last" ]; then
+      art_line="$art_line${ESC}[${art_s}m" art_last="$art_s"
+    fi
+    art_line="$art_line$art_g"
+  done
+  if [ -n "$ART_COLOR" ]; then art_line="$art_line${ESC}[0m"; fi
+}
+
+# Draws one frame over the last: the Clawling in pose $1, and beside it the
+# first $2 columns of the wordmark.
+art_frame() {
+  art_wide="$2"
+  if [ -n "$ART_DRAWN" ]; then printf '%s[9A' "$ESC"; fi
+  # shellcheck disable=SC2086 # one word per pixel row
+  set -- $1
+  while [ "$#" -ge 2 ]; do
+    art_cells "$1" "$2" 20
+    printf '\r%s\n' "$art_line"
+    shift 2
+  done
+  printf '%s[6A' "$ESC"
+  # shellcheck disable=SC2086
+  set -- $ART_WORDMARK
+  while [ "$#" -ge 2 ]; do
+    art_cells "$1" "$2" "$art_wide"
+    printf '\r%s[23C%s\n' "$ESC" "$art_line"
+    shift 2
+  done
+  printf '%s[2B' "$ESC"
+  ART_DRAWN=1
+}
+
+# About a second for a person at a terminal: the Clawling waves, the wordmark
+# appears beside it, and the Clawling hops with the ball. It waits on nothing,
+# and a signal ends it early with the outcome unchanged: the install is done.
+# Skipped for CI, a dumb terminal, CLAWTRATE_NO_ANIMATION, a terminal that is
+# not UTF-8 or narrower than the art. NO_COLOR keeps the motion without colour.
+celebrate() {
+  [ -t 1 ] || return 0
+  [ -z "${CI+set}" ] && [ -z "${CLAWTRATE_NO_ANIMATION+set}" ] || return 0
+  case "${TERM:-dumb}" in dumb) return 0 ;; esac
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) ;;
+    *) return 0 ;;
+  esac
+  command -v sleep >/dev/null 2>&1 || return 0
+  art_size="$(stty size 2>/dev/null </dev/tty)" || art_size=""
+  case "${art_size##* }" in
+    '' | *[!0-9]* | 0) ;;
+    *) [ "${art_size##* }" -ge 64 ] || return 0 ;;
+  esac
+  ART_COLOR=1 ART_RGB="" ART_DRAWN=""
+  if [ -n "${NO_COLOR:-}" ]; then ART_COLOR=""; fi
+  case "${COLORTERM:-}" in truecolor | 24bit) ART_RGB=1 ;; esac
+  ESC="$(printf '\033')"
+  trap 'exit 0' INT TERM HUP
+  CURSOR_HIDDEN=1
+  printf '\n%s[?25l' "$ESC"
+  art_frame "$ART_IDLE" 0
+  sleep 0.12
+  art_frame "$ART_WAVE_HIGH" 0
+  sleep 0.12
+  art_frame "$ART_WAVE_LOW" 0
+  sleep 0.12
+  art_frame "$ART_WAVE_HIGH" 0
+  sleep 0.12
+  art_frame "$ART_WAVE_LOW" 0
+  sleep 0.12
+  art_frame "$ART_IDLE" 14
+  sleep 0.05
+  art_frame "$ART_IDLE" 28
+  sleep 0.05
+  art_frame "$ART_IDLE" 41
+  sleep 0.15
+  # The hop: the cheering Clawling one pixel row up, then back down.
+  art_frame "${ART_DONE#?....................} ...................." 41
+  sleep 0.12
+  art_frame "$ART_DONE" 41
+  printf '%s[?25h' "$ESC"
+  CURSOR_HIDDEN=""
+}
+
 main() {
   [ "$#" -eq 1 ] && [ "$1" = 'clawtrate-installer-complete' ] || exit 1
   trap - EXIT
   set -eu
   PHASE="" WORK="" STAGE="" LOCKED="" KEEP_STAGE="" LEFT="" TARGET="" LOCK="" STAGED_ID="" VERSION=""
+  CURSOR_HIDDEN=""
   trap finish EXIT
   trap 'exit 1' INT TERM HUP
 
@@ -539,6 +761,7 @@ main() {
   PHASE=installed
   say "Installed Clawtrate $APP_VERSION in $TARGET."
   say "Later updates come from Settings in Clawtrate."
+  celebrate || :
   exit 0
 }
 

@@ -2,9 +2,10 @@
 //
 //   node apps/desktop/packaging/site-feed.ts <site source> <output folder>
 //
-// It refuses a missing site source, which has to hold index.html, and one that
-// has its own updates/beta/: that folder is only ever the generated feed. It
-// copies the source, reads the repository's releases from GitHub's API, takes
+// It refuses a missing site source, which has to hold index.html, one that has
+// its own updates/beta/, which is only ever the generated feed, and an output
+// folder that is not empty. It copies the source, reads the repository's
+// releases from GitHub's API, takes
 // the newest published beta that carries both Mac zips, feed.json and
 // latest-mac.json, checks the two files against GitHub's digest of each, each
 // other and the release's tag, and each zip against GitHub's size and digest,
@@ -232,9 +233,9 @@ function filesUnder(dir: string, prefix = ""): string[] {
 /**
  * Copies the site source into `output`, adds the Beta feed, and fills the Mac
  * download page from the same beta. Refuses, so nothing deploys, a missing
- * source, a source with its own updates/beta/, no beta to fill the page from,
- * a template token left anywhere, and an install script whose pinned team is
- * the placeholder or not the beta's.
+ * source, a source with its own updates/beta/, an output that is not empty, no
+ * beta to fill the page from, a template token left anywhere, and an install
+ * script whose pinned team is the placeholder or not the beta's.
  */
 export async function assembleSite(
   source: string,
@@ -249,6 +250,9 @@ export async function assembleSite(
   for (const required of [DOWNLOAD_PAGE, INSTALL_SCRIPT])
     if (!existsSync(join(source, required)))
       throw new Error(`${source}/${required} does not exist: there is no site to deploy.`);
+  // Copying over an earlier assembly would keep pages since removed from the source.
+  if (existsSync(output) && readdirSync(output).length)
+    throw new Error(`${output} is not empty: assemble the site into a new folder.`);
   // Assembled aside, so a refusal leaves <output> as it was and a rerun can use it.
   const work = mkdtempSync(join(tmpdir(), "clawtrate-site-"));
   try {
