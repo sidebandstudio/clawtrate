@@ -1,18 +1,20 @@
-// The autonomy step and the Main Bot's first run:
-// docs/design/main-bot-onboarding.md, sections 2 to 4. Prototype code, not
-// product code.
+// The Main Bot's first run, the autonomy choice and bots that set themselves
+// up: docs/design/main-bot-onboarding.md. Prototype code, not product code.
 //
 // One view at a time, from the address:
-//   view      setup | first
+//   view      setup | first | rename | create | proposal | agents
 //   at        start | greeted | saving | done
-//   card      unconfirmed | stale
+//   card      unconfirmed | stale | declined
 //   opening   ambiguous: the first message's delivery couldn't be confirmed
 //   existing  1: an existing Main Bot
 //   plugin    missing: the first run before the plugin is added
+//   grant     0: Juniper isn't a manager yet (create)
+//   step      add | added   (agents)
 //
-// The first run's Save is the person's own edit. It asks a stand-in gateway,
-// which answers after a delay; the rail, the title pill and the hero change
-// only on that answer.
+// No bot writes anything here. A bot's change is a proposal: Review and save
+// opens the person's own editor filled with it. That save (or the first run's
+// Save) asks a stand-in gateway, which answers after a delay. The rail, the
+// title pill and the hero change only on that answer.
 
 (function () {
   const { CT } = window;
@@ -21,13 +23,15 @@
   const live = document.getElementById("mb-live");
 
   const state = {
-    view: p.get("view") === "first" ? "first" : "setup",
+    view: p.get("view") || "setup",
     autonomy: null,
     at: p.get("at"),
     card: p.get("card"),
     existing: p.get("existing") === "1",
     plugin: p.get("plugin") === "missing" ? "missing" : "present",
+    grant: p.get("grant") !== "0",
     opening: p.get("opening"),
+    step: p.get("step"),
     sheet: false,
     alsoMain: false,
   };
@@ -112,7 +116,7 @@
     },
   };
   function seedBots() {
-    const fresh = !state.existing;
+    const fresh = (state.view === "setup" || state.view === "first") && !state.existing;
     const main = fresh
       ? { id: "main", name: "main", main: true, autonomy: null, role: "", avatar: null }
       : { id: "main", name: "Juniper", main: true, autonomy: "ask", role: "", avatar: "claw" };
@@ -131,6 +135,8 @@
 
   let chat = null;
   let composer = { value: "" };
+  const proposals = [];
+  const openProposals = () => proposals.filter((x) => x.state === "open").length;
 
   function rail(selected) {
     const rows = gateway.bots
@@ -144,19 +150,26 @@
         );
       })
       .join("");
+    const count = proposals.length
+      ? `<span class="mb-gw-prop">Proposals <span class="mb-count" data-testid="proposals-count">${openProposals()}</span></span>`
+      : "";
     return (
       `<nav class="mb-rail" aria-label="Bots"><div class="mb-rail-top"><span class="mb-brand">Clawtrate</span>` +
       `<button type="button" class="mb-round" aria-label="New">+</button></div><ul class="mb-list">${rows}</ul>` +
-      `<div class="mb-rail-foot"><button type="button" class="mb-gw"><span class="mb-dot"></span><span><strong>Home gateway</strong><span>Connected</span></span></button></div></nav>`
+      `<div class="mb-rail-foot"><button type="button" class="mb-gw"><span class="mb-dot"></span><span><strong>Home gateway</strong><span>Connected</span></span>${count}</button></div></nav>`
     );
   }
 
   function header(bot) {
     const b = botById(bot);
     const back = phone() ? `<button type="button" class="mb-round mb-back" aria-label="Back to bots">‹</button>` : "";
+    const strip =
+      state.view === "proposal"
+        ? `<p class="mb-strip" data-testid="channel-note">This conversation also receives direct messages from your connected chat apps.</p>`
+        : "";
     return (
       `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" data-picture="${b.avatar ? "claw" : "none"}" aria-label="${esc(b.main ? `${b.name}, Main Bot` : b.name)}">` +
-      `${claw(b.name, 22, { star: b.main })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>`
+      `${claw(b.name, 22, { star: b.main })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>${strip}`
     );
   }
 
@@ -194,6 +207,7 @@
     const rows = (c.rows || [])
       .map(([k, v, extra]) => `<div class="mb-card-row"><span>${esc(k)}</span><span>${v}${extra ? ` ${extra}` : ""}</span></div>`)
       .join("");
+    const marks = (c.marks || []).map((m) => `<span class="mb-mark">${esc(m)}</span>`).join("");
     const note = c.note ? `<p class="mb-card-note" data-tone="${c.tone || ""}">${esc(c.note)}</p>` : "";
     const from = c.from ? `<p class="mb-card-from">${esc(c.from)}</p>` : "";
     const actions = (c.actions || [])
@@ -201,11 +215,17 @@
       .join("");
     return (
       `<article class="mb-card" data-kind="${c.cardKind}" data-id="${c.id || ""}" data-testid="card-${c.cardKind}" aria-label="${esc(c.title)}">${head}` +
+      (marks ? `<div class="mb-marks">${marks}</div>` : "") +
       `${rows}${from}${note}` +
       (actions ? `<div class="mb-card-actions">${actions}</div>` : "") +
       `<p class="mb-card-state" role="status">${c.stateText ? esc(c.stateText) : ""}</p></article>`
     );
   }
+
+  const diff = (minus, plus) =>
+    `<span class="mb-diff">${minus.map((l) => `<span data-sign="-">− ${esc(l)}</span>`).join("")}${plus
+      .map((l) => `<span data-sign="+">+ ${esc(l)}</span>`)
+      .join("")}</span>`;
 
   // The first run's guided card: Clawtrate's own, not the model's.
   function guided(g) {
@@ -246,7 +266,7 @@
       `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
       `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
       `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`;
-    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${phone() ? "" : rail(chat.bot)}${pane}</div>`;
+    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${phone() ? "" : rail(chat.bot)}${pane}</div>${editorHtml()}`;
     const t = root.querySelector(".mb-transcript");
     t.scrollTop = t.scrollHeight;
     if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
@@ -410,6 +430,321 @@
     say(`Renamed to ${saved}`);
   }
 
+  // ---- proposals: shared ----------------------------------------------------
+  // On OpenClaw 2026.10.6 the plugin applies no stored request (section 6 of
+  // the design): Review and save opens the person's own editor, or New bot,
+  // filled with the proposed values, and saving there is the person's edit.
+
+  const GATED = "Clawtrate can't apply this for you on this gateway. Review and save opens your editor with these values.";
+  let editor = null;
+
+  function addProposal(c) {
+    const prop = { id: c.id, state: "open", card: c };
+    proposals.push(prop);
+    chat.items.push(c);
+    return prop;
+  }
+
+  function editorHtml() {
+    if (!editor) return "";
+    const { prop } = editor;
+    const fields = prop.card.editor.fields
+      .map(
+        ([label, value, multi], i) =>
+          `<label class="mb-field"><span>${esc(label)}</span>` +
+          (multi
+            ? `<textarea id="ed-${i}" rows="3">${esc(value)}</textarea>`
+            : `<input id="ed-${i}" value="${esc(value)}"/>`) +
+          `</label>`,
+      )
+      .join("");
+    const stale = editor.stale
+      ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-stale">${esc(prop.card.editor.stale)}</p>`
+      : "";
+    return (
+      `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-ed-title" data-testid="editor">` +
+      `<h2 id="mb-ed-title">${esc(prop.card.editor.title)}</h2>` +
+      `<p class="mb-hint">${esc(prop.card.editor.lede)}</p>${stale}${fields}` +
+      `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet" data-act="editor-cancel">Cancel</button>` +
+      `<button type="button" class="mb-btn" data-variant="primary" data-act="editor-save">${esc(prop.card.editor.save)}</button></div></div>`
+    );
+  }
+
+  function review(id) {
+    const prop = proposals.find((x) => x.id === id);
+    if (!prop || prop.state !== "open") return;
+    editor = { prop, stale: state.card === "stale" && prop.card.staleable };
+    renderChat();
+    root.querySelector('[data-testid="editor"] input, [data-testid="editor"] textarea')?.focus();
+  }
+
+  async function editorSave() {
+    const { prop } = editor;
+    editor = null;
+    const c = prop.card;
+    prop.state = "saving";
+    c.actions = [];
+    c.stateText = "Saving…";
+    c.cardKind = "saving";
+    renderChat();
+    await gateway.answer(1000, () => c.effect());
+    prop.state = "saved";
+    Object.assign(c, {
+      stateText: "",
+      cardKind: "saved",
+      title: c.doneTitle,
+      marks: [],
+      from: "",
+      note: c.savedNote,
+      rows: c.doneRows,
+      actions: c.ownRename && !c.ownRename.done ? [[c.ownRename.label, "own-rename"]] : [],
+    });
+    renderChat();
+    say(c.title);
+  }
+
+  function decline(id) {
+    const prop = proposals.find((x) => x.id === id);
+    if (!prop || prop.state !== "open") return;
+    prop.state = "declined";
+    Object.assign(prop.card, { cardKind: "declined", title: prop.card.declinedTitle, actions: [], note: "Nothing changed.", marks: [] });
+    renderChat();
+  }
+
+  const read = '<span class="mb-read">read back</span>';
+  const byYou = (where) => `<span class="mb-read">by you, in ${where}</span>`;
+
+  // ---- view: a bot asks to rename itself --------------------------------------
+
+  async function playRename() {
+    chat.items.push({ kind: "user", text: "Plan my Saturday errands." });
+    chat.items.push({ kind: "bot", text: "Here's the route: hardware store, then the library, then groceries on the way home." });
+    chat.items.push({ kind: "user", text: "Can you go by Scout from now on, and keep your answers shorter?" });
+    addProposal({
+      kind: "card",
+      cardKind: "proposal",
+      id: "scout",
+      staleable: true,
+      title: "Pip asks to rename itself Scout",
+      rows: [
+        ["Name", "Pip → <strong>Scout</strong>", '<span class="mb-read">yours to make</span>'],
+        ["Instructions", diff([], ["Keep answers short; use a list when it helps."])],
+      ],
+      from: "Proposed by Pip, in this chat.",
+      note: GATED,
+      ownRename: { bot: "pip", to: "Scout", label: "Rename Pip to Scout" },
+      actions: [["Review and save", "review", "primary"], ["Rename Pip to Scout", "own-rename"], ["Not now", "decline"]],
+      editor: {
+        title: "Pip's instructions",
+        lede: "Your instructions editor, with Pip's proposed change added. Clawtrate read Pip's instructions again when this opened.",
+        stale: "Pip's instructions changed since Pip asked. This starts from what they say now, with Pip's change added.",
+        save: "Save",
+        fields: [["AGENTS.md", "Plan errands and trips.\nKeep answers short; use a list when it helps.", true]],
+      },
+      doneTitle: "Pip's instructions changed",
+      doneRows: [["Instructions", "updated", read]],
+      savedNote: "Saved by you in Pip's instructions.",
+      declinedTitle: "Kept Pip's instructions",
+      effect: () => "saved",
+    });
+    chat.items.push({ kind: "bot", text: "I've asked to go by Scout and keep answers short. Review and save it when you're ready." });
+    renderChat();
+    if (state.card === "declined") return decline("scout");
+    if (state.card === "stale") return review("scout");
+    if (state.at === "done") {
+      review("scout");
+      await editorSave();
+    }
+  }
+
+  // ---- view: creating a bot by chat ---------------------------------------------
+
+  async function playCreate() {
+    chat.items.push({ kind: "user", text: "Make me a bot that tracks my running training. Call it Stride, and have it run hands-off." });
+    if (!state.grant) {
+      chat.items.push({
+        kind: "card",
+        cardKind: "grant",
+        id: "grant",
+        title: "Juniper can't ask to change other bots",
+        note: "Being your Main Bot doesn't include this. You can allow Juniper to ask to create bots and change other bots; you still confirm each request.",
+        actions: [["Allow", "grant", "primary"], ["Not now", "grant-no"]],
+      });
+      renderChat();
+      return;
+    }
+    proposeCreate();
+    renderChat();
+    if (state.at === "done") {
+      review("stride");
+      await editorSave();
+    }
+  }
+
+  function proposeCreate() {
+    const gatedRow = '<span class="mb-read" data-gated="1">gated: by you, in New bot</span>';
+    addProposal({
+      kind: "card",
+      cardKind: "proposal",
+      id: "stride",
+      title: "Juniper asks to create Stride",
+      marks: ["More freedom than your usual choice"],
+      rows: [
+        ["Name", `${claw("Stride", 18)} <strong>Stride</strong> (id stride, new)`],
+        ["Account and model", "OpenAI · Personal, the same as Juniper's"],
+        ["Autonomy", "<strong>Hands-off</strong> (your usual choice: Ask before acting)", gatedRow],
+        ["Role", "Tracks your running training and plans the week's runs.", gatedRow],
+        ["Routine", "Weekly run plan, Sundays at 6 PM", gatedRow],
+      ],
+      from: "Proposed by Juniper, in this chat.",
+      note: "Clawtrate can't create this for you on this gateway: after the bot is made, its settings, role and routine would be written to it with no check that it's still the same bot. Review and save opens New bot with these values.",
+      actions: [["Review and save", "review", "primary"], ["Not now", "decline"]],
+      editor: {
+        title: "New bot",
+        lede: "New bot, filled with Juniper's proposal. You create the bot here, as you would any new bot.",
+        save: "Create",
+        fields: [
+          ["Name", "Stride"],
+          ["Account and model", "OpenAI · Personal"],
+          ["Autonomy", "Hands-off"],
+          ["Role", "Tracks your running training and plans the week's runs.", true],
+          ["Routine", "Weekly run plan, Sundays at 6 PM"],
+        ],
+      },
+      doneTitle: "Created Stride",
+      doneRows: [
+        ["Name", "<strong>Stride</strong>, id stride", byYou("New bot")],
+        ["Autonomy", "Hands-off", byYou("New bot")],
+        ["Role and routine", "saved", byYou("New bot")],
+      ],
+      savedNote: "Created by you in New bot.",
+      declinedTitle: "Didn't create Stride",
+      effect: () => {
+        gateway.bots.splice(1, 0, { id: "stride", name: "Stride", preview: "New bot", fresh: true });
+        return "saved";
+      },
+    });
+    chat.items.push({ kind: "bot", text: "I've drafted Stride for you. Review it and create it when it looks right." });
+  }
+
+  // ---- view: proposals of other origins ---------------------------------------
+
+  function playProposal() {
+    addProposal({
+      kind: "card",
+      cardKind: "proposal",
+      id: "junebug",
+      title: "Juniper asks to rename itself Junebug",
+      rows: [["Name", "Juniper → <strong>Junebug</strong>", '<span class="mb-read">yours to make</span>']],
+      from: "Clawtrate couldn't confirm where this request came from.",
+      note: "Clawtrate can't apply a name from a request on this gateway. You can rename Juniper yourself.",
+      ownRename: { bot: "main", to: "Junebug", label: "Rename Juniper to Junebug" },
+      actions: [["Rename Juniper to Junebug", "own-rename", "primary"], ["Not now", "decline"]],
+      declinedTitle: "Kept Juniper's name",
+    });
+    addProposal({
+      kind: "card",
+      cardKind: "proposal",
+      id: "otto-instructions",
+      title: "Juniper asks to change Otto's instructions",
+      marks: ["Another bot's instructions"],
+      rows: [["AGENTS.md", diff(["Check backups every Monday."], ["Check backups every Monday and Thursday.", "Tell Juniper when one fails."])]],
+      from: "Proposed by Juniper.",
+      note: GATED,
+      actions: [["Review and save", "review", "primary"], ["Not now", "decline"]],
+      editor: {
+        title: "Otto's instructions",
+        lede: "Your instructions editor, with Juniper's proposed change. Clawtrate read Otto's instructions again when this opened.",
+        save: "Save",
+        fields: [["AGENTS.md", "Check backups every Monday and Thursday.\nTell Juniper when one fails.", true]],
+      },
+      doneTitle: "Otto's instructions changed",
+      doneRows: [["AGENTS.md", "updated", read]],
+      savedNote: "Saved by you in Otto's instructions.",
+      declinedTitle: "Kept Otto's instructions",
+      effect: () => "saved",
+    });
+    addProposal({
+      kind: "card",
+      cardKind: "proposal",
+      id: "pip-freedom",
+      who: "Pip",
+      title: "Pip asks to run hands-off",
+      marks: ["More freedom"],
+      rows: [["Autonomy", "Ask before acting → <strong>Hands-off</strong>"]],
+      from: "Proposed by Pip.",
+      note: GATED,
+      actions: [["Review and save", "review", "primary"], ["Not now", "decline"]],
+      editor: {
+        title: "Pip's autonomy",
+        lede: "Pip's Autonomy setting, with Pip's proposed choice. This gives Pip more freedom.",
+        save: "Save",
+        fields: [["Autonomy", "Hands-off"]],
+      },
+      doneTitle: "Pip runs hands-off",
+      doneRows: [["Autonomy", "Hands-off", read]],
+      savedNote: "Saved by you in Pip's settings.",
+      declinedTitle: "Pip keeps asking before acting",
+      effect: () => "saved",
+    });
+    renderChat();
+  }
+
+  // ---- view: agents with access -----------------------------------------------
+
+  function renderAgents() {
+    const nav = ["General", "Bots", "Accounts", "Permissions", "Agents with access", "Gateway"]
+      .map((n) => `<li><a href="#" ${n === "Agents with access" ? 'aria-current="page"' : ""}>${n}</a></li>`)
+      .join("");
+    const grant = (name, scope, bots, when) =>
+      `<li class="mb-grant"><div><strong>${name}</strong><span>${scope} · ${bots}</span><span>${when}</span></div>` +
+      `<div class="mb-grant-actions"><button type="button" class="mb-btn" data-variant="quiet">See its activity</button>` +
+      `<button type="button" class="mb-btn" data-variant="danger-quiet" data-act="remove">Remove access</button></div></li>`;
+    const added = state.step === "added";
+    const list =
+      grant("Claude Code", "Suggest changes", "All bots, including later ones", "Added Nov 22 · Expires in 28 days · Last used 2 minutes ago") +
+      (added ? grant("Codex", "See bots", "Pip and Otto", "Added just now · Expires in 30 days · Not used yet") : "");
+    root.innerHTML =
+      `<div class="mb-settings"><nav class="mb-settings-nav" aria-label="Settings"><h2>Settings</h2><ul>${nav}</ul></nav>` +
+      `<section class="mb-settings-body" aria-labelledby="mb-agents-title"><h1 id="mb-agents-title">Agents with access</h1>` +
+      `<p class="mb-lede">Coding agents on this Mac that you allow can see your bots and suggest changes through Clawtrate, while Clawtrate is open. You confirm every change. Your gateway's credentials never leave it.</p>` +
+      `<ul class="mb-grants" data-testid="grants">${list}</ul>` +
+      `<button type="button" class="mb-btn" data-variant="primary" data-act="add">Add an agent</button>` +
+      (state.step === "add" ? addDialog() : "") +
+      (added ? addedNote() : "") +
+      `</section></div>`;
+  }
+
+  function addDialog() {
+    const radio = (id, title, line, checked) =>
+      `<label class="mb-radio"><input type="radio" name="scope" value="${id}" ${checked ? "checked" : ""}/><span><strong>${title}</strong><span>${line}</span></span></label>`;
+    return (
+      `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-add-title" data-testid="add-agent">` +
+      `<h2 id="mb-add-title">Add an agent</h2><label class="mb-field"><span>Name</span><input value="Codex"/></label>` +
+      `<fieldset><legend>What it may do</legend>` +
+      radio("see", "See bots", "List bots and read their settings and routines.", true) +
+      radio("suggest", "Suggest changes", "Also ask for changes, which you confirm in Clawtrate.", false) +
+      `</fieldset><label class="mb-switch"><input type="checkbox"/><span>Include bots' instructions</span></label>` +
+      `<p class="mb-hint" data-testid="instructions-hint">Without it, the agent gets no instructions, no instruction changes and no routine prompts, and can't suggest them.</p>` +
+      `<fieldset><legend>Which bots</legend><label class="mb-radio"><input type="radio" name="bots"/><span><strong>All bots</strong></span></label>` +
+      `<label class="mb-radio"><input type="radio" name="bots" checked/><span><strong>Chosen bots</strong><span>Pip, Otto</span></span></label>` +
+      `<label class="mb-switch"><input type="checkbox" disabled/><span>Include bots you add later</span></label></fieldset>` +
+      `<label class="mb-field"><span>Expires</span><select><option>In 30 days</option><option>In 7 days</option><option>In 90 days</option></select></label>` +
+      `<p class="mb-hint" data-testid="grant-limit">Anything that can read this agent's secret can do what you allow here. Programs running as you on this Mac can read your agent's settings, so give agents the least they need.</p>` +
+      `<p class="mb-hint">It never gets credentials, devices, the gateway's settings, completions, or a way to delete bots or message them.</p>` +
+      `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet">Cancel</button><button type="button" class="mb-btn" data-variant="primary" data-act="added">Add</button></div></div>`
+    );
+  }
+
+  function addedNote() {
+    return (
+      `<div class="mb-added" data-testid="added-config"><h2>Paste this into Codex's MCP settings</h2>` +
+      `<p>The secret is shown once. Clawtrate keeps only a digest of it.</p>` +
+      `<pre class="mb-code">{\n  "mcpServers": {\n    "clawtrate": {\n      "command": "/Applications/Clawtrate.app/Contents/MacOS/clawtrate-mcp",\n      "env": { "CLAWTRATE_GRANT": "ctg_••••••••••••" }\n    }\n  }\n}</pre>` +
+      `<button type="button" class="mb-btn" data-variant="quiet">Copy</button></div>`
+    );
+  }
+
   // ---- events -------------------------------------------------------------------
 
   function closeSheet() {
@@ -446,6 +781,42 @@
       root.querySelector(".mb-sheet button").focus();
     } else if (act === "sheet-close") {
       closeSheet();
+    } else if (act === "review") {
+      review(id);
+    } else if (act === "editor-save") {
+      await editorSave();
+    } else if (act === "editor-cancel") {
+      editor = null;
+      renderChat();
+    } else if (act === "decline") {
+      decline(id);
+    } else if (act === "grant") {
+      const c = chat.items.find((i) => i.id === "grant");
+      Object.assign(c, { cardKind: "granted", title: "Juniper can now ask to change other bots", note: "", actions: [] });
+      state.grant = true;
+      proposeCreate();
+      renderChat();
+    } else if (act === "grant-no") {
+      const c = chat.items.find((i) => i.id === "grant");
+      Object.assign(c, { cardKind: "declined", actions: [], note: "Not now. Juniper can't ask to create bots." });
+      renderChat();
+    } else if (act === "own-rename") {
+      const prop = proposals.find((x) => x.id === id);
+      const own = prop.card.ownRename;
+      prop.card.stateText = "Renaming…";
+      prop.card.actions = prop.card.actions.filter((a) => a[1] !== "own-rename");
+      renderChat();
+      await gateway.answer(800, () => (botById(own.bot).name = own.to));
+      own.done = true;
+      prop.card.stateText = "";
+      if (prop.state === "open" && prop.card.actions.every((a) => a[1] !== "review")) {
+        prop.state = "saved";
+        prop.card.cardKind = "renamed";
+        prop.card.actions = [];
+      }
+      chat.items.push({ kind: "line", text: `You renamed it ${own.to}. Read back.`, testid: "own-rename-line" });
+      renderChat();
+      say(`Renamed to ${own.to}`);
     } else if (act === "use-claw") {
       const c = chat.items.find((i) => i.id === id);
       c.actions = [];
@@ -476,6 +847,12 @@
       const c = chat.items.find((i) => i.id === "opening");
       Object.assign(c, { cardKind: "left", note: "Left as it is. You can write to main yourself.", actions: [] });
       renderChat();
+    } else if (act === "add") {
+      state.step = "add";
+      renderAgents();
+    } else if (act === "added") {
+      state.step = "added";
+      renderAgents();
     }
   });
 
@@ -525,6 +902,11 @@
     if (guidedCard && event.target.id === "g-role") guidedCard.role = event.target.value;
   });
   root.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && editor) {
+      editor = null;
+      renderChat();
+      return;
+    }
     if (event.key === "Escape" && state.sheet) closeSheet();
     if (event.key === "Tab" && state.sheet) {
       // The setup behind the sheet is inert; Tab and Shift+Tab cycle inside it.
@@ -547,15 +929,21 @@
   // ---- start ----------------------------------------------------------------
 
   function start() {
+    proposals.length = 0;
     guidedCard = null;
     composer = { value: "" };
-    chat = { bot: "main", items: [] };
+    chat = { bot: state.view === "rename" ? "pip" : "main", items: [] };
     if (state.view === "setup") return renderSetup();
-    return playFirst();
+    if (state.view === "agents") return renderAgents();
+    if (state.view === "first") return playFirst();
+    if (state.view === "rename") return playRename();
+    if (state.view === "create") return playCreate();
+    if (state.view === "proposal") return playProposal();
   }
 
   document.addEventListener("ct:settings", () => {
     if (state.view === "setup") renderSetup();
+    else if (state.view === "agents") renderAgents();
     else if (chat) renderChat();
   });
   seedBots();

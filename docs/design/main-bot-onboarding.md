@@ -11,7 +11,7 @@ It builds on:
 
 The evidence is [`docs/research/bot-self-management.md`](../research/bot-self-management.md), from checks on a development gateway and from the OpenClaw 2026.10.6 package CI installs. Its findings are cited as R1 to R34.
 
-The prototype is [`prototype/main-bot.html`](prototype/main-bot.html), in dark (the default) and light, at desktop and phone width. It shows the autonomy step and the first run with its guided card, and `prototype/tools/checks/main-bot.mjs` checks it. A bot asking to rename itself, creating a bot by chat, proposals and external agents in Settings are to follow. The prototype is a fixture: it shows what each state looks like and cannot show that a gateway effect happened. Section 17 lists the contract tests that do.
+The prototype is [`prototype/main-bot.html`](prototype/main-bot.html): the autonomy step, the first run with its guided card, a bot asking to rename itself, creating a bot by chat, proposals, and external agents in Settings, in dark (the default) and light, at desktop and phone width. `prototype/tools/checks/main-bot.mjs` checks it. The prototype is a fixture: it shows what each state looks like and cannot show that a gateway effect happened. Section 17 lists the contract tests that do.
 
 ## Contents
 
@@ -696,16 +696,16 @@ The implicit-`main` rename; whether `messageChannel` is trusted per-turn provena
 
 `main-bot.html` takes `theme`, `width` and `chrome`, as the other pages, and:
 
-| Parameter  | Values                                                                                                                                                                                         |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `view`     | `setup` (default), `first` (the first run); to follow: `rename` (a bot asks to rename itself), `create` (creating a bot by chat), `proposal` (proposals of other origins), `agents` (Settings) |
-| `at`       | `start`, `greeted`, `saving`, `done`: a point in the first run; with the proposals to follow, `done` also saves a proposal through its editor                                                  |
-| `card`     | `unconfirmed`, `stale`: other outcomes; to follow: `declined`, and `stale` on the editor of a changed bot                                                                                      |
-| `opening`  | `ambiguous`: the first message's delivery couldn't be confirmed                                                                                                                                |
-| `existing` | `1`: an existing Main Bot                                                                                                                                                                      |
-| `plugin`   | `missing`                                                                                                                                                                                      |
-| `grant`    | to follow: `0`, Juniper isn't a manager yet (create)                                                                                                                                           |
-| `step`     | to follow: `add`, `added` (agents)                                                                                                                                                             |
+| Parameter  | Values                                                                                                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`     | `setup` (default), `first` (the first run), `rename` (a bot asks to rename itself), `create` (creating a bot by chat), `proposal` (proposals of other origins), `agents` (Settings) |
+| `at`       | `start`, `greeted`, `saving`, `done`: a point in the first run; `done` also saves a proposal through its editor                                                                     |
+| `card`     | `unconfirmed`, `stale` (the editor on a changed bot), `declined`: other outcomes                                                                                                    |
+| `opening`  | `ambiguous`: the first message's delivery couldn't be confirmed                                                                                                                     |
+| `existing` | `1`: an existing Main Bot                                                                                                                                                           |
+| `plugin`   | `missing`                                                                                                                                                                           |
+| `grant`    | `0`: Juniper isn't a manager yet (create)                                                                                                                                           |
+| `step`     | `add`, `added` (agents)                                                                                                                                                             |
 
 A stand-in gateway answers after a delay, and the rail changes only on its answer. The Claws are a stand-in drawn from the name, not #300's creatures, which aren't on `main`. The page is a fixture: it shows each state and proves no gateway effect.
 

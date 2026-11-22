@@ -1,5 +1,4 @@
-// Checks prototype/main-bot.html against docs/design/main-bot-onboarding.md
-// (the autonomy step and the first run):
+// Checks prototype/main-bot.html against docs/design/main-bot-onboarding.md:
 // each state's words and structure, and that the rail and the header change
 // only on the stand-in gateway's answer.
 //
@@ -190,6 +189,15 @@ await check("MB-08 unconfirmed and stale saves leave the name and say why", asyn
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "main");
 });
 
+await check("MB-09 no Apply and no Undo on any card: proposals are saved in the person's own editor", async ({ page, open }) => {
+  for (const view of ["view=first&at=done", "view=rename", "view=rename&at=done", "view=create", "view=create&at=done", "view=proposal"]) {
+    await open(view);
+    await page.locator(".mb-card").first().waitFor();
+    const names = await page.locator(".mb-card button").allInnerTexts();
+    assert(!names.some((n) => /^(Apply|Undo)\b/.test(n.trim())), `${view}: ${names.join(", ")}`);
+  }
+});
+
 await check("MB-10 an existing Main Bot: nothing sent for the person", async ({ page, open }) => {
   await open("view=first&existing=1");
   await has(page, '[data-testid="existing-main"]', "Juniper is your Main Bot.");
@@ -215,6 +223,103 @@ await check("MB-11 the plugin missing: Save in Clawtrate, and the line", async (
   assert.equal((await page.getByTestId("saved-name").innerText()).trim(), "Basil");
   assert.equal((await page.getByTestId("saved-role").innerText()).trim(), "Help me plan the garden.");
   assert.equal(await page.getByTestId("card-picture-offer").count(), 0);
+});
+
+await check("MB-12 a bot's own rename is a proposal; Review and save opens the person's editor; the rename is the person's", async ({ page, open, width }) => {
+  await open("view=rename");
+  const card = page.getByTestId("card-proposal");
+  await has(page, '[data-testid="card-proposal"]', "Pip asks to rename itself Scout");
+  await has(page, '[data-testid="card-proposal"]', "Clawtrate can't apply this for you on this gateway. Review and save opens your editor with these values.");
+  assert.deepEqual(await card.getByRole("button").allInnerTexts(), ["Review and save", "Rename Pip to Scout", "Not now"]);
+  await card.getByRole("button", { name: "Review and save" }).click();
+  const editor = page.getByRole("dialog", { name: "Pip's instructions" });
+  await editor.waitFor();
+  await has(page, '[data-testid="editor"]', "Clawtrate read Pip's instructions again when this opened.");
+  assert.match(await page.locator("#ed-0").inputValue(), /Keep answers short/);
+  if (width !== "phone") assert.equal(await railName(page, "pip", width), "Pip");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await page.getByTestId("card-saved").waitFor();
+  await has(page, '[data-testid="card-saved"]', "Saved by you in Pip's instructions.");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Pip");
+  await page.getByRole("button", { name: "Rename Pip to Scout" }).click();
+  await page.getByTestId("own-rename-line").waitFor();
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Scout");
+  if (width !== "phone") assert.equal(await railName(page, "pip", width), "Scout");
+});
+
+await check("MB-13 a changed bot starts the editor from what it says now; Not now keeps everything; Cancel writes nothing", async ({ page, open }) => {
+  await open("view=rename&card=stale");
+  await page.getByTestId("editor-stale").waitFor();
+  await has(page, '[data-testid="editor-stale"]', "Pip's instructions changed since Pip asked.");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByTestId("editor").count(), 0);
+  assert.equal(await page.getByTestId("card-proposal").count(), 1);
+  await open("view=rename&card=declined");
+  await has(page, '[data-testid="card-declined"]', "Kept Pip's instructions");
+  assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Pip");
+});
+
+await check("MB-14 the star grants nothing: a manager grant comes first", async ({ page, open }) => {
+  await open("view=create&grant=0");
+  await has(page, '[data-testid="card-grant"]', "Juniper can't ask to change other bots");
+  await has(page, '[data-testid="card-grant"]', "Being your Main Bot doesn't include this.");
+  assert.equal(await page.getByTestId("card-proposal").count(), 0);
+  await page.getByRole("button", { name: "Allow" }).click();
+  await page.getByTestId("card-proposal").waitFor();
+});
+
+await check("MB-15 creating by chat: every value shown, the follow-ons gated, New bot filled, listed after the read-back", async ({ page, open, width }) => {
+  await open("view=create");
+  await has(page, '[data-testid="card-proposal"]', "Juniper asks to create Stride");
+  await has(page, '[data-testid="card-proposal"]', "More freedom than your usual choice");
+  await has(page, '[data-testid="card-proposal"]', "Clawtrate can't create this for you on this gateway");
+  assert.equal(await page.locator('[data-testid="card-proposal"] [data-gated="1"]').count(), 3);
+  if (width !== "phone") assert.equal(await page.getByTestId("rail-name-stride").count(), 0);
+  await page.getByRole("button", { name: "Review and save" }).click();
+  const dialog = page.getByRole("dialog", { name: "New bot" });
+  await dialog.waitFor();
+  assert.equal(await page.locator("#ed-0").inputValue(), "Stride");
+  assert.equal(await page.locator("#ed-2").inputValue(), "Hands-off");
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("card-saved").waitFor();
+  await has(page, '[data-testid="card-saved"]', "Created by you in New bot.");
+  if (width !== "phone") assert.equal(await railName(page, "stride", width), "Stride");
+});
+
+await check("MB-16 other origins: unconfirmed origin, a name only the person changes, another bot's diff, more freedom", async ({ page, open, width }) => {
+  await open("view=proposal");
+  await has(page, '[data-testid="channel-note"]', "direct messages from your connected chat apps");
+  assert.equal(await page.getByTestId("card-proposal").count(), 3);
+  await has(page, '[data-id="junebug"]', "Clawtrate couldn't confirm where this request came from.");
+  assert.deepEqual(await page.locator('[data-id="junebug"]').getByRole("button").allInnerTexts(), ["Rename Juniper to Junebug", "Not now"]);
+  await has(page, '[data-id="otto-instructions"]', "Another bot's instructions");
+  assert.equal(await page.locator('[data-id="otto-instructions"] .mb-diff [data-sign="+"]').count(), 2);
+  await has(page, '[data-id="pip-freedom"]', "More freedom");
+  if (width !== "phone") assert.equal(await page.getByTestId("proposals-count").innerText(), "3");
+  await page.locator('[data-id="pip-freedom"]').getByRole("button", { name: "Review and save" }).click();
+  await has(page, '[data-testid="editor"]', "This gives Pip more freedom.");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await page.locator('[data-id="pip-freedom"][data-kind="saved"]').waitFor();
+  assert.equal(await page.locator('[data-id="pip-freedom"]').getByRole("button").count(), 0);
+});
+
+await check("MB-17 agents with access: See by default, no direct changes, the limit, the config", async ({ page, open }) => {
+  await open("view=agents");
+  assert.equal(await page.getByRole("heading", { level: 1 }).innerText(), "Agents with access");
+  await has(page, '[data-testid="grants"]', "Suggest changes · All bots, including later ones");
+  await has(page, '[data-testid="grants"]', "Expires in 28 days");
+  await open("view=agents&step=add");
+  const dialog = page.getByRole("dialog", { name: "Add an agent" });
+  assert.deepEqual(await dialog.locator('input[name="scope"]').evaluateAll((r) => r.map((x) => [x.value, x.checked])), [
+    ["see", true],
+    ["suggest", false],
+  ]);
+  await has(page, '[data-testid="grant-limit"]', "Anything that can read this agent's secret can do what you allow here.");
+  await has(page, '[data-testid="instructions-hint"]', "no instruction changes and no routine prompts");
+  assert.equal(await dialog.getByText("Include bots you add later").count(), 1);
+  await open("view=agents&step=added");
+  await has(page, '[data-testid="added-config"]', "clawtrate-mcp");
+  await has(page, '[data-testid="added-config"]', "The secret is shown once.");
 });
 
 await check("MB-18 an ambiguous opening stops and waits for an explicit retry", async ({ page, open }) => {
