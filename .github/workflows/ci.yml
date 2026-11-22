@@ -272,6 +272,36 @@ jobs:
           "removed: $($owned -join '; ')"
           if ($kept -ne $other) { throw "the uninstaller removed or changed $links, which another program had taken over" }
           "kept: $links, which opens $kept"
+      # The current user's link entry wins over every user's in HKEY_CLASSES_ROOT, so an install
+      # for every user over a current user's must leave none behind (packaging/installer.nsh).
+      # The runner's account is an administrator, so /allusers needs no prompt.
+      - name: Install for every user over an install for the current user, then uninstall
+        run: |
+          $installer = @(Get-ChildItem apps/desktop/dist/Clawtrate-*-win-x64.exe)[0].FullName
+          $userDir = Join-Path $env:RUNNER_TEMP "Clawtrate install"
+          $allDir = Join-Path $env:RUNNER_TEMP "Clawtrate for every user"
+          $user = 'HKCU:\Software\Classes\clawtrate'
+          $all = 'HKLM:\Software\Classes\clawtrate'
+          $run = Start-Process $installer -ArgumentList '/S', '/currentuser', "/D=$userDir" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the installer for the current user exited with $($run.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $user)) { throw "the installer for the current user did not write $user" }
+          $run = Start-Process $installer -ArgumentList '/S', '/allusers', "/D=$allDir" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the installer for every user exited with $($run.ExitCode)" }
+          # It ran the current user's uninstaller first, as an update, which took that entry with it.
+          if (Test-Path -LiteralPath $user) { throw "$user is still there, so links would open the removed copy" }
+          $command = (Get-ItemProperty -LiteralPath "$all\shell\open\command").'(default)'
+          $expected = '"' + (Join-Path $allDir 'Clawtrate.exe') + '" -- "%1"'
+          if ($command -ne $expected) { throw "links open '$command', not '$expected'" }
+          "links open: $command"
+          $run = Start-Process (Join-Path $allDir 'Uninstall Clawtrate.exe') -ArgumentList '/S', '/allusers' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the uninstaller exited with $($run.ExitCode)" }
+          # The uninstaller carries on from a copy of itself in the temporary folder, so wait for it.
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path -LiteralPath $all) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          foreach ($key in $user, $all) {
+            if (Test-Path -LiteralPath $key) { throw "the uninstaller left $key" }
+          }
+          "removed: $user; $all"
       # What a failed check saw: Playwright's error context for each failed test.
       - if: failure()
         uses: actions/upload-artifact@v7

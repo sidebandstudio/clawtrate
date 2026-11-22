@@ -73,7 +73,7 @@ describe("packaging configuration", () => {
     ]);
     expect(statements("customUnInstall")).toEqual([
       // Not on an update: the copy of the installer, in the current user's folder for
-      // either scope.
+      // either scope, then the install's scope again.
       "${ifNot} ${isUpdated}",
       '${if} $installMode == "all"',
       "SetShellVarContext current",
@@ -83,14 +83,15 @@ describe("packaging configuration", () => {
       '${if} $installMode == "all"',
       "SetShellVarContext all",
       "${endif}",
-      // At the install's scope again: the link entry, only while it opens this installation.
+      "${endif}",
+      // On every uninstall, an update too, at the install's scope: the link entry, only
+      // while it opens this installation.
       "Push $0",
       `ReadRegStr $0 SHELL_CONTEXT ${commandKey} ""`,
       `\${if} $0 == ${command}`,
       `DeleteRegKey SHELL_CONTEXT ${key}`,
       "${endif}",
       "Pop $0",
-      "${endif}",
     ]);
   });
 

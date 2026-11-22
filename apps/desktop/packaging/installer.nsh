@@ -9,9 +9,10 @@
 ;
 ; electron-builder registers no URL scheme on Windows, so this installation
 ; registers Clawtrate links (docs/design/links.md) for its own scope, this user
-; or every user, and its uninstaller removes that entry only while it still
-; opens this installation. The command puts `--` before the link, so nothing
-; Windows splits from a link reaches Chromium as a switch (src/main/links.ts).
+; or every user, replacing an entry already there, and its uninstaller removes
+; that entry only while it still opens this installation, on an update too. The
+; command puts `--` before the link, so nothing Windows splits from a link
+; reaches Chromium as a switch (src/main/links.ts).
 
 ; The folder, from the file's path; the build fails if electron-builder ever names the file otherwise.
 !searchparse "${APP_INSTALLER_STORE_FILE}" "" CLAWTRATE_UPDATER_DIR "\installer.exe"
@@ -33,14 +34,18 @@
     ${if} $installMode == "all"
       SetShellVarContext all
     ${endif}
-    ; A link entry another copy of the app wrote since stays.
-    Push $0
-    ReadRegStr $0 SHELL_CONTEXT "Software\Classes\clawtrate\shell\open\command" ""
-    ${if} $0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
-      DeleteRegKey SHELL_CONTEXT "Software\Classes\clawtrate"
-    ${endif}
-    Pop $0
   ${endif}
+  ; The link entry goes on an update too. An install for every user first runs
+  ; this user's uninstaller as an update, and this user's entry would win over
+  ; the new one. electron-builder runs that uninstaller before customInstall, so
+  ; an update in the same scope writes the entry again. An entry another copy of
+  ; the app, or another program, wrote since stays.
+  Push $0
+  ReadRegStr $0 SHELL_CONTEXT "Software\Classes\clawtrate\shell\open\command" ""
+  ${if} $0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
+    DeleteRegKey SHELL_CONTEXT "Software\Classes\clawtrate"
+  ${endif}
+  Pop $0
 !macroend
 
 ; Distinguish the signed setup container from the app and its uninstaller.
