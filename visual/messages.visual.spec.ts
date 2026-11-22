@@ -716,10 +716,13 @@ test.describe("message actions on a phone", () => {
     const box = (await bubble.boundingBox())!;
     const actions = turn.getByTestId("message-actions");
     const at = { clientX: box.x + 30, clientY: box.y + 20 };
-    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, ...at });
-    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, ...at });
-    await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, ...at });
-    await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 1, ...at });
+    // The first finger down is the primary one, as the browser marks it, and the second is not.
+    const one = { pointerType: "touch", pointerId: 1, isPrimary: true, ...at };
+    const two = { pointerType: "touch", pointerId: 2, isPrimary: false, ...at };
+    await bubble.dispatchEvent("pointerdown", one);
+    await bubble.dispatchEvent("pointerdown", two);
+    await bubble.dispatchEvent("pointerup", two);
+    await bubble.dispatchEvent("pointerup", one);
     await page.waitForTimeout(900);
     await expect(actions).not.toHaveAttribute("data-open", "true");
   });
