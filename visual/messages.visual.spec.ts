@@ -833,6 +833,26 @@ test.describe("message actions on a phone", () => {
     await finger.lift();
   });
 
+  test("F-066: a right-click on a held message is the mouse's own: it opens nothing and keeps the browser's menu", async ({
+    page,
+  }) => {
+    const turn = await holdReady(page);
+    const box = (await turn.locator(".msg > .bubble").last().boundingBox())!;
+    // Seen after the page's own handlers: a prevented menu is one the browser does not show.
+    await page.evaluate(() =>
+      window.addEventListener("contextmenu", (event) => {
+        (window as unknown as { menuShut: boolean }).menuShut = event.defaultPrevented;
+      }),
+    );
+    const finger = await fingerOn(turn);
+    await page.mouse.click(box.x + 120, box.y + 20, { button: "right" });
+    expect(await page.evaluate(() => (window as unknown as { menuShut: boolean }).menuShut)).toBe(
+      false,
+    );
+    await expect(turn.getByTestId("message-actions")).not.toHaveAttribute("data-open", "true");
+    await finger.lift();
+  });
+
   test("F-066: on a touch screen, a mouse over a message shows its actions, and a touch hides them", async ({
     page,
   }) => {
@@ -848,6 +868,9 @@ test.describe("message actions on a phone", () => {
     await page.touchscreen.tap(box.x + 30, box.y + 20);
     // pointer-events changes at once, where the opacity fades.
     await expect(actions).toHaveCSS("pointer-events", "none");
+    // The mouse moving on over the same message shows them again, without leaving it first.
+    await page.mouse.move(box.x + 40, box.y + 24);
+    await expect.poll(() => shown(actions)).toBe(true);
   });
 
   test("F-066: a tap on a message leaves its actions hidden", async ({ page }) => {

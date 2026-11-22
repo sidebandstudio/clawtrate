@@ -181,13 +181,19 @@ export function MessageActions({
     // A mouse, or a pen above the screen, shows the actions while it is over the message: set here,
     // since a tap leaves :hover behind, and a touch screen in tablet mode can report no hover with
     // a mouse attached.
+    const hovering = (event: PointerEvent) =>
+      event.pointerType === "mouse" || (event.pointerType === "pen" && event.buttons === 0);
     const onEnter = (event: PointerEvent) => {
       measure();
-      if (event.pointerType === "mouse" || (event.pointerType === "pen" && event.buttons === 0))
-        turn.dataset.hover = "true";
+      if (hovering(event)) turn.dataset.hover = "true";
+    };
+    // A tap takes the hover away; the mouse moving on over the message brings it back.
+    const onHover = (event: PointerEvent) => {
+      if (!turn.dataset.hover && hovering(event)) onEnter(event);
     };
     const onLeave = () => delete turn.dataset.hover;
     turn.addEventListener("pointerenter", onEnter);
+    turn.addEventListener("pointermove", onHover);
     turn.addEventListener("pointerleave", onLeave);
     // Touch and hold on the message shows its actions; a tap elsewhere hides them. The finger that
     // starts it owns the gesture until it lifts or the browser takes it, which is how WebKit on iOS
@@ -230,8 +236,10 @@ export function MessageActions({
       if (turn.getBoundingClientRect().top !== start.top) stop();
     };
     // Chromium's own long press, its contextmenu, can come while this one waits: it opens the
-    // actions at once, and Chromium's menu, which would cover them, stays shut.
+    // actions at once, and Chromium's menu, which would cover them, stays shut. A right-click
+    // meanwhile is the mouse's own, and leaves both alone.
     const onMenu = (event: MouseEvent) => {
+      if ((event as PointerEvent).pointerType !== "touch") return;
       if (!turn.contains(event.target as Node)) return;
       event.preventDefault();
       if (timer) open();
@@ -264,6 +272,7 @@ export function MessageActions({
     return () => {
       end();
       turn.removeEventListener("pointerenter", onEnter);
+      turn.removeEventListener("pointermove", onHover);
       turn.removeEventListener("pointerleave", onLeave);
       turn.removeEventListener("pointerdown", onDown);
     };
