@@ -614,12 +614,16 @@ const settle = async <T>(read: () => Promise<T>): Promise<T | Unavailable> => {
 const isUnavailable = (value: unknown): value is Unavailable =>
   typeof rec(value).status === "string" && !("hash" in rec(value));
 
+type ConfigRead = { config: RawRecord; hash: string | null; raw: RawRecord };
+
 /**
  * Reads and writes for these pages. It keeps no collection: each read is
  * answered and forgotten, each write is read back before it is reported.
  */
 export class MachinesEngine {
   private readonly ctx: MachinesContext;
+  /** The placement parts' `config.get` while it is out: parts read together send one. */
+  private sharedConfig: Promise<ConfigRead> | null = null;
 
   constructor(ctx: MachinesContext) {
     this.ctx = ctx;
@@ -629,7 +633,7 @@ export class MachinesEngine {
     if (!this.ctx.connected()) throw new Error("Not connected to the gateway.");
   }
 
-  private async config(): Promise<{ config: RawRecord; hash: string | null; raw: RawRecord }> {
+  private async config(): Promise<ConfigRead> {
     const raw = rec(await this.ctx.request("config.get", {}));
     // A settings file the gateway can't read or parse is answered `valid: false` with an empty
     // `config`: read as settings, that would be every setting unset.
@@ -640,6 +644,15 @@ export class MachinesEngine {
     return { config: rec(raw.config), hash: str(raw.hash, MAX_REASON_CHARS), raw };
   }
 
+  private placementConfig(): Promise<ConfigRead> {
+    if (this.sharedConfig) return this.sharedConfig;
+    const read = this.config().finally(() => {
+      if (this.sharedConfig === read) this.sharedConfig = null;
+    });
+    this.sharedConfig = read;
+    return read;
+  }
+
   /** Section 14, one part for one bot. Admin reads are asked only of an admin connection. */
   async readPlacement<P extends PlacementPart>(botId: string, part: P): Promise<PlacementParts[P]> {
     this.connectedOrThrow();
@@ -648,7 +661,7 @@ export class MachinesEngine {
       workspace: () => this.readWorkspacePart(botId),
       browser: async () => ({
         readAt: this.ctx.now(),
-        browser: readBrowserSettings((await this.config()).config, botId),
+        browser: readBrowserSettings((await this.placementConfig()).config, botId),
       }),
       inventory: () => this.readInventoryPart(botId),
       credentials: () => this.readCredentialsPart(),
@@ -659,7 +672,7 @@ export class MachinesEngine {
   private async readCommandsPart(botId: string): Promise<PlacementParts["commands"]> {
     const { ctx } = this;
     const [{ config, hash, raw }, { nodes, omitted }] = await Promise.all([
-      this.config(),
+      this.placementConfig(),
       ctx.request("node.list", {}).then(readNodes),
     ]);
     const commands = readCommandPlace(config, botId, nodes);
@@ -709,7 +722,7 @@ export class MachinesEngine {
     const { ctx } = this;
     const latest = ctx.latestTask(botId);
     const [{ config }, status, listing, secrets] = await Promise.all([
-      this.config(),
+      this.placementConfig(),
       settle(() => ctx.request("models.authStatus", { agentId: botId })),
       latest
         ? ctx.request("tools.effective", { sessionKey: latest }).then(
@@ -750,7 +763,7 @@ export class MachinesEngine {
   private async readCredentialsPart(): Promise<PlacementParts["credentials"]> {
     if (!this.ctx.admin())
       return { readAt: this.ctx.now(), plugins: { status: "needs-admin" }, pluginsOmitted: 0 };
-    const { config, hash: baseHash } = await this.config();
+    const { config, hash: baseHash } = await this.placementConfig();
     const ids = Object.entries(rec(rec(config.plugins).entries))
       .filter(([, entry]) => rec(entry).enabled !== false)
       .map(([id]) => id);
@@ -873,6 +886,8 @@ export class MachinesEngine {
   }
 
   private requireWrite(scope: "admin" | "pairing", what: string): void {
+    // A read sent before a write can answer from before it, so the page's read after it asks again.
+    this.sharedConfig = null;
     this.connectedOrThrow();
     if (this.ctx.readOnly())
       throw new PlacementWriteError("This host only reads; it changes nothing.");

@@ -746,6 +746,22 @@ describe("where a bot runs: the engine", () => {
     expect(await Promise.race([credentials, Promise.resolve("waiting")])).toBe("waiting");
   });
 
+  it("F-046: the parts read together send one config.get, and a read after it settles or after a write sends another", async () => {
+    const gw = gateway();
+    const e = engine(gw, { admin: true });
+    const gets = () => gw.calls.filter(([method]) => method === "config.get").length;
+    await Promise.all(PLACEMENT_PARTS.map((part) => e.readPlacement("otto", part)));
+    expect(gets()).toBe(1);
+    await e.readPlacement("otto", "browser");
+    expect(gets()).toBe(2);
+    // A write starts while a read is out: the read after the write doesn't take that read's answer.
+    const before = e.readPlacement("otto", "browser");
+    const write = e.setWorkspace("otto", "/srv/claw/workspaces/otto-2");
+    const after = e.readPlacement("otto", "commands");
+    await Promise.all([before, write, after]);
+    expect(gets()).toBe(4);
+  });
+
   it("F-272: bots with the same stored node or the same reported path are named as having the same setting", async () => {
     const gw = gateway();
     await engine(gw, { admin: true }).setCommandMachine(
