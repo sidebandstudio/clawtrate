@@ -4929,7 +4929,7 @@ export class ClawtrateClient {
       throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
     const here = await this.readGatewayIdentity();
     // A bot command can be the first to identify this connection after discovery got no ID.
-    if (here !== null && alive()) this.accounts.onGateway(here);
+    this.confirmGatewayIdentity(here, alive);
     if (!alive()) throw new Error("The connection changed before the change was sent.");
     // `gatewayId` is known here, so a gateway that names none (null) never matches it.
     if (here !== gatewayId)
@@ -6578,6 +6578,13 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
   }
 
+  private confirmGatewayIdentity(id: string | null, current: () => boolean): void {
+    if (id === null || !current()) return;
+    this.accounts.onGateway(id);
+    // Clearing another gateway's creation can notify a host that stops the connection.
+    if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+  }
+
   private readGatewayIdentity(): Promise<string | null> {
     const known = this.gatewayIdentity;
     if (known?.epoch === this.epoch) return known.id;
@@ -6618,12 +6625,7 @@ export class ClawtrateClient {
     const gatewayId = this.readGatewayIdentity();
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
-    void gatewayId.then((id) => {
-      if (id === null || !sameSocket()) return;
-      this.setConnection({ gatewayId: id });
-      // A bot creation asked of another gateway stays with it.
-      this.accounts.onGateway(id);
-    });
+    void gatewayId.then((id) => this.confirmGatewayIdentity(id, sameSocket));
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;

@@ -521,6 +521,36 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  it("publishes a recovered gateway identity before either viewer can start a Create", async () => {
+    const fake = new AccountsGateway();
+    fake.identity = "";
+    const { client } = await accountsClient({ gateway: fake });
+    const release = holdCreate(fake);
+    let first: Promise<unknown> | undefined;
+    try {
+      expect(client.state.connection.gatewayId).toBeNull();
+      fake.identity = "gateway-a";
+      const command = { type: "createBot", ...input, gatewayId: fake.identity } as const;
+      first = createBridgeSession(client).apply(command);
+      await until(() => fake.gateway.calls("agents.create").length === 1);
+      expect(client.state.connection.gatewayId).toBe(fake.identity);
+      expect(client.state.accounts.creation?.status).toBe("creating");
+      await expect(createBridgeSession(client).apply(command)).rejects.toThrow(
+        "already being created",
+      );
+      release();
+      await expect(first).resolves.toEqual({ botId: "viral", missing: [] });
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    } finally {
+      release();
+      try {
+        await first;
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
   it("retires the first gateway's partial when a later identity read identifies its replacement", async () => {
     const { client, fake } = await accountsClient();
     try {
@@ -539,6 +569,7 @@ describe("a bot write is bound to its gateway to the end", () => {
       await expect(
         viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-a" }),
       ).rejects.toThrow("another gateway");
+      expect(client.state.connection.gatewayId).toBe("gateway-b");
       expect(client.state.accounts.creation).toBeNull();
       await expect(
         viewer.apply({ type: "finishBot", botId: "viral", gatewayId: "gateway-b" }),
