@@ -100,7 +100,14 @@ async function react(page: Page, reactions: Record<string, MessageReaction[]>): 
 async function holdOn(message: Locator): Promise<void> {
   const bubble = message.locator(".msg > .bubble").last();
   const box = (await bubble.boundingBox())!;
-  const at = { pointerType: "touch", clientX: box.x + 30, clientY: box.y + 20 };
+  // The first finger down, as the browser marks it: a touch and hold is that finger's.
+  const at = {
+    pointerType: "touch",
+    pointerId: 1,
+    isPrimary: true,
+    clientX: box.x + 30,
+    clientY: box.y + 20,
+  };
   await bubble.dispatchEvent("pointerdown", at);
   await expect(message.getByTestId("message-actions")).toHaveAttribute("data-open", "true", {
     timeout: 3000,
