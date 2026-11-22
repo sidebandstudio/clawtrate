@@ -537,6 +537,14 @@ export function Shell({
     openedLink.current = linkId;
     openLinkedChat(linkBot, linkKey);
   }, [linkId, linkBot, linkKey]);
+  // Once the link's chat is on screen, any other chat opened, such as one a New task that was
+  // already on its way opens, drops the link: going back to its chat asks nothing.
+  const linkShown = useRef<number | null>(null);
+  useEffect(() => {
+    if (linkId === null || linkKey === null) return;
+    if (taskKey === linkKey) linkShown.current = linkId;
+    else if (linkShown.current === linkId) onChatLinkDone?.(linkId);
+  }, [taskKey, linkId, linkKey, onChatLinkDone]);
   const linkHere =
     chatLink && linkKey !== null && linkKey === taskKey && !drawerOpen && !routines && !inert
       ? chatLink

@@ -595,3 +595,31 @@ test("F-248: a link's card closes to the heading of the screen that replaced the
   await expectCantOpen("This Clawtrate link is invalid. Ask for a new link.");
   await expect(heading).toBeFocused();
 });
+
+test("F-248: once a link's chat is open, another chat opened drops the link's question", async () => {
+  const linkedChat = page.locator('.task[data-key="agent:marlow:main"]');
+  await expect(field()).toHaveAttribute("aria-label", "Message Marlow");
+  // A New task already on its way when the link comes finishes while the link asks.
+  const created = Promise.withResolvers<unknown>();
+  served.gateway.handlers["sessions.create"] = () => created.promise;
+  const creates = served.gateway.calls("sessions.create").length;
+  try {
+    await field().focus();
+    await page.keyboard.press("ControlOrMeta+t");
+    await expect.poll(() => served.gateway.calls("sessions.create").length).toBe(creates + 1);
+    await deliver(link("marlow", "Linked words."));
+    await expect(choice()).toBeVisible();
+    created.resolve({ key: "agent:marlow:second", entry: { label: "Second look" } });
+    await expect(choice()).toHaveCount(0);
+    await expect(field()).toHaveValue("");
+  } finally {
+    delete served.gateway.handlers["sessions.create"];
+  }
+  // Back in the chat the link opened, nothing asks again, and its draft is as it was.
+  await linkedChat.click();
+  await expect(field()).toHaveValue("Start over.\nAlso this.");
+  await frames();
+  await expect(choice()).toHaveCount(0);
+  await expect(note()).toHaveText("");
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});

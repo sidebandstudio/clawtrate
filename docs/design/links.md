@@ -133,9 +133,10 @@ replacing an existing draft. Explain when the link cannot open.
    Bind any choice to the connection and resolved chat.
    Clear pending link text on close or after applying it. If the connection or
    chat changes while the choice is open, discard the choice and show the
-   applicable failure. If the draft changes, show the choice again for the new
-   draft. A later link replaces the pending request and gets its own validation
-   and choice.
+   applicable failure. Once the link's chat is open, another chat opened discards
+   the choice too, without a failure, and going back to it asks nothing. If the
+   draft changes, show the choice again for the new draft. A later link
+   replaces the pending request and gets its own validation and choice.
 3. Set the draft through the existing composer state. Issue #18 owns the
    composer. Use the existing dialog and live-region patterns for outcomes.
 4. The prototype uses local fixtures. Its bar selects Opened, Loading, Existing draft,
