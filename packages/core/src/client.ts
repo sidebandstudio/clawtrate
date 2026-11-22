@@ -1630,14 +1630,52 @@ export class ClawtrateClient {
   async suspend(): Promise<void> {
     return this.changeConnection(async () => {
       if (!this.settings) return;
-      // Saved, so a restart does not reconnect by itself.
-      await this.saveSettings({ ...this.settings, suspended: true });
+      // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
+      const typed = this.typedTokenEnds(this.settings.url);
+      await this.saveSettings({
+        ...this.settings,
+        suspended: true,
+        ...(typed ? { token: null } : {}),
+      });
       // The connection stops: writes waiting for access fail, as on any lost connection.
       // Runs are kept as they are and reconciled with history after Reconnect.
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
       this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
     });
+  }
+
+  /**
+   * Whether the current settings carry the token the person typed for this attempt, on a host
+   * that keeps such tokens in memory only (one with `credentialStatus`), and so whether that
+   * token ends now. It is forgotten for the attempt either way.
+   */
+  private typedTokenEnds(url: string): boolean {
+    const typed = this.typedAttempt;
+    if (!typed || typed.url !== url) return false;
+    this.typedAttempt = null;
+    return (
+      this.host.credentialStatus !== undefined &&
+      this.selectionApplied === typed.selection &&
+      this.settings?.url === url &&
+      this.settings.token === typed.token
+    );
+  }
+
+  /**
+   * An attempt ended for good (a refusal or an ended pairing request): the token typed for it
+   * goes from the settings, in memory at once and then saved, unless a newer attempt took over.
+   */
+  private endTypedAttempt(url: string): void {
+    const selection = this.typedAttempt?.selection;
+    if (!this.typedTokenEnds(url) || !this.settings) return;
+    this.settings = { ...this.settings, token: null };
+    void this.changeConnection(async () => {
+      const current = this.settings;
+      if (!current || current.url !== url || this.selectionApplied !== selection) return;
+      if (current.token !== null) return;
+      await this.saveSettings(current);
+    }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
@@ -6388,6 +6426,7 @@ export class ClawtrateClient {
           retryAt: null,
           error: { ...PAIRING_ENDED, hint: null },
         });
+        this.endTypedAttempt(url);
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
@@ -6466,10 +6505,12 @@ export class ClawtrateClient {
       ...(refused ? { paired: false } : {}),
     });
     // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
-    if (pause)
+    if (pause) {
       this.rejectAccessWaiters(
         new Error(`The gateway refused this device: ${this.scrub(message)}`),
       );
+      this.endTypedAttempt(url);
+    }
     return {
       closeCode: 1000,
       closeReason: "connect rejected",
