@@ -185,19 +185,29 @@ export function MessageActions({
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
     // A bar a finger opened counts the touch areas its buttons reach past it, and keeps them 2 px
-    // within what shows of the transcript, below the band kept clear for the header and the strip,
-    // which lie over it. It keeps them 2 px off those of the quotes, reactions and replies links
-    // near it, the message's own and its neighbours', and off the bubbles after the message. A
-    // mouse's or a pen's stays beside the bubble wherever there is room: above or below it, the
-    // pointer would leave the message on its way to the bar, and the bar would hide.
+    // within what shows of the transcript and of the screen, below the band kept clear for the
+    // header and the strip, which lie over it. It keeps them 2 px off those of the quotes,
+    // reactions and replies links near it, the message's own and its neighbours', off Jump to
+    // latest, and off the bubbles after the message. A mouse's or a pen's stays beside the bubble
+    // wherever there is room: above or below it, the pointer would leave the message on its way to
+    // the bar, and the bar would hide.
     const touch = toolbar.dataset.pointer === "touch";
     const clear = reachPast(toolbar) + 2;
     const scroller = turn.closest<HTMLElement>(".transcript");
     const inner = scroller?.firstElementChild;
     const view = scroller?.getBoundingClientRect();
     const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
-    const first = view ? view.top + band + clear - turnBox.top : -Infinity;
-    const last = view ? view.bottom - clear - height - turnBox.top : Infinity;
+    // A keyboard can shrink what shows of the screen and leave the page's own size as it was.
+    const screen = window.visualViewport;
+    const first =
+      Math.max(view ? view.top + band : -Infinity, screen?.offsetTop ?? -Infinity) +
+      clear -
+      turnBox.top;
+    const last =
+      Math.min(view?.bottom ?? Infinity, screen ? screen.offsetTop + screen.height : Infinity) -
+      clear -
+      height -
+      turnBox.top;
     const quote = turn.previousElementSibling;
     // Only what lies within a bar and its reach of the message and its quote is looked at: the
     // message's row of the transcript, and the rows next to it out to that far. A 44 px touch area
@@ -232,6 +242,8 @@ export function MessageActions({
     const all = (selector: string) =>
       rows.flatMap((row) => [...row.querySelectorAll(selector)]).filter(near);
     const controls = all(".reply-quote, .reaction, .replies-link");
+    const jump = touch ? scroller?.parentElement?.querySelector(":scope > .jump-latest") : null;
+    if (jump) controls.push(jump);
     const around = (area: { top: number; right: number; bottom: number; left: number }) => ({
       top: area.top - turnBox.top - clear,
       right: area.right - turnBox.left + clear,
@@ -300,18 +312,36 @@ export function MessageActions({
   }, [turnRef, measure]);
 
   // An open bar is placed again as its transcript is resized or scrolled, as when the screen gets
-  // shorter. A shut one listens for none of it.
+  // shorter, as what shows of the screen changes, as when a keyboard comes up, and as Jump to
+  // latest comes, goes or changes over the transcript's foot. A shut one listens for none of it.
   const open = held || menu !== null;
   useEffect(() => {
+    if (!open) return;
     const scroller = turnRef.current?.closest<HTMLElement>(".transcript");
-    if (!open || !scroller) return;
+    const wrap = scroller?.parentElement;
+    const screen = window.visualViewport;
     const again = () => measure();
     const resized = new ResizeObserver(again);
-    resized.observe(scroller);
-    scroller.addEventListener("scroll", again, { passive: true });
+    if (scroller) resized.observe(scroller);
+    const jump = () => {
+      const button = wrap?.querySelector(":scope > .jump-latest");
+      if (button) resized.observe(button);
+    };
+    jump();
+    const changed = new MutationObserver(() => {
+      jump();
+      again();
+    });
+    if (wrap) changed.observe(wrap, { childList: true });
+    scroller?.addEventListener("scroll", again, { passive: true });
+    screen?.addEventListener("resize", again);
+    screen?.addEventListener("scroll", again);
     return () => {
       resized.disconnect();
-      scroller.removeEventListener("scroll", again);
+      changed.disconnect();
+      scroller?.removeEventListener("scroll", again);
+      screen?.removeEventListener("resize", again);
+      screen?.removeEventListener("scroll", again);
     };
   }, [open, turnRef, measure]);
 

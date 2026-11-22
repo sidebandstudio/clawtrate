@@ -125,6 +125,38 @@ async function fingerDown(page: Page, x: number, y: number): Promise<() => Promi
   return () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
+/** A new message from Otto at the end of the open task, as the gateway's next event would add it. */
+async function addMessage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const task = "agent:otto:disk-space";
+      const transcript = state.transcripts[task]!;
+      const item = {
+        id: "row-new:1",
+        role: "assistant" as const,
+        timestamp: (transcript.items.at(-1)!.timestamp ?? 0) + 60_000,
+        blocks: [
+          { kind: "text" as const, text: "The cache is back under 2 GB.", messageId: "row-new" },
+        ],
+        model: null,
+        messageId: "row-new",
+      };
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [task]: { ...transcript, items: [...transcript.items, item] },
+        },
+      };
+    });
+  });
+}
+
 /** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
 async function react(page: Page, reactions: Record<string, MessageReaction[]>): Promise<void> {
   await page.evaluate((reactions) => {
@@ -1121,6 +1153,90 @@ for (const width of [320, 390, 430]) {
         await settle(page);
       }
       await expect(actions).not.toHaveAttribute("data-open", "true");
+    });
+
+    test("F-066: when Jump to latest comes up under a held message's actions, the bar moves or shuts, so each button and Jump to latest keep their own touch areas", async ({
+      page,
+    }) => {
+      await open(page);
+      // Your short message before Otto's report, with the foot of its actions 16 px over where Jump
+      // to latest comes up: 44 px high, 10 px above the transcript's foot.
+      const message = page.locator('[data-message="row-8"]');
+      await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      const transcript = page.locator(".transcript");
+      const view = (await transcript.boundingBox())!;
+      const bar = (await actions.boundingBox())!;
+      await transcript.evaluate(
+        (el, by) => {
+          el.scrollTop += by;
+        },
+        bar.y + bar.height - (view.y + view.height - 54 + 16),
+      );
+      await settle(page);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      // A new message while the reader is away from the end.
+      await addMessage(page);
+      const jump = page.getByTestId("jump-latest");
+      await expect(jump).toBeVisible();
+      await expect
+        .poll(async () => {
+          if ((await actions.getAttribute("data-open")) !== "true") return [];
+          return (await Promise.all((await buttons.all()).map(unreached))).flat();
+        })
+        .toEqual([]);
+      expect(await unreached(jump)).toEqual([]);
+    });
+
+    test("F-066: when less of the screen shows and the page keeps its size, a held message's actions stay within what shows, or shut", async ({
+      page,
+    }) => {
+      await open(page);
+      // A keyboard on a phone can hide the screen's foot and leave the page as it was. Chromium
+      // cannot shrink what shows that way alone: zoomed in, it shows less of the page, and the
+      // page keeps its size.
+      const zoom = 1.4;
+      // Your short message before Otto's report, with the foot of its actions 20 px below where
+      // what shows will end.
+      const message = page.locator('[data-message="row-8"]');
+      await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      const bar = (await actions.boundingBox())!;
+      await page.locator(".transcript").evaluate(
+        (el, by) => {
+          el.scrollTop += by;
+        },
+        bar.y + bar.height - (PHONE.height / zoom + 20),
+      );
+      await settle(page);
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: zoom });
+      await expect
+        .poll(() => page.evaluate(() => window.visualViewport!.height))
+        .toBeLessThan(PHONE.height - 200);
+      // Each button's 44 px area within what shows, or the actions shut.
+      const within = (button: Locator) =>
+        button.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const middle = box.top + box.height / 2;
+          const screen = window.visualViewport!;
+          return middle - 22 >= screen.offsetTop && middle + 22 <= screen.offsetTop + screen.height;
+        });
+      await expect
+        .poll(async () => {
+          if ((await actions.getAttribute("data-open")) !== "true") return true;
+          for (const button of await buttons.all()) if (!(await within(button))) return false;
+          return true;
+        })
+        .toBe(true);
     });
   });
 }
