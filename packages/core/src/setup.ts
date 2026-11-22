@@ -38,6 +38,8 @@ export type CantTellReason =
   | "not-set-up"
   /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
   | "endpoint"
+  /** Over SSH: the status results disagree, or say too little to tell running from stopped. */
+  | "contradictory"
   /**
    * The installed OpenClaw has no command Clawtrate has verified as read-only:
    * its launcher may repair its own installation before any command runs, so
@@ -47,7 +49,14 @@ export type CantTellReason =
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
-  "launchagent" | "launchagent-stopped" | "systemd" | "systemd-stopped" | "none";
+  | "launchagent"
+  | "launchagent-stopped"
+  | "systemd"
+  | "systemd-stopped"
+  /** The status named a systemd user unit. */
+  | "systemd-user"
+  | "systemd-user-stopped"
+  | "none";
 
 export type SetupLook = {
   outcome: LookOutcome;
@@ -84,6 +93,12 @@ export type SetupFailureKind =
   | "no-dialog"
   /** The look refused to run here (`docs/development/setup.md`); `reason` says why. */
   | "refused"
+  /** Over SSH: the gateway answered with another identity than the route's. */
+  | "identity"
+  /** Over SSH: the gateway's identity couldn't be read after its hello. */
+  | "identity-unread"
+  /** Over SSH: the route's saved token is gone or was refused; a new pairing is needed. */
+  | "pairing-gone"
   /** Connected, but the bots couldn't be read. */
   | "bots"
   /** Back couldn't close the connection setup opened; Back tries again. */
@@ -115,6 +130,8 @@ export type SetupPhase =
   | "found"
   /** The host's dialog is open. */
   | "confirming"
+  /** Over SSH: a first contact's key, or a changed key, waits for the person (§5). */
+  | "key"
   | "connecting"
   /** Connected through setup: the app takes over. */
   | "done"
@@ -128,6 +145,10 @@ export type SetupState = {
   slow: boolean;
   look: SetupLook | null;
   failure: SetupFailure | null;
+  /** Another computer over SSH (§5), while setup is there; absent on this computer. */
+  there?: SshSetup | null;
+  /** The SSH route the app is connected through, for the status strip and Settings (§8). */
+  route?: RouteStatus | null;
 };
 
 export const initialSetupState: SetupState = {
@@ -137,6 +158,186 @@ export const initialSetupState: SetupState = {
   look: null,
   failure: null,
 };
+
+/** Why an SSH destination's settings were refused, by name (§5). */
+export type SshRefusalCategory =
+  "jump-host" | "command-or-forward" | "host-key" | "unsupported" | "invalid-value" | "unreadable";
+
+/** What `ssh` and the host found that ended a step over SSH (§5, §7, §8), in fixed copy. */
+export type SshFailureKind =
+  | "unreachable"
+  | "sign-in-refused"
+  | "ssh-stopped"
+  | "timed-out"
+  | "spawn-failed"
+  /** This computer's `ssh` can't be used (missing, too old, an unknown system). */
+  | "not-supported"
+  /** The host couldn't establish that its own SSH files are private: Advanced. */
+  | "app-files-unsafe"
+  | "forwarding-refused"
+  | "gateway-not-answering"
+  /** The forward's LOOK found the gateway's service proven stopped (`provenStopped`). */
+  | "gateway-stopped"
+  /** The forward's LOOK found another service at the gateway's port than the card named. */
+  | "service-changed"
+  /** The forward's LOOK couldn't tell what answers at the gateway's port. */
+  | "service-cant-tell"
+  /** The key presented when the forward opened isn't the pinned one. */
+  | "key-changed"
+  /** This computer can't keep a route's device token encrypted: no pairing over SSH. */
+  | "no-token-storage"
+  /** The one-time code wasn't made on that computer; `exit` is OpenClaw's. */
+  | "code-failed"
+  /** Remove couldn't delete the route's pinned key: nothing else was forgotten. */
+  | "remove-failed"
+  /** The route file on this computer could not be updated. */
+  | "route-not-saved"
+  /** The gateway accepted this device and the new pairing could not be saved here. */
+  | "pairing-not-kept"
+  /** OpenClaw's start command ran and exited with an error (`exit`). */
+  | "start-failed"
+  /** The start command didn't run there: its program was no longer the one the look named. */
+  | "start-not-run"
+  /** The start command ran, and Clawtrate couldn't establish afterwards that the gateway runs. */
+  | "start-unconfirmed";
+
+export type UnreachableWords =
+  "connection refused" | "no such name" | "timed out" | "network unreachable";
+
+/** A host key as the person sees it: its type and fingerprint, never its bytes. */
+export type ShownHostKey = { label: string; fingerprint: string };
+
+/**
+ * Another computer, as far as the host established it. Every string is the
+ * host's: the account, host and port as resolved from the person's SSH
+ * configuration, and fixed copy naming them.
+ */
+export type SshSetup = {
+  /** What was typed, once it matched the destination pattern; kept for Back. */
+  destination: string;
+  /** "you@devbox.example", once resolved. */
+  account: string | null;
+  /** The name typed, without the user: "devbox". */
+  name: string | null;
+  /** The SSH port, once resolved. */
+  port: number | null;
+  /** What was typed isn't a destination Clawtrate can use. */
+  invalid: boolean;
+  /** The person's settings for that name were refused: the setting and the engine's fixed note. */
+  refusal: {
+    category: SshRefusalCategory;
+    setting: string;
+    title: string;
+    sentence: string;
+  } | null;
+  /** First contact, or a changed key, waiting for the person (§5). */
+  key: {
+    state: "first-contact" | "changed";
+    presented: ShownHostKey;
+    trusted: (ShownHostKey & { pinnedAt: string }) | null;
+  } | null;
+  failure: { kind: SshFailureKind; cause: UnreachableWords | null; exit: number | null } | null;
+  /** At launch: the saved route is being opened again with its saved token, no new pairing. */
+  resume?: boolean;
+  /**
+   * Something the screen says beside its usual words: Replace stopped with
+   * its box unticked, so nothing was replaced; or, at launch, the saved
+   * route's name now resolves to another account, host or port.
+   */
+  notice?: "replace-unticked" | "endpoint-changed" | null;
+};
+
+/** Where the app's SSH route stands (§8): the status strip's words come from it. */
+export type RouteStatus = {
+  /** The name typed for that computer: "devbox". */
+  name: string;
+  /** The full account, as resolved: "you@devbox.example". */
+  account: string;
+  /** Its SSH port. */
+  port: number;
+  phase:
+    | "up"
+    /** The forward dropped, or is up again and the gateway hasn't answered as itself yet. */
+    | "restoring"
+    /** Back after a drop, the gateway's identity read again: said for a moment. */
+    | "restored"
+    /** Two minutes without the forward. */
+    | "unreachable"
+    | "key-changed"
+    /** The LOOK found another service at the gateway's port, before any identity was read. */
+    | "service-changed"
+    /** The gateway answered with another identity than the route's. */
+    | "different-gateway"
+    /** The forward stays up and the LOOK reports the service stopped. */
+    | "stopped"
+    /** The route couldn't be restored for a reason other than reaching the computer. */
+    | "failed"
+    /** The person chose Disconnect: the route is kept, and only Reconnect opens it again. */
+    | "disconnected";
+  /** For `unreachable`: the cause in brackets, as section 5 words it. */
+  cause: UnreachableWords | null;
+  profile: "default" | "clawtrate";
+  /** Whether "Retry now" does something now: only while the forward waits for its next try. */
+  retry: boolean;
+};
+
+/**
+ * Where the gateway's owner approves a request (§9): this computer, or the
+ * SSH route's account and port, and the profile, for the approve command.
+ * "Approve from here" (F-500) plugs in on the same place: it is offered only
+ * where a place is known.
+ */
+export type ApprovalPlace =
+  | { route: "this-computer"; profile: "default" | "clawtrate" }
+  | {
+      route: "ssh";
+      /** The route's full account, as resolved: "you@devbox.example". */
+      account: string;
+      /** Its SSH port. */
+      port: number;
+      profile: "default" | "clawtrate";
+    };
+
+/** A gateway's pairing request id, as OpenClaw makes them: a UUID. Anything else is never put in a command. */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The approve command and its line for a place (§9): the selected profile, by
+ * name. Only a request id of the gateway's shape is put in the command; without
+ * one, the command lists the pending devices and the line says to match this
+ * device's id.
+ */
+export function approvalForPlace(
+  place: ApprovalPlace,
+  requestId: string,
+): { command: string; note: string } {
+  const profileArgs = place.profile === "clawtrate" ? "--profile clawtrate " : "";
+  const known = REQUEST_ID.test(requestId);
+  const command = known
+    ? `openclaw ${profileArgs}devices approve ${requestId}`
+    : `openclaw ${profileArgs}devices list`;
+  if (place.route === "this-computer")
+    return {
+      command,
+      note: known
+        ? `On this computer, approve this request for the ${place.profile} profile:`
+        : `On this computer, approve this device for the ${place.profile} profile from the requests this lists.`,
+    };
+  const on = `On ${place.account} (SSH port ${place.port})`;
+  return {
+    command,
+    note: known
+      ? `${on}, approve this request for the ${place.profile} profile.`
+      : `${on}, list pending devices for the ${place.profile} profile and match this device ID before you approve.`,
+  };
+}
+
+/** An SSH destination, account or name: a user of 64 and a host of 253, an `@` and a margin. */
+export const MAX_DESTINATION_CHARS = 320;
+/** A fingerprint as shown: `SHA256:` and 43 base64 characters. */
+export const MAX_FINGERPRINT_CHARS = 64;
+/** The host's fixed note for a refused SSH setting, naming the host twice. */
+export const MAX_SSH_NOTE_CHARS = 1_024;
 
 /** Names of other services or profiles the look keeps, and their length. */
 export const MAX_LOOK_OTHERS = 5;
@@ -155,10 +356,34 @@ export type SetupHost = {
   connect(): Promise<void>;
   /** Back to the first screen. */
   reset(): void;
+  /**
+   * Another computer (§5): look there for what was typed. The host resolves
+   * it, refuses it by name, or asks its own dialog for the account first.
+   */
+  there?(destination: string): Promise<void>;
+  /** Trust the key first contact captured, after the host's own dialog. */
+  trustKey?(): Promise<void>;
+  /** Replace a changed key, after the host's dialog and its checkbox. */
+  replaceKey?(): Promise<void>;
+  /** Start OpenClaw there when the look proved it stopped, after the host's dialog. */
+  start?(): Promise<void>;
+  /** The status strip's "Retry now": restore the route's forward at once. */
+  retryRoute?(): Promise<void>;
+  /**
+   * Settings, Gateway, "Remove this gateway…", or the same on a route that
+   * couldn't be restored, after the host's dialog: local only.
+   */
+  removeRoute?(): Promise<void>;
 };
 
 /**
  * Whether the screens of setup are offered, and which: `look` runs on the
  * host's computer, `pair` needs a native dialog of the host's.
  */
-export type SetupOffer = { look: boolean; pair: boolean; platform: string };
+export type SetupOffer = {
+  look: boolean;
+  pair: boolean;
+  platform: string;
+  /** Another computer over SSH is offered (§5): the host can confirm and has a transport. */
+  ssh?: boolean;
+};

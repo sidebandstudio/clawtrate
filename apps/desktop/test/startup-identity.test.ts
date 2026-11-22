@@ -60,7 +60,8 @@ vi.mock("electron", () => {
   return {
     app,
     BrowserWindow,
-    dialog: {},
+    // A data folder the launch refuses shows this and quits: recorded, so the test says why.
+    dialog: { showErrorBox: (title: string) => calls.push(`showErrorBox ${title}`) },
     ipcMain: { handle() {}, on() {} },
     nativeImage: { createFromBitmap: () => ({}) },
     nativeTheme: { shouldUseDarkColors: false },
@@ -109,8 +110,22 @@ afterEach(() => {
 async function startUp(os: NodeJS.Platform, packaged: boolean): Promise<string[]> {
   Object.defineProperty(process, "platform", { ...platform, value: os });
   recorded.packaged = packaged;
-  await import("../src/main/index.ts");
-  await vi.waitFor(() => expect(recorded.calls).toContain("window"));
+  // The launch's own lines, so a refused data folder names its reason and the folder that failed.
+  const lines: string[] = [];
+  const log = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  try {
+    await import("../src/main/index.ts");
+    await vi.waitFor(() =>
+      expect(
+        recorded.calls,
+        `${os}: ${lines.filter((l) => l.startsWith("[setup]")).join("; ")}`,
+      ).toContain("window"),
+    );
+  } finally {
+    log.mockRestore();
+  }
   return [...recorded.calls];
 }
 

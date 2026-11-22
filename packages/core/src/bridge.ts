@@ -24,7 +24,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import type { SetupHost, SetupOffer } from "./setup.ts";
+import { MAX_DESTINATION_CHARS, type SetupHost, type SetupOffer } from "./setup.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -82,6 +82,14 @@ export type BridgeCommand =
   | { type: "setupCancel" }
   | { type: "setupConnect" }
   | { type: "setupReset" }
+  /** Another computer (`setup.ts`): look there, trust or replace its key, start OpenClaw there. */
+  | { type: "setupThere"; destination: string }
+  | { type: "setupTrustKey" }
+  | { type: "setupReplaceKey" }
+  | { type: "setupStart" }
+  /** The SSH route: restore its forward now, or remove it (each confirmed by the host). */
+  | { type: "setupRetryRoute" }
+  | { type: "setupRemoveRoute" }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
   | { type: "retry" }
@@ -1056,7 +1064,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setupCancel":
     case "setupConnect":
     case "setupReset":
+    case "setupTrustKey":
+    case "setupReplaceKey":
+    case "setupStart":
+    case "setupRetryRoute":
+    case "setupRemoveRoute":
       return { type: command.type };
+    case "setupThere": {
+      // Bounded here; the host validates it against the destination pattern.
+      if (
+        typeof command.destination !== "string" ||
+        command.destination.length > MAX_DESTINATION_CHARS
+      )
+        throw new Error("That isn't an SSH host or alias Clawtrate can use.");
+      return { type: "setupThere", destination: command.destination };
+    }
     case "sendMessage": {
       const ids = command.attachmentIds ?? [];
       if (
@@ -1529,6 +1551,32 @@ class ViewerSession implements BridgeSession {
         if (command.type === "setupConnect") return setup.connect();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();
+      }
+      case "setupThere":
+      case "setupTrustKey":
+      case "setupReplaceKey":
+      case "setupStart":
+      case "setupRetryRoute":
+      case "setupRemoveRoute": {
+        const setup = policy.setup;
+        const missing = () => {
+          throw new Error("This host doesn't reach another computer over SSH.");
+        };
+        if (!setup) return missing();
+        switch (command.type) {
+          case "setupThere":
+            return setup.there ? setup.there(command.destination) : missing();
+          case "setupTrustKey":
+            return setup.trustKey ? setup.trustKey() : missing();
+          case "setupReplaceKey":
+            return setup.replaceKey ? setup.replaceKey() : missing();
+          case "setupStart":
+            return setup.start ? setup.start() : missing();
+          case "setupRetryRoute":
+            return setup.retryRoute ? setup.retryRoute() : missing();
+          default:
+            return setup.removeRoute ? setup.removeRoute() : missing();
+        }
       }
       case "suspend":
         return client.suspend();

@@ -12,6 +12,7 @@ import {
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   type ClawtrateClient,
+  type ApprovalPlace,
   type ClawtrateState,
   type SetupFailure,
   type SetupHost,
@@ -56,6 +57,8 @@ export type SetupControllerOptions = {
   /** The host's log: fixed lines only, never a program's output or a credential. */
   log?: (line: string) => void;
   now?: () => number;
+  /** Where the setup slice goes: the client's, unless a router shares it (`host.ts`). */
+  publish?: (next: SetupState) => void;
 };
 
 /**
@@ -98,7 +101,7 @@ export class SetupController implements SetupHost {
   constructor(options: SetupControllerOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
-    options.client.setSetup(this.state);
+    (options.publish ?? ((next) => options.client.setSetup(next)))(this.state);
     // Back to the first screen once a gateway set up here is let go.
     options.client.store.subscribe((state) => {
       if (this.state.phase === "done" && state.connection.status === "idle")
@@ -112,7 +115,18 @@ export class SetupController implements SetupHost {
 
   private publish(next: SetupState): void {
     this.state = next;
-    this.options.client.setSetup(next);
+    if (this.options.publish) this.options.publish(next);
+    else this.options.client.setSetup(next);
+  }
+
+  /** Where the owner approves a request for the gateway at `url` (§9), when this setup found it. */
+  placeFor(url: string): ApprovalPlace | null {
+    const found = this.found;
+    if (!found || found.url !== url) return null;
+    const profile = found.profile.name;
+    return profile === "default" || profile === "clawtrate"
+      ? { route: "this-computer", profile }
+      : null;
   }
 
   private log(line: string): void {
@@ -262,14 +276,16 @@ export class SetupController implements SetupHost {
     }
   }
 
-  reset(): void {
+  /** Back to the first screen; resolves once the connection setup opened is let go (or couldn't be). */
+  reset(): Promise<void> {
     this.attempt += 1;
     this.clearSlow();
     this.stopWatching();
     this.options.stopPrograms();
     this.found = null;
-    void this.closeOwned();
+    const closed = this.closeOwned();
     this.publish(initialSetupState);
+    return closed.then(() => undefined);
   }
 
   /**

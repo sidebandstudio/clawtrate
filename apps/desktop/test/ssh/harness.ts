@@ -36,8 +36,73 @@ export function testEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return env;
 }
 
+/** Run a fixture script in its own process group, as it would run under sshd. */
+export function runTestShell(
+  shell: string,
+  args: string[],
+  input: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve, reject) => {
+    // Keep the group leader until Node sees EOF from every writer to stdout.
+    // The fixture gets its usual signals and arguments. Only the leader has fd 3.
+    const supervise = [
+      "trap ':' TERM",
+      '"$@" 3<&-',
+      "status=$?",
+      "trap '' TERM",
+      "exec 1>&-",
+      "read -r release <&3",
+      'exit "$status"',
+    ].join("\n");
+    const child = spawn("/bin/sh", ["-c", supervise, "fixture", shell, ...args], {
+      env,
+      cwd,
+      detached: true,
+      stdio: ["pipe", "pipe", "ignore", "pipe"],
+    });
+    const inputPipe = child.stdin!;
+    const outputPipe = child.stdout!;
+    const releasePipe = child.stdio[3]!;
+    let stdout = "";
+    outputPipe.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    inputPipe.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    inputPipe.end(input);
+    const timer = setTimeout(() => {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
+        }
+      }
+      outputPipe.destroy();
+      inputPipe.destroy();
+      reject(new Error(`SSH fixture shell timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+    outputPipe.once("end", () => {
+      clearTimeout(timer);
+      releasePipe.destroy();
+    });
+    child.once("error", reject);
+    child.once("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout });
+    });
+  });
+}
+
+/**
+ * A fresh folder of the test's own. On macOS it is made in /tmp, not the
+ * per-user temporary folder, whose long path leaves no room for a forward's
+ * local socket (104 bytes) in the folders below it.
+ */
 export function tempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), prefix)));
 }
 
 export function keygen(path: string, type: "ed25519" | "ecdsa" = "ed25519"): void {
@@ -136,6 +201,8 @@ export function makeWorld(root: string): TestWorld {
     agent: "none",
     platform: process.platform,
     env: testEnv(),
+    // The test's stand-in `openclaw` has no launcher of its own: the scripts may run it.
+    launcher: () => true,
   };
   return {
     root,
@@ -146,10 +213,21 @@ export function makeWorld(root: string): TestWorld {
   };
 }
 
-/** A stand-in `openclaw` in the test home's first fixed place, answering from files the test writes. */
+/**
+ * A stand-in `openclaw` in the test home's first fixed place, answering from
+ * files the test writes. Beside the LOOK's commands it answers `qr --json
+ * --voice-node --url <url>` (from `qr-<profile>.json`, or by running
+ * `qr-<profile>.sh` when the test wrote one), `gateway start` and `gateway
+ * stop`, and appends every command's arguments, which carry no code, to
+ * `calls`.
+ */
 export function installStubOpenclaw(home: string): {
   setVersion(text: string): void;
   setStatus(profile: "default" | "clawtrate", json: unknown, exit?: number): void;
+  setCode(profile: "default" | "clawtrate", json: unknown, exit?: number): void;
+  setCodeScript(profile: "default" | "clawtrate", script: string): void;
+  setStart(profile: "default" | "clawtrate", exit: number): void;
+  calls(): string[];
 } {
   const bin = join(home, ".openclaw", "bin");
   const stub = join(home, ".openclaw", "stub");
@@ -160,10 +238,18 @@ export function installStubOpenclaw(home: string): {
     [
       "#!/bin/sh",
       'd="$HOME/.openclaw/stub"',
-      'case "$*" in',
-      '  --version) cat "$d/version" ;;',
-      '  "gateway status --json") cat "$d/status-default.json"; exit "$(cat "$d/exit-default")" ;;',
-      '  "--profile clawtrate gateway status --json") cat "$d/status-clawtrate.json"; exit "$(cat "$d/exit-clawtrate")" ;;',
+      'printf \'%s\\n\' "$*" >> "$d/calls"',
+      "p=default",
+      'if [ "${1:-}" = --profile ] && [ "${2:-}" = clawtrate ]; then p=clawtrate; shift 2; fi',
+      'case "$p $*" in',
+      '  "default --version") cat "$d/version" ;;',
+      '  "default gateway status --json") cat "$d/status-default.json"; exit "$(cat "$d/exit-default")" ;;',
+      '  "clawtrate gateway status --json") cat "$d/status-clawtrate.json"; exit "$(cat "$d/exit-clawtrate")" ;;',
+      '  "$p qr --json --voice-node --url ws://127.0.0.1:"*)',
+      '    if [ -f "$d/qr-$p.sh" ]; then exec /bin/sh "$d/qr-$p.sh" "$@"; fi',
+      '    cat "$d/qr-$p.json"; exit "$(cat "$d/qr-exit-$p")" ;;',
+      '  "$p gateway start") : > "$d/started-$p"; exit "$(cat "$d/start-exit-$p" 2>/dev/null || echo 0)" ;;',
+      '  "$p gateway stop") : > "$d/stopped-$p"; exit 0 ;;',
       "  *) exit 2 ;;",
       "esac",
       "",
@@ -175,6 +261,17 @@ export function installStubOpenclaw(home: string): {
     setStatus: (profile, json, exit = 0) => {
       writeFileSync(join(stub, `status-${profile}.json`), JSON.stringify(json, null, 2));
       writeFileSync(join(stub, `exit-${profile}`), String(exit));
+    },
+    setCode: (profile, json, exit = 0) => {
+      writeFileSync(join(stub, `qr-${profile}.json`), JSON.stringify(json));
+      writeFileSync(join(stub, `qr-exit-${profile}`), String(exit));
+    },
+    setCodeScript: (profile, script) =>
+      writeFileSync(join(stub, `qr-${profile}.sh`), script, { mode: 0o700 }),
+    setStart: (profile, exit) => writeFileSync(join(stub, `start-exit-${profile}`), String(exit)),
+    calls: () => {
+      const path = join(stub, "calls");
+      return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [];
     },
   };
 }
@@ -208,8 +305,15 @@ export function statusJson(options: {
       port: options.port,
       version: "2026.10.6",
     },
-    port: { port: options.port, status: "busy", listeners: [{ pid }] },
-    rpc: { ok: options.rpcOk ?? true, url: `ws://127.0.0.1:${options.port}` },
+    // A stopped service frees its port: nothing listens there, and the RPC fails.
+    port:
+      options.running === false
+        ? { port: options.port, status: "free", listeners: [] }
+        : { port: options.port, status: "busy", listeners: [{ pid }] },
+    rpc: {
+      ok: options.rpcOk ?? options.running !== false,
+      url: `ws://127.0.0.1:${options.port}`,
+    },
     extraServices: [],
   };
 }
@@ -249,6 +353,15 @@ export async function waitFor(check: () => boolean, ms: number, what: string): P
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/** Whether this sshd has `PerSourcePenalties` (OpenSSH 9.8 and later). */
+function penalties(): boolean {
+  const out = spawnSync(SSHD, ["-V"], { encoding: "utf8" });
+  const match = /OpenSSH_(\d+)\.(\d+)/.exec(`${out.stderr}${out.stdout}`);
+  if (!match) return false;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major > 9 || (major === 9 && minor >= 8);
 }
 
 export type TestSshd = {
@@ -302,6 +415,9 @@ export async function startSshd(
       "X11Forwarding no",
       // Sessions see the test's home, not the account's: their start-up files and the LOOK's places.
       `SetEnv HOME=${home} ZDOTDIR=${home}`,
+      // OpenSSH 9.8 and later refuse a source address for a while after refused sign-ins and the
+      // credential-free key probes these tests make by the dozen; this sshd is the test's own.
+      ...(penalties() ? ["PerSourcePenalties no"] : []),
       "LogLevel VERBOSE",
       "",
     ].join("\n");
@@ -449,11 +565,13 @@ export function httpGateway(): Promise<{
   });
 }
 
-/** A GET through a local port: the status code, or null when nothing answered as HTTP. */
-export function httpGet(port: number): Promise<number | null> {
+/** A GET through a local port or socket: the status code, or null when nothing answered as HTTP. */
+export function httpGet(local: number | string): Promise<number | null> {
   return new Promise((resolve) => {
     const request = httpRequest(
-      { host: "127.0.0.1", port, path: "/", timeout: 3000 },
+      typeof local === "number"
+        ? { host: "127.0.0.1", port: local, path: "/", timeout: 3000 }
+        : { socketPath: local, path: "/", timeout: 3000 },
       (response) => {
         response.resume();
         resolve(response.statusCode ?? null);
@@ -467,3 +585,17 @@ export function httpGet(port: number): Promise<number | null> {
     request.end();
   });
 }
+
+/**
+ * A token seal for tests, standing in for Electron's `safeStorage`: what it
+ * seals is the reversed bytes in base64 behind a marker, so a plain token
+ * never appears in what is written.
+ */
+export const testSeal = {
+  available: () => true,
+  seal: (plain: string) => `sealed:${Buffer.from(plain, "utf8").reverse().toString("base64")}`,
+  open: (sealed: string) =>
+    sealed.startsWith("sealed:")
+      ? Buffer.from(sealed.slice("sealed:".length), "base64").reverse().toString("utf8")
+      : null,
+};

@@ -1,13 +1,20 @@
 // The LOOK script, run on the other computer as `/bin/sh -s` with the script on
 // standard input (docs/design/setup.md, section 19), and the parser for what it
-// prints. The script is a constant; its one value is the run's request id,
-// which the host makes and validates. It looks only in fixed places and prints
-// one JSON line per fact between a begin and an end line carrying that id, so
-// anything a login start-up file printed before it is told apart and dropped.
-// Every program output travels as base64 and is checked here, in memory,
-// before any fact is returned; nothing raw is kept.
+// prints. The script is a constant; its values are the run's request id,
+// which the host makes and validates, and whether it may run the program it
+// finds (`remoteLauncherVerified`): without that it finds the program and runs
+// nothing. It clears every OPENCLAW_ variable the
+// login left, so no inherited profile, state, config or port changes what the
+// two profiles name, looks only in fixed places, and prints one JSON line per
+// fact between a begin and an end line carrying that id, so anything a login
+// start-up file printed before it is told apart and dropped. The program it
+// found is named with its checksum, so a later script runs that same file or
+// nothing. Every program output travels as base64 and is checked here, in
+// memory, before any fact is returned; nothing raw is kept.
 
 import { randomUUID } from "node:crypto";
+
+import { OLDEST_OPENCLAW_VERSION } from "@clawtrate/core";
 
 /** The fixed places, in order; the facts name a place by its index. */
 export const PROGRAM_PLACES = [
@@ -20,11 +27,35 @@ export const PROGRAM_PLACES = [
 
 export type ProgramPlace = (typeof PROGRAM_PLACES)[number];
 
+/**
+ * Clears every OPENCLAW_ variable the login set, or stops: an inherited
+ * profile, state folder, config path or port would change what the two
+ * profiles name. A variable that can't be cleared ends the script.
+ */
+export const CLEAR_OPENCLAW = String.raw`for v in $(env | sed -n 's/^\(OPENCLAW_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v" || exit 65; done`;
+
+/**
+ * Whether the LOOK, CODE and START may run the other computer's OpenClaw.
+ * Its launcher replays pending package-lifecycle work before it handles any
+ * command, `--version` included, so a command runs only in a version whose
+ * pinned source shows a read-only path past that branch (`READ_ONLY_VERSIONS`,
+ * docs/decisions.md, "What the look runs"). The LOOK can't read the version
+ * there without running the program, and none is verified yet: production
+ * runs it nowhere, and the found card offers Advanced instead. A test's world
+ * names its own stand-in.
+ */
+export const remoteLauncherVerified = (): boolean => false;
+
 /** The script's body. Edit with care: a test runs it under several shells and a hostile login. */
 export const LOOK_SCRIPT_BODY = String.raw`set -eu
 case "$request_id" in
   *[!0-9a-f-]*|'') exit 64 ;;
 esac
+case "$run_launcher" in
+  0|1) ;;
+  *) exit 64 ;;
+esac
+${CLEAR_OPENCLAW}
 # Stop after 30 seconds, whatever is still running.
 ( sleep 30 </dev/null >/dev/null 2>&1 & s=$!
   trap 'kill "$s" 2>/dev/null; exit 0' TERM
@@ -38,7 +69,7 @@ line uname ",\"s\":\"$(uname -s </dev/null 2>/dev/null | b64 256 || true)\",\"m\
 prog=''
 i=0
 for p in "$HOME/.openclaw/bin/openclaw" /opt/homebrew/bin/openclaw /usr/local/bin/openclaw "$HOME/.local/bin/openclaw" "$HOME/.npm-global/bin/openclaw"; do
-  if [ -z "$prog" ] && [ -f "$p" ] && [ -x "$p" ]; then prog=$p; line program ",\"i\":$i"; fi
+  if [ -z "$prog" ] && [ -f "$p" ] && [ -x "$p" ]; then prog=$p; line program ",\"i\":$i,\"c\":\"$(cksum < "$p" 2>/dev/null | b64 64 || true)\""; fi
   i=$((i + 1))
 done
 exec 4>&1
@@ -51,7 +82,7 @@ run() {
   case "$code" in ''|*[!0-9]*) code=255 ;; esac
   printf '","exit":%s}\n' "$code"
 }
-if [ -n "$prog" ]; then
+if [ -n "$prog" ] && [ "$run_launcher" = 1 ]; then
   run version --version
   run status-default gateway status --json
   if [ -d "$HOME/.openclaw-clawtrate" ]; then
@@ -66,10 +97,19 @@ line end ",\"id\":\"$request_id\""
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The script as sent: the one assignment the host writes, then the constant body. */
-export function lookScript(requestId: string = randomUUID()): { requestId: string; text: string } {
+/**
+ * The script as sent: the two assignments the host writes, then the constant
+ * body. With `launcher` false (the default) it runs no program.
+ */
+export function lookScript(
+  requestId: string = randomUUID(),
+  launcher = false,
+): { requestId: string; text: string } {
   if (!REQUEST_ID.test(requestId)) throw new Error("Not a request id.");
-  return { requestId, text: `request_id='${requestId}'\n${LOOK_SCRIPT_BODY}` };
+  return {
+    requestId,
+    text: `request_id='${requestId}'\nrun_launcher='${launcher ? 1 : 0}'\n${LOOK_SCRIPT_BODY}`,
+  };
 }
 
 export type Version = { year: number; month: number; day: number; build: string | null };
@@ -79,6 +119,10 @@ export type ServiceLabel = "LaunchAgent" | "systemd user" | "systemd" | "Schedul
 export type GatewayStatus = {
   profile: "default" | "clawtrate";
   exit: number;
+  /** What the status said of the gateway's port: "free" or "busy", or null when it didn't say. */
+  portStatus: "free" | "busy" | null;
+  /** The address its RPC probe answered on, as reported. */
+  rpcUrl: string | null;
   service: {
     label: ServiceLabel;
     loaded: boolean | null;
@@ -90,15 +134,19 @@ export type GatewayStatus = {
   bindMode: "loopback" | "lan" | "tailnet" | "auto" | "custom" | null;
   version: Version | null;
   rpcOk: boolean | null;
-  /** The processes OpenClaw saw listening on the gateway's port. */
-  listenerPids: number[];
+  /** The processes OpenClaw saw listening on the gateway's port; null when the list was missing or unreadable. */
+  listenerPids: number[] | null;
 };
 
 export type LookFacts = {
   system: { os: string; machine: string; nodeName: string } | null;
   program: ProgramPlace | null;
+  /** The program file's `cksum` ("<crc> <size>"), so a later script runs this same file or nothing. */
+  programSum: string | null;
   /** From `openclaw --version`; null when no program, "unreadable" when it answered something else. */
   version: Version | "unreadable" | null;
+  /** A program was found and the LOOK ran nothing of it (`remoteLauncherVerified`). */
+  launcherHeld?: true;
   gateways: Array<
     GatewayStatus | { profile: "default" | "clawtrate"; exit: number; unreadable: true }
   >;
@@ -146,6 +194,8 @@ export const MAX_LOOK_NOISE = 16 * 1024;
 /** The most the host reads of a LOOK: the largest whole LOOK and the noise allowance, 148,877. */
 export const MAX_LOOK_OUTPUT = MAX_LOOK_FACTS + MAX_LOOK_NOISE;
 
+/** What `cksum` prints for standard input: the CRC and the size, in decimal. */
+export const PROGRAM_SUM = /^[0-9]{1,10} [0-9]{1,20}$/;
 const VERSION = /^OpenClaw (\d{4})\.(\d{1,2})\.(\d{1,3})( \(([0-9a-f]{7,12})\))?$/;
 const GATEWAY_VERSION = /^(\d{4})\.(\d{1,2})\.(\d{1,3})$/;
 const SYSTEM_WORD = /^[A-Za-z0-9_.-]{1,64}$/;
@@ -211,10 +261,14 @@ export function parseGatewayStatus(
   const listenerPids =
     Array.isArray(listeners) && listeners.length <= 16
       ? listeners.map((listener) => pid(record(listener)?.pid))
-      : [];
+      : null;
+  const rpcUrl = typeof rpc?.url === "string" && rpc.url.length <= 64 ? rpc.url : null;
   return {
     profile,
     exit,
+    portStatus:
+      portStatus?.status === "free" ? "free" : portStatus?.status === "busy" ? "busy" : null,
+    rpcUrl,
     service: service
       ? {
           label:
@@ -251,16 +305,21 @@ export function parseGatewayStatus(
         }
       : null,
     rpcOk: bool(rpc?.ok),
-    listenerPids: listenerPids.every((value): value is number => value !== null)
-      ? listenerPids
-      : [],
+    listenerPids:
+      listenerPids !== null && listenerPids.every((value): value is number => value !== null)
+        ? listenerPids
+        : null,
   };
 }
 
 const flag = (value: unknown) => (value === 0 || value === 1 ? value === 1 : null);
 
-/** The script's standard output, parsed in memory. */
-export function parseLookOutput(stdout: string, requestId: string): LookParse {
+/**
+ * The script's standard output, parsed in memory. `launcher`: whether the
+ * script was allowed to run the program; when it wasn't, any answer of the
+ * program is malformed.
+ */
+export function parseLookOutput(stdout: string, requestId: string, launcher = true): LookParse {
   if (stdout.length > MAX_LOOK_OUTPUT) return { ok: false, reason: "too-large" };
   const lines = stdout.split("\n").map((line) => line.replace(/\r$/, ""));
   const begin = lines.findIndex((line) => line === `{"k":"begin","id":"${requestId}"}`);
@@ -271,6 +330,7 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
   const facts: LookFacts = {
     system: null,
     program: null,
+    programSum: null,
     version: null,
     gateways: [],
     signs: {
@@ -300,16 +360,15 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
       case "end": {
         if (fact.id !== requestId) return { ok: false, reason: "malformed" };
         // Every fact the script always prints, and each the program and the state it found call for.
+        const ran = Boolean(facts.program) && launcher;
         const needed = ["uname", "signs"];
-        if (facts.program) needed.push("version", "status-default");
-        if (facts.signs.clawtrateState && facts.program) needed.push("status-clawtrate");
+        if (ran) needed.push("version", "status-default");
+        if (facts.signs.clawtrateState && ran) needed.push("status-clawtrate");
         if (needed.some((name) => !seen.has(name))) return { ok: false, reason: "incomplete" };
-        if (
-          !facts.program &&
-          ["version", "status-default", "status-clawtrate"].some((n) => seen.has(n))
-        ) {
+        if (!ran && ["version", "status-default", "status-clawtrate"].some((n) => seen.has(n))) {
           return { ok: false, reason: "malformed" };
         }
+        if (facts.program && !launcher) facts.launcherHeld = true;
         return { ok: true, facts, noiseLines: begin };
       }
       case "uname": {
@@ -331,6 +390,8 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
         const place = typeof fact.i === "number" ? PROGRAM_PLACES[fact.i] : undefined;
         if (!place) return { ok: false, reason: "malformed" };
         facts.program = place;
+        const sum = decode(fact.c)?.trim() ?? null;
+        facts.programSum = sum !== null && PROGRAM_SUM.test(sum) ? sum : null;
         break;
       }
       case "version": {
@@ -392,24 +453,73 @@ export type FoundService = { ok: true; service: GatewayService; holdsPort: true 
  * every listener on the port. A service that reports itself stopped is
  * "not-running"; anything less certain is "cant-tell".
  */
+/**
+ * The one verdict of "stopped", for the found card's Start and the forward's
+ * "OpenClaw stopped": the status command succeeded, a loaded service of a
+ * known kind reports itself stopped, the port is reported free with no
+ * listener, the gateway's RPC failed, and the installed CLI is one setup
+ * supports. Anything less, or anything that disagrees, is not proven.
+ */
+export function provenStopped(status: GatewayStatus, cli: LookFacts["version"]): boolean {
+  if (cli === null || cli === "unreadable") return false;
+  const [year, month, day] = OLDEST_OPENCLAW_VERSION.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const supported = cli.year - year || cli.month - month || cli.day - day;
+  return (
+    status.exit === 0 &&
+    status.service !== null &&
+    status.service.label !== "other" &&
+    status.service.loaded === true &&
+    status.service.running === false &&
+    status.port !== null &&
+    status.configPath !== null &&
+    status.portStatus === "free" &&
+    status.listenerPids !== null &&
+    status.listenerPids.length === 0 &&
+    status.rpcOk === false &&
+    supported >= 0
+  );
+}
+
 export function serviceOnPort(
   facts: LookFacts,
   port: number,
-): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" } {
+  /** The profile whose status is asked; without it, the first status that names the port. */
+  profile?: "default" | "clawtrate",
+): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" | "endpoint" } {
   for (const gateway of facts.gateways) {
+    if (profile !== undefined && gateway.profile !== profile) continue;
     if ("unreadable" in gateway) return { ok: false, reason: "cant-tell" };
     if (gateway.port !== port) continue;
     const service = gateway.service;
     if (gateway.exit !== 0 || !service || !gateway.configPath || service.label === "other") {
       return { ok: false, reason: "cant-tell" };
     }
-    if (service.running === false) return { ok: false, reason: "not-running" };
-    if (service.running !== true || service.loaded !== true || gateway.rpcOk !== true) {
+    if (service.running === false) {
+      // Stopped only as the found card's Start judges it (`provenStopped`).
+      return provenStopped(gateway, facts.version)
+        ? { ok: false, reason: "not-running" }
+        : { ok: false, reason: "cant-tell" };
+    }
+    if (
+      service.running !== true ||
+      service.loaded !== true ||
+      gateway.rpcOk !== true ||
+      gateway.portStatus !== "busy" ||
+      gateway.version === null
+    ) {
       return { ok: false, reason: "cant-tell" };
     }
+    // The RPC answered at exactly the gateway's loopback endpoint: a tailnet or custom bind is
+    // probed elsewhere, and Clawtrate can't establish the loopback endpoint it forwards to.
+    if (gateway.rpcUrl !== `ws://127.0.0.1:${port}`) return { ok: false, reason: "endpoint" };
     const pid = service.pid;
     if (
       pid === null ||
+      gateway.listenerPids === null ||
       gateway.listenerPids.length === 0 ||
       gateway.listenerPids.some((each) => each !== pid)
     ) {

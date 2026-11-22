@@ -8,7 +8,7 @@ function fixture() {
   let state: ClawtrateState = initialState;
   const timers: Array<{ ms: number; run: () => void }> = [];
   const set = (next: ClawtrateState) => void (state = next);
-  const send = (type: "setupLook" | "setupCancel" | "setupConnect" | "setupReset") =>
+  const send = (type: "setupLook" | "setupCancel" | "setupConnect" | "setupReset" | "setupStart") =>
     setupCommand(
       { type },
       () => state,
@@ -46,5 +46,16 @@ describe("the fixture's setup answers", () => {
     f.send("setupConnect");
     for (const timer of f.timers.slice(first - 3, first)) timer.run();
     expect(f.setup()).toMatchObject({ phase: "connecting", step: 0 });
+  });
+
+  it("a Start reset before it finished doesn't come back as the running card", () => {
+    const f = fixture();
+    f.send("setupLook");
+    f.runUntil(900);
+    f.send("setupStart");
+    const start = f.timers.length;
+    f.send("setupReset");
+    for (const timer of f.timers.slice(start - 1)) timer.run();
+    expect(f.setup()?.phase).toBe("idle");
   });
 });

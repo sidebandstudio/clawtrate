@@ -11,6 +11,7 @@ import {
 } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { ROUTE_CHANNEL_URL } from "../client.ts";
 import type {
   ClawtrateHost,
   ClientIdentity,
@@ -124,12 +125,28 @@ export type NodeHostOptions = {
   client: ClientIdentity;
   log?: ClawtrateHost["log"];
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
+  /** Wraps the file store: the desktop host keeps each route's device token in its route store. */
+  wrapStorage?: (store: KeyValueStore) => KeyValueStore;
+  /**
+   * The host's own socket for an address it holds (an SSH route's forward), or
+   * null for any other address, which gets the built-in WebSocket.
+   */
+  routeSocket?: (url: string) => WebSocketLike | null;
 };
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
   return {
-    createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
-    storage: createFileStore(join(options.dataDir, "state.json")),
+    createWebSocket: (url) => {
+      const routed = options.routeSocket?.(url);
+      if (routed) return routed;
+      // A route channel's address goes only over its host's private socket: with none, refused.
+      if (ROUTE_CHANNEL_URL.test(url))
+        throw new Error("That route's channel has no private socket here.");
+      return new WebSocket(url) as unknown as WebSocketLike;
+    },
+    storage: (options.wrapStorage ?? ((store) => store))(
+      createFileStore(join(options.dataDir, "state.json")),
+    ),
     signer: createFileSigner(join(options.dataDir, "device-key.pem")),
     client: options.client,
     ...(options.log ? { log: options.log } : {}),

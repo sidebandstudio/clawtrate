@@ -134,7 +134,10 @@ export const READ_ONLY_VERSIONS: ReadonlySet<string> = new Set();
  * running it: the launcher `openclaw.mjs` it resolves to, beside the package's
  * own `package.json` named "openclaw". Null when it isn't that.
  */
-async function installedVersion(program: string): Promise<string | null> {
+export async function installedVersion(
+  program: string,
+  maxManifestBytes: number,
+): Promise<string | null> {
   try {
     const launcher = await realpath(program);
     if (basename(launcher) !== "openclaw.mjs") return null;
@@ -142,15 +145,15 @@ async function installedVersion(program: string): Promise<string | null> {
     const file = await open(manifest, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
       const info = await file.stat();
-      if (!info.isFile() || info.size > MAX_MANIFEST_BYTES) return null;
-      const bytes = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+      if (!info.isFile() || info.size > maxManifestBytes) return null;
+      const bytes = Buffer.alloc(maxManifestBytes + 1);
       let size = 0;
       while (size < bytes.length) {
         const { bytesRead } = await file.read(bytes, size, bytes.length - size);
         if (bytesRead === 0) break;
         size += bytesRead;
       }
-      if (size > MAX_MANIFEST_BYTES) return null;
+      if (size > maxManifestBytes) return null;
       const parsed = JSON.parse(bytes.toString("utf8", 0, size)) as {
         name?: unknown;
         version?: unknown;
@@ -169,7 +172,7 @@ async function installedVersion(program: string): Promise<string | null> {
 export async function readOnlyProgram(
   program: string,
 ): Promise<{ verified: boolean; version: string | null }> {
-  const version = await installedVersion(program);
+  const version = await installedVersion(program, MAX_MANIFEST_BYTES);
   return { verified: version !== null && READ_ONLY_VERSIONS.has(version), version };
 }
 

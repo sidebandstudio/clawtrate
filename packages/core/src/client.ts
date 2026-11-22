@@ -470,13 +470,42 @@ export const MAX_SPAWN_LINKS = 200;
 const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
+/** Token writes a routed connection holds until its identity matched (`holdForRoute`). */
+export const MAX_ROUTE_HELD_WRITES = 4;
+/**
+ * What one held write keeps in memory at most, in JSON characters: a device
+ * token record (its token, device id, role and scopes). A gateway's token is
+ * well under it; a write past it is not held, so its token isn't kept.
+ */
+export const MAX_ROUTE_HELD_WRITE_CHARS = 8 * 1024;
 
 export type ConnectionSettings = {
   url: string;
   token: string | null;
   /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
   suspended?: boolean;
+  /**
+   * The route this connection belongs to, when the host reaches the gateway
+   * through a route of its own (docs/decisions.md, "Routes"): an SSH route's
+   * `url` is its forward's local address, which changes, so the device token is
+   * kept for the route, never for that address. A routed connection is opened
+   * only by its host (`connectRoute`), never resumed by the client itself.
+   */
+  route?: string;
 };
+
+/** A route's key: its kind and 24 hex digits of the host's digest of what identifies it. */
+export const ROUTE_KEY = /^(?:ssh|here)-[0-9a-f]{24}$/;
+
+/**
+ * A route channel's address: it resolves nowhere, so only its host's own
+ * private socket ever carries it, never a socket of the host's built-in kind.
+ */
+export const ROUTE_CHANNEL_URL = /^ws:\/\/c[0-9a-f]{16}\.ssh\.invalid$/;
+
+/** What a device token is kept for: the gateway URL, or a route. */
+const credentialOf = (settings: Pick<ConnectionSettings, "url" | "route">) =>
+  settings.route ? `route:${settings.route}` : settings.url;
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -494,6 +523,12 @@ export type ClientOptions = {
    * a saved one resumed at start and every retry.
    */
   allowGatewayUrl?: (url: string) => boolean;
+  /**
+   * The host's way back to a route after Disconnect (`retryNow`): a routed
+   * connection's address belongs to one forward of its host, so only the host
+   * can open the route again. Without it, Reconnect reopens the saved address.
+   */
+  reopenRoute?: (route: string) => Promise<void>;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
   /** Turn limit for runs this client starts. */
@@ -637,6 +672,12 @@ export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
 export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
 /** A setup reuse found no saved token for its gateway any more: a new consent is needed. */
 export const SETUP_PAIRING_GONE = "SETUP_PAIRING_GONE";
+/** A routed connection's gateway identity couldn't be read after its hello: nothing was used. */
+export const ROUTE_IDENTITY_UNREAD = "ROUTE_IDENTITY_UNREAD";
+/** A routed connection's gateway answered with another identity than the route's: nothing was used. */
+export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
+/** A routed connection's token or connection couldn't be saved on this device: the attempt ended. */
+export const ROUTE_NOT_SAVED = "ROUTE_NOT_SAVED";
 /** A new setup pairing found a saved token for its gateway: consent to reuse it is needed first. */
 export const SETUP_PAIRING_APPEARED = "SETUP_PAIRING_APPEARED";
 /** An ordinary connection's refusal whose code the pinned protocol doesn't name. A code of the client's own. */
@@ -915,6 +956,8 @@ export class ClawtrateClient {
     null;
   /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
   private heldToken: string | null = null;
+  /** The route whose gateway the state shows, or null for one reached by its address. */
+  private shownRoute: string | null = null;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -1112,14 +1155,26 @@ export class ClawtrateClient {
   private epoch = 0;
   /** The gateway's identity as read on the connection of `epoch`, once asked. */
   private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
+  /** The identity a routed connection must find after each hello; null until its first read. */
+  private routeIdentity: { route: string; identity: string | null } | null = null;
+  /**
+   * Every socket this client opens, numbered: a protocol retry on the same
+   * connection is a new socket. `routeSocket` is the open one's number, 0
+   * while none is.
+   */
+  private socketSeq = 0;
+  private routeSocket = 0;
+  /** The routed socket, by number, whose gateway identity matched after its own hello. */
+  private routeVerified: number | null = null;
+  /** A routed socket's token writes, held in memory until its identity matched. */
+  private routeHeldWrites: Array<() => Promise<void>> = [];
+  /** The socket, by number, whose writes `routeHeldWrites` holds. */
+  private routeHeldFor: number | null = null;
   /** Check-in reads begun; only the latest one's answer is shown. */
   private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
-    request: (method, params, options) => {
-      if (!this.protocol) return Promise.reject(new NotSentError());
-      return this.protocol.request(method, params, options);
-    },
+    request: (method, params, options) => this.request(method, params, options),
     get: () => this.state.accounts,
     update: (change) =>
       this.store.update((state) => ({ ...state, accounts: change(state.accounts) })),
@@ -1143,10 +1198,7 @@ export class ClawtrateClient {
   });
   /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
   private readonly routines = new RoutinesEngine({
-    request: (method, params) => {
-      if (!this.protocol) return Promise.reject(new NotSentError());
-      return this.protocol.request(method, params);
-    },
+    request: (method, params) => this.request(method, params),
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
@@ -1256,6 +1308,9 @@ export class ClawtrateClient {
     if (options.resume === false) return;
     const settings = await this.savedSettings();
     if (stops !== this.stops) return;
+    // A route's address is its host's to open again: the client never resumes one by itself.
+    // A route the person disconnected stays chosen, disconnected, so Reconnect asks its host.
+    if (settings?.route && !settings.suspended) return;
     this.settings = settings;
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
@@ -1377,6 +1432,125 @@ export class ClawtrateClient {
     return (await this.loadToken(validateGatewayUrl(url), identity.deviceId, "operator")) !== null;
   }
 
+  /** Whether this device holds a token for `route` (`ROUTE_KEY`). */
+  async hasRouteToken(route: string): Promise<boolean> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    const identity = await this.loadIdentity();
+    return (await this.loadToken(`route:${route}`, identity.deviceId, "operator")) !== null;
+  }
+
+  /** Drops this device's token for `route`: the route was removed, or leads elsewhere now. */
+  async dropRouteToken(route: string): Promise<void> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    const identity = await this.loadIdentity();
+    await this.host.storage.delete(this.tokenKey(`route:${route}`, identity.deviceId, "operator"));
+  }
+
+  /** The route of the connection, if the host opened it through one. */
+  get route(): string | null {
+    return this.settings?.route ?? null;
+  }
+
+  /** Whether the person chose Disconnect: nothing reconnects until Reconnect. */
+  get suspended(): boolean {
+    return this.settings?.suspended === true;
+  }
+
+  /**
+   * Connect through a route the host holds open (docs/design/setup.md §7, §8):
+   * `url` is where the route answers now, `route` the key its device token is
+   * kept for. With a setup code, as `connectWithSetupCode`: the first token is
+   * written for the route only for the operator role and exactly read. Without
+   * one, the route's own token, as `connectForSetup` when `setup` is set, else
+   * as an ordinary reconnect. Reopening the same route keeps what is on screen.
+   */
+  async connectRoute(options: {
+    url: string;
+    route: string;
+    code?: { bootstrapToken: string; expiresAtMs: number };
+    setup?: SetupEndpointCheck;
+    /**
+     * The gateway identity the route recorded, or null before its first. After
+     * every hello on this route the identity is read before anything else is
+     * asked or allowed; one that differs, or none, ends the connection.
+     */
+    identity?: string | null;
+  }): Promise<void> {
+    // Numbered as it is asked, as every choice of gateway is, even one refused below.
+    const selection = ++this.selectionAsked;
+    const url = validateGatewayUrl(options.url);
+    if (!ROUTE_KEY.test(options.route)) throw new Error("Not a route key.");
+    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+    const stops = this.stops;
+    return this.changeConnection(async () => {
+      if (stops !== this.stops) return;
+      const setup = options.setup ?? (options.code ? {} : null);
+      // A route the person disconnected meanwhile isn't reopened by a reconnect asked before.
+      if (!setup && this.settings?.route === options.route && this.settings.suspended) return;
+      const next: ConnectionSettings = { url, token: null, route: options.route };
+      // An ordinary reconnect of a route is saved before anything changes here: one that can't
+      // be saved leaves the connection that stays open, and its selection, as they are. A
+      // pairing's is saved only once its token and identity were checked.
+      if (!options.code && !setup) await this.host.storage.set(SETTINGS_KEY, JSON.stringify(next));
+      this.selectionApplied = selection;
+      if (this.settings?.route !== options.route)
+        this.abandonAccessRequest("Switched to another gateway.");
+      this.routeIdentity = { route: options.route, identity: options.identity ?? null };
+      this.settings = next;
+      this.pairingSeen = null;
+      this.setupCheck = setup ? setupCheckFor(url, setup) : null;
+      this.setupIntent = setup ? { url, reuse: !options.code } : null;
+      this.setupCode = options.code
+        ? {
+            url,
+            bootstrapToken: options.code.bootstrapToken,
+            expiresAtMs: options.code.expiresAtMs,
+          }
+        : null;
+      if (stops === this.stops) await this.open();
+    });
+  }
+
+  /**
+   * The route was removed: the saved connection that names it is forgotten,
+   * whether the route is the current connection or only the one kept across a
+   * restart or Disconnect. A connection to anything else is left alone.
+   */
+  async forgetRoute(route: string): Promise<void> {
+    if (!ROUTE_KEY.test(route)) throw new Error("Not a route key.");
+    const asked = ++this.selectionAsked;
+    // Asked inside the queue: a Connect queued before this one may have selected another route.
+    await this.changeConnection(async () => {
+      // The saved connection goes only if it names this route: a route still pairing is selected
+      // in memory alone, and the gateway saved before it stays saved.
+      const saved = await this.savedSettings();
+      if (saved?.route === route) await this.host.storage.delete(SETTINGS_KEY);
+      if (this.settings?.route === route) await this.disconnectNow(asked, { keepSaved: true });
+    });
+  }
+
+  /**
+   * The route's way to the gateway is down (its forward is being restored):
+   * the socket closes and nothing is retried until the host connects the route
+   * again, so nothing is sent to an address the route no longer holds. What is
+   * on screen stays.
+   */
+  holdRoute(route: string): void {
+    if (this.settings?.route !== route) return;
+    this.close();
+    this.setupCheck = null;
+    if (this.state.connection.status !== "idle")
+      // No connection, no effective access; the next hello says what is granted.
+      this.setConnection({
+        status: this.everConnected ? "reconnecting" : "connecting",
+        retryAt: null,
+        canWrite: false,
+        canAnswer: false,
+        canApprove: false,
+        canAdmin: false,
+      });
+  }
+
   /** The host's setup slice: what its look found and where setup stands. */
   setSetup(next: SetupState | undefined): void {
     this.setupSlice = next;
@@ -1401,26 +1575,48 @@ export class ClawtrateClient {
       if (selection !== undefined && this.selectionApplied !== selection) {
         throw new GatewayChangedError();
       }
-      // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
-      // and stays the selection it was.
-      await this.host.storage.delete(SETTINGS_KEY);
-      this.selectionApplied = asked;
-      this.abandonAccessRequest("Disconnected from the gateway.");
-      this.close();
-      this.setupCode = null;
-      this.setupCheck = null;
-      this.setupIntent = null;
-      this.settings = null;
-      this.pairingSeen = null;
-      this.rows = new Map();
-      this.raw.clear();
-      this.retained.clear();
-      this.forgetGatewayState();
-      this.store.set({
-        ...initialState,
-        turnLimitMinutes: this.turnLimitMs / 60_000,
-        connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
-      });
+      // And it forgets the saved connection only if that is the selection it lets go: one still
+      // pairing, never saved, leaves the gateway saved before it as it was.
+      const keepSaved = selection !== undefined && !this.namesSelection(await this.savedSettings());
+      await this.disconnectNow(asked, { keepSaved });
+    });
+  }
+
+  /** Whether `saved` is the connection selected now: the same route, or the same plain address. */
+  private namesSelection(saved: ConnectionSettings | null): boolean {
+    const current = this.settings;
+    if (!saved || !current) return false;
+    return current.route
+      ? saved.route === current.route
+      : !saved.route && saved.url === current.url;
+  }
+
+  /**
+   * Disconnect's work, inside the connection queue, as the selection `asked`.
+   * With `keepSaved`, the saved connection is left as it is (the caller
+   * decided it).
+   */
+  private async disconnectNow(asked: number, { keepSaved = false } = {}): Promise<void> {
+    if (!this.settings) return;
+    // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
+    // and stays the selection it was.
+    if (!keepSaved) await this.host.storage.delete(SETTINGS_KEY);
+    this.selectionApplied = asked;
+    this.abandonAccessRequest("Disconnected from the gateway.");
+    this.close();
+    this.setupCode = null;
+    this.setupCheck = null;
+    this.setupIntent = null;
+    this.settings = null;
+    this.pairingSeen = null;
+    this.rows = new Map();
+    this.raw.clear();
+    this.retained.clear();
+    this.forgetGatewayState();
+    this.store.set({
+      ...initialState,
+      turnLimitMinutes: this.turnLimitMs / 60_000,
+      connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
     });
   }
 
@@ -1430,6 +1626,7 @@ export class ClawtrateClient {
    */
   async retryNow(): Promise<void> {
     const stops = this.stops;
+    let reopen: string | null = null;
     // The reload runs outside the queue: it changes nothing saved.
     const reload = await this.changeConnection(async () => {
       if (!this.settings || stops !== this.stops) return null;
@@ -1437,10 +1634,21 @@ export class ClawtrateClient {
       if (this.protocol?.connected && this.state.connection.status === "connected") {
         return this.generation;
       }
+      // A route's address is its host's forward of the moment: only the host opens the route
+      // again, and without one nothing is reopened, the route staying disconnected.
+      if (this.settings.route && !this.options.reopenRoute) return null;
       if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
+      if (this.settings.route) {
+        reopen = this.settings.route;
+        return null;
+      }
       if (stops === this.stops) await this.open();
       return null;
     });
+    if (reopen !== null && stops === this.stops) {
+      await this.options.reopenRoute!(reopen);
+      return;
+    }
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
 
@@ -1450,7 +1658,25 @@ export class ClawtrateClient {
    */
   async suspend(): Promise<void> {
     return this.changeConnection(async () => {
-      if (!this.settings) return;
+      if (!this.settings) {
+        // A route its host is still opening at launch is saved though not loaded here: it is the
+        // one disconnected, and stays chosen for Reconnect.
+        const saved = await this.savedSettings();
+        if (!saved?.route) return;
+        await this.saveSettings({ ...saved, suspended: true });
+        this.setConnection({ status: "disconnected", gatewayUrl: saved.url, retryAt: null });
+        return;
+      }
+      // A route still pairing is selected in memory alone, never saved: Disconnect cancels it,
+      // and the connection saved before it stays as it was. Its host offers Pair again.
+      if (
+        this.settings.route &&
+        this.isSetup(this.settings.url) &&
+        !this.namesSelection(await this.savedSettings())
+      ) {
+        await this.disconnectNow(++this.selectionAsked, { keepSaved: true });
+        return;
+      }
       // Saved, so a restart does not reconnect by itself.
       await this.saveSettings({ ...this.settings, suspended: true });
       // The connection stops: writes waiting for access fail, as on any lost connection.
@@ -1673,7 +1899,10 @@ export class ClawtrateClient {
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
     const upgrade = new GatewayScopeUpgrade({
-      request: (method, params, options) => protocol.request(method, params, options),
+      request: (method, params, options) =>
+        this.routeGated()
+          ? Promise.reject(new NotSentError())
+          : protocol.request(method, params, options),
       tokenStore: {
         load: auth.tokenStore.load,
         clear: auth.tokenStore.clear,
@@ -1694,7 +1923,7 @@ export class ClawtrateClient {
             const within = withinAsked(scopes, target);
             const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
             const pairing = askedPairing && within.includes(PAIRING_SCOPE);
-            await this.writeToken(url, deviceId, role, {
+            await this.writeToken(credentialOf(this.settings), deviceId, role, {
               token,
               grantedScopes: within,
               heldScopes: [
@@ -4682,7 +4911,7 @@ export class ClawtrateClient {
         return {
           alive,
           request: (method, params, options) =>
-            protocol && alive()
+            protocol && alive() && !this.routeGated()
               ? protocol.request(method, params, options)
               : Promise.reject(new NotSentError()),
         };
@@ -5336,10 +5565,15 @@ export class ClawtrateClient {
       return;
     }
 
-    const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
+    const credential = credentialOf(settings);
+    const stored = await this.loadToken(credential, identity.deviceId, "operator");
     if (generation !== this.generation) return;
-    // Reopening the same gateway keeps what is on screen until fresh data arrives.
-    const sameGateway = this.state.connection.gatewayUrl === settings.url;
+    // Reopening the same gateway keeps what is on screen until fresh data arrives: the same
+    // address, or the same route at the address it answers on now.
+    const sameGateway = settings.route
+      ? this.shownRoute === settings.route
+      : this.shownRoute === null && this.state.connection.gatewayUrl === settings.url;
+    this.shownRoute = settings.route ?? null;
     const hasData = sameGateway && this.state.bots.length > 0;
     if (!sameGateway) {
       this.rows = new Map();
@@ -5372,7 +5606,7 @@ export class ClawtrateClient {
           ),
     }));
 
-    const tokenStore = this.connectionTokenStore(settings.url, generation);
+    const tokenStore = this.connectionTokenStore(settings.url, generation, credential);
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => {
         const loaded = await this.loadIdentity();
@@ -5441,6 +5675,12 @@ export class ClawtrateClient {
         let socket: WebSocketLike;
         endReads(current);
         current = null;
+        // A new socket, retries included: a routed one is gated until its own hello's identity
+        // read matched, and whatever the one it replaces held back goes.
+        const socketNumber = ++this.socketSeq;
+        this.routeSocket = socketNumber;
+        this.routeHeldWrites = [];
+        this.routeHeldFor = null;
         try {
           socket = this.host.createWebSocket(settings.url);
         } catch (error) {
@@ -5497,6 +5737,13 @@ export class ClawtrateClient {
           // A closed socket's reads stop, and whatever they started with them.
           mine.closed = true;
           endReads(mine);
+          // And it is retired: its identity read, failed or late, and what it held back count
+          // for nothing, and the protocol's retry starts gated on a socket of its own.
+          if (this.routeSocket === socketNumber) {
+            this.routeSocket = 0;
+            this.routeHeldWrites = [];
+            this.routeHeldFor = null;
+          }
           handlers.close(event.code, event.reason);
         };
         socket.onerror = () => handlers.error(new Error("WebSocket error"));
@@ -5516,7 +5763,7 @@ export class ClawtrateClient {
           if (generation !== this.generation || current !== mine)
             throw new Error("the connection was replaced");
         };
-        const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        const token = await this.loadToken(credential, identity.deviceId, "operator");
         stillCurrent();
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
@@ -5530,6 +5777,8 @@ export class ClawtrateClient {
           stillCurrent();
           if (!holds) throw new Error("the setup connection's endpoint changed");
         }
+        // A route's address is allowed only while its channel is the host's current one.
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         this.heldToken = token?.token ?? null;
         const setup = this.isSetup(settings.url);
         // A new pairing, keyed on the host's pending code for this address whether or not it has
@@ -5564,6 +5813,12 @@ export class ClawtrateClient {
           this.pairingGone();
           throw new Error("the saved pairing is gone");
         }
+        // Nor does a route without its token and without a code: no other credential is ever
+        // offered there.
+        if (settings.route !== undefined && !token && !newPairing) {
+          this.pairingGone();
+          throw new Error("the route's pairing is gone");
+        }
         // The host's one-time code, while it lives, for a device not yet paired with this gateway.
         const code =
           !token && this.setupCode?.url === settings.url && this.now() < this.setupCode.expiresAtMs
@@ -5590,6 +5845,7 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         // The plan as the lifecycle chose it, which may have read the store again, against the
         // consent given: a new pairing sends its code and never a stored token, a reuse sends
         // this device's token and nothing else.
@@ -5604,7 +5860,7 @@ export class ClawtrateClient {
             throw new Error("the setup connection's endpoint changed");
           }
           // And the saved pairing as it is after that last wait: still what the person agreed to.
-          const saved = await this.loadToken(settings.url, identity.deviceId, "operator");
+          const saved = await this.loadToken(credential, identity.deviceId, "operator");
           stillCurrent();
           if (newPairing && saved) {
             this.pairingAppeared();
@@ -5629,6 +5885,8 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
+        // And a route's address still its host's current channel, at the frame itself.
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         const code = this.setupCode;
         if (code?.url === settings.url && this.now() >= code.expiresAtMs) {
           this.setupEndpointChanged(settings.url, generation);
@@ -5656,6 +5914,8 @@ export class ClawtrateClient {
         };
       },
       onConnectHello: async (hello, context) => {
+        // The socket this hello came on: what it holds back, and its identity, are its own.
+        const helloSocket = this.routeSocket;
         // Still the protocol's current socket: one replaced since, on this same address and
         // connection, stages, writes and saves nothing, after any of these waits.
         const live = () => {
@@ -5682,6 +5942,7 @@ export class ClawtrateClient {
               scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
             },
             live,
+            helloSocket,
           );
         }
         if (!live()) return;
@@ -5708,32 +5969,56 @@ export class ClawtrateClient {
           }
           // The token stays a credential to take out of gateway text after its staging ends.
           this.heldToken = staged.token;
-          // A record saved meanwhile keeps what it holds, as a replacement token does. Queued
-          // with every other token change, so a late rejection cannot remove it.
-          const written = await this.changeConnection(async () => {
-            const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
-            if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
-              return false;
-            await this.writeToken(settings.url, staged.deviceId, staged.role, {
-              token: staged.token,
-              grantedScopes: [...staged.scopes],
-              heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
-              ...(existing?.adminHeld ? { adminHeld: true } : {}),
-              ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          const commit = async () => {
+            // A record saved meanwhile keeps what it holds, as a replacement token does. Queued
+            // with every other token change, so a late rejection cannot remove it.
+            const written = await this.changeConnection(async () => {
+              const existing = await this.loadToken(credential, staged.deviceId, staged.role);
+              if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
+                return false;
+              await this.writeToken(credential, staged.deviceId, staged.role, {
+                token: staged.token,
+                grantedScopes: [...staged.scopes],
+                heldScopes: existing ? [...existing.heldScopes] : [...READ_SCOPES],
+                ...(existing?.adminHeld ? { adminHeld: true } : {}),
+                ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+              });
+              return true;
             });
-            return true;
-          });
-          if (!written) return;
-          // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
-          await this.changeConnection(async () => {
-            const current = this.settings;
-            if (!live() || generation !== this.generation || current?.url !== settings.url) return;
-            await this.saveSettings(current);
-          });
+            if (!written) return;
+            // Queued with Connect and Disconnect, so it never saves a gateway forgotten meanwhile.
+            await this.changeConnection(async () => {
+              const current = this.settings;
+              if (!live() || generation !== this.generation || current?.url !== settings.url)
+                return;
+              await this.saveSettings(current);
+            });
+          };
+          // A route keeps the token only once its gateway said who it is (checkRouteIdentity).
+          if (!this.holdForRoute(helloSocket, commit, JSON.stringify(staged).length))
+            await commit();
           return;
         }
         // A setup that reused this device's pairing saves its gateway once its hello is in.
         const reuse = this.setupIntent?.url === settings.url && this.setupIntent.reuse;
+        // A route's reuse is saved only once this socket's gateway said who it is, held with its
+        // tokens (checkRouteIdentity): a save that fails then ends the attempt as not saved.
+        if (reuse && settings.route) {
+          const saveReuse = () =>
+            this.changeConnection(async () => {
+              const current = this.settings;
+              if (!live() || generation !== this.generation || current?.url !== settings.url)
+                return;
+              if (this.setupEndpointFails(settings.url, generation)) {
+                this.close();
+                return;
+              }
+              await this.saveSettings(current);
+            });
+          // It captures nothing but this connection's own fields: the settings are read when it runs.
+          if (!this.holdForRoute(helloSocket, saveReuse, 0)) await saveReuse();
+          return;
+        }
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
@@ -5783,6 +6068,12 @@ export class ClawtrateClient {
               protocol,
             },
           });
+          return;
+        }
+        // A route's gateway says who it is before anything is asked of it or allowed here.
+        if (settings.route) {
+          // This hello is the current socket's: its identity read is that socket's alone.
+          void this.checkRouteIdentity(hello, generation, settings.route, this.routeSocket);
           return;
         }
         this.handleHello(hello, generation);
@@ -5888,7 +6179,9 @@ export class ClawtrateClient {
         this.pendingResync = "gap";
       },
       onEvent: (event) => {
-        if (generation === this.generation) this.handleEvent(event, generation);
+        // A route's gateway sends nothing that counts here until its identity matched.
+        if (generation === this.generation && !this.routeGated())
+          this.handleEvent(event, generation);
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
@@ -5943,6 +6236,9 @@ export class ClawtrateClient {
     this.endSocketReads = () => {};
     // The replaced or stopped socket's credential is no longer needed to take it out of text.
     this.heldToken = null;
+    // Writes a route held for that socket's hello go with it (checkRouteIdentity).
+    this.routeHeldWrites = [];
+    this.routeHeldFor = null;
     this.invalidateCheckIns();
     this.accounts.onClose();
     this.routines.onClose();
@@ -6120,7 +6416,10 @@ export class ClawtrateClient {
       }
     }
 
-    const pause = setup || shouldPauseGatewayReconnect({ details: error.details });
+    // A route's refusal comes before its gateway said who it is: the attempt ends, and the
+    // token is kept (its forgetting waits for an identity that never matched, so it lapses).
+    const routeRefused = refused && Boolean(this.settings?.route);
+    const pause = setup || routeRefused || shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
@@ -7240,9 +7539,12 @@ export class ClawtrateClient {
   private request(
     method: string,
     params: unknown,
-    options?: { onSent?: (requestId: string) => void },
+    options?: Parameters<GatewayProtocolClient<Plan>["request"]>[2],
   ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
+    // A routed connection asks its gateway only who it is until that identity matched.
+    if (method !== "gateway.identity.get" && this.routeGated())
+      return Promise.reject(new NotSentError());
     // The log policy of the connection this goes out on: a late failure is logged with it,
     // never with that of a connection that replaced it.
     const quiet = this.quiet();
@@ -7250,6 +7552,34 @@ export class ClawtrateClient {
       if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
       throw error;
     });
+  }
+
+  /**
+   * Whether the current connection is a route's whose gateway identity hasn't
+   * matched yet (docs/decisions.md, "Routes"): only the handshake and
+   * `gateway.identity.get` pass; no request, event or token goes further.
+   */
+  private routeGated(): boolean {
+    return Boolean(this.settings?.route) && this.routeVerified !== this.routeSocket;
+  }
+
+  /**
+   * Holds a write of a routed connection's token in memory until its gateway's
+   * identity matches, and says so; false when nothing is held back.
+   */
+  private holdForRoute(socket: number, write: () => Promise<void>, size: number): boolean {
+    if (!this.settings?.route || this.routeVerified === socket) return false;
+    // A socket replaced since keeps nothing: its write is dropped, never held for another.
+    if (socket !== this.routeSocket) return true;
+    // Nor is a write larger than one held write keeps (`MAX_ROUTE_HELD_WRITE_CHARS`).
+    if (size > MAX_ROUTE_HELD_WRITE_CHARS) return true;
+    if (this.routeHeldFor !== socket) {
+      this.routeHeldFor = socket;
+      this.routeHeldWrites = [];
+    }
+    // One hello brings a token and at most its forgetting; anything past the bound is not kept.
+    if (this.routeHeldWrites.length < MAX_ROUTE_HELD_WRITES) this.routeHeldWrites.push(write);
+    return true;
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
@@ -7329,6 +7659,116 @@ export class ClawtrateClient {
           hint: null,
         },
       });
+  }
+
+  /** A route's address stopped being its host's current channel: nothing is signed or sent. */
+  private refuseRouteAddress(generation: number): never {
+    const url = this.settings?.url ?? "";
+    const current = generation === this.generation;
+    this.close();
+    this.dropSetupCredentials();
+    if (current)
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        error: {
+          code: "GATEWAY_NOT_ALLOWED",
+          message: new GatewayNotAllowedError(url).message,
+          hint: null,
+        },
+      });
+    throw new GatewayNotAllowedError(url);
+  }
+
+  /**
+   * After a routed connection's hello: the gateway's identity first, while
+   * the connection grants nothing here. The route's recorded identity must
+   * match; before its first, any identity read is the route's from then on.
+   * No identity, or another, closes the connection and nothing else is asked.
+   */
+  private async checkRouteIdentity(
+    hello: HelloOk,
+    generation: number,
+    route: string,
+    socket: number,
+  ) {
+    const expected = this.routeIdentity?.route === route ? this.routeIdentity.identity : null;
+    const id = await this.readGatewayIdentity();
+    // The read of a socket replaced since says nothing of the current one.
+    const ours = () =>
+      generation === this.generation &&
+      this.routeSocket === socket &&
+      this.settings?.route === route;
+    if (!ours()) return;
+    if (id === null || (expected !== null && id !== expected)) {
+      // Terminal for this attempt: what it would have kept is forgotten, and nothing retries, so
+      // a write waiting for access fails now rather than waiting on a connection that won't come.
+      this.routeHeldWrites = [];
+      this.routeHeldFor = null;
+      this.heldToken = null;
+      this.abandonAccessRequest("The gateway that answered isn't this route's.");
+      this.close();
+      this.dropSetupCredentials();
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        canWrite: false,
+        canAnswer: false,
+        canApprove: false,
+        canAdmin: false,
+        error:
+          id === null
+            ? {
+                code: ROUTE_IDENTITY_UNREAD,
+                message:
+                  "Clawtrate couldn't confirm which OpenClaw gateway answered, so it disconnected.",
+                hint: null,
+              }
+            : {
+                code: ROUTE_IDENTITY_CHANGED,
+                message: "A different OpenClaw gateway answered, so Clawtrate disconnected.",
+                hint: null,
+              },
+      });
+      return;
+    }
+    this.routeIdentity = { route, identity: id };
+    this.routeVerified = socket;
+    // Only now is a token from this socket's hello kept.
+    const held = this.routeHeldFor === socket ? this.routeHeldWrites : [];
+    this.routeHeldWrites = [];
+    this.routeHeldFor = null;
+    try {
+      for (const write of held) await write();
+    } catch {
+      // A token or connection that couldn't be kept ends the attempt; what was kept stays.
+      if (!ours()) return;
+      this.heldToken = null;
+      const message = "Clawtrate couldn't save this connection on this device, so it disconnected.";
+      this.abandonAccessRequest(message);
+      this.close();
+      this.dropSetupCredentials();
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        canWrite: false,
+        canAnswer: false,
+        canApprove: false,
+        canAdmin: false,
+        error: {
+          code: ROUTE_NOT_SAVED,
+          message,
+          hint: null,
+        },
+      });
+      return;
+    }
+    if (!ours()) return;
+    this.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, gatewayId: id },
+    }));
+    this.handleHello(hello, generation);
   }
 
   /** Whether the connection to `url` is the host's setup connection. */
@@ -7464,9 +7904,14 @@ export class ClawtrateClient {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
-  private tokenKey(url: string, deviceId: string, role: string): string {
-    return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+  /**
+   * Device tokens are scoped to one gateway URL, or to one route, so a token is
+   * never offered to another. A gateway URL starts with `ws`, never `route:`.
+   */
+  private tokenKey(credential: string, deviceId: string, role: string): string {
+    if (credential.startsWith("route:"))
+      return `deviceToken:route:${credential.slice("route:".length)}:${deviceId}:${role}`;
+    return `deviceToken:${encodeURIComponent(credential)}:${deviceId}:${role}`;
   }
 
   /**
@@ -7478,17 +7923,23 @@ export class ClawtrateClient {
   private connectionTokenStore(
     url: string,
     generation: number,
+    credential: string = url,
   ): ConnectionTokenStore & {
     /** `store`, for one socket's hello: nothing is staged or written once that socket is retired. */
     save: (
       params: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      socket: number,
     ) => Promise<void>;
   } {
-    const current = () => generation === this.generation && this.settings?.url === url;
+    const current = () =>
+      generation === this.generation &&
+      this.settings?.url === url &&
+      credentialOf(this.settings) === credential;
     const save = async (
       { deviceId, role, token, scopes }: Parameters<GatewayBrowserDeviceTokenStore["store"]>[0],
       live: () => boolean,
+      socket: number,
     ) => {
       if (!current() || !live()) return;
       // A setup connection's first token waits in memory for its grant to be checked.
@@ -7500,27 +7951,33 @@ export class ClawtrateClient {
       // A replacement token is this socket's credential now: taken out of gateway text too.
       this.heldToken = token;
       // Queued with every other token change, so a late rejection cannot remove it.
-      await this.changeConnection(async () => {
-        if (!current() || !live()) return;
-        const existing = await this.loadToken(url, deviceId, role);
-        if (!current() || !live()) return;
-        const held = existing?.heldScopes ?? [...READ_SCOPES];
-        await this.writeToken(url, deviceId, role, {
-          token,
-          // A replacement token is held to what this client asks for, whatever it was granted.
-          grantedScopes: scopes.filter((scope) => held.includes(scope)),
-          heldScopes: held,
-          ...(existing?.adminHeld ? { adminHeld: true } : {}),
-          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+      const write = () =>
+        this.changeConnection(async () => {
+          if (!current() || !live()) return;
+          const existing = await this.loadToken(credential, deviceId, role);
+          if (!current() || !live()) return;
+          const held = existing?.heldScopes ?? [...READ_SCOPES];
+          await this.writeToken(credential, deviceId, role, {
+            token,
+            // A replacement token is held to what this client asks for, whatever it was granted.
+            grantedScopes: scopes.filter((scope) => held.includes(scope)),
+            heldScopes: held,
+            ...(existing?.adminHeld ? { adminHeld: true } : {}),
+            ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
+          });
         });
-      });
+      // A route's token from this hello waits in memory until its gateway's identity matched.
+      if (
+        !this.holdForRoute(socket, write, JSON.stringify({ deviceId, role, token, scopes }).length)
+      )
+        await write();
     };
     return {
       save,
       // The lifecycle uses the record's scopes for reconnects. Report the
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
-        const record = await this.loadToken(url, deviceId, role);
+        const record = await this.loadToken(credential, deviceId, role);
         if (!record) return null;
         return {
           token: record.token,
@@ -7528,7 +7985,7 @@ export class ClawtrateClient {
             this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
-      store: (params) => save(params, () => true),
+      store: (params) => save(params, () => true, this.routeSocket),
       // A removal that names no token could take one saved after the rejection.
       // This client removes a token only through `forget`.
       clear: async () => {},
@@ -7539,11 +7996,21 @@ export class ClawtrateClient {
       // so the comparison trims it too.
       forget: async ({ deviceId, role }, rejected) => {
         if (!current()) return;
-        await this.changeConnection(async () => {
-          const existing = await this.loadToken(url, deviceId, role);
-          if (existing?.token.trim() !== rejected) return;
-          await this.host.storage.delete(this.tokenKey(url, deviceId, role));
-        });
+        const forget = () =>
+          this.changeConnection(async () => {
+            const existing = await this.loadToken(credential, deviceId, role);
+            if (existing?.token.trim() !== rejected) return;
+            await this.host.storage.delete(this.tokenKey(credential, deviceId, role));
+          });
+        // Nor does a route's gateway that hasn't said who it is make this device forget its token.
+        if (
+          !this.holdForRoute(
+            this.routeSocket,
+            forget,
+            JSON.stringify({ deviceId, role, rejected }).length,
+          )
+        )
+          await forget();
       },
     };
   }

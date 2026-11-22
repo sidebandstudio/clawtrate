@@ -12,6 +12,7 @@ import {
   type Bot,
   type CheckInsState,
   type ConnectionState,
+  type RouteStatus,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -190,8 +191,14 @@ export function Settings({
   initialUpdates,
   updateReading,
   onClose,
+  route = null,
+  removeProblem = null,
 }: {
   connection: ConnectionState;
+  /** The SSH route the app is connected through, when it is one (docs/design/setup.md §8). */
+  route?: RouteStatus | null;
+  /** Why "Remove this gateway…" didn't finish, while the route it left is shown. */
+  removeProblem?: string | null;
   info: HostInfo;
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
@@ -337,10 +344,19 @@ export function Settings({
   const gatewayPane = (
     <>
       <dl className="facts" data-testid="gateway-facts">
-        <div>
-          <dt>Address</dt>
-          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? "None yet"}</dd>
-        </div>
+        {route ? (
+          <div>
+            <dt>Route</dt>
+            <dd className="b-wrap-value">{`Over SSH to ${route.account}, ${route.profile} profile`}</dd>
+          </div>
+        ) : (
+          <div>
+            <dt>Address</dt>
+            <dd title={connection.gatewayUrl ?? undefined}>
+              {connection.gatewayUrl ?? "None yet"}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>State</dt>
           <dd className="settings-state" data-testid="gateway-state">
@@ -390,6 +406,9 @@ export function Settings({
             Waiting for the gateway's owner to approve this device's new pairing. It changes by
             itself once they approve or reject it; until then this device keeps its earlier access.
           </p>
+          {upgrade.approveCommand && upgrade.approveNote && (
+            <p className="approve-note">{upgrade.approveNote}</p>
+          )}
           {upgrade.approveCommand && (
             <CommandLine command={upgrade.approveCommand} label="Copy approve command" />
           )}
@@ -406,7 +425,7 @@ export function Settings({
         {canDisconnect && (
           <GatewayConnectionButton key={`suspend:${gatewayUrl}`} action="suspend" />
         )}
-        {gatewayUrl && (
+        {gatewayUrl && !route && (
           <button
             type="button"
             className="button"
@@ -421,10 +440,25 @@ export function Settings({
             Use another gateway
           </button>
         )}
+        {route && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            onClick={() => void send({ type: "setupRemoveRoute" })}
+          >
+            Remove this gateway…
+          </button>
+        )}
       </div>
       {forgetProblem && (
         <div className="form-error" role="alert" data-testid="forget-problem">
           {forgetProblem}
+        </div>
+      )}
+      {route && removeProblem && (
+        <div className="form-error" role="alert" data-testid="remove-problem">
+          {`Clawtrate couldn't remove this route. ${removeProblem}`}
         </div>
       )}
       {canRePair && (
