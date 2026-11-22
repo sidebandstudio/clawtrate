@@ -40,7 +40,7 @@ import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
-import { dictionaryRequests, isDictionary, requestsSoFar } from "./net-log.ts";
+import { dictionaryRequests, requestsSoFar } from "./net-log.ts";
 import {
   CHECKOUT,
   bundleIdentifier,
@@ -567,16 +567,16 @@ test("stays on its own content", async () => {
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
 });
 
-test("F-393: checking spelling asks no outside host for a dictionary", async () => {
+test("F-393: checking spelling asks for no dictionary", async () => {
   // Windows checks spelling with its own checker. For a language it has no
   // checker for, Chromium falls back to a Hunspell dictionary and downloads it
   // the first time, in a request the browser process makes outside the
   // session's request filter. Faroese has a Hunspell dictionary, and a
   // Windows without Faroese installed has no checker for it, so a second copy
-  // of the app with Faroese as its spelling language takes that path as it
-  // starts. Its network log, complete once it has quit, shows every request:
-  // on Windows the dictionary must be asked of the app's own folder, never of
-  // a host. macOS builds no Hunspell fallback, so nothing asks for one.
+  // of the app with Faroese as its spelling language would take that path as
+  // it starts. Its network log, complete once it has quit, shows every
+  // request, and none may be for a dictionary, from a host or from a file.
+  // macOS builds no Hunspell fallback, so nothing asks for one there either.
   test.setTimeout(120_000);
   // A new folder each time: one that already holds a dictionary never asks for it.
   const spelling = realpathSync.native(
@@ -660,14 +660,12 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
       .toBeGreaterThan(0);
     const shown = view.contexts().flatMap((context) => context.pages())[0]!;
     await expect(shown.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
-    // Closed too soon, the copy could quit before it asks for the dictionary,
-    // so wait until the log on disk shows the request. Chromium writes events
-    // only once 15 are waiting, and an idle app logs none, so a request can
-    // sit unwritten until the app quits. Each picture the page asks for adds
-    // events, and events are written in the order they happen, so asking for
-    // one more picture until one shows brings every earlier event to disk. On
-    // macOS, which asks for no dictionary, that a picture shows checks this
-    // wait works.
+    // Chromium writes events only once 15 are waiting, and an idle app logs
+    // none, so a request can sit unwritten until the app quits. Each picture
+    // the page asks for adds events, and events are written in the order they
+    // happen, so asking for one more picture until one shows brings every
+    // earlier event to disk, a dictionary request at startup included, and
+    // shows the log is being written.
     let picture = 0;
     await expect
       .poll(
@@ -675,16 +673,9 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
           await shown.evaluate((url) => {
             new Image().src = url;
           }, `${picturesAt}${picture++}.png`);
-          const asked = soFar();
-          return (
-            asked.some((url) => url.startsWith(picturesAt)) &&
-            (!WINDOWS || asked.some(isDictionary))
-          );
+          return soFar().some((url) => url.startsWith(picturesAt));
         },
-        {
-          timeout: 30_000,
-          message: `the log on disk shows a picture's request${WINDOWS ? " and the dictionary's" : ""}`,
-        },
+        { timeout: 30_000, message: "the log on disk shows a picture's request" },
       )
       .toBe(true);
     // Windows refuses the close message until the window is shown.
@@ -716,15 +707,10 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     left = processesUsing(data);
   }
   expect(left, "the copy's processes end within 10 seconds of it").toEqual([]);
-  const asked = dictionaryRequests(readFileSync(netLog, "utf8"));
-  if (!WINDOWS) {
-    expect(asked, "the dictionaries the network log shows requests for").toEqual([]);
-    return;
-  }
-  const folder = join(realpathSync(APP), "resources/app.asar/out/renderer/dictionaries");
-  const own = `${decodeURI(pathToFileURL(folder).href)}/`;
-  expect(asked.length, "the dictionaries the network log shows requests for").toBeGreaterThan(0);
-  for (const url of asked) expect(decodeURI(url).startsWith(own), url).toBe(true);
+  expect(
+    dictionaryRequests(readFileSync(netLog, "utf8")),
+    "the dictionaries the network log shows requests for",
+  ).toEqual([]);
 });
 
 test("opens with the same pairing and tasks after a newer build takes its place", async () => {
