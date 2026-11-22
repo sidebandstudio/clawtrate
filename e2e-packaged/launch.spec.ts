@@ -526,7 +526,8 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
   const args = [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`];
   let copy: ChildProcess;
   if (WINDOWS) {
-    // Windows keeps no run record: the run's teardown ends whatever names the run's folder.
+    // Windows keeps no run record. Node puts the copy in a job object that
+    // Windows closes when this worker exits, so the copy ends with it.
     copy = spawn(packagedExecutable(APP), args, { env: appEnv(), stdio: "ignore" });
   } else {
     // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
@@ -624,18 +625,10 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
       // Bounded: a copy that could not be ended never exits. The list below names it.
       await Promise.race([exited, sleep(10_000)]);
     }
+    // Its helpers end by themselves once it has. Any left fail the test, listed
+    // but not ended: only the copy was started here.
     for (let i = 0; i < 50 && processesUsing(data).length > 0; i += 1) await sleep(200);
     left = processesUsing(data);
-    for (const pid of left) {
-      if (WINDOWS) forceEnd(pid);
-      else {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // gone since the listing
-        }
-      }
-    }
   }
   expect(left, "the copy's processes end within 10 seconds of it").toEqual([]);
   const asked = dictionaryRequests(readFileSync(netLog, "utf8"));
