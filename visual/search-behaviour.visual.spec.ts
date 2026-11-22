@@ -331,6 +331,35 @@ test("F-033: a message whose history comes as the connection's access changes do
   );
 });
 
+test("F-033: Try again opens a result whose first open was refused", async ({ page }) => {
+  const key = "agent:otto:disk-space";
+  await search(page, "clear the transcode", "scene=main&bot=pip&task=agent:pip:week&search=on");
+  const user = options(page, "messages").filter({ hasText: "· User" });
+  await expect(user).toBeVisible();
+  await unload(page, key);
+  await page.evaluate((key) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const send = fixture.send;
+    fixture.send = async (command) => {
+      if (command.type === "openSession" && command.key === key) {
+        fixture.send = send;
+        throw new Error("At most 8 tasks can be open at once.");
+      }
+      return send(command);
+    };
+  }, key);
+  await user.click();
+  await expect(user).toContainText("At most 8 tasks can be open at once.");
+  await options(page, "messages")
+    .filter({ hasText: /^Try again$/ })
+    .click();
+  // Only an open acquires the slot that became available.
+  await expect.poll(() => sent(page, "openSession")).toContainEqual({ type: "openSession", key });
+  await release(page);
+  await expect(palette(page)).toHaveCount(0);
+  await expect(page.locator(".turn[data-search-focus]")).toBeFocused();
+});
+
 test("F-033: Try again on a history that failed opens the message once the history loads", async ({
   page,
 }) => {

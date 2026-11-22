@@ -1359,6 +1359,8 @@ export function SearchPalette({
                       name: "Try again",
                       first: "Try again",
                       open: () => {
+                        // A refused first open left this view without the task. Ask for it again.
+                        if (!latest.current.state.transcripts[opening.key]) return row.open();
                         const retry: Opening = {
                           ...opening,
                           status: "loading",
