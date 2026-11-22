@@ -102,7 +102,7 @@ export function startupFailure(error: unknown): {
     return {
       title: "Clawtrate couldn't use this device's credentials",
       message:
-        "The file that holds this device's credentials is damaged or was changed, so Clawtrate didn't use it. Start fresh to set this device's saved files aside, unchanged, in a folder next to them, and pair this device again. Or quit and restore them from a backup.",
+        "This device's saved credentials are damaged or were changed, so Clawtrate didn't use them. Start fresh makes this device a new device with a new identity: its saved files are set aside, unchanged, in a folder next to them, and its old tokens and settings are no longer used. Then pair this device again. Or quit and restore the files from a backup.",
       recover: "folder",
     };
   if (name === "SavedSettingsInvalidError")

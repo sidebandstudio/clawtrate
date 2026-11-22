@@ -134,6 +134,12 @@ describe("a desktop start that can't open this device's credentials", () => {
     expect(startupFailure(named("SavedSettingsInvalidError")).message).toMatch(
       /saved credentials stay in place/,
     );
+    // Starting fresh after damaged credentials is a new device: it says so, and that the old
+    // tokens and settings stop being used though they are kept.
+    const damaged = startupFailure(named("CredentialRecordInvalidError")).message;
+    expect(damaged).toMatch(/new device with a new identity/);
+    expect(damaged).toMatch(/old tokens and settings are no longer used/);
+    expect(damaged).toMatch(/set aside, unchanged/);
     for (const name of ["CredentialRecordInvalidError", "SavedSettingsInvalidError"]) {
       const said = startupFailure(named(name));
       expect(said.message, name).toMatch(/Start fresh/);
