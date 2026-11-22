@@ -732,3 +732,26 @@ for (const outcome of ["release", "release-failed"] as const)
       /Could not create|Created/,
     );
   });
+
+test("F-034: a reconnect to the same gateway, as an access grant makes, doesn't stop a Create", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=release`, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("First");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "createBot").length)
+    .toBe(1);
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...(state.connection as object), connectedAt: Date.now() + 60_000 },
+    })),
+  );
+  await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
+});

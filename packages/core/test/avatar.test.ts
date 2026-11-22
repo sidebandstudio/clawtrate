@@ -521,10 +521,12 @@ describe("reading a picture from the gateway", () => {
     // Padding dropped, a space, the wrong alphabet, and pad bits that are not zero.
     expect(readPicture(good.replace(/=+$/, "")).kind).toBe("invalid");
     expect(readPicture(`data:image/png;base64, ${body}`).kind).toBe("invalid");
-    // A URL-safe character in the payload, with the prefix as it was.
-    const at = body.search(/[A-Za-z0-9]/);
-    const urlSafe = `data:image/png;base64,${body.slice(0, at)}-${body.slice(at + 1)}`;
-    expect(urlSafe).not.toBe(good);
+    // The URL-safe alphabet: the 2×2 PNG with one "/" written as "_". A decoder that took the
+    // URL-safe alphabet would read the very same bytes, so only the alphabet check refuses it.
+    expect(PNG.slice("data:image/png;base64,".length)).toContain("/");
+    const urlSafe = PNG.replace(/(base64,[^/]*)\//, "$1_");
+    expect(urlSafe).not.toBe(PNG);
+    expect(readPicture(PNG).kind).toBe("plain");
     expect(readPicture(urlSafe).kind).toBe("invalid");
     const last = body.replace(/=+$/, "").at(-1)!;
     const bumped = B64[B64.indexOf(last) + 1]!;
