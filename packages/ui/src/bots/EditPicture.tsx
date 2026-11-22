@@ -5,7 +5,7 @@
 // connection or admin access goes.
 
 import type { Bot } from "@clawtrate/core";
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
 import {
@@ -27,11 +27,14 @@ const same = (a: PictureDraft, b: PictureDraft) =>
 
 export function EditPicture({
   bot,
+  gatewayId,
   canSave,
   onClose,
   onSaved,
 }: {
   bot: Bot;
+  /** The gateway this opening is for: nothing is written to another. */
+  gatewayId: string | null;
   /** Admin access on a live connection: what saving needs. */
   canSave: boolean;
   onClose: () => void;
@@ -46,12 +49,13 @@ export function EditPicture({
   const [problem, setProblem] = useState<string | null>(null);
   const previewRef = useRef<HTMLSpanElement>(null);
   // Whether this opening still stands: not once it is closed or replaced, and not without access.
+  // Layout effects, so the guard changes as the dialog is committed, before a save can resume.
   const live = useRef(true);
   const allowed = useRef(canSave);
-  useEffect(() => {
+  useLayoutEffect(() => {
     allowed.current = canSave;
   }, [canSave]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     live.current = true;
     return () => {
       live.current = false;
@@ -67,7 +71,12 @@ export function EditPicture({
       const avatar = await pictureFor(draft, previewRef.current?.querySelector("svg"));
       if (!stands()) return;
       if (!avatar) throw new Error("not drawn");
-      const { confirmed } = await bridge.invoke({ type: "setBotPicture", botId: bot.id, avatar });
+      const { confirmed } = await bridge.invoke({
+        type: "setBotPicture",
+        botId: bot.id,
+        avatar,
+        gatewayId,
+      });
       if (!stands()) return;
       if (!confirmed) {
         setProblem(PICTURE_NOT_CONFIRMED);

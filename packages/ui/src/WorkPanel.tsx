@@ -26,6 +26,7 @@ type PictureSession = {
   token: number;
   botId: string;
   gateway: string | null;
+  gatewayId: string | null;
   connectedAt: number | null;
 };
 
@@ -170,6 +171,7 @@ export function WorkPanel({
                   token: ++tokens.current,
                   botId: bot.id,
                   gateway: gatewayKey,
+                  gatewayId: connection.gatewayId,
                   connectedAt,
                 })
               }
@@ -183,6 +185,7 @@ export function WorkPanel({
             <EditPicture
               key={pictureSession.token}
               bot={bot}
+              gatewayId={pictureSession.gatewayId}
               canSave={canEditPicture}
               onClose={() => {
                 const token = pictureSession.token;

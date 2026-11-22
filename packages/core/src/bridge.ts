@@ -285,6 +285,8 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      /** The gateway New bot was opened on; nothing is created on another. */
+      gatewayId: string | null;
     }
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id. */
@@ -300,7 +302,13 @@ export type BridgeCommand =
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
-  | { type: "setBotPicture"; botId: string; avatar: string }
+  | {
+      type: "setBotPicture";
+      botId: string;
+      avatar: string;
+      /** The gateway Edit picture was opened on; nothing is written to another. */
+      gatewayId: string | null;
+    }
   // Check-ins (`check-ins.ts`). Saving needs admin.
   | { type: "refreshCheckIns"; botId?: string }
   /** The draft as `CheckInDraft` says. The outcome is `checkIns.save`. */
@@ -1115,10 +1123,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
       };
     case "setBotPicture":
       return {
         type: "setBotPicture",
+        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
         botId: botId(command.botId),
         avatar: shortText(command.avatar, 32_768, "picture"),
       };
@@ -1808,14 +1818,17 @@ class ViewerSession implements BridgeSession {
       case "disconnectAccount":
         return client.disconnectAccount(command.profileId);
       case "createBot":
-        return client.createBot({
-          name: command.name,
-          avatar: command.avatar,
-          account: command.account,
-          provider: command.provider,
-          model: command.model,
-          effort: command.effort,
-        });
+        return client.createBot(
+          {
+            name: command.name,
+            avatar: command.avatar,
+            account: command.account,
+            provider: command.provider,
+            model: command.model,
+            effort: command.effort,
+          },
+          command.gatewayId,
+        );
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
@@ -1833,7 +1846,7 @@ class ViewerSession implements BridgeSession {
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
       case "setBotPicture":
-        return client.setBotPicture(command.botId, command.avatar);
+        return client.setBotPicture(command.botId, command.avatar, command.gatewayId);
       case "refreshCheckIns":
         return client.refreshCheckIns(command.botId);
       case "saveCheckIn":

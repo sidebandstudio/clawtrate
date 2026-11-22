@@ -17,7 +17,14 @@ describe("F-037: changing a bot's picture", () => {
   it("sends it with agents.update and is saved once the bot list shows it, as the creature chosen", async () => {
     const { client, fake } = await accountsClient();
     const viewer = createBridgeSession(client);
-    expect(await viewer.apply({ type: "setBotPicture", botId: "otto", avatar: PICTURE })).toEqual({
+    expect(
+      await viewer.apply({
+        type: "setBotPicture",
+        botId: "otto",
+        avatar: PICTURE,
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({
       confirmed: true,
     });
     expect(fake.gateway.calls("agents.update")).toEqual([{ agentId: "otto", avatar: PICTURE }]);
@@ -28,6 +35,29 @@ describe("F-037: changing a bot's picture", () => {
       choice: { family: "shellfolk", shell: "turret", color: "pink" },
       chosen: true,
     });
+    client.stop();
+  });
+
+  it("sends nothing when Edit picture was opened on another gateway", async () => {
+    const { client, fake } = await accountsClient();
+    const viewer = createBridgeSession(client);
+    await expect(
+      viewer.apply({
+        type: "setBotPicture",
+        botId: "otto",
+        avatar: PICTURE,
+        gatewayId: "gateway-b",
+      }),
+    ).rejects.toThrow("made for another gateway");
+    expect(fake.gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
+  it("answers unconfirmed, not unsaved, when the gateway took it but the list can't be read", async () => {
+    const { client, fake } = await accountsClient();
+    fake.failListAfterUpdate = true;
+    expect(await client.setBotPicture("otto", PICTURE)).toEqual({ confirmed: false });
+    expect(fake.gateway.calls("agents.update")).toHaveLength(1);
     client.stop();
   });
 
@@ -57,6 +87,26 @@ describe("F-037: changing a bot's picture", () => {
       "can't be kept",
     );
     expect(fake.gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
+  it("New bot creates nothing when it was opened on another gateway", async () => {
+    const { client, fake } = await accountsClient();
+    const viewer = createBridgeSession(client);
+    const command = {
+      type: "createBot",
+      name: "Viral",
+      avatar: null,
+      account: "acme:home",
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+    } as const;
+    await expect(viewer.apply({ ...command, gatewayId: "gateway-b" })).rejects.toThrow(
+      "made for another gateway",
+    );
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    expect((await viewer.apply({ ...command, gatewayId: "gateway-a" })).botId).toBe("viral");
     client.stop();
   });
 

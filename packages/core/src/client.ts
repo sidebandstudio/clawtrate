@@ -4855,7 +4855,12 @@ export class ClawtrateClient {
     return this.accounts.disconnect(profileId);
   }
 
-  createBot(input: CreateBotInput): Promise<CreatedBot> {
+  /**
+   * Create a bot. With `gatewayId` (the gateway the person was looking at, null when that
+   * gateway names none), nothing is sent unless it is still the gateway connected.
+   */
+  async createBot(input: CreateBotInput, gatewayId?: string | null): Promise<CreatedBot> {
+    if (gatewayId !== undefined) await this.requireSameGateway(gatewayId);
     return this.accounts.createBot(input);
   }
 
@@ -4887,8 +4892,20 @@ export class ClawtrateClient {
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
-  setBotPicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
+  async setBotPicture(
+    botId: string,
+    avatar: string,
+    gatewayId?: string | null,
+  ): Promise<{ confirmed: boolean }> {
+    if (gatewayId !== undefined) await this.requireSameGateway(gatewayId);
     return this.accounts.setBotPicture(botId, avatar);
+  }
+
+  /** Refuse a change made while another gateway was connected, before anything is sent. */
+  private async requireSameGateway(gatewayId: string | null): Promise<void> {
+    const here = await this.readGatewayIdentity();
+    if (here !== gatewayId)
+      throw new Error("This change was made for another gateway, so nothing was sent.");
   }
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------

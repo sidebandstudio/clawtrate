@@ -5,7 +5,7 @@
 
 import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
 import { firstChoice } from "@clawtrate/core";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
@@ -70,17 +70,19 @@ export function NewBot({
   // as it is now, and whether a Create is being prepared or sent.
   const open = useRef(true);
   const [gateway] = useState(() => connection.gatewayId ?? connection.gatewayUrl);
+  const [gatewayId] = useState(() => connection.gatewayId);
   const now$ = useRef(connection);
   const latest = useRef(draft);
   const pending = useRef(false);
   const [preparing, setPreparing] = useState(false);
-  useEffect(() => {
+  // Layout effects, so the guard changes as the dialog is committed, before a Create can resume.
+  useLayoutEffect(() => {
     open.current = true;
     return () => {
       open.current = false;
     };
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     now$.current = connection;
     latest.current = draft;
   });
@@ -201,6 +203,7 @@ export function NewBot({
         provider,
         model: sent.model,
         effort: sent.effort,
+        gatewayId,
       });
       // An answer for an opening that has gone, or a draft changed since, closes and clears nothing.
       if (!open.current || latest.current !== sent) return;
@@ -320,9 +323,24 @@ export function NewBot({
       <>
         <PicturePreview draft={shown} label={null} previewRef={previewRef} small />
         {pictureFailed && (
-          <p className="b-field-error" role="alert" style={{ textAlign: "center" }}>
-            {PICTURE_FAILED}
-          </p>
+          <div className="b-upload">
+            <p className="b-field-error" role="alert">
+              {PICTURE_FAILED}
+            </p>
+            <button
+              type="button"
+              className="button"
+              data-variant="quiet"
+              data-size="sm"
+              onClick={() => {
+                // The bot then gets the Clawling its id gives; the name and account stay.
+                setDraft((was) => ({ ...was, picture: null }));
+                setPictureFailed(false);
+              }}
+            >
+              Use the default picture
+            </button>
+          </div>
         )}
         <p className="b-lead">
           Choose the account {name} runs on. The sign-in stays on your gateway.

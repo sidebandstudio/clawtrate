@@ -1196,7 +1196,12 @@ export class AccountsEngine {
     this.requireAdmin("Changing a bot's picture");
     if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
     await this.ctx.request("agents.update", { agentId: botId, avatar });
-    await this.ctx.refreshBots();
+    // The gateway took the picture. A list that can't be read now leaves it unconfirmed, not unsaved.
+    try {
+      await this.ctx.refreshBots();
+    } catch {
+      return { confirmed: false };
+    }
     return { confirmed: this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl === avatar };
   }
 

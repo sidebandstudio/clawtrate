@@ -1008,6 +1008,11 @@ export function accountCommand(
       }));
       return Promise.resolve();
     case "createBot": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (command.gatewayId !== get().connection.gatewayId)
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       const name = command.name.trim() || "New bot";
       put((a) => ({
         ...a,
@@ -1130,6 +1135,11 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "setBotPicture": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (command.gatewayId !== get().connection.gatewayId)
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       if (params.picturesave === "hold") return new Promise(() => {});
       if (params.picturesave === "refused")
         return Promise.reject(new Error("agents.update: INVALID_REQUEST (a gateway's own words)"));
