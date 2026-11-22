@@ -20,7 +20,7 @@ function block(selector: string): Record<string, string> {
 
 describe("the iOS app's design tokens", () => {
   it("are the values of packages/ui/src/styles/tokens.css, light and dark", () => {
-    const light = block(':root,\n:root[data-theme="light"]');
+    const light = block(':root[data-theme="light"]');
     const dark = block(':root[data-theme="dark"]');
     for (const token of COLOR_TOKENS) {
       expect(LIGHT[token], `light --${token}`).toBe(light[token]);
