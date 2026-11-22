@@ -241,7 +241,7 @@
 /* new: the three creature families, a creature over its name. */
 .b-families {
   display: grid;
-  grid-template-columns: repeat(3, 96px);
+  grid-template-columns: repeat(3, minmax(0, 96px));
   justify-content: center;
   gap: 8px;
 }

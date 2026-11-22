@@ -16,6 +16,17 @@ const sent = (page: Page) =>
       window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
   );
+/**
+ * Let what a released gate starts finish: its promise settles in microtasks, then a task and two
+ * frames pass, so its callbacks and the renders they cause are done before the check looks.
+ */
+const settled = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((done) =>
+        setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => done())), 0),
+      ),
+  );
 const row = (page: Page, name: string) =>
   page.getByTestId("bot").filter({ has: page.getByText(name, { exact: true }) });
 
@@ -397,7 +408,15 @@ test("F-035: Next waits while a picture is read, and a creature chosen meanwhile
     const real = w.createImageBitmap.bind(window);
     w.createImageBitmap = ((...args: Parameters<typeof createImageBitmap>) =>
       new Promise((resolve) => {
-        w.release = () => resolve(real(...args));
+        // Returns once the real decode has settled, so the check can wait for it.
+        w.release = () => {
+          const decoded = real(...args);
+          resolve(decoded);
+          return decoded.then(
+            () => undefined,
+            () => undefined,
+          );
+        };
       })) as typeof createImageBitmap;
   });
   await page.getByTestId("picture-file").setInputFiles({
@@ -407,12 +426,16 @@ test("F-035: Next waits while a picture is read, and a creature chosen meanwhile
   });
   const next = page.getByRole("button", { name: "Reading the picture…" });
   await expect(next).toBeDisabled();
+  // The decode has begun and is held: what follows happens while it is pending.
+  await page.waitForFunction(
+    () => typeof (window as unknown as { release?: unknown }).release === "function",
+  );
   await page.getByRole("textbox", { name: "Name" }).press("Enter");
   await expect(page.getByRole("heading", { name: "New bot", level: 2 })).toBeVisible();
   await page.getByRole("radio", { name: "Shellfolk" }).click();
   await expect(page.getByRole("button", { name: "Next" })).toBeEnabled();
-  await page.evaluate(() => (window as unknown as { release: () => void }).release());
-  await page.waitForTimeout(200);
+  await page.evaluate(() => (window as unknown as { release: () => Promise<void> }).release());
+  await settled(page);
   await expect(page.getByTestId("picture-preview").locator("img")).toHaveCount(0);
   await expect(page.getByTestId("picture-preview").locator("svg")).toHaveAttribute(
     "data-family",
@@ -476,8 +499,8 @@ test("F-037: a save answered after its editor closed does nothing to the editor 
   );
   // The old save lands on the gateway, but the new editor and its draft stay, and nothing is announced.
   await expect(row(page, "Otto").locator('svg.creature[data-family="lantern"]')).toBeVisible();
-  // The old reply's handling runs after the list shows the picture: give it the time to.
-  await page.waitForTimeout(300);
+  // The old reply's handling runs after the list shows the picture: let it run first.
+  await settled(page);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("radio", { name: "Shellfolk" })).toHaveAttribute(
     "aria-checked",
@@ -502,8 +525,10 @@ test("F-037: a picture still being drawn when admin goes is never sent", async (
   await dialog.getByRole("button", { name: "Save" }).click();
   await dropAdmin(page);
   await expect(dialog).toHaveCount(0);
-  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
-  await page.waitForTimeout(300);
+  await page.evaluate(() =>
+    (window as unknown as { releaseDecode: () => Promise<void> }).releaseDecode(),
+  );
+  await settled(page);
   expect((await sent(page)).map((each) => each.type)).not.toContain("setBotPicture");
 });
 
@@ -545,9 +570,16 @@ test("F-034: a New bot draft closed while its picture was being drawn is never c
   await expect(page.getByTestId("create")).toHaveText("Creating…");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("new-bot")).toHaveCount(0);
-  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
-  await page.waitForTimeout(300);
+  // Opened again while the old draw is still pending: the old one sends nothing and leaves this one be.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await page.evaluate(() =>
+    (window as unknown as { releaseDecode: () => Promise<void> }).releaseDecode(),
+  );
+  await settled(page);
   expect((await sent(page)).map((each) => each.type)).not.toContain("createBot");
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await expect(page.getByTestId("create")).toHaveText("Create");
 });
 
 test("F-034: a Create answered after its dialog closed doesn't close or clear the draft opened since", async ({
@@ -567,8 +599,8 @@ test("F-034: a Create answered after its dialog closed doesn't close or clear th
   await page.getByRole("button", { name: "Back to the picture" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Newer");
   await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+  await settled(page);
   await expect(row(page, "First").first()).toBeVisible();
-  await page.waitForTimeout(300);
   await expect(page.getByTestId("new-bot")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Newer");
 });
@@ -590,4 +622,35 @@ test("F-037: while a picture is being saved its choices are frozen, so what is s
   );
   await expect(dialog).toHaveCount(0);
   await expect(row(page, "Otto").locator('svg.creature[data-family="lantern"]')).toBeVisible();
+});
+
+test("F-035: a JPEG whose frame header comes after more than 256 KiB of metadata is still checked and taken", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  const small = Buffer.from(
+    await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 48;
+      canvas.height = 32;
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#3f6f8f";
+      ctx.fillRect(0, 0, 48, 32);
+      return canvas.toDataURL("image/jpeg").split(",")[1]!;
+    }),
+    "base64",
+  );
+  // Five APP1 blocks of metadata, about 320 KiB, between the start and the rest of the file.
+  const block = Buffer.concat([Buffer.from([0xff, 0xe1, 0xff, 0xff]), Buffer.alloc(0xfffd)]);
+  const padded = Buffer.concat([
+    small.subarray(0, 2),
+    ...new Array(5).fill(block),
+    small.subarray(2),
+  ]);
+  await page
+    .getByTestId("picture-file")
+    .setInputFiles({ name: "big-metadata.jpg", mimeType: "image/jpeg", buffer: padded });
+  await expect(page.getByTestId("picture-preview").locator("img")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

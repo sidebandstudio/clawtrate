@@ -58,3 +58,25 @@ describe("a GIF's size before decoding", () => {
     expect(gifSize(gif([2, 2], [[0, 0, 2, 2]], [0x99]))).toBeNull();
   });
 });
+
+describe("a JPEG's size before decoding", () => {
+  /** A JPEG's start, an APP1 block of metadata of the size given, then a frame header. */
+  function jpeg(metadata: number, width: number, height: number) {
+    const bytes: number[] = [0xff, 0xd8];
+    for (let left = metadata; left > 0;) {
+      const size = Math.min(left, 65_533);
+      bytes.push(0xff, 0xe1, (size + 2) >> 8, (size + 2) & 255, ...new Array(size).fill(0));
+      left -= size;
+    }
+    bytes.push(0xff, 0xc0, 0, 17, 8, height >> 8, height & 255, width >> 8, width & 255, 3);
+    bytes.push(...new Array(9).fill(0), 0xff, 0xd9);
+    return new Uint8Array(bytes);
+  }
+
+  it("is found after any amount of metadata, given the whole file", () => {
+    const whole = jpeg(300 * 1024, 48, 32);
+    expect(imageHeader(whole)).toEqual({ width: 48, height: 32 });
+    // The first 256 KiB alone don't reach the frame header: the picker then reads the whole file.
+    expect(imageHeader(whole.subarray(0, 256 * 1024))).toBeNull();
+  });
+});

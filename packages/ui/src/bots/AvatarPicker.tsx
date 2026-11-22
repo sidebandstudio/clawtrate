@@ -285,8 +285,11 @@ export function imageHeader(
 async function uploadedPicture(file: File): Promise<string> {
   if (file.size >= MAX_UPLOAD_BYTES) throw new UploadRefused("size");
   let head = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
-  // A GIF's frames can be anywhere in it: its whole file is read (under 25 MB) to check each.
-  if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && file.size > head.length)
+  // A GIF's frames can be anywhere in it, and a JPEG's frame header can follow more metadata
+  // than the first read holds: the whole file is read then (it is under 25 MB) to find them.
+  const gif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46;
+  const jpeg = head[0] === 0xff && head[1] === 0xd8;
+  if (file.size > head.length && (gif || (jpeg && imageHeader(head) === null)))
     head = new Uint8Array(await file.arrayBuffer());
   const header = imageHeader(head);
   if (header === "unknown") throw new UploadRefused("type");
