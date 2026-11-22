@@ -308,8 +308,17 @@ export default async function globalSetup() {
       "--no-seed",
     );
     // With the computer plugin, whose Marlow and Pip have browsers of their own. Seeded: the
-    // seed gives the bots their names.
-    if (withComputer) await startInstance(computer, "--with-plugin", "clawtrate-computer");
+    // seed gives the bots their names. Views and leases get the plugin's normal 20 s window, so a
+    // loaded machine's stall is not taken for an ended view; strict 6 s expiry is covered by the
+    // dev-gateway's own computer checks and the unit tests.
+    if (withComputer)
+      await startInstance(
+        computer,
+        "--with-plugin",
+        "clawtrate-computer",
+        "--renew-timeout-ms",
+        "20000",
+      );
     for (const instance of withComputer ? [name, accounts, computer] : [name, accounts]) {
       const mine = listInstances().find((row) => row.name === instance);
       if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);

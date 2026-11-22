@@ -119,6 +119,7 @@ import {
   SCRIPTED_ACCOUNTS,
 } from "./accounts.ts";
 import {
+  BOT_BROWSER_CHOICES,
   checkedCopy,
   copyPlugin,
   loadDevPlugin,
@@ -352,6 +353,7 @@ export function browserConfig(
   ports: InstancePorts,
   declaration: BotBrowsers,
   executablePath: string,
+  renewTimeoutMs: number = declaration.renewTimeoutMs,
 ) {
   const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(ports, declaration.bots);
   const profiles: Record<string, { cdpPort: number }> = { openclaw: { cdpPort: defaultCdpPort } };
@@ -379,7 +381,7 @@ export function browserConfig(
     plugin: {
       bots,
       drainTimeoutMs: declaration.drainTimeoutMs,
-      renewTimeoutMs: declaration.renewTimeoutMs,
+      renewTimeoutMs,
     },
   };
 }
@@ -394,6 +396,11 @@ export type StartOptions = {
    * a first pairing on loopback does when nobody has changed the setting.
    */
   defaultLocalPairing?: boolean;
+  /**
+   * The bot-browser plugin's lease and view window instead of its declaration's, from the same
+   * closed set (`BOT_BROWSER_CHOICES.renewTimeoutMs`); only with a plugin that declares browsers.
+   */
+  renewTimeoutMs?: number;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -408,7 +415,12 @@ export function devConfig(
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
-    ? browserConfig(ports, owner.botBrowsers, chromium ?? developmentChromium())
+    ? browserConfig(
+        ports,
+        owner.botBrowsers,
+        chromium ?? developmentChromium(),
+        options.renewTimeoutMs ?? owner.botBrowsers.renewTimeoutMs,
+      )
     : null;
   const entryOf = (plugin: DevPlugin) => {
     const entry = pluginEntry(plugin, stateDir, ports.providerPort);
@@ -730,6 +742,10 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
   );
 }
 
+/** Absent, or one of the bot-browser windows a declaration may choose. */
+const renewChoice = (value: unknown) =>
+  value === undefined || (BOT_BROWSER_CHOICES.renewTimeoutMs as readonly unknown[]).includes(value);
+
 /** What this run of the instance was started with besides plugins, beside its run file. */
 const startOptionsFile = (inst: DevInstance) => join(inst.runDir, "start-options.json");
 
@@ -741,9 +757,12 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     recorded === null ||
     typeof recorded !== "object" ||
     Array.isArray(recorded) ||
-    Object.keys(recorded).some((key) => key !== "accounts" && key !== "defaultLocalPairing") ||
+    Object.keys(recorded).some(
+      (key) => key !== "accounts" && key !== "defaultLocalPairing" && key !== "renewTimeoutMs",
+    ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
-    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing)
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
+    !renewChoice((recorded as StartOptions).renewTimeoutMs)
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
@@ -1033,6 +1052,8 @@ export async function start(
     defaultLocalPairing?: boolean;
     /** A paired machine: the gateway's own node host (`scripted-node.ts`); named instances only. */
     node?: boolean;
+    /** The bot-browser plugin's window (`StartOptions.renewTimeoutMs`). */
+    renewTimeoutMs?: number;
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
@@ -1049,9 +1070,15 @@ export async function start(
       "the default instance always requires explicit pairing; use --instance <name> with --default-local-pairing",
     );
   }
+  if (!renewChoice(options.renewTimeoutMs)) {
+    throw new Error(
+      `--renew-timeout-ms must be one of ${BOT_BROWSER_CHOICES.renewTimeoutMs.join(", ")}`,
+    );
+  }
   const startOptions: StartOptions = {
     ...(options.accounts ? { accounts: true } : {}),
     ...(options.defaultLocalPairing ? { defaultLocalPairing: true } : {}),
+    ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
@@ -1063,6 +1090,9 @@ export async function start(
     );
   }
   const browserBots = plugins.find((plugin) => plugin.botBrowsers)?.botBrowsers?.bots ?? [];
+  if (options.renewTimeoutMs !== undefined && browserBots.length === 0) {
+    throw new Error("--renew-timeout-ms needs a plugin that gives bots browsers (--with-plugin)");
+  }
   const browserPortsOf = (ports: InstancePorts) => {
     const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(ports, browserBots);
     return [pagesPort, defaultCdpPort, ...botCdpPorts];
@@ -2099,7 +2129,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2116,6 +2146,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "with-accounts": { type: "boolean", default: false },
       "with-node": { type: "boolean", default: false },
       "default-local-pairing": { type: "boolean", default: false },
+      "renew-timeout-ms": { type: "string" },
       agent: { type: "string" },
       provider: { type: "string" },
     },
@@ -2155,6 +2186,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   if (values["default-local-pairing"] && command !== "start" && command !== "up") {
     throw new Error(`--default-local-pairing is a start option; ${command} does not take it`);
   }
+  const renew = values["renew-timeout-ms"];
+  if (renew !== undefined && command !== "start" && command !== "up") {
+    throw new Error(`--renew-timeout-ms is a start option; ${command} does not take it`);
+  }
   const inst = openInstance(selected);
   const runId = values["run-id"];
   switch (command) {
@@ -2167,6 +2202,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         accounts: values["with-accounts"],
         defaultLocalPairing: values["default-local-pairing"],
         node: values["with-node"],
+        ...(renew !== undefined ? { renewTimeoutMs: Number(renew) } : {}),
       });
     case "stop":
       return stop(inst);

@@ -9,7 +9,7 @@
 // With CLAWTRATE_COMPUTER_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there.
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserPorts, instancePorts, openInstance } from "../tools/dev-gateway/src/cli.ts";
@@ -443,6 +443,19 @@ test("F-144 F-145: a real question while Pip's browser can be taken: its card, W
   }
 });
 
+/**
+ * How long "You have control" can stand with nothing confirming it: three quarters of the lease
+ * this run's Computer instance was configured with, as its config says, and the check's 3.5 s.
+ */
+function unconfirmedWithin(): number {
+  const config = JSON.parse(readFileSync(openInstance(COMPUTER).configPath, "utf8")) as {
+    plugins?: { entries?: Record<string, { config?: { renewTimeoutMs?: unknown } }> };
+  };
+  const lease = config.plugins?.entries?.["clawtrate-computer"]?.config?.renewTimeoutMs;
+  expect(typeof lease === "number" && lease > 0, "the instance's lease window").toBe(true);
+  return 0.75 * (lease as number) + 3_500;
+}
+
 test("F-142: when the gateway stops answering renewals, You have control ends within the lease: input stops at once, and the bar says control isn't confirmed", async ({
   browser,
 }) => {
@@ -469,10 +482,10 @@ test("F-142: when the gateway stops answering renewals, You have control ends wi
     const before = (await pageRecord()).seq;
     process.kill(pid!, "SIGSTOP");
     paused = true;
-    // Within three quarters of the development contract's 6 s lease, with no answer and no event.
+    // Within three quarters of the instance's own lease, with no answer and no event.
     await expect(bar(page)).toContainText(
       "The gateway hasn't confirmed that you still have control of Pip's browser. Input has stopped.",
-      { timeout: 8_000 },
+      { timeout: unconfirmedWithin() },
     );
     await full(page).getByTestId("screen-frame").focus();
     await page.keyboard.type("never sent");

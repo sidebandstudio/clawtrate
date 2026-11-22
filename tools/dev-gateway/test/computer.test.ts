@@ -29,8 +29,10 @@ import {
   developmentChromium,
   loadPlugins,
   PLUGIN_RULE,
+  recordedStartOptions,
   reset,
   sandboxProblems,
+  start,
   settleBrowserProcesses,
 } from "../src/cli.ts";
 import {
@@ -175,6 +177,35 @@ describe("the browser setup the tool writes", () => {
       expect(denied.includes("browser"), bot).toBe(!["marlow", "pip"].includes(bot));
     }
     expect(sandboxProblems(c, PORTS, state, [plugin()], {}, CHROMIUM)).toEqual([]);
+  });
+
+  it("a start may choose the plugin's window from the declaration's set; the guard holds the config to that choice", async () => {
+    const state = temp();
+    const chosen = devConfig("tok", PORTS, state, [plugin()], { renewTimeoutMs: 20000 }, CHROMIUM);
+    const entry = (chosen.plugins.entries as Record<string, { config: Record<string, unknown> }>)[
+      "clawtrate-computer"
+    ]!;
+    expect(entry.config).toMatchObject({ drainTimeoutMs: 5000, renewTimeoutMs: 20000 });
+    expect(
+      sandboxProblems(chosen, PORTS, state, [plugin()], { renewTimeoutMs: 20000 }, CHROMIUM),
+    ).toEqual([]);
+    // The same config is not the one a start without the choice writes.
+    expect(sandboxProblems(chosen, PORTS, state, [plugin()], {}, CHROMIUM)).not.toEqual([]);
+    // Read back only as one of the set.
+    const runDir = temp();
+    writeFileSync(join(runDir, "start-options.json"), '{"renewTimeoutMs":20000}');
+    expect(recordedStartOptions({ runDir })).toEqual({ renewTimeoutMs: 20000 });
+    writeFileSync(join(runDir, "start-options.json"), '{"renewTimeoutMs":7000}');
+    expect(() => recordedStartOptions({ runDir })).toThrow(/not a record of start options/);
+    // Refused before anything changes: a value outside the set, or no plugin with browsers.
+    const inst = testInstance(temp(), temp(), "renew");
+    await expect(
+      start(inst, { plugins: ["clawtrate-computer"], renewTimeoutMs: 7000 }),
+    ).rejects.toThrow(/--renew-timeout-ms must be one of 6000, 10000, 20000/);
+    await expect(start(inst, { renewTimeoutMs: 20000 })).rejects.toThrow(
+      /needs a plugin that gives bots browsers/,
+    );
+    expect(BOT_BROWSER_CHOICES.renewTimeoutMs).toContain(20000);
   });
 
   it("without the plugin there is no browser block and the browser tool stays denied to every bot", () => {
