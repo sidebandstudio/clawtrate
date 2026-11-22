@@ -297,13 +297,13 @@ async function shot(on: Page, name: string): Promise<void> {
   ] as const) {
     for (const theme of ["light", "dark"] as const) {
       await on.setViewportSize({ width, height });
-      await on.emulateMedia({ colorScheme: theme });
+      await on.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
       await on.waitForTimeout(300);
       await on.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
     }
   }
   await on.setViewportSize(size);
-  await on.emulateMedia({ colorScheme: "light" });
+  await on.evaluate(() => (document.documentElement.dataset.theme = "dark"));
 }
 
 test.beforeAll(async ({ browser }) => {
