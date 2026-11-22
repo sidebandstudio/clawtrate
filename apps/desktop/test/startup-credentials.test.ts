@@ -10,13 +10,18 @@ import {
   DEVICE_KEY_FILE,
   type SecretBox,
 } from "@clawtrate/core/node";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startHostRuntime } from "../src/host/runtime.ts";
-import { SESSION_ONLY, startupFailure } from "../src/main/secret-box.ts";
+import {
+  keepAside,
+  RECOVERY_BUTTONS,
+  SESSION_ONLY,
+  startupFailure,
+} from "../src/main/secret-box.ts";
 
 const SECRET = "shared-token-sentinel-31c9";
 const dirs: string[] = [];
@@ -113,6 +118,59 @@ describe("a desktop start that can't open this device's credentials", () => {
     expect(main).toContain("dialog.showErrorBox(title, message);");
     expect(main).toMatch(
       /credentialStatus\?\.\(\)\) === "session"\)\s+void dialog\.showMessageBox/,
+    );
+  });
+
+  it("a damaged record or unreadable settings offer to start fresh keeping the files; a locked keychain asks to unlock", () => {
+    const named = (name: string) => Object.assign(new Error(name), { name });
+    expect(startupFailure(named("SecureStorageUnavailableError"))).toMatchObject({
+      recover: false,
+    });
+    expect(startupFailure(named("SecureStorageUnavailableError")).message).toMatch(
+      /Unlock your keychain/,
+    );
+    for (const name of ["CredentialRecordInvalidError", "SavedSettingsInvalidError"]) {
+      const said = startupFailure(named(name));
+      expect(said.recover, name).toBe(true);
+      expect(said.message, name).toMatch(/Start fresh/);
+      expect(said.message, name).toMatch(/unchanged/);
+      expect(said.message, name).not.toMatch(/remove this device from the gateway/);
+    }
+    expect(startupFailure(new Error("other")).recover).toBe(false);
+    expect(RECOVERY_BUTTONS[0]).toMatch(/keep the old files/);
+  });
+
+  it("starting fresh sets the data folder aside unchanged, beside it, under a name of its own", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "clawtrate-keep-"));
+    dirs.push(parent);
+    const dir = join(parent, "gateway");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "credentials.bin"), "sealed-bytes");
+    writeFileSync(join(dir, STATE_FILE), "{}");
+    const now = new Date("2026-11-22T10:20:30Z");
+    const kept = await keepAside(dir, now);
+    expect(kept).toBe(join(parent, "gateway-kept-20261122-102030"));
+    expect(existsSync(dir)).toBe(false);
+    expect(readFileSync(join(kept, "credentials.bin"), "utf8")).toBe("sealed-bytes");
+    expect(readFileSync(join(kept, STATE_FILE), "utf8")).toBe("{}");
+    // The same moment again: a name of its own, and the first copy untouched.
+    mkdirSync(dir);
+    writeFileSync(join(dir, STATE_FILE), "[]");
+    const second = await keepAside(dir, now);
+    expect(second).toBe(`${kept}-2`);
+    expect(readFileSync(join(kept, STATE_FILE), "utf8")).toBe("{}");
+  });
+
+  it("the main process offers that choice for those cases, and relaunches only after setting the files aside", () => {
+    const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const guarded = main.slice(
+      main.indexOf("const { title, message, recover } = startupFailure(error);"),
+    );
+    expect(guarded).toContain("buttons: [...RECOVERY_BUTTONS]");
+    const fresh = guarded.slice(guarded.indexOf("if (choice === 0) {"));
+    expect(fresh.indexOf("await keepAside(privateDataDir(), new Date());")).toBeGreaterThan(0);
+    expect(fresh.indexOf("app.relaunch();")).toBeGreaterThan(
+      fresh.indexOf("await keepAside(privateDataDir(), new Date());"),
     );
   });
 });

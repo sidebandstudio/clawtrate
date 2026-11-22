@@ -10,6 +10,7 @@
 // nothing, so it counts as unavailable there.
 
 import type { SecretBox } from "@clawtrate/core/node";
+import { rename, stat } from "node:fs/promises";
 
 /** The safeStorage calls the box uses. */
 export type SafeStorageLike = {
@@ -79,30 +80,62 @@ export const MOCK_KEYCHAIN_SWITCH = "use-mock-keychain";
  * What the app says when it can't start because of this device's credentials: fixed words
  * for each case, never the error's own message, its cause or anything read from a file.
  */
-export function startupFailure(error: unknown): { title: string; message: string } {
+export function startupFailure(error: unknown): {
+  title: string;
+  message: string;
+  /** Whether the app offers to start fresh, keeping the files it couldn't use (`keepAside`). */
+  recover: boolean;
+} {
   const name = error instanceof Error ? error.name : "";
   if (name === "SecureStorageUnavailableError")
     return {
       title: "Clawtrate couldn't open your keychain",
       message:
         "Clawtrate keeps this device's credentials in your keychain, and couldn't read them. Unlock your keychain, then open Clawtrate again.",
+      recover: false,
     };
   if (name === "CredentialRecordInvalidError")
     return {
       title: "Clawtrate couldn't use this device's credentials",
       message:
-        "The file that holds this device's credentials is damaged or was changed, so Clawtrate didn't use it. Open Clawtrate again; if this comes back, remove this device from the gateway and pair it again.",
+        "The file that holds this device's credentials is damaged or was changed, so Clawtrate didn't use it. Start fresh to set this device's saved files aside, unchanged, in a folder next to them, and pair this device again. Or quit and restore them from a backup.",
+      recover: true,
     };
   if (name === "SavedSettingsInvalidError")
     return {
       title: "Clawtrate couldn't read its saved settings",
       message:
-        "This device's saved settings from an earlier version can't be read, so Clawtrate didn't use them. Open Clawtrate again; if this comes back, pair this device again.",
+        "This device's saved settings from an earlier version can't be read, so Clawtrate didn't use them. Start fresh to set this device's saved files aside, unchanged, in a folder next to them, and pair this device again. Or quit and restore them from a backup.",
+      recover: true,
     };
   return {
     title: "Clawtrate couldn't start",
     message: "Something went wrong while Clawtrate was starting. Open Clawtrate again.",
+    recover: false,
   };
+}
+
+/** The button that starts fresh, and the one that quits, in the recovery dialog. */
+export const RECOVERY_BUTTONS = ["Start fresh and keep the old files", "Quit"] as const;
+
+/**
+ * Starting fresh: renames the data folder to a sibling, `<folder>-kept-<date>` (with `-2`, `-3`
+ * … if taken), so nothing in it changes and none of it is read, and returns that path. The next
+ * start makes an empty folder and pairs as a new device.
+ */
+export async function keepAside(dir: string, now: Date): Promise<string> {
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
+  for (let n = 1; ; n += 1) {
+    const target = `${dir}-kept-${stamp}${n === 1 ? "" : `-${n}`}`;
+    try {
+      await stat(target);
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await rename(dir, target);
+    return target;
+  }
 }
 
 /** Said once when secure storage couldn't be used before this device's credentials moved there. */

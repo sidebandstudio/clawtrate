@@ -32,8 +32,10 @@ import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   keychainCheckName,
+  keepAside,
   KEYCHAIN_CHECK_SWITCH,
   MOCK_KEYCHAIN_SWITCH,
+  RECOVERY_BUTTONS,
   safeStorageBox,
   SESSION_ONLY,
   startupFailure,
@@ -399,8 +401,36 @@ async function main(): Promise<void> {
     });
   } catch (error) {
     // Nothing has connected and no window is open: say so in fixed words, and leave.
-    const { title, message } = startupFailure(error);
-    dialog.showErrorBox(title, message);
+    const { title, message, recover } = startupFailure(error);
+    if (!recover) {
+      dialog.showErrorBox(title, message);
+      app.exit(1);
+      return;
+    }
+    // A damaged record or unreadable settings: start fresh, keeping those files, or quit.
+    const choice = dialog.showMessageBoxSync({
+      type: "error",
+      title,
+      message: title,
+      detail: message,
+      buttons: [...RECOVERY_BUTTONS],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (choice === 0) {
+      try {
+        await keepAside(privateDataDir(), new Date());
+        app.relaunch();
+        app.exit(0);
+      } catch {
+        dialog.showErrorBox(
+          title,
+          "Clawtrate couldn't set the old files aside. Nothing was changed.",
+        );
+        app.exit(1);
+      }
+      return;
+    }
     app.exit(1);
     return;
   }
