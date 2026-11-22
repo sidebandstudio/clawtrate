@@ -1,4 +1,4 @@
-// The home page's script: the theme switch, copy buttons, the approval demo,
+// The home page's script: the theme switch, the install commands, the approval demo,
 // the questions, and the entrances. claws.js adds the Claws and the logo row.
 // The page reads fully without either, in dark.
 // Screens follow the theme through CSS, so the first paint is already right.
@@ -38,6 +38,45 @@
       setTimeout(() => (button.textContent = "Copy"), 1800);
     });
   });
+
+  // Homebrew or curl: tabs over the two commands, the same choice in every box.
+  const switches = [...document.querySelectorAll("[data-cmd]")];
+  function choose(tool) {
+    switches.forEach((box) => {
+      box.querySelectorAll("[data-cmd-tabs] button").forEach((tab) => {
+        const on = tab.dataset.tool === tool;
+        tab.setAttribute("aria-selected", String(on));
+        tab.tabIndex = on ? 0 : -1;
+      });
+      box.querySelectorAll(".cmd-box").forEach((panel) => {
+        panel.hidden = panel.dataset.tool !== tool;
+      });
+    });
+  }
+  switches.forEach((box) => {
+    const list = box.querySelector("[data-cmd-tabs]");
+    const tabs = [...list.querySelectorAll("button")];
+    list.setAttribute("role", "tablist");
+    list.setAttribute("aria-labelledby", box.previousElementSibling.id);
+    tabs.forEach((tab, index) => {
+      const panel = box.querySelector(`.cmd-box[data-tool="${tab.dataset.tool}"]`);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", panel.id);
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", tab.id);
+      tab.addEventListener("click", () => choose(tab.dataset.tool));
+      tab.addEventListener("keydown", (event) => {
+        const last = tabs.length - 1;
+        const to = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: last }[event.key];
+        if (to === undefined) return;
+        event.preventDefault();
+        const next = tabs[(to + tabs.length) % tabs.length];
+        choose(next.dataset.tool);
+        next.focus();
+      });
+    });
+  });
+  choose("brew");
 
   // The approval demo: Allow once or Deny, then reset.
   const demo = document.querySelector(".demo");

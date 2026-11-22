@@ -30,10 +30,11 @@
     </script>
   </head>
   <body>
-    <!-- The Claws' shared shape: the eye's clip. -->
+    <!-- The Claws' shared shapes: the eyes' clips. -->
     <svg class="claw-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
-        <clipPath id="ew-s"><circle r="3.1" /></clipPath>
+        <clipPath id="claw-eye"><circle r="3.1" /></clipPath>
+        <clipPath id="claw-eye-large"><circle r="3.7" /></clipPath>
       </defs>
     </svg>
     <a class="skip" href="#main">Skip to the content</a>
@@ -90,17 +91,28 @@
           </div>
           <div class="cmd rise">
             <p class="cmd-label" id="cmd-hero-label">Or install from Terminal</p>
-            <div class="cmd-box">
-              <pre
-                aria-labelledby="cmd-hero-label"
-              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"\$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
-              <button class="copy" type="button" data-copy>Copy</button>
+            <div class="cmd-switch" data-cmd>
+              <div class="cmd-tabs" data-cmd-tabs>
+                <button type="button" id="cmd-hero-tab-brew" data-tool="brew">Homebrew</button>
+                <button type="button" id="cmd-hero-tab-curl" data-tool="curl">curl</button>
+              </div>
+              <div class="cmd-box" id="cmd-hero-brew" data-tool="brew">
+                <span class="cmd-tool">Homebrew</span>
+                <pre
+                  tabindex="0"
+                  aria-label="Homebrew command"
+                ><code>brew install --cask sidebandstudio/tap/clawtrate</code></pre>
+                <button class="copy" type="button" data-copy>Copy</button>
+              </div>
+              <div class="cmd-box" id="cmd-hero-curl" data-tool="curl">
+                <span class="cmd-tool">curl</span>
+                <pre
+                  tabindex="0"
+                  aria-label="curl command"
+                ><code>curl -fsSL https://clawtrate.dev/install.sh | sh</code></pre>
+                <button class="copy" type="button" data-copy>Copy</button>
+              </div>
             </div>
-            <p class="cmd-note">
-              For a first install. It downloads the installer whole before running it, and the
-              installer checks the download and the app's signature before it installs. Later
-              updates come from Settings. No sudo. <a href="install.sh">Read install.sh</a>
-            </p>
           </div>
         </div>
 
@@ -123,241 +135,501 @@
               aria-hidden="true"
               focusable="false"
             >
-              <g class="cr">
-                <g class="arm arm-l">
+              <g data-s="idle">
+                <g
+                  data-part="creature"
+                  style="transform-box: view-box; transform-origin: 20px 35px"
+                >
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 10.1px 27.5px"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M10.1 27.5L5.3 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-92.4 5.3 22.9)"
+                      cx="5.3"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 29.9px 27.5px"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M29.9 27.5L34.7 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-8.4 34.7 22.9)"
+                      cx="34.7"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
                   <path
-                    d="M10.1 27.5L5.3 22.9"
-                    stroke="#5b8dff"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                  />
-                  <circle
-                    cx="5.3"
-                    cy="22.9"
-                    r="3.2"
+                    data-part="stalk"
                     fill="none"
                     stroke="#5b8dff"
-                    stroke-width="3.4"
-                    pathLength="100"
-                    stroke-dasharray="78 22"
-                    transform="rotate(-92.4 5.3 22.9)"
-                  />
-                </g>
-                <g class="arm arm-r">
-                  <path
-                    d="M29.9 27.5L34.7 22.9"
-                    stroke="#5b8dff"
-                    stroke-width="2.5"
+                    stroke-width="2.4"
                     stroke-linecap="round"
-                  />
-                  <circle
-                    cx="34.7"
-                    cy="22.9"
-                    r="3.2"
-                    fill="none"
-                    stroke="#5b8dff"
-                    stroke-width="3.4"
-                    pathLength="100"
-                    stroke-dasharray="78 22"
-                    transform="rotate(-8.4 34.7 22.9)"
-                  />
-                  <circle class="ball" data-s="done" cx="36.73" cy="20.64" r="2.7" fill="#f6f5f2" />
-                </g>
-                <g data-s="idle">
-                  <path
+                    stroke-linejoin="round"
                     d="M16.6 21.5Q15.8 15.55 15 9.6"
+                  />
+                  <path
+                    data-part="stalk"
+                    fill="none"
                     stroke="#5b8dff"
                     stroke-width="2.4"
                     stroke-linecap="round"
-                    fill="none"
-                  />
-                  <path
+                    stroke-linejoin="round"
                     d="M23.4 21.5Q24.2 15.55 25 9.6"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
                   />
-                </g>
-                <g data-s="waiting">
+                  <g data-part="body" fill="#5b8dff">
+                    <path
+                      d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                    />
+                  </g>
                   <path
-                    d="M16.6 21.5Q15.8 14.95 15 8.4"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                  <path
-                    d="M23.4 21.5Q24.2 14.95 25 8.4"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                </g>
-                <g data-s="done">
-                  <path
-                    d="M16.6 21.5Q15.8 15.25 15 9"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                  <path
-                    d="M23.4 21.5Q24.2 15.25 25 9"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                </g>
-                <g data-s="blocked">
-                  <path
-                    d="M16.6 21.5Q13 16.15 12.6 13.6"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                  <path
-                    d="M23.4 21.5Q27 16.15 27.4 13.6"
-                    stroke="#5b8dff"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                </g>
-                <path
-                  d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
-                  fill="#5b8dff"
-                />
-                <g data-s="idle">
-                  <path
-                    d="M18.2 27.4Q20 29.1 21.8 27.4"
+                    data-part="mouth"
                     fill="none"
                     stroke="#16181b"
                     stroke-width="1.3"
                     stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M18.2 27.4Q20 29.1 21.8 27.4"
                   />
-                  <g transform="translate(15 9.6)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0.82" cy="0.34" r="1.67" fill="#16181b" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
+                  <g data-part="eye" transform="translate(15 9.6)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0.6" cy="0.2" r="1.67" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
                       <rect
-                        class="blink"
+                        data-part="lid"
+                        style="
+                          transform-box: view-box;
+                          transform-origin: 0px 0px;
+                          animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 0ms infinite;
+                        "
                         x="-6"
                         y="-10.1"
                         width="12"
                         height="7"
-                        style="--b: 6.7px; animation-delay: 0s"
                       />
                     </g>
                   </g>
-                  <g transform="translate(25 9.6)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0.82" cy="0.34" r="1.67" fill="#16181b" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
+                  <g data-part="eye" transform="translate(25 9.6)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0.6" cy="0.2" r="1.67" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
                       <rect
-                        class="blink"
+                        data-part="lid"
+                        style="
+                          transform-box: view-box;
+                          transform-origin: 0px 0px;
+                          animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 50ms infinite;
+                        "
                         x="-6"
                         y="-10.1"
                         width="12"
                         height="7"
-                        style="--b: 6.7px; animation-delay: 0.05s"
-                      />
-                    </g>
-                  </g>
-                </g>
-                <g data-s="waiting">
-                  <path d="M17.8 27.2H22.2Q22.2 30.2 20 30.2Q17.8 30.2 17.8 27.2Z" fill="#16181b" />
-                  <g transform="translate(15 8.4) scale(1.1)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0" cy="0.07" r="1.67" fill="#16181b" />
-                    <circle cx="-0.64" cy="-0.63" r="0.57" fill="#fff" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
-                      <rect
-                        class="blink"
-                        x="-6"
-                        y="-10.1"
-                        width="12"
-                        height="7"
-                        style="--b: 6.7px; animation-delay: 2.7s"
-                      />
-                    </g>
-                  </g>
-                  <g transform="translate(25 8.4) scale(1.1)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0" cy="0.07" r="1.67" fill="#16181b" />
-                    <circle cx="-0.64" cy="-0.63" r="0.57" fill="#fff" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
-                      <rect
-                        class="blink"
-                        x="-6"
-                        y="-10.1"
-                        width="12"
-                        height="7"
-                        style="--b: 6.7px; animation-delay: 2.75s"
                       />
                     </g>
                   </g>
                 </g>
-                <g data-s="done">
+              </g>
+              <g data-s="waiting">
+                <g
+                  data-part="creature"
+                  style="
+                    transform-box: view-box;
+                    transform-origin: 20px 35px;
+                    animation: av-lean 2600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                  "
+                >
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 10.1px 27.5px"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M10.1 27.5L5.3 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-92.4 5.3 22.9)"
+                      cx="5.3"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
+                  <g
+                    class="av-still"
+                    data-part="arm"
+                    style="
+                      transform-box: view-box;
+                      transform-origin: 29.9px 27.5px;
+                      animation: av-wave 900ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
+                      --av-still: -54deg;
+                    "
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M29.9 27.5L34.7 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-8.4 34.7 22.9)"
+                      cx="34.7"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
                   <path
-                    d="M17.4 27Q20 30.4 22.6 27"
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.6 21.5Q15.8 14.95 15 8.4"
+                  />
+                  <path
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M23.4 21.5Q24.2 14.95 25 8.4"
+                  />
+                  <g data-part="body" fill="#5b8dff">
+                    <path
+                      d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                    />
+                  </g>
+                  <path
+                    data-part="mouth"
+                    fill="#16181b"
+                    d="M17.8 27.2H22.2Q22.2 30.2 20 30.2Q17.8 30.2 17.8 27.2Z"
+                  />
+                  <g data-part="eye" transform="translate(15 8.4) scale(1.1)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                    <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                      <rect
+                        data-part="lid"
+                        style="
+                          transform-box: view-box;
+                          transform-origin: 0px 0px;
+                          animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 0ms infinite;
+                        "
+                        x="-6"
+                        y="-10.1"
+                        width="12"
+                        height="7"
+                      />
+                    </g>
+                  </g>
+                  <g data-part="eye" transform="translate(25 8.4) scale(1.1)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
+                    <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                      <rect
+                        data-part="lid"
+                        style="
+                          transform-box: view-box;
+                          transform-origin: 0px 0px;
+                          animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 50ms infinite;
+                        "
+                        x="-6"
+                        y="-10.1"
+                        width="12"
+                        height="7"
+                      />
+                    </g>
+                  </g>
+                </g>
+              </g>
+              <g data-s="done">
+                <g
+                  data-part="creature"
+                  style="
+                    transform-box: view-box;
+                    transform-origin: 20px 35px;
+                    animation: av-hop 3200ms cubic-bezier(0.3, 0, 0.2, 1) 0ms infinite;
+                  "
+                >
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 10.1px 27.5px; rotate: 42deg"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M10.1 27.5L5.3 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-92.4 5.3 22.9)"
+                      cx="5.3"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 29.9px 27.5px; rotate: -42deg"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M29.9 27.5L34.7 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-8.4 34.7 22.9)"
+                      cx="34.7"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                    <circle
+                      data-part="ball"
+                      fill="#f6f5f2"
+                      stroke="#c9c6bf"
+                      stroke-width="0.7"
+                      cx="36.73"
+                      cy="20.64"
+                      r="2.7"
+                    />
+                  </g>
+                  <path
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.6 21.5Q15.8 15.25 15 9"
+                  />
+                  <path
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M23.4 21.5Q24.2 15.25 25 9"
+                  />
+                  <g data-part="body" fill="#5b8dff">
+                    <path
+                      d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                    />
+                  </g>
+                  <path
+                    data-part="mouth"
                     fill="none"
                     stroke="#16181b"
                     stroke-width="1.4"
                     stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M17.4 27Q20 30.4 22.6 27"
                   />
-                  <g transform="translate(15 9)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
+                  <g data-part="eye" transform="translate(15 9)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
                     <path
-                      d="M-1.92 0.93Q0 -2.23 1.92 0.93"
                       fill="none"
                       stroke="#16181b"
                       stroke-width="1.3"
                       stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M-1.92 0.93Q0 -2.23 1.92 0.93"
                     />
                   </g>
-                  <g transform="translate(25 9)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
+                  <g data-part="eye" transform="translate(25 9)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
                     <path
-                      d="M-1.92 0.93Q0 -2.23 1.92 0.93"
                       fill="none"
                       stroke="#16181b"
                       stroke-width="1.3"
                       stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M-1.92 0.93Q0 -2.23 1.92 0.93"
                     />
                   </g>
                 </g>
-                <g data-s="blocked">
+              </g>
+              <g data-s="blocked" data-muted>
+                <g
+                  data-part="creature"
+                  style="transform-box: view-box; transform-origin: 20px 35px; rotate: 6deg"
+                >
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 10.1px 27.5px; rotate: -62deg"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M10.1 27.5L5.3 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-92.4 5.3 22.9)"
+                      cx="5.3"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
+                  <g
+                    data-part="arm"
+                    style="transform-box: view-box; transform-origin: 29.9px 27.5px; rotate: 62deg"
+                  >
+                    <path
+                      stroke="#5b8dff"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M29.9 27.5L34.7 22.9"
+                    />
+                    <circle
+                      data-part="claw"
+                      fill="none"
+                      stroke="#5b8dff"
+                      stroke-width="3.4"
+                      pathLength="100"
+                      stroke-dasharray="78 22"
+                      transform="rotate(-8.4 34.7 22.9)"
+                      cx="34.7"
+                      cy="22.9"
+                      r="3.2"
+                    />
+                  </g>
                   <path
-                    d="M18.2 28.6Q20 27 21.8 28.6"
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.6 21.5Q13 16.15 12.6 13.6"
+                  />
+                  <path
+                    data-part="stalk"
+                    fill="none"
+                    stroke="#5b8dff"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M23.4 21.5Q27 16.15 27.4 13.6"
+                  />
+                  <g data-part="body" fill="#5b8dff">
+                    <path
+                      d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
+                    />
+                  </g>
+                  <path
+                    data-part="mouth"
                     fill="none"
                     stroke="#16181b"
                     stroke-width="1.3"
                     stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M18.2 28.6Q20 27 21.8 28.6"
                   />
-                  <g transform="translate(12.6 13.6)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0.25" cy="1.02" r="1.67" fill="#16181b" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
-                      <rect x="-6" y="-5.1" width="12" height="5.26" transform="rotate(-12)" />
+                  <g data-part="eye" transform="translate(12.6 13.6)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0.25" cy="1.02" r="1.67" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                      <rect
+                        data-part="lid"
+                        transform="rotate(-12)"
+                        x="-6"
+                        y="-5.1"
+                        width="12"
+                        height="5.26"
+                      />
                     </g>
                   </g>
-                  <g transform="translate(27.4 13.6)">
-                    <circle r="4.35" fill="#5b8dff" />
-                    <circle r="3.1" fill="#fff" />
-                    <circle cx="0.25" cy="1.02" r="1.67" fill="#16181b" />
-                    <g clip-path="url(#ew-s)" fill="#5b8dff">
-                      <rect x="-6" y="-5.1" width="12" height="5.26" transform="rotate(12)" />
+                  <g data-part="eye" transform="translate(27.4 13.6)">
+                    <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
+                    <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
+                    <circle data-part="pupil" fill="#16181b" cx="0.25" cy="1.02" r="1.67" />
+                    <g fill="#5b8dff" clip-path="url(#claw-eye)">
+                      <rect
+                        data-part="lid"
+                        transform="rotate(12)"
+                        x="-6"
+                        y="-5.1"
+                        width="12"
+                        height="5.26"
+                      />
                     </g>
                   </g>
                 </g>
@@ -796,9 +1068,13 @@
               <h3 id="q3">Can I verify the Mac download?</h3>
               <div class="faq-a" id="a3" role="region" aria-labelledby="q3">
                 <p>
-                  The Mac beta is Developer ID signed and Apple-notarized. The Terminal installer
-                  checks the download and the app's signature before it installs. It is for a first
-                  install and leaves an existing copy alone.
+                  Yes. The Mac beta is Developer ID signed and notarized by Apple. Homebrew checks
+                  the download's SHA-256 against
+                  <a
+                    href="https://github.com/sidebandstudio/homebrew-tap/blob/main/Casks/clawtrate.rb"
+                    >the cask</a
+                  >. <a href="install.sh">install.sh</a> checks the SHA-256, the signature and the
+                  notarization before it installs, and leaves an existing copy alone.
                 </p>
               </div>
             </li>
@@ -868,11 +1144,27 @@
           </div>
           <div class="close-side rise">
             <p class="cmd-label" id="cmd-close-label">Or from Terminal</p>
-            <div class="cmd-box cmd-close">
-              <pre
-                aria-labelledby="cmd-close-label"
-              ><code>sh -c 'f=$(mktemp) &amp;&amp; trap "rm -f \"\$f\"" EXIT &amp;&amp; c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) &amp;&amp; [ "$c" = 200 ] &amp;&amp; sh "$f"'</code></pre>
-              <button class="copy" type="button" data-copy>Copy</button>
+            <div class="cmd-switch" data-cmd>
+              <div class="cmd-tabs" data-cmd-tabs>
+                <button type="button" id="cmd-close-tab-brew" data-tool="brew">Homebrew</button>
+                <button type="button" id="cmd-close-tab-curl" data-tool="curl">curl</button>
+              </div>
+              <div class="cmd-box cmd-close" id="cmd-close-brew" data-tool="brew">
+                <span class="cmd-tool">Homebrew</span>
+                <pre
+                  tabindex="0"
+                  aria-label="Homebrew command"
+                ><code>brew install --cask sidebandstudio/tap/clawtrate</code></pre>
+                <button class="copy" type="button" data-copy>Copy</button>
+              </div>
+              <div class="cmd-box cmd-close" id="cmd-close-curl" data-tool="curl">
+                <span class="cmd-tool">curl</span>
+                <pre
+                  tabindex="0"
+                  aria-label="curl command"
+                ><code>curl -fsSL https://clawtrate.dev/install.sh | sh</code></pre>
+                <button class="copy" type="button" data-copy>Copy</button>
+              </div>
             </div>
             <p class="oss">
               MIT licensed. The source, roadmap, and design decisions live on

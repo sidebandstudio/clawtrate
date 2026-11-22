@@ -1,8 +1,10 @@
 #!/bin/sh
-# Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet.
-# Download it whole, then run it:
+# An incomplete download that ends before main is called runs nothing and fails.
+trap 'exit 1' EXIT
+
+# Installs the Clawtrate beta on a Mac where Clawtrate is not installed yet:
 #
-#   sh -c 'f=$(mktemp) && trap "rm -f \"\$f\"" EXIT && c=$(curl -q -sS --connect-timeout 15 --max-time 30 --proto =https --max-redirs 0 -o "$f" -w "%{http_code}" https://clawtrate.dev/install.sh) && [ "$c" = 200 ] && sh "$f"'
+#   curl -fsSL https://clawtrate.dev/install.sh | sh
 #
 # It reads the Beta feed, takes the build for this Mac's processor, and checks
 # the download's SHA-256, the archive's layout, the app's bundle id, version and
@@ -18,9 +20,6 @@
 # and CLAWTRATE_ASSETS (the origin a release download redirects to), each
 # http://127.0.0.1:<port>/...; and CLAWTRATE_APPLICATIONS, the folder to
 # install into.
-
-# An incomplete download that ends before main is called runs nothing and fails.
-trap 'exit 1' EXIT
 
 # The Developer ID team that signs Clawtrate's releases.
 CLAWTRATE_TEAM_ID="9X79V37Q89"

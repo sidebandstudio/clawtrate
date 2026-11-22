@@ -334,20 +334,71 @@ code {
   color: var(--text-muted);
   margin-bottom: 8px;
 }
+/* Homebrew or curl: one line each. Without script both show, each named. */
+.cmd-tabs {
+  display: none;
+}
+.js .cmd-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-bubble);
+}
+.cmd-tabs button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 140ms var(--ease),
+    color 140ms var(--ease);
+}
+.cmd-tabs button:hover {
+  color: var(--text);
+}
+.cmd-tabs button[aria-selected="true"] {
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(
+    --shadow-raised
+  ); /* taste-skill-ignore: the chosen tab, raised like the app's pills */
+}
 .cmd-box {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 10px 6px 10px 16px;
+  padding: 6px 6px 6px 16px;
   border-radius: 18px;
   background: var(--bg-bubble);
+}
+.cmd-box + .cmd-box {
+  margin-top: 8px;
+}
+.cmd-box[hidden] {
+  display: none;
+}
+.cmd-tool {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.js .cmd-tool {
+  display: none;
 }
 .cmd-box pre {
   flex: 1;
   min-width: 0;
-  padding-top: 7px;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
+  padding: 8px 0;
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .cmd-box code {
   font-size: 13px;
@@ -374,15 +425,6 @@ code {
 }
 .copy:active {
   transform: scale(0.95);
-}
-.cmd-note {
-  margin-top: 10px;
-  font-size: var(--t-s);
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-.cmd-note a {
-  color: var(--text);
 }
 
 /* The live approval, drawn the way the app draws its conversation. */
@@ -988,6 +1030,23 @@ h3 {
 .cmd-close {
   background: color-mix(in srgb, var(--close-ink) 12%, transparent);
 }
+.close .cmd-tabs {
+  background: color-mix(in srgb, var(--close-ink) 12%, transparent);
+}
+.close .cmd-tabs button {
+  color: color-mix(in srgb, var(--close-ink) 78%, transparent);
+}
+.close .cmd-tabs button:hover {
+  color: var(--close-ink);
+}
+.close .cmd-tabs button[aria-selected="true"] {
+  background: var(--close-btn);
+  color: var(--close-btn-ink);
+  box-shadow: none; /* taste-skill-ignore: flat on the green band */
+}
+.close .cmd-tool {
+  color: inherit;
+}
 .cmd-close .copy {
   background: var(--close-btn);
   color: var(--close-btn-ink);
@@ -1190,6 +1249,11 @@ h3 {
 @media (max-width: 520px) {
   .bar .btn-small {
     padding: 0 14px;
+  }
+  /* A phone shows the whole command, wrapped at its spaces. */
+  .cmd-box pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 }
 
@@ -1473,8 +1537,9 @@ h3 {
   color: var(--text-muted);
 }
 
-/* The Claws: Clawtrate's creatures, drawn in a 40-unit box. Each pose is a
-   data-s group, shown while the drawing's data-state names it. */
+/* The Claws: Clawtrate's creatures, from the app's avatar spec on the 40-unit
+   grid. Each pose is a data-s group, shown while the drawing's data-state
+   names it; each moving part carries its motion inline, as the app draws it. */
 .claw-defs {
   position: absolute;
   overflow: hidden;
@@ -1507,167 +1572,205 @@ h3 {
 .claw-art[data-state="done"] [data-s~="done"] {
   display: inline;
 }
-.claw-art .cr {
-  transform-box: view-box;
-  transform-origin: 20px 35px;
-  transition: rotate 280ms var(--ease);
-}
-.claw-art .blink {
-  animation: claw-blink 5.6s infinite;
-}
-.claw-art[data-state="done"] .cr {
-  animation: claw-hop 3.2s cubic-bezier(0.3, 0, 0.2, 1) infinite;
-}
-/* The white ball keeps an edge on a light page. */
-:root[data-theme="light"] .claw-perch .ball,
-:root[data-theme="light"] .track-stable .ball {
-  stroke: rgba(17, 18, 19, 0.24);
-  stroke-width: 0.45;
-}
-
-.clawling .arm {
-  transform-box: view-box;
-  transition: rotate 280ms var(--ease);
-}
-.clawling .arm-l {
-  transform-origin: 10.1px 27.5px;
-}
-.clawling .arm-r {
-  transform-origin: 29.9px 27.5px;
-}
-.clawling[data-state="waiting"] .arm-r {
-  animation: claw-wave 0.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-}
-.clawling[data-state="done"] .arm-l {
-  rotate: 42deg;
-}
-.clawling[data-state="done"] .arm-r {
-  rotate: -42deg;
-}
-.clawling[data-state="blocked"] {
+/* Blocked: the creature loses its colour a little. */
+.claw-art [data-muted] {
   filter: saturate(0.4) brightness(0.85);
 }
-.clawling[data-state="blocked"] .cr {
-  rotate: 6deg;
-}
-.clawling[data-state="blocked"] .arm-l {
-  rotate: -62deg;
-}
-.clawling[data-state="blocked"] .arm-r {
-  rotate: 62deg;
-}
-
-.lantern .lure {
-  transform-box: view-box;
-  transform-origin: 20px 14.8px;
-  transition: rotate 300ms var(--ease);
-}
-.lantern[data-state="thinking"] .lure {
-  animation: claw-sway-lure 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-}
-.lantern[data-state="working"] .lure {
-  animation: claw-conduct 0.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-}
-.lantern[data-state="thinking"] .glow {
-  animation: claw-pulse 2.6s ease-in-out infinite;
-}
+/* The Lantern's light: low while it thinks, bright once it looks at you. */
 .lantern .halo {
-  opacity: 0.3;
-  transition: opacity 400ms var(--ease);
-}
-.lantern[data-state="thinking"] .halo {
-  animation: claw-pulse 2.6s ease-in-out infinite;
-}
-.lantern:not([data-state="thinking"]) .halo {
   opacity: 1;
 }
-.lantern .ping {
-  display: none;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-.lantern[data-state="waiting"] .ping {
-  display: inline;
-  animation: claw-ping 2.6s cubic-bezier(0.2, 0, 0.4, 1) infinite;
+.lantern [data-s="thinking"] .halo {
+  animation: av-glow 2600ms cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  opacity: 0.35;
 }
 
-@keyframes claw-blink {
-  0%,
-  91%,
-  100% {
-    translate: 0 0;
+/* The spec's motions (avatar.ts, AVATAR_MOTIONS), in grid units. */
+@keyframes av-blink {
+  0% {
+    translate: 0px 0px;
+  }
+  91% {
+    translate: 0px 0px;
   }
   93.5% {
-    translate: 0 var(--b);
+    translate: 0px 6.7px;
   }
   96% {
-    translate: 0 0;
+    translate: 0px 0px;
+  }
+  100% {
+    translate: 0px 0px;
   }
 }
-@keyframes claw-hop {
-  0%,
+@keyframes av-blink-large {
+  0% {
+    translate: 0px 0px;
+  }
+  91% {
+    translate: 0px 0px;
+  }
+  93.5% {
+    translate: 0px 7.3px;
+  }
+  96% {
+    translate: 0px 0px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-sway {
+  0% {
+    rotate: -4deg;
+  }
+  50% {
+    rotate: 4deg;
+  }
+  100% {
+    rotate: -4deg;
+  }
+}
+@keyframes av-bob {
+  0% {
+    translate: 0px 0px;
+  }
+  50% {
+    translate: 0px -1.4px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-lean {
+  0% {
+    scale: 1;
+  }
+  45% {
+    scale: 1.07;
+  }
+  60% {
+    scale: 1.07;
+  }
+  100% {
+    scale: 1;
+  }
+}
+@keyframes av-hop {
+  0% {
+    translate: 0px 0px;
+  }
   4% {
-    translate: 0 0;
+    translate: 0px 0px;
   }
   10% {
-    translate: 0 -2.8px;
+    translate: 0px -2.8px;
   }
   16% {
-    translate: 0 0;
+    translate: 0px 0px;
   }
   20% {
-    translate: 0 -0.9px;
+    translate: 0px -0.9px;
   }
-  24%,
+  24% {
+    translate: 0px 0px;
+  }
   100% {
-    translate: 0 0;
+    translate: 0px 0px;
   }
 }
-@keyframes claw-wave {
-  0%,
+@keyframes av-snap {
+  0% {
+    stroke-dasharray: 78 22;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 97 3;
+    stroke-dashoffset: 9.5;
+  }
   100% {
+    stroke-dasharray: 78 22;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes av-wave {
+  0% {
     rotate: -30deg;
   }
   50% {
     rotate: -78deg;
   }
-}
-@keyframes claw-sway-lure {
-  0%,
   100% {
+    rotate: -30deg;
+  }
+}
+@keyframes av-crawl {
+  0% {
+    translate: 0px 0px;
+  }
+  50% {
+    translate: -1px -0.6px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-tilt {
+  0% {
+    rotate: -7deg;
+  }
+  50% {
+    rotate: 5deg;
+  }
+  100% {
+    rotate: -7deg;
+  }
+}
+@keyframes av-lure-sway {
+  0% {
     rotate: -9deg;
   }
   50% {
     rotate: 9deg;
   }
-}
-@keyframes claw-conduct {
-  0%,
   100% {
+    rotate: -9deg;
+  }
+}
+@keyframes av-conduct {
+  0% {
     rotate: -16deg;
   }
   50% {
     rotate: 14deg;
   }
+  100% {
+    rotate: -16deg;
+  }
 }
-@keyframes claw-ping {
+@keyframes av-ping {
   0% {
     scale: 1;
     opacity: 0.85;
   }
-  60%,
+  60% {
+    scale: 3;
+    opacity: 0;
+  }
   100% {
     scale: 3;
     opacity: 0;
   }
 }
-@keyframes claw-pulse {
-  0%,
-  100% {
+@keyframes av-glow {
+  0% {
     opacity: 1;
   }
   50% {
     opacity: 0.55;
+  }
+  100% {
+    opacity: 1;
   }
 }
 
@@ -1702,6 +1805,10 @@ h3 {
   .snow i,
   .fizz i {
     animation: none !important;
+  }
+  /* A part whose motion is the point holds a still pose, such as a claw raised to wave. */
+  .claw-art .av-still {
+    rotate: var(--av-still) !important;
   }
   .lantern .ping,
   .snow {
