@@ -622,6 +622,21 @@ describe("this device's credentials in secure storage", () => {
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
 
+  it("an earlier build's token moved in beside this device's own is retired when that token is removed", async () => {
+    const { dir, pem } = legacyFolder();
+    const own = await ownTokenKey(pem);
+    // Both came from the earlier build's files: no save of this device's token ran here.
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({ connection: CONNECTION, [own]: RECORD, "turn-limit-minutes": "30" }),
+    );
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    await credentials.storage.delete(own);
+    expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
   it("readers during a switch see the settings and their typed token together, never one without the other", async () => {
     const { dir } = legacyFolder();
     const credentials = open(dir, fakeBox().box);
