@@ -988,10 +988,10 @@ export class ComputerViews {
     // The tab's request or control ended since the take was refused: nothing holds it now.
     const now = this.pane(viewer)?.control;
     if (now?.status === "conflict" && asked >= live.conflictAfter) {
-      if (!kept.find((tab) => tab.targetId === now.targetId)?.lease)
+      if (!tabs.find((tab) => tab.targetId === now.targetId)?.lease)
         this.patchControl(viewer, { status: "none" });
     }
-    this.tieTake(live, asked, kept);
+    this.tieTake(live, asked, tabs);
   }
 
   /**

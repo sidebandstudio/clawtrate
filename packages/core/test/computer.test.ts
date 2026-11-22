@@ -104,6 +104,17 @@ const tabsAnswer = (lease: unknown = null, extra: unknown[] = []) => ({
   tabs: [{ targetId: TAB, url: "http://127.0.0.1:1/sign-in", title: "Sign in", lease }, ...extra],
 });
 
+function tabsWithTargetLast(lease: unknown) {
+  const answer = tabsAnswer(lease);
+  const others = Array.from({ length: 16 }, (_, i) => ({
+    targetId: `TAB${String(i).padStart(29, "0")}`,
+    url: `http://127.0.0.1:1/${i}`,
+    title: `Tab ${i}`,
+    lease: null,
+  }));
+  return { ...answer, tabs: [...others, ...answer.tabs] };
+}
+
 function question(overrides: Partial<QuestionCard> = {}): QuestionCard {
   return {
     id: "ask_1",
@@ -583,21 +594,26 @@ describe("taking control (F-142, F-144, section 18)", () => {
     expect(words.busyLine("Pip", "browser-not-watched")).not.toContain("still acting");
   });
 
-  it("F-142: someone else holding the tab is a conflict, not control", async () => {
-    let lease: unknown = null;
-    const h = harness({
-      "clawtrate-computer.tabs": () => tabsAnswer(lease),
-      "clawtrate-computer.control.take": () => {
-        throw refused("UNAVAILABLE", "control_held");
-      },
-    });
-    await live(h);
-    lease = { state: "granted", mine: false };
-    await h.views.take(h.viewer);
-    await flush();
-    expect(h.pane().control.status).toBe("conflict");
-    expect(h.pane().tabs[0]!.lease).toEqual({ state: "granted", holder: "elsewhere" });
-  });
+  it.each([false, true])(
+    "F-142: someone else holding the tab is a conflict, not control (outside the visible list: %s)",
+    async (outside) => {
+      let lease: unknown = null;
+      const h = harness({
+        "clawtrate-computer.tabs": () =>
+          outside && lease ? tabsWithTargetLast(lease) : tabsAnswer(lease),
+        "clawtrate-computer.control.take": () => {
+          throw refused("UNAVAILABLE", "control_held");
+        },
+      });
+      await live(h);
+      lease = { state: "granted", mine: false };
+      await h.views.take(h.viewer);
+      await flush();
+      expect(h.pane().control.status).toBe("conflict");
+      if (outside) expect(h.pane().tabs.some((tab) => tab.targetId === TAB)).toBe(false);
+      else expect(h.pane().tabs[0]!.lease).toEqual({ state: "granted", holder: "elsewhere" });
+    },
+  );
 
   it("F-142: a refused take names no holder until a read made after it does: another device still asking is asking, not in control, and the line clears once that request ends", async () => {
     let lease: unknown = null;
@@ -712,50 +728,54 @@ describe("taking control (F-142, F-144, section 18)", () => {
     await Promise.all([first, other]);
   });
 
-  it("F-142: Cancel withdraws the take with the draining event's generation, and a grant that wins the race is given back at once with no input", async () => {
-    let grant!: (value: unknown) => void;
-    let lease: unknown = null;
-    const h = harness({
-      "clawtrate-computer.tabs": () => tabsAnswer(lease),
-      "clawtrate-computer.control.take": () => new Promise((resolve) => (grant = resolve)),
-    });
-    await live(h);
-    const taking = h.views.take(h.viewer);
-    await flush();
-    // This connection's request: the read after the event lists it as its own.
-    lease = { state: "draining", mine: true };
-    h.views.controlEvent({
-      agentId: "pip",
-      profile: "bot-pip",
-      targetId: TAB,
-      holder: "user",
-      state: "draining",
-      generation: GEN,
-    });
-    h.views.cancelTake(h.viewer);
-    await flush();
-    expect(h.calls("clawtrate-computer.control.release")).toEqual([
-      { sessionKey: KEY, targetId: TAB, generation: GEN },
-    ]);
-    expect(h.pane().control.status).toBe("none");
-    grant({
-      state: "granted",
-      generation: GEN2,
-      renewWithinMs: 20_000,
-      targetId: TAB,
-      guarantee: [],
-    });
-    await taking;
-    await flush();
-    expect(h.calls("clawtrate-computer.control.release").at(-1)).toEqual({
-      sessionKey: KEY,
-      targetId: TAB,
-      generation: GEN2,
-    });
-    expect(h.pane().control.status).toBe("none");
-    expect(h.views.input(h.viewer, { kind: "text", text: "x" })).toBe(false);
-    expect(h.calls("clawtrate-computer.input")).toEqual([]);
-  });
+  it.each([false, true])(
+    "F-142: Cancel withdraws the take with the draining event's generation, and a grant that wins the race is given back at once with no input (outside the visible list: %s)",
+    async (outside) => {
+      let grant!: (value: unknown) => void;
+      let lease: unknown = null;
+      const h = harness({
+        "clawtrate-computer.tabs": () =>
+          outside && lease ? tabsWithTargetLast(lease) : tabsAnswer(lease),
+        "clawtrate-computer.control.take": () => new Promise((resolve) => (grant = resolve)),
+      });
+      await live(h);
+      const taking = h.views.take(h.viewer);
+      await flush();
+      // This connection's request: the read after the event lists it as its own.
+      lease = { state: "draining", mine: true };
+      h.views.controlEvent({
+        agentId: "pip",
+        profile: "bot-pip",
+        targetId: TAB,
+        holder: "user",
+        state: "draining",
+        generation: GEN,
+      });
+      h.views.cancelTake(h.viewer);
+      await flush();
+      expect(h.calls("clawtrate-computer.control.release")).toEqual([
+        { sessionKey: KEY, targetId: TAB, generation: GEN },
+      ]);
+      expect(h.pane().control.status).toBe("none");
+      grant({
+        state: "granted",
+        generation: GEN2,
+        renewWithinMs: 20_000,
+        targetId: TAB,
+        guarantee: [],
+      });
+      await taking;
+      await flush();
+      expect(h.calls("clawtrate-computer.control.release").at(-1)).toEqual({
+        sessionKey: KEY,
+        targetId: TAB,
+        generation: GEN2,
+      });
+      expect(h.pane().control.status).toBe("none");
+      expect(h.views.input(h.viewer, { kind: "text", text: "x" })).toBe(false);
+      expect(h.calls("clawtrate-computer.input")).toEqual([]);
+    },
+  );
 
   it("F-142: sends input to the held tab one call at a time, in order, with the generation, and only while held", async () => {
     let release!: () => void;
@@ -2124,25 +2144,10 @@ describe("bounds at the engine and what a settled state says", () => {
   });
 
   it("F-150: after a drop, the held tab is looked for in the whole reply: listed past the sixteen kept, held elsewhere, it stays unknown", async () => {
-    const others = Array.from({ length: 16 }, (_, i) => ({
-      targetId: `TAB${String(i).padStart(29, "0")}`,
-      url: `http://127.0.0.1:1/${i}`,
-      title: `Tab ${i}`,
-      lease: null,
-    }));
     let lease: unknown = null;
-    // The held tab is first while control is taken; after the drop sixteen others come first.
     let late = false;
     const h = harness({
-      "clawtrate-computer.tabs": () => {
-        const held = { targetId: TAB, url: "http://127.0.0.1:1/sign-in", title: "Sign in", lease };
-        return {
-          agentId: "pip",
-          profile: "bot-pip",
-          browser: "running",
-          tabs: late ? [...others, held] : [held, ...others],
-        };
-      },
+      "clawtrate-computer.tabs": () => (late ? tabsWithTargetLast(lease) : tabsAnswer(lease)),
     });
     await granted(h);
     late = true;
