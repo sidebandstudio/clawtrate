@@ -639,6 +639,10 @@ describe("parsing a choice from untrusted input", () => {
     const inherited = Object.create({ shell: "dome" }) as Record<string, string>;
     Object.assign(inherited, { family: "shellfolk", color: "green" });
     expect(parseAvatarChoice(inherited)).toBeNull();
+    // The right number of own fields, but the part itself only inherited.
+    const borrowed = Object.create({ shell: "dome" }) as Record<string, string>;
+    Object.assign(borrowed, { family: "shellfolk", color: "green", note: "x" });
+    expect(parseAvatarChoice(borrowed)).toBeNull();
     expect(
       parseAvatarChoice({ family: "shellfolk", shell: "dome", color: "green", toString: "x" }),
     ).toBeNull();
