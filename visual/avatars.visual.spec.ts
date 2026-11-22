@@ -110,6 +110,17 @@ test("with motion reduced, nothing moves and each state holds its still pose", a
   await reduced.close();
 });
 
+test("the decorative Connect avatars stay still while the connected gateway loads bots", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFixture(page, "scene=discovering", "dark");
+  const ensemble = page.locator(".ensemble");
+  await expect(ensemble).toBeVisible();
+  await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
+  expect(await ensemble.evaluate((row) => row.getAnimations({ subtree: true }).length)).toBe(0);
+});
+
 /** Thirty more bots, every other one waiting for you, so most rows sit below the rail's view. */
 async function crowd(page: Page) {
   await page.evaluate(() => {

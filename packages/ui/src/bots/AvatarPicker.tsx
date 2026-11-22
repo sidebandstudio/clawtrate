@@ -304,8 +304,9 @@ async function uploadedPicture(file: File): Promise<string> {
     throw new UploadRefused("read");
   }
   try {
-    // A second check, on what the decoder made: never more than the header said.
-    if (bitmap.width > header.width || bitmap.height > header.height)
+    // The decoder can apply a quarter turn from the photo's orientation metadata.
+    const turned = bitmap.width === header.height && bitmap.height === header.width;
+    if (!turned && (bitmap.width > header.width || bitmap.height > header.height))
       throw new UploadRefused("pixels");
     const side = Math.min(bitmap.width, bitmap.height);
     for (const px of [PICTURE_PX, 96, 72, 56]) {

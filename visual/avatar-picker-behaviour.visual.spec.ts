@@ -127,6 +127,46 @@ test("F-035: the person's own picture replaces the creature; a file of 25 MB or 
   await expect(page.getByTestId("picture-preview").locator("svg")).toBeVisible();
 });
 
+test("F-035: a rotated JPEG keeps its orientation in the picture preview", async ({ page }) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 48;
+    canvas.height = 32;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 24, 32);
+    ctx.fillStyle = "blue";
+    ctx.fillRect(24, 0, 24, 32);
+    return canvas.toDataURL("image/jpeg").split(",")[1]!;
+  });
+  const jpeg = Buffer.from(encoded, "base64");
+  // EXIF orientation 6 tells the decoder to turn the stored image 90 degrees clockwise.
+  const orientation = Buffer.from(
+    "ffe100224578696600004d4d002a00000008000101120003000000010006000000000000",
+    "hex",
+  );
+  await page.getByTestId("picture-file").setInputFiles({
+    name: "portrait.jpg",
+    mimeType: "image/jpeg",
+    buffer: Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]),
+  });
+  const preview = page.getByTestId("picture-preview").locator("img");
+  await expect(preview).toBeVisible();
+  const colors = await preview.evaluate(async (image: HTMLImageElement) => {
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 2;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(image, 0, 0, 1, 2);
+    const pixels = ctx.getImageData(0, 0, 1, 2).data;
+    return { redOnTop: pixels[0]! > pixels[2]!, blueBelow: pixels[6]! > pixels[4]! };
+  });
+  expect(colors).toEqual({ redOnTop: true, blueBelow: true });
+});
+
 test("F-037: on admin the Work pane's picture opens Edit picture; Save sends it and the bot is drawn anew", async ({
   page,
 }) => {

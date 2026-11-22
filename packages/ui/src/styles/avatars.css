@@ -38,6 +38,11 @@
   rotate: var(--av-still) !important;
 }
 
+/* The Connect screen's decorative creatures stay still, even after it connects. */
+.ensemble .creature [data-motion-part] {
+  animation: none !important;
+}
+
 /* A rail presence moves only while it is in the bot list's view and the page is
    shown (Rail.tsx marks it). Elsewhere its creature, ring and badge hold still,
    and a part with a still pose keeps it, so a waiting claw stays raised. */
