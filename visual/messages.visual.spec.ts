@@ -913,7 +913,7 @@ for (const width of [320, 390, 430]) {
           expect(await unreached(control)).toEqual([]);
       });
 
-    test("F-066 F-067: a held reply shows its actions clear of the quote over it, each button with its 44 px hit area", async ({
+    test("F-066 F-067 F-283: a held reply shows its actions clear of the quote over it and of the reactions over that, each button and reaction with its 44 px hit area", async ({
       page,
     }) => {
       await open(page);
@@ -923,7 +923,11 @@ for (const width of [320, 390, 430]) {
       await holdOn(message);
       const buttons = message.getByTestId("message-actions").getByRole("button");
       await expect(buttons).toHaveCount(3);
-      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      // Over the quote, the reactions on Otto's report.
+      const pills = page.locator('[data-message="row-9"]').getByTestId("reaction");
+      await expect(pills).toHaveCount(2);
+      for (const control of [...(await buttons.all()), ...(await pills.all())])
+        expect(await unreached(control)).toEqual([]);
       // The quote heads the reply's turn, just over its bubble. Across its whole width, no touch
       // in its 44 px area reaches the bar. The bubble lies over the area's foot with the bar shut
       // too, so the bar is all that is looked for.

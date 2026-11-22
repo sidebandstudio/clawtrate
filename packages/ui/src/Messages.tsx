@@ -185,8 +185,8 @@ export function MessageActions({
     const height = toolbar.offsetHeight;
     // A bar a finger opened counts the touch areas its buttons reach past it, and keeps them 2 px
     // within what shows of the transcript, below the band kept clear for the header and the strip,
-    // which lie over it, and 2 px off those of the message's other controls: the quote over it,
-    // its reactions and its replies link. A mouse's or a pen's stays beside the bubble wherever
+    // which lie over it, and 2 px off those of the quotes, reactions and replies links: the
+    // message's own and its neighbours'. A mouse's or a pen's stays beside the bubble wherever
     // there is room: above or below it, the pointer would leave the message on its way to the bar,
     // and the bar would hide.
     const touch = toolbar.dataset.pointer === "touch";
@@ -198,20 +198,23 @@ export function MessageActions({
       : 0;
     const first = view ? view.top + band + clear - turnBox.top : -Infinity;
     const last = view ? view.bottom - clear - height - turnBox.top : Infinity;
-    const quote = turn.previousElementSibling?.matches(".reply-quote")
-      ? [turn.previousElementSibling]
+    const quote = turn.previousElementSibling;
+    const controls = touch
+      ? [...(scroller ?? turn).querySelectorAll(".reply-quote, .reaction, .replies-link")]
       : [];
-    const taken = touch
-      ? [...quote, ...turn.querySelectorAll(".reaction, .replies-link")].map((control) => {
-          const area = touchArea(control);
-          return {
-            top: area.top - turnBox.top - clear,
-            right: area.right - turnBox.left + clear,
-            bottom: area.bottom - turnBox.top + clear,
-            left: area.left - turnBox.left - clear,
-          };
-        })
-      : [];
+    const taken = controls.map((control) => {
+      const area = touchArea(control);
+      return {
+        // The message's own: the quote over it, and its reactions and replies link under it.
+        side: control === quote ? "over" : turn.contains(control) ? "under" : null,
+        top: area.top - turnBox.top - clear,
+        right: area.right - turnBox.left + clear,
+        bottom: area.bottom - turnBox.top + clear,
+        left: area.left - turnBox.left - clear,
+      };
+    });
+    const over = taken.filter((area) => area.side === "over");
+    const under = taken.filter((area) => area.side === "under");
     const fits = (top: number, left: number) =>
       !touch ||
       (top >= first &&
@@ -229,19 +232,20 @@ export function MessageActions({
     const top = box.top - turnBox.top;
     if (left >= 0 && left <= max && fits(top, left)) return setPlace({ top, left });
     // Within the column: where there is no room beside it, it sits at the bubble's outer corner,
-    // above the message, else below it, else inside it at the top of what shows of it.
+    // above the message, else below it, else inside it at the top of what shows of it, under its
+    // quote.
     const corner = Math.max(
       0,
       Math.min(max, role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width),
     );
-    const above = Math.min(top - 4, ...taken.map((area) => area.top)) - height;
-    const below = Math.max(box.bottom - turnBox.top + 4, ...taken.map((area) => area.bottom));
+    const above = Math.min(top - 4, ...over.map((area) => area.top)) - height;
+    const below = Math.max(box.bottom - turnBox.top + 4, ...under.map((area) => area.bottom));
     setPlace({
       top: fits(above, corner)
         ? above
         : fits(below, corner)
           ? below
-          : Math.min(last, Math.max(first, top)),
+          : Math.min(last, Math.max(first, top, ...over.map((area) => area.bottom))),
       left: corner,
     });
   }, [turnRef, role]);
