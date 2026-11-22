@@ -15,12 +15,12 @@
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, normalize } from "node:path";
+import { isAbsolute, normalize, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
   REFUSALS,
+  literalTokenRefusal,
   usablePort,
-  usableToken,
   type Extracted,
   type SettingsProfile,
 } from "./settings-extract.ts";
@@ -124,18 +124,25 @@ const component = (name: string) =>
   name.length > 0 && name.length <= 255 && !/[/\0]/.test(name) && name !== "." && name !== "..";
 
 /**
- * Unless the caller says this is a production run and no sandbox marker is
- * present, the home folder must be a private folder of this account's, by
- * its canonical path, below one of this machine's temporary roots with no
- * folder on the way that another account could swap, and away from the
- * account's real home. Checked before anything in it is opened.
+ * Which home may be read, decided before anything in it is opened. A
+ * production run (the caller says so, and no sandbox marker is present)
+ * reads only the home the operating system reports for this account, and
+ * nothing when that can't be determined. Any other run reads only a private
+ * folder of this account's, by its canonical path, below one of this
+ * machine's temporary roots with no folder on the way that another account
+ * could swap, and away from the account's real home.
  */
 export function guardHome(
   home: string,
   sandboxed: boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  accountHomeOf: () => string | null = accountHome,
 ): void {
-  if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) return;
+  const real = accountHomeOf();
+  if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
+    if (real === null || home !== resolve(real)) throw new SetupRefusedError("home");
+    return;
+  }
   const uid = process.geteuid?.() ?? null;
   const orNull = <T>(read: () => T): T | null => {
     try {
@@ -144,7 +151,6 @@ export function guardHome(
       return null;
     }
   };
-  const real = accountHome();
   const canonical = orNull(() => realpathSync(home));
   const realHome = real === null ? null : orNull(() => realpathSync(real));
   const root = systemTempRoots(process.platform).find(
@@ -222,10 +228,11 @@ export async function openSettingsFile(options: {
   deadlineMs?: number;
 }): Promise<Opened> {
   const { home, folder, file, platform } = options;
+  // No local proof on any other system: nothing is looked up, resolved or opened there.
+  if (platform !== "darwin" && platform !== "linux") return refused("helper");
   if (!isAbsolute(home) || normalize(home) !== home || !component(folder) || !component(file))
     return refused("path");
   guardHome(home, options.sandboxed);
-  if (platform !== "darwin" && platform !== "linux") return refused("helper");
   if (platform === "darwin" && !options.helper) return refused("helper");
   const held = await holdHome(home);
   if (!("handle" in held)) return held;
@@ -483,7 +490,10 @@ function validExtracted(message: unknown): Extracted | null {
   if (typeof message !== "object" || message === null) return null;
   const { kind, token, port, reason, why } = message as Record<string, unknown>;
   if (kind === "found")
-    return typeof token === "string" && usableToken(token) && usablePort(port)
+    return typeof token === "string" &&
+      token === token.trim() &&
+      literalTokenRefusal(token) === null &&
+      usablePort(port)
       ? { kind: "found", token, port }
       : null;
   if (kind !== "refused" || typeof reason !== "string" || !Object.hasOwn(REFUSALS, reason))

@@ -285,6 +285,34 @@ describe.skipIf(!posix)("the home folder", () => {
     await expect(openIn(path())).rejects.toBeInstanceOf(SetupRefusedError);
   });
 
+  it("reads nothing on Windows, and looks up, resolves and opens no home first", async () => {
+    // A home that doesn't exist: the guard would refuse it, and holding it would fail.
+    const missing = join(scratch, "no-such-windows-home");
+    for (const home of [missing, "relative\\home"])
+      await expect(
+        openSettingsFile({
+          home,
+          folder: ".openclaw",
+          file: "openclaw.json",
+          platform: "win32",
+          helper: null,
+          sandboxed: true,
+        }),
+      ).resolves.toEqual(unsafe("helper"));
+    expect(
+      await readLocalSettings({
+        home: missing,
+        platform: "win32",
+        helper: null,
+        sandboxed: false,
+        worker: WORKER,
+      }),
+    ).toEqual([
+      { profile: "default", outcome: unsafe("helper") },
+      { profile: "clawtrate", outcome: unsafe("helper") },
+    ]);
+  });
+
   it("takes the temporary roots from this machine, whichever platform's reader is asked for", async () => {
     const other = platform === "darwin" ? "linux" : "darwin";
     const answer = openSettingsFile({
@@ -357,6 +385,41 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     const { path, file } = home();
     acl(file, "root allow read");
     expect(await openIn(path)).toEqual(unsafe("acl"));
+  });
+
+  it.each(["add_file", "add_subdirectory", "delete_child", "writesecurity", "chown"])(
+    "refuses a home whose ACL lets another account %s",
+    async (perm) => {
+      const { path } = home();
+      acl(path, `staff allow ${perm}`);
+      expect(await openIn(path)).toEqual(unsafe("acl"));
+    },
+  );
+
+  it("keeps a home's ordinary ACLs: macOS's delete denial, read-only grants and this account's own", async () => {
+    const { path } = home();
+    try {
+      acl(path, "group:everyone deny delete");
+      acl(path, "everyone allow list,search,readattr,readextattr,readsecurity");
+      acl(path, `${userInfo().username} allow add_file,delete_child`);
+      expect(await openIn(path)).toMatchObject({ kind: "read" });
+    } finally {
+      // The delete denial would otherwise keep the scratch folder from being removed.
+      execFileSync("/bin/chmod", ["-N", path]);
+    }
+  });
+
+  it("checks the home it was handed itself, as the host does", () => {
+    const shared = join(scratch, `helper-shared-${++homes}`);
+    mkdirSync(shared, { mode: 0o700 });
+    chmodSync(shared, 0o770);
+    const handed = (home: string) =>
+      spawnSync("/bin/sh", ["-c", 'exec "$0" read .openclaw openclaw.json 3<"$1"', helper!, home], {
+        encoding: "utf8",
+      }).stdout;
+    expect(handed("/usr")).toBe("refused owner\n");
+    expect(handed(shared)).toBe("refused mode\n");
+    expect(handed(home().path)).toBe(`ok\n${SETTINGS}`);
   });
 
   it("allows an ACL that grants only this account, or only denies", async () => {
@@ -664,6 +727,35 @@ parentPort.postMessage({ kind: "found", token, port: 1 });\n`;
     );
   });
 
+  it.each([
+    ["$NAME", "$OPENCLAW_TOKEN"],
+    ["${…}", "${OPENCLAW_TOKEN}"],
+    ["${…} inside text", "abc${OPENCLAW_TOKEN}def"],
+    ["a legacy env marker", "secretref-env:OPENCLAW_TOKEN"],
+    ["an older env marker", "__env__:OPENCLAW_TOKEN"],
+    ["the redaction sentinel", "__OPENCLAW_REDACTED__"],
+    ["a display marker", "[REDACTED]"],
+    ["a placeholder", "change-me-now"],
+    ["the word null", "null"],
+    ["untrimmed text", ` ${TOKEN}`],
+  ])("refuses a worker's token that is %s, by the extractor's own rule", async (name, token) => {
+    const answer = answering(`token-${name.replace(/\W+/g, "-")}.mjs`, {
+      kind: "found",
+      token,
+      port: 19555,
+    });
+    expect(await parseInWorker("", "default", answer)).toEqual(workerFailed);
+  });
+
+  it("takes a worker's literal token that only looks like a reference", async () => {
+    const answer = answering("token-literal.mjs", { kind: "found", token: "$cost-2026", port: 1 });
+    expect(await parseInWorker("", "default", answer)).toEqual({
+      kind: "found",
+      token: "$cost-2026",
+      port: 1,
+    });
+  });
+
   it("keeps only a refusal's fixed fields", async () => {
     const message = { kind: "refused", reason: "credential", why: "empty", secret: TOKEN };
     expect(await parseInWorker("", "default", answering("extra.mjs", message))).toStrictEqual({
@@ -776,24 +868,41 @@ describe("the account's real home", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // Every guardHome call here passes a stand-in for the account's home: the real one is never
+  // looked up, and nothing is opened, since the guard decides before anything is.
+  const synthetic = join("/", "clawtrate-synthetic-home");
+  const elsewhere = join("/", "clawtrate-other-home");
+
   it("is refused unless the caller says the run is a production one, and no marker says otherwise", () => {
-    // A synthetic home outside the temporary roots, and a real system folder: never the account's.
-    for (const path of [join("/", "clawtrate-synthetic-home"), "/usr"]) {
+    for (const path of [synthetic, "/usr"]) {
       for (const sandboxed of [true, undefined])
-        expect(() => guardHome(path, sandboxed, {}), `${path} ${sandboxed}`).toThrow(
+        expect(() => guardHome(path, sandboxed, {}, () => path), `${path} ${sandboxed}`).toThrow(
           SetupRefusedError,
         );
       // A marker makes a run sandboxed whatever the caller says.
-      expect(() => guardHome(path, false, { CLAWTRATE_AUTOMATED: "" })).toThrow(SetupRefusedError);
-      // Only an explicit production caller, with no marker, is let through.
-      expect(() => guardHome(path, false, {})).not.toThrow();
+      expect(() => guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => path)).toThrow(
+        SetupRefusedError,
+      );
     }
+  });
+
+  it("in a production run, is only the home the system reports for this account", () => {
+    const production = (home: string, account: string | null) => () =>
+      guardHome(home, false, {}, () => account);
+    expect(production(synthetic, synthetic)).not.toThrow();
+    expect(production(synthetic, `${synthetic}/`)).not.toThrow();
+    // A home the caller names that isn't the account's, or no account home at all, refuses.
+    expect(production(elsewhere, synthetic)).toThrow(SetupRefusedError);
+    expect(production(`${synthetic}/`, synthetic)).toThrow(SetupRefusedError);
+    expect(production(join(synthetic, ".openclaw"), synthetic)).toThrow(SetupRefusedError);
+    expect(production(synthetic, null)).toThrow(SetupRefusedError);
   });
 
   it("is never a default: every reader entry point takes the home from its caller", () => {
     const source = readFileSync(join(ROOT, "apps/desktop/src/setup/settings-reader.ts"), "utf8");
-    // `accountHome` is read only to refuse it; nothing resolves a home of its own.
-    expect(source.match(/accountHome\(\)/g)).toHaveLength(1);
+    // The account's home is looked up only to compare with the one given; nothing else names one.
+    expect(source.match(/\baccountHome\b/g)).toHaveLength(2);
+    expect(source).toContain("accountHomeOf: () => string | null = accountHome,");
     expect(source).not.toMatch(/homedir|userInfo|process\.env\.HOME|"~/);
   });
 });

@@ -84,12 +84,29 @@ const ENV_SHORTHAND = /^\$[A-Z][A-Z0-9_]{0,127}$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-/** A token the host may hold: what the rules below accept, checked again at the worker's boundary. */
-export const usableToken = (token: string) =>
-  token.length > 0 &&
-  token === token.trim() &&
-  Buffer.byteLength(token, "utf8") <= TOKEN_MAX_BYTES &&
-  !CONTROL.test(token);
+type TokenRefusal = "placeholder" | "redacted" | "indirect" | "empty" | "long" | "control";
+
+/**
+ * Why a token, already trimmed as OpenClaw trims it, isn't a literal the host
+ * may hold, or null. The one rule for both the extraction below and the
+ * host's check of the worker's answer.
+ */
+export function literalTokenRefusal(token: string): TokenRefusal | null {
+  if (!token) return "empty";
+  if (PLACEHOLDERS.has(token)) return "placeholder";
+  if (REDACTED.has(token)) return "redacted";
+  // OpenClaw treats `$NAME`, `${…}` and its legacy markers as references.
+  if (
+    ENV_SHORTHAND.test(token) ||
+    token.includes("${") ||
+    token.startsWith("secretref-env:") ||
+    token.startsWith("__env__:")
+  )
+    return "indirect";
+  if (Buffer.byteLength(token, "utf8") > TOKEN_MAX_BYTES) return "long";
+  if (CONTROL.test(token)) return "control";
+  return null;
+}
 
 export const usablePort = (port: unknown): port is number =>
   typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535;
@@ -160,19 +177,7 @@ export function extractSettings(text: string, profile: SettingsProfile): Extract
   if (raw === undefined) return refuse("credential", "no-token");
   if (typeof raw !== "string") return refuse("credential", "secret-ref");
 
-  // OpenClaw trims, then treats `$NAME`, `${…}` and its legacy markers as references.
   const token = raw.trim();
-  if (!token) return refuse("credential", "empty");
-  if (PLACEHOLDERS.has(token)) return refuse("credential", "placeholder");
-  if (REDACTED.has(token)) return refuse("credential", "redacted");
-  if (
-    ENV_SHORTHAND.test(token) ||
-    token.includes("${") ||
-    token.startsWith("secretref-env:") ||
-    token.startsWith("__env__:")
-  )
-    return refuse("credential", "indirect");
-  if (Buffer.byteLength(token, "utf8") > TOKEN_MAX_BYTES) return refuse("credential", "long");
-  if (CONTROL.test(token)) return refuse("credential", "control");
-  return { kind: "found", token, port };
+  const why = literalTokenRefusal(token);
+  return why ? refuse("credential", why) : { kind: "found", token, port };
 }

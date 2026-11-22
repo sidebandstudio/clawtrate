@@ -42,8 +42,13 @@ static const char *openFailure(int parent, const char *name) {
     }
 }
 
-/** Whether an ACL entry allows anything to anyone but this account. */
-static int aclGrantsOthers(int fd) {
+/**
+ * Whether an ACL entry allows anyone but this account anything, or with
+ * `changesOnly`, anything that changes a folder's entries or its access: add
+ * a file or folder, delete an entry, rewrite the ACL or take ownership. A
+ * deny adds no permission, so a deny entry never counts.
+ */
+static int aclGrantsOthers(int fd, int changesOnly) {
     acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
     if (!acl) return errno == ENOENT ? 0 : 1;
     int grants = 0;
@@ -59,6 +64,15 @@ static int aclGrantsOthers(int fd) {
             grants = !who || mbr_uuid_to_id(who->g_guid, &id, &type) != 0 || type != ID_TYPE_UID ||
                      id != geteuid();
             if (who) acl_free(who);
+            acl_permset_t perms;
+            if (grants && changesOnly) {
+                const acl_perm_t changes[] = {ACL_ADD_FILE, ACL_ADD_SUBDIRECTORY, ACL_DELETE_CHILD,
+                                              ACL_WRITE_SECURITY, ACL_CHANGE_OWNER};
+                grants = 0;
+                if (acl_get_permset(entry, &perms) != 0) grants = 1;
+                for (size_t i = 0; !grants && i < sizeof changes / sizeof *changes; ++i)
+                    grants = acl_get_perm_np(perms, changes[i]) != 0;
+            }
         }
     }
     acl_free(acl);
@@ -73,9 +87,23 @@ static const char *checkOpened(int fd, int folder) {
     if (st.st_uid != geteuid()) return "owner";
     if (folder ? (st.st_mode & 077) != 0 : (st.st_mode & 07777) != 0600) return "mode";
     if (!folder && st.st_nlink != 1) return "links";
-    if (aclGrantsOthers(fd)) return "acl";
+    if (aclGrantsOthers(fd, 0)) return "acl";
     if (!folder && st.st_size > SETTINGS_LIMIT) return "large";
     return NULL;
+}
+
+/**
+ * The home folder the host held and passed as fd 3, checked here too: a
+ * folder of this account's that no other account can add to, remove from or
+ * re-permission, by its mode or its ACL.
+ */
+static const char *checkHome(int fd) {
+    struct stat st;
+    if (fstat(fd, &st) != 0) return "failed";
+    if (!S_ISDIR(st.st_mode)) return "type";
+    if (st.st_uid != geteuid()) return "owner";
+    if ((st.st_mode & 022) != 0) return "mode";
+    return aclGrantsOthers(fd, 1) ? "acl" : NULL;
 }
 
 /** Reads to the end, refusing more than the limit however large the file was when checked. */
@@ -108,6 +136,8 @@ static const char *readSettings(int home, const char *folderName, const char *fi
                                 char **buffer, size_t *length) {
     *buffer = NULL;
     *length = 0;
+    const char *homeRefused = checkHome(home);
+    if (homeRefused) return homeRefused;
     int folder = openat(home, folderName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     const char *why = folder < 0 ? openFailure(home, folderName) : checkOpened(folder, 1);
     if (!why) why = preflight(folder, fileName);
