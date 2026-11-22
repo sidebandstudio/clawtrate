@@ -607,6 +607,27 @@ describe("this device's credentials in secure storage", () => {
     }
   });
 
+  it("switching away and back while the earlier token's removal keeps failing never revives it, live or after relaunch", async () => {
+    const { dir } = legacyFolder();
+    let reads = 0;
+    const lockedAfterOpen = fakeBox({
+      decrypt: async (data) => {
+        if ((reads += 1) > 1) throw new Error("locked");
+        return fakeBox().box.decrypt(data);
+      },
+    }).box;
+    const credentials = open(dir, lockedAfterOpen);
+    expect(await credentials.storage.get("connection")).toBe(CONNECTION);
+    // Another gateway: the earlier token's removal fails, so its sealed copy stays.
+    const other = JSON.stringify({ url: "ws://127.0.0.1:19003", token: null });
+    await credentials.storage.set("connection", other);
+    expect(await credentials.storage.get("connection")).toBe(other);
+    // Back to the first address, with no token typed: the earlier token stays retired.
+    await credentials.storage.set("connection", NO_TOKEN);
+    expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
   it("removing this device's own token never revives the earlier build's token, live or after relaunch", async () => {
     const { dir, pem } = legacyFolder();
     const credentials = open(dir, fakeBox().box);
