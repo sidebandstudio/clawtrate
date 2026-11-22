@@ -434,6 +434,7 @@ export function computerFixture(
       get().transcripts[key]?.questions.find((q) => q.status === "pending") ?? null,
     questionStatus: (key, id) =>
       get().transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
+    withdraw: () => {},
     answer: async (key, id, answers) => {
       await wait(300);
       const t = get().transcripts[key];

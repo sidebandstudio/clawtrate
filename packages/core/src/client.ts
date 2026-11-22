@@ -1228,7 +1228,8 @@ export class ClawtrateClient {
       this.state.transcripts[key]?.questions.find((q) => q.status === "pending") ?? null,
     questionStatus: (key, id) =>
       this.state.transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
-    answer: (key, id, answers) => this.answerQuestion(key, id, answers),
+    answer: (key, id, answers, owner) => this.answerQuestion(key, id, answers, { owner }),
+    withdraw: (owner) => this.withdraw(owner),
     stopTask: (key, owner) => this.stopTask(key, owner),
     log: (level, message) => this.log(level, message),
   });

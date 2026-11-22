@@ -487,7 +487,18 @@ export type ComputerContext = {
   pendingQuestion(key: string): QuestionCard | null;
   /** How a question of the task ended, if it did. */
   questionStatus(key: string, questionId: string): QuestionCard["status"] | null;
-  answer(key: string, questionId: string, answers: Record<string, QuestionAnswer[]>): Promise<void>;
+  /**
+   * Answer the question for `owner`, the hand-back that queued it: withdrawn with it (`withdraw`)
+   * while it waits for access or reads the question, nothing of it is sent.
+   */
+  answer(
+    key: string,
+    questionId: string,
+    answers: Record<string, QuestionAnswer[]>,
+    owner: object,
+  ): Promise<void>;
+  /** Withdraw what `owner` asked for and the gateway has not been asked yet. */
+  withdraw(owner: object): void;
   /**
    * The conversation's Stop for the task's runs; which runs it asked to stop, or the abort's
    * answer. Asked for `owner`: withdrawn with it while it waits for write access.
@@ -576,6 +587,8 @@ type Live = {
   shown: boolean;
   /** The answer on its way after a confirmed release, by its number; its result is its own. */
   answering: number | null;
+  /** Who asks for the hand-back's answer, queued or on its way: withdrawn when the viewer leaves. */
+  answerOwner: object | null;
   /**
    * After a take was refused as held (`conflict`): the first tab read that tells who holds the
    * tab now. Earlier reads say nothing of it.
@@ -749,6 +762,7 @@ export class ComputerViews {
       tabsAsked: 0,
       shown: true,
       answering: null,
+      answerOwner: null,
       conflictAfter: 0,
       closed: 0,
       recoverAsked: 0,
@@ -797,6 +811,14 @@ export class ComputerViews {
     if (!live) return;
     // Nothing starts a view or a take again until the tab is shown again.
     live.shown = false;
+    // The answer chosen here goes only while the person is here: queued, it is retired, and on
+    // its way, it is withdrawn unless the gateway was already asked. The release goes on.
+    if (live.answerOwner) this.ctx.withdraw(live.answerOwner);
+    live.answerOwner = null;
+    if (live.lease?.answer) {
+      live.lease.answer = null;
+      this.patchControl(viewer, { answerQueued: false, outcome: "answer-not-sent" });
+    }
     this.closeTarget(live);
   }
 
@@ -1659,6 +1681,7 @@ export class ComputerViews {
     lease.inputs.length = 0;
     lease.sequence = ++this.nextSequence;
     lease.answer = options.answer ?? null;
+    if (lease.answer) live.answerOwner = {};
     const sequence = lease.sequence;
     this.patchControl(viewer, {
       status: "releasing",
@@ -1740,6 +1763,7 @@ export class ComputerViews {
       return;
     }
     this.patchControl(live.viewer, { ...noControl, status: "answering" });
+    const owner = live.answerOwner ?? {};
     const token = ++this.nextSequence;
     live.answering = token;
     // The answer's result belongs to this pane's task and this hand-back only: a pane shown for
@@ -1754,7 +1778,7 @@ export class ComputerViews {
       );
     };
     void this.ctx
-      .answer(lease.key, answer.questionId, { [answer.itemId]: [{ option: answer.option }] })
+      .answer(lease.key, answer.questionId, { [answer.itemId]: [{ option: answer.option }] }, owner)
       .then(
         () => {
           if (!mine()) return;

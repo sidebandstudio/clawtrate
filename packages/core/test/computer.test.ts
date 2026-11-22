@@ -198,6 +198,7 @@ function harness(handlers: Record<string, Handler> = {}, options: { write?: bool
     answer: async (key, id, answers) => {
       answered.push({ key, id, answers });
     },
+    withdraw: () => {},
     stopTask: vi.fn(async () => ({ runIds: [], aborted: false })),
     log: (_level, message) => logs.push(message),
   };
