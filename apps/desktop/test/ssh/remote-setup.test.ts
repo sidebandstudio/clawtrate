@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   FakeGateway,
@@ -1907,6 +1907,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
   describe("a route's teardown and its attempts' ownership", () => {
     type Internals = {
       closeLive: (...args: unknown[]) => Promise<boolean>;
+      retire: (...args: unknown[]) => Promise<void>;
       live: { forward: { close: () => Promise<void> } } | null;
     };
     const lsAlive = (from: number) =>
@@ -2052,7 +2053,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       const h = host();
       await connected(h);
       const r = h.remote as unknown as Internals;
-      const first = r.live!.forward;
+      const previous = r.live!;
+      const retire = vi.spyOn(r, "retire");
+      const first = previous.forward;
       const close = first.close.bind(first);
       let release = () => {};
       const slow = new Promise<void>((resolve) => (release = resolve));
@@ -2060,14 +2063,21 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         await slow;
         return close();
       };
-      await h.remote.there("devbox-local");
-      if (h.setup().phase === "key") await h.remote.trustKey();
-      await h.remote.connect();
-      await until(() => h.setup().phase === "done" && h.setup().route?.phase === "up", 30_000);
-      release();
-      await sleep(300);
-      expect(h.setup().route?.phase).toBe("up");
-      await h.remote.closeAll();
+      try {
+        await h.remote.there("devbox-local");
+        if (h.setup().phase === "key") await h.remote.trustKey();
+        await h.remote.connect();
+        await until(() => h.setup().phase === "done" && h.setup().route?.phase === "up", 30_000);
+        expect(retire).toHaveBeenCalledTimes(1);
+        expect(retire.mock.calls[0]?.[0]).toBe(previous);
+        release();
+        await retire.mock.results[0]!.value;
+        expect(h.setup().route?.phase).toBe("up");
+      } finally {
+        release();
+        retire.mockRestore();
+        await h.remote.closeAll();
+      }
     });
 
     it("Disconnect while a saved route is restored at launch ends the restore: nothing is sent, the route stays chosen and disconnected, and Reconnect opens it", async () => {

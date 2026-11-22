@@ -258,21 +258,19 @@ describe.skipIf(process.platform === "win32")("the route store", () => {
       record({ id: `r00000000000${n}`, endpoint: `you@[host${n}.example]:22` }),
     );
     for (const each of routes) roomy.put(each);
-    let kept = 0;
-    let refused = 0;
-    for (const each of routes) {
-      try {
-        roomy.setToken(each.key, "device-1", "operator", TOKEN);
-        kept += 1;
-      } catch {
-        refused += 1;
-      }
-    }
-    expect(refused).toBeGreaterThan(0);
-    expect(statSync(roomy.path).size).toBeLessThanOrEqual(MAX_ROUTE_FILE_BYTES);
+    const fitting = routes.slice(0, 5);
+    for (const each of fitting) roomy.setToken(each.key, "device-1", "operator", TOKEN);
+    const before = readFileSync(roomy.path);
+    expect(before.length).toBeLessThanOrEqual(MAX_ROUTE_FILE_BYTES);
+    const last = routes[5]!;
+    expect(() => roomy.setToken(last.key, "device-1", "operator", TOKEN)).toThrow(
+      "The routes are larger than a file keeps.",
+    );
+    expect(readFileSync(roomy.path).equals(before)).toBe(true);
     const reread = new RouteStore(dirname(roomy.path), { seal: wide });
     expect(reread.list()).toHaveLength(6);
-    expect(routes.filter((each) => reread.hasToken(each.key))).toHaveLength(kept);
+    for (const each of fitting) expect(reread.hasToken(each.key)).toBe(true);
+    expect(reread.hasToken(last.key)).toBe(false);
     // A token kept for device-1 isn't deleted by device-2's key, and is by its own.
     const storage = routedStorage(memoryStorage(), store);
     await storage.set(tokenKey(one.key), TOKEN);
