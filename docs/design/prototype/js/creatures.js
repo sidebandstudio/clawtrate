@@ -314,14 +314,21 @@ function crc32(bytes            )         {
 const u32 = (bytes            , at        ) =>
   ((bytes[at]  << 24) | (bytes[at + 1]  << 16) | (bytes[at + 2]  << 8) | bytes[at + 3] ) >>> 0;
 const isLetter = (byte        ) => (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
-/** Bit depths each colour type allows. */
-const DEPTHS                           = {
-  0: [1, 2, 4, 8, 16],
-  2: [8, 16],
-  3: [1, 2, 4, 8],
-  4: [8, 16],
-  6: [8, 16],
-};
+/** Whether a colour type allows a bit depth (the PNG specification's table). */
+function depthAllowed(colour        , depth        )          {
+  switch (colour) {
+    case 0:
+      return depth === 1 || depth === 2 || depth === 4 || depth === 8 || depth === 16;
+    case 3:
+      return depth === 1 || depth === 2 || depth === 4 || depth === 8;
+    case 2:
+    case 4:
+    case 6:
+      return depth === 8 || depth === 16;
+    default:
+      return false;
+  }
+}
 
 /**
  * The chunks of a well-formed PNG, or null. At most `MAX_PNG_CHUNKS`; every
@@ -354,7 +361,7 @@ function pngChunks(bytes            )                    {
       const height = u32(data, 4);
       const [depth, colour, compression, filter, interlace] = data.subarray(8);
       if (width < 1 || height < 1 || width > MAX_PNG_SIDE || height > MAX_PNG_SIDE) return null;
-      if (!DEPTHS[colour ]?.includes(depth ) || compression !== 0 || filter !== 0) return null;
+      if (!depthAllowed(colour , depth ) || compression !== 0 || filter !== 0) return null;
       if (interlace !== 0 && interlace !== 1) return null;
     } else if (type === "PLTE") {
       if (palette || idat !== "before" || length === 0 || length % 3 !== 0) return null;
