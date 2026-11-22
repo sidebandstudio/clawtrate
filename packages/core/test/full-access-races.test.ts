@@ -600,4 +600,47 @@ describe("full access under interleavings", () => {
     expect((gateway.connects.at(-1) as ConnectParams).scopes).not.toContain("operator.pairing");
     client.stop();
   });
+
+  it("a refusal accepted while a Connect is being saved stands after it, and a later Connect asks for the six again", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes], "token-A"),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "connected");
+    // The next Connect's save waits; meanwhile the saved token is refused.
+    const saving = deferred<void>();
+    const set = storage.set;
+    let held = false;
+    storage.set = async (key, value) => {
+      if (key === "connection" && !held) {
+        held = true;
+        await saving.promise;
+      }
+      return set(key, value);
+    };
+    const connecting = client.connect({ url: URL, token: "shared" });
+    await until(() => held);
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    const before = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_TOKEN_MISMATCH");
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    saving.resolve();
+    await connecting;
+    await until(() => gateway.connects.length >= before + 2);
+    // Every attempt after the refusal, the Connect's own included, asks for read.
+    for (const each of (gateway.connects as ConnectParams[]).slice(before + 1))
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    // A Connect the person starts afterwards may ask for the six again.
+    const later = gateway.connects.length;
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => gateway.connects.length > later);
+    expect((gateway.connects[later] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
+    client.stop();
+  });
 });

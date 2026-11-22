@@ -1054,6 +1054,11 @@ export class ClawtrateClient {
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
   /**
+   * How many times full-access eligibility has ended (a refusal, a lost token, an ended
+   * attempt). A Connect grants it only if none ended after that Connect began.
+   */
+  private eligibilityEnds = 0;
+  /**
    * The grant of the token record this client last read or wrote, by its key: whether it is a
    * full pairing's, and its held scopes as one bit per scope of `FULL_SCOPES`, so nothing grows
    * here. Kept current by every read and write, so an upgrade writes on the grant as it is then.
@@ -1459,6 +1464,7 @@ export class ClawtrateClient {
   async connect(options: ConnectOptions): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
+    const endsAtStart = this.eligibilityEnds;
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
@@ -1470,8 +1476,8 @@ export class ClawtrateClient {
       this.selectionApplied = selection;
       this.typedAttempt = token ? { url, token, selection } : null;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
-      // for full access.
-      this.fullEligible = true;
+      // for full access, unless a refusal or loss accepted since this Connect began says not.
+      this.fullEligible = this.eligibilityEnds === endsAtStart;
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
@@ -1497,14 +1503,15 @@ export class ClawtrateClient {
   ): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
+    const endsAtStart = this.eligibilityEnds;
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
       this.selectionApplied = selection;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
-      // for full access.
-      this.fullEligible = true;
+      // for full access, unless a refusal or loss accepted since this Connect began says not.
+      this.fullEligible = this.eligibilityEnds === endsAtStart;
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -1705,10 +1712,16 @@ export class ClawtrateClient {
     }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
   }
 
+  /** Full-access eligibility ends now, and a Connect already under way doesn't grant it back. */
+  private endEligibility(): void {
+    this.fullEligible = false;
+    this.eligibilityEnds += 1;
+  }
+
   /** The attempt on this address ended: no full pairing by itself, and its typed token is done. */
   private endAttempt(url: string): void {
     if (this.settings?.url !== url) return;
-    this.fullEligible = false;
+    this.endEligibility();
     if (this.typedAttempt?.url === url) this.typedAttempt = null;
   }
 
@@ -5828,7 +5841,7 @@ export class ClawtrateClient {
         stillCurrent();
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
         if (token) this.planHadToken = true;
-        else if (this.planHadToken) this.fullEligible = false;
+        else if (this.planHadToken) this.endEligibility();
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
         if (this.setupEndpointFails(settings.url, generation)) {
           this.close();
@@ -8229,7 +8242,7 @@ export class ClawtrateClient {
         // Until the removal has run, loads skip the refused token, so a retry never sends it again.
         this.writes.rejected.set(key, (this.writes.rejected.get(key) ?? new Set()).add(rejected));
         // And no retry asks for the six in its place: that takes the person's decision.
-        this.fullEligible = false;
+        this.endEligibility();
         this.writes.refusals += 1;
         await this.changeConnection(async () => {
           const existing = await this.loadToken(url, deviceId, role, true);

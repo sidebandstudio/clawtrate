@@ -192,4 +192,31 @@ describe("a desktop start that can't open this device's credentials", () => {
     expect(existsSync(join(dir, STATE_FILE))).toBe(false);
     expect(readFileSync(join(dir, "credentials.bin"), "utf8")).toBe("sealed-bytes");
   });
+
+  for (const withSettings of [true, false])
+    it(`a damaged earlier key ${withSettings ? "beside settings" : "alone"} is recovered by starting fresh, and kept aside`, async () => {
+      const parent = mkdtempSync(join(tmpdir(), "clawtrate-bad-key-"));
+      dirs.push(parent);
+      const dir = join(parent, "gateway");
+      mkdirSync(dir);
+      writeFileSync(join(dir, DEVICE_KEY_FILE), "not a key");
+      if (withSettings)
+        writeFileSync(join(dir, STATE_FILE), JSON.stringify({ "turn-limit-minutes": "30" }));
+      const failure = await createSecureCredentials({ dataDir: dir, box: box() })
+        .signer.loadIdentity()
+        .catch((error: unknown) => error);
+      // What the main process does with that failure.
+      const { recover } = startupFailure(failure);
+      expect(recover).toBe("folder");
+      const kept = await keepAside(
+        recover === "settings" ? join(dir, STATE_FILE) : dir,
+        new Date(),
+      );
+      // The relaunch opens cleanly, as a new device, and the damaged file is kept.
+      expect(
+        (await createSecureCredentials({ dataDir: dir, box: box() }).signer.loadIdentity())
+          .deviceId,
+      ).toMatch(/^[0-9a-f]{64}$/);
+      expect(readFileSync(join(kept, DEVICE_KEY_FILE), "utf8")).toBe("not a key");
+    });
 });

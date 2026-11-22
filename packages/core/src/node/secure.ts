@@ -420,7 +420,9 @@ export function createSecureCredentials(options: {
     for (const key of tokenKeys)
       if (!validTokenRecord(entries[key]!)) throw new SavedSettingsInvalidError();
     const pem = (await readOptional(keyPath))?.toString("utf8") ?? null;
-    if (pem !== null && !usableKey(pem)) throw new SavedSettingsInvalidError();
+    // An earlier build's key that can't be used is a damaged credential, not unreadable settings:
+    // its recovery sets the whole folder aside, the key with it, and keeps it.
+    if (pem !== null && !usableKey(pem)) throw new CredentialRecordInvalidError();
     const credentials: Credentials = {
       values: {
         ...Object.fromEntries(tokenKeys.map((key) => [key, entries[key]!])),
