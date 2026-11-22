@@ -1685,8 +1685,11 @@ export class ClawtrateClient {
         throw new GatewayChangedError();
       }
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
-      // and stays the selection it was.
-      await this.host.storage.delete(SETTINGS_KEY);
+      // and stays the selection it was. Another client on this store may have saved a different
+      // gateway since this one was chosen; that record is the other client's and stays.
+      if ((await this.savedSettings())?.url === this.settings.url) {
+        await this.host.storage.delete(SETTINGS_KEY);
+      }
       this.selectionApplied = asked;
       this.abandonAccessRequest("Disconnected from the gateway.");
       this.close();
@@ -6488,6 +6491,9 @@ export class ClawtrateClient {
             (await this.loadToken(settings.url, identity.deviceId, "operator")) !== null;
           if (!paired || !live()) return;
           try {
+            // Read at the moment of the write: another client on this store may have saved a
+            // different gateway or forgotten this one since, and neither is written over.
+            if ((await this.savedSettings())?.url !== settings.url || !live()) return;
             await this.saveSettings({ ...current, token: null });
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
