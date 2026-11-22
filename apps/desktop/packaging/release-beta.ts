@@ -91,7 +91,13 @@ export interface RunResult {
 export type Run = (
   command: string,
   args: string[],
-  options?: { env?: NodeJS.ProcessEnv; cwd?: string; inherit?: boolean; input?: string },
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    cwd?: string;
+    inherit?: boolean;
+    input?: string;
+    timeout?: number;
+  },
 ) => RunResult;
 
 export const run: Run = (command, args, options = {}) => {
@@ -100,6 +106,7 @@ export const run: Run = (command, args, options = {}) => {
     env: options.env ?? process.env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout: options.timeout,
     input: options.input,
     stdio: [
       options.input === undefined ? "ignore" : "pipe",
@@ -1624,17 +1631,25 @@ export async function withdraw(runner: Run, version: string, net: Net = NET): Pr
     `GitHub lists ${tag} as a draft. Its download addresses can still answer from caches for a while.`,
   );
   dispatchSite(runner);
-  // A run that checked the tag before the edit can still deploy the withdrawn feed, so the
-  // feed is judged only once main has none left. Main's runs queue one at a time, so an
-  // unfinished one is always among the newest.
+  // A run that checked the tag before the edit can still deploy the withdrawn feed.
+  // A rerun keeps its original run id, so check every page for unfinished main runs.
   const deadline = Date.now() + net.waitMs;
+  const inconclusive = `Could not confirm in time whether the Site workflow's runs on main finished. Look at them, then check ${BETA_FEED_URL}.`;
   for (;;) {
-    const runs = runner("gh", [
-      "api",
-      `repos/${REPOSITORY}/actions/workflows/site.yml/runs?branch=main&per_page=100`,
-      "--jq",
-      '.workflow_runs[] | select(.status != "completed") | .id',
-    ]);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) stop(inconclusive);
+    const runs = runner(
+      "gh",
+      [
+        "api",
+        `repos/${REPOSITORY}/actions/workflows/site.yml/runs?per_page=100`,
+        "--paginate",
+        "--jq",
+        '.workflow_runs[] | select(.head_branch == "main" and .status != "completed") | .id',
+      ],
+      { timeout: remaining },
+    );
+    if (Date.now() >= deadline) stop(inconclusive);
     if (runs.status !== 0)
       stop(
         `Could not read the Site workflow's runs on main from GitHub. Wait for them to finish, then check ${BETA_FEED_URL}.`,

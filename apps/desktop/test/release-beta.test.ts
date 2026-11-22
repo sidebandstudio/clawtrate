@@ -1106,8 +1106,7 @@ describe("what publishing accepts as the prepared release", () => {
   });
 });
 
-const siteRuns =
-  "repos/sidebandstudio/clawtrate/actions/workflows/site.yml/runs?branch=main&per_page=100";
+const siteRuns = "repos/sidebandstudio/clawtrate/actions/workflows/site.yml/runs?per_page=100";
 
 /** GitHub and the site as the publishing and withdrawing steps see them. */
 function github(
@@ -1522,6 +1521,26 @@ describe("withdrawing", () => {
     });
     await withdraw(runner, VERSION, { ...net, pollMs: 1 });
     expect(events).toEqual(["list", "list", "read"]);
+  });
+
+  it("stops before reading the feed if the final Site run list arrives late", async () => {
+    const made = hub(false);
+    const read = vi.fn(() => new Response("", { status: 404 }));
+    let now = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const budgets: Array<number | undefined> = [];
+    const runner: Run = (command, args, options) => {
+      if (!args.includes(siteRuns)) return made.runner(command, args, options);
+      expect(args).toContain("--paginate");
+      budgets.push(options?.timeout);
+      now += budgets.length === 1 ? 400 : 601;
+      return ok(budgets.length === 1 ? "123" : "");
+    };
+    expect(
+      await stopped(() => withdraw(runner, VERSION, { ...serving(read), pollMs: 1 })),
+    ).toContain("Could not confirm in time whether the Site workflow's runs on main finished");
+    expect(budgets).toEqual([1_000, 600]);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("expects the beta GitHub lists once the Site runs have finished", async () => {
