@@ -77,6 +77,17 @@ export class SavedSettingsInvalidError extends Error {
   }
 }
 
+/**
+ * A replacement whose rename happened but whose folder sync didn't: the file on disk may be the
+ * new one or the old one, so what is held in memory can't be trusted until it is read again.
+ */
+class IndeterminateCommitError extends Error {
+  constructor() {
+    super("A change to this device's saved credentials may or may not have been kept.");
+    this.name = "IndeterminateCommitError";
+  }
+}
+
 /** Where this device's credentials are: sealed, sealed with an earlier copy still to remove, this session only, or unreadable. */
 export type CredentialStatus = "secure" | "cleanup-pending" | "session" | "locked";
 
@@ -266,7 +277,17 @@ async function replaceDurably(
     await rm(temp, { force: true });
     throw error;
   }
-  await syncFolder(dir);
+  // Renamed: the change is on disk unless the rename is lost. Finish its sync, once more if it
+  // fails; otherwise neither the old nor the new contents can be assumed.
+  try {
+    await syncFolder(dir);
+  } catch {
+    try {
+      await syncFolder(dir);
+    } catch {
+      throw new IndeterminateCommitError();
+    }
+  }
 }
 
 export function createSecureCredentials(options: {
@@ -299,18 +320,31 @@ export function createSecureCredentials(options: {
     replaceDurably(statePath, Buffer.from(`${JSON.stringify(settings, null, 2)}\n`));
 
   /** An earlier build's temporary files whose writer has ended: a live or unknown writer's are left. */
+  const earlierTemps = async () =>
+    (await readdir(dataDir)).filter((name) => EARLIER_TEMP.test(name));
+  /** Removes them, syncs the folder, and returns how many are left: a live or unknown writer's. */
   const sweepEarlierTemps = async () => {
-    for (const name of await readdir(dataDir)) {
-      const pid = Number(EARLIER_TEMP.exec(name)?.[2] ?? 0);
-      if (!pid || pid === process.pid) continue;
-      try {
-        process.kill(pid, 0);
+    let left = 0;
+    let removed = false;
+    for (const name of await earlierTemps()) {
+      const pid = Number(EARLIER_TEMP.exec(name)![2]);
+      let ended = false;
+      if (pid !== process.pid) {
+        try {
+          process.kill(pid, 0);
+        } catch (error) {
+          ended = (error as NodeJS.ErrnoException).code === "ESRCH";
+        }
+      }
+      if (!ended) {
+        left += 1;
         continue;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
       }
       await rm(join(dataDir, name), { force: true });
+      removed = true;
     }
+    if (removed) await syncFolder(dataDir);
+    return left;
   };
 
   /** Once the record is committed: the files without credentials, then the key file, then earlier temporary files. */
@@ -318,8 +352,8 @@ export function createSecureCredentials(options: {
     await writeSettings();
     await rm(keyPath, { force: true });
     await syncFolder(dataDir);
-    await sweepEarlierTemps();
-    mode.swept = true;
+    // Done only once no earlier temporary file is left: one a live writer still holds keeps it open.
+    mode.swept = (await sweepEarlierTemps()) === 0;
   };
 
   const openMode = async (): Promise<Mode> => {
@@ -337,7 +371,11 @@ export function createSecureCredentials(options: {
       Object.entries(entries).filter(([key]) => !isCredentialKey(key) && key !== SETTINGS_KEY),
     );
     if (savedSettings) settings[SETTINGS_KEY] = JSON.stringify({ ...savedSettings, token: null });
-    const earlier = tokenKeys.length > 0 || savedSettings?.token != null || (await exists(keyPath));
+    const earlier =
+      tokenKeys.length > 0 ||
+      savedSettings?.token != null ||
+      (await exists(keyPath)) ||
+      (await earlierTemps()).length > 0;
 
     const stored = await readOptional(sealedPath);
     const available = await box.available().catch(() => false);
@@ -387,8 +425,10 @@ export function createSecureCredentials(options: {
         const sealed = { wrapped, key, credentials };
         await commit(sealed);
         mode = { kind: "secure", sealed, swept: false };
-      } catch {
-        // Nothing replaced anything: the files are as they were.
+      } catch (error) {
+        // Renamed but not surely kept: the earlier files stay, and opening is tried again.
+        if (error instanceof IndeterminateCommitError) throw error;
+        // Otherwise nothing replaced anything: the files are as they were.
       }
       if (mode) {
         await sweep(mode).catch(() =>
@@ -406,10 +446,18 @@ export function createSecureCredentials(options: {
   };
 
   let opened: Promise<Mode> | null = null;
-  const mode = () => (opened ??= openMode());
+  /**
+   * After a change that may or may not have reached the disk, what is held is dropped and the
+   * next use opens the files again, so nothing builds on a snapshot the disk may not have.
+   */
+  const invalidateOn = (error: unknown) => {
+    if (error instanceof IndeterminateCommitError) opened = null;
+    throw error;
+  };
+  const mode = () => (opened ??= openMode().catch(invalidateOn));
   let queue: Promise<void> = Promise.resolve();
   const queued = (run: () => Promise<void>) => {
-    const next = queue.then(run);
+    const next = queue.then(run).catch(invalidateOn);
     queue = next.catch(() => {});
     return next;
   };
@@ -494,8 +542,16 @@ export function createSecureCredentials(options: {
         if (current.kind === "locked") return;
         const kept = (await credentials()).values[SETTINGS_KEY];
         const earlier = kept === undefined ? null : parseSettings(kept);
-        if (earlier && (earlier.url !== next.url || earlier.token !== next.token))
-          await change(withoutValue(SETTINGS_KEY));
+        // ...only once replaced: another address, another token, or a device token saved for it.
+        // Settings that merely drop a typed token, at a Disconnect or a refusal, keep it.
+        const replaced =
+          earlier !== null &&
+          (earlier.url !== next.url ||
+            (next.token !== null && earlier.token !== next.token) ||
+            Object.keys((await credentials()).values).some((key) =>
+              key.startsWith(`deviceToken:${encodeURIComponent(earlier.url)}:`),
+            ));
+        if (replaced) await change(withoutValue(SETTINGS_KEY));
       },
       delete: async (key) => {
         if (isCredentialKey(key)) return change(withoutValue(key));

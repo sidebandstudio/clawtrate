@@ -34,14 +34,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const fsHooks = vi.hoisted(() => ({
   written: [] as Array<{ file: string; text: string }>,
   failRename: null as null | ((to: string) => boolean),
+  /** Folder syncs to refuse, from the next one on. */
+  failFolderSyncs: 0,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
   const open = (async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args);
     const file = String(args[0]);
+    const folder = args[1] === "r" && (await handle.stat()).isDirectory();
     return new Proxy(handle, {
       get(target, prop, receiver) {
+        if (prop === "sync" && folder && fsHooks.failFolderSyncs > 0)
+          return () => {
+            fsHooks.failFolderSyncs -= 1;
+            return Promise.reject(Object.assign(new Error("sync refused"), { code: "EIO" }));
+          };
         if (prop === "writeFile")
           return (data: string | Uint8Array) => {
             fsHooks.written.push({ file, text: Buffer.from(data).toString("latin1") });
@@ -83,6 +91,7 @@ const dirs: string[] = [];
 afterEach(() => {
   fsHooks.written.length = 0;
   fsHooks.failRename = null;
+  fsHooks.failFolderSyncs = 0;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -276,9 +285,55 @@ describe("this device's credentials in secure storage", () => {
     writeFileSync(join(dir, ended), JSON.stringify({ [TOKEN_KEY]: RECORD }));
     writeFileSync(join(dir, live), "{}");
     const credentials = open(dir, fakeBox().box);
-    expect(await credentials.secure()).toBe(true);
+    // A live writer's file may hold a credential: cleanup isn't confirmed while it is there.
+    expect(await credentials.secure()).toBe(false);
+    expect(await credentials.status()).toBe("cleanup-pending");
     expect(existsSync(join(dir, ended))).toBe(false);
     expect(existsSync(join(dir, live))).toBe(true);
+    rmSync(join(dir, live));
+    expect(await open(dir, fakeBox().box).secure()).toBe(true);
+  });
+
+  it("removes a dead writer's temporary file at a restart even when the other files are clean", async () => {
+    const { dir } = legacyFolder();
+    await open(dir, fakeBox().box).signer.loadIdentity();
+    expect(readdirSync(dir).sort()).toEqual([CREDENTIALS_FILE, STATE_FILE].sort());
+    const orphan = `${STATE_FILE}.2147483646.tmp`;
+    writeFileSync(join(dir, orphan), JSON.stringify({ [TOKEN_KEY]: RECORD }));
+    const again = open(dir, fakeBox().box);
+    expect(await again.secure()).toBe(true);
+    expect(existsSync(join(dir, orphan))).toBe(false);
+    expect(everything(dir)).not.toContain(DEVICE);
+  });
+
+  it("a folder sync that fails after the record's rename drops what is held, and the next use reads the disk", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.storage.get(TOKEN_KEY)).toBe(RECORD);
+    const newer = RECORD.replace(DEVICE, "token-B");
+    fsHooks.failFolderSyncs = 2;
+    await expect(credentials.storage.set(TOKEN_KEY, newer)).rejects.toThrow();
+    // Not the snapshot from before the failed write: what the disk holds.
+    expect(await credentials.storage.get(TOKEN_KEY)).toBe(newer);
+    expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(newer);
+    // A later write builds on that, and is kept.
+    const latest = RECORD.replace(DEVICE, "token-C");
+    await credentials.storage.set(TOKEN_KEY, latest);
+    expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(latest);
+  });
+
+  it("a folder sync that fails after the move's rename keeps the earlier files, and the next start finishes the move", async () => {
+    const { dir, pem } = legacyFolder();
+    const before = readFileSync(join(dir, STATE_FILE), "utf8");
+    fsHooks.failFolderSyncs = 2;
+    const credentials = open(dir, fakeBox().box);
+    await expect(credentials.signer.loadIdentity()).rejects.toThrow();
+    expect(readFileSync(join(dir, STATE_FILE), "utf8")).toBe(before);
+    expect(readFileSync(join(dir, DEVICE_KEY_FILE), "utf8")).toBe(pem);
+    const again = open(dir, fakeBox().box);
+    expect((await again.signer.loadIdentity()).deviceId).toBe(await deviceIdOf(pem));
+    expect(await again.secure()).toBe(true);
+    expect(existsSync(join(dir, DEVICE_KEY_FILE))).toBe(false);
   });
 
   it("refuses a changed record or wrapped key before using anything in it, and a failed write keeps the record before it", async () => {
@@ -350,6 +405,20 @@ describe("this device's credentials in secure storage", () => {
     expect(await paired.storage.get("connection")).toBe(CONNECTION);
     await paired.storage.set("connection", NO_TOKEN);
     expect(await open(other, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
+  it("settings that only drop a token keep an earlier build's saved token until a device token is saved for its address", async () => {
+    const dir = emptyFolder();
+    writeFileSync(join(dir, STATE_FILE), JSON.stringify({ connection: CONNECTION }));
+    const credentials = open(dir, fakeBox().box);
+    // A Disconnect or a refusal drops the typed token: the earlier saved one stays.
+    await credentials.storage.set("connection", NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+    // Once this device is paired there, it goes.
+    const again = open(dir, fakeBox().box);
+    await again.storage.set(TOKEN_KEY, RECORD);
+    await again.storage.set("connection", NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
 
   it("without secure storage, nothing moves, nothing is written in clear text, and the host has no full access", async () => {
