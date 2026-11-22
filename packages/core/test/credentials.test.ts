@@ -441,6 +441,181 @@ describe("a refused device token never removes a newer one", () => {
     }
   });
 
+  it("never sends a token refused after its last read and before its frame", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+    };
+    const host = testHost(otherGateway, storage);
+    const signed = deferred<void>();
+    let signs = 0;
+    host.signer.sign = async () => {
+      if ((signs += 1) === 1) await signed.promise;
+      return "signature";
+    };
+    // The other client's read after signing finds token-A; token-A's refusal is accepted
+    // before that read hands it back, so before its frame goes.
+    let lateRead = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      const value = await get(key);
+      if (lateRead && key === tokenKey(URL_A)) {
+        lateRead = false;
+        gateway.connectReply = () => ({ ok: false, error: tokenMismatch });
+        gateway.dropAll();
+        await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+      }
+      return value;
+    };
+    const other = new ClawtrateClient(host, FAST);
+    try {
+      await other.start();
+      await until(() => signs === 1);
+      lateRead = true;
+      signed.resolve();
+      await until(() => other.state.connection.status === "connected");
+      expect(connectAuth(gateway, 1)?.deviceToken).toBe("token-A");
+      expect(otherGateway.connects.length).toBeGreaterThan(0);
+      for (let i = 0; i < otherGateway.connects.length; i += 1) {
+        expect(connectAuth(otherGateway, i)?.deviceToken).toBeUndefined();
+      }
+    } finally {
+      signed.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("a setup reuse never sends a token replaced while its connect was being signed", async () => {
+    const storage = memoryStorage({ [tokenKey(URL_A)]: savedToken("token-A") });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => {
+      if ((params as ConnectParams).auth?.deviceToken !== "token-B")
+        return { ok: false, error: tokenMismatch };
+      return { ok: true, payload: helloOk([...READ_SCOPES], "token-B") };
+    };
+    const host = testHost(gateway, storage);
+    const signed = deferred<void>();
+    let signs = 0;
+    host.signer.sign = async () => {
+      if ((signs += 1) === 1) await signed.promise;
+      return "signature";
+    };
+    const client = new ClawtrateClient(host, FAST);
+    try {
+      await client.start();
+      await client.connectForSetup(URL_A);
+      // The plan has chosen token-A and is being signed when token-B replaces it.
+      await until(() => signs === 1);
+      storage.data.set(tokenKey(URL_A), savedToken("token-B"));
+      signed.resolve();
+      await until(() => gateway.connects.length > 0);
+      expect(connectAuth(gateway, 0)?.deviceToken).toBe("token-B");
+      await until(() => client.state.connection.status === "connected");
+    } finally {
+      signed.resolve();
+      client.stop();
+    }
+  });
+
+  it("keeps the shared token while no device token is saved, so a restart still connects", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: "bootstrap" }),
+    });
+    const gateway = new FakeGateway();
+    let holdNext = false;
+    gateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      if (!auth?.token && !auth?.deviceToken) {
+        return {
+          ok: false,
+          error: {
+            code: "UNAUTHORIZED",
+            message: "missing token",
+            details: { code: "AUTH_TOKEN_MISSING" },
+          },
+        };
+      }
+      holdNext = true;
+      return { ok: true, payload: helloOk(scopes, "issued-token") };
+    };
+    // This hello's save waits while a newer socket on the same store opens and closes unsaved.
+    const held = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL_A)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const closing = new FakeGateway();
+    closing.refuseConnections = true;
+    const other = new ClawtrateClient(testHost(closing, storage), FAST);
+    try {
+      await client.start();
+      await until(() => waiting);
+      await other.start();
+      await until(() => closing.sockets.some((socket) => socket.readyState === 3));
+      other.stop();
+      held.resolve();
+      await until(() => client.state.connection.status === "connected");
+      await sleep(30);
+      client.stop();
+      expect(storage.data.has(tokenKey(URL_A))).toBe(false);
+      const restarted = new ClawtrateClient(testHost(gateway, storage), FAST);
+      const before = gateway.connects.length;
+      await restarted.start();
+      await until(() => gateway.connects.length > before);
+      expect(connectAuth(gateway, before)?.token).toBe("bootstrap");
+      await until(() => restarted.state.connection.status === "connected");
+      restarted.stop();
+    } finally {
+      held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
+  it("keeps the token an approved access request rotated to, after another socket opened first", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const approval = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-A" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+    };
+    const other = new ClawtrateClient(testHost(otherGateway, storage), FAST);
+    try {
+      await client.requestAccess();
+      await until(() => client.state.connection.upgrade.status === "pending");
+      // Another client on the store opens its socket before the approval reaches this one.
+      await other.start();
+      await until(() => other.state.connection.status === "connected");
+      approval.resolve({
+        status: "approved",
+        requestId: "up-A",
+        deviceToken: "token-R",
+        scopes: [...INTERACTIVE_SCOPES],
+      });
+      await until(() => client.state.connection.upgrade.status !== "pending");
+      const before = gateway.connects.length;
+      gateway.dropAll();
+      await until(() => gateway.connects.length > before);
+      expect(connectAuth(gateway, gateway.connects.length - 1)?.deviceToken).toBe("token-R");
+    } finally {
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("removes the saved token when the gateway refuses it", async () => {
     const { client, gateway, storage } = await pairedOnA();
     // Saved with surrounding whitespace: a connect sends it trimmed.
