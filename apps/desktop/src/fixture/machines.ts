@@ -17,13 +17,13 @@
 //   mwrite=refused|conflict|unanswered|unreadable|unconfirmed|pending|notapplied   how a change
 //            goes; unreadable: its answer is lost and the gateway's settings file can't be read
 //   mslow=<bot>       that bot's placement read never answers
-//   plugins=none      the settings hold no plugin entries to inspect
+//   plugins=none|hang none: the settings hold no plugin entries to inspect; hang: the plugin
+//                     credential read never answers, and every other part of the placement does
 //   pairing=grant     a request for device access is approved after a moment, or on release if
 //                     a test holds answers
 
 import {
   type ApprovalsFile,
-  type BotPlacement,
   type BridgeCommand,
   type ClawtrateState,
   type CommandPlace,
@@ -32,6 +32,7 @@ import {
   type DeviceRow,
   type MachinesView,
   type NodeFacts,
+  type PlacementParts,
 } from "@clawtrate/core";
 
 export type MachineParams = {
@@ -228,7 +229,7 @@ export function machineCommands(now: number, params: MachineParams) {
       );
   };
 
-  function placement(state: ClawtrateState, botId: string): BotPlacement {
+  function placement(state: ClawtrateState, botId: string): PlacementParts {
     const commands = place(botId);
     const others = bots(state).filter((id) => id !== botId);
     const ownBrowser = params.machine === "ownbrowser" && botId === "otto";
@@ -242,25 +243,33 @@ export function machineCommands(now: number, params: MachineParams) {
       );
     };
     return {
-      botId,
-      readAt: now,
-      configHash: `c${revision}`,
-      configActive: params.write !== "pending" || revision === 1,
-      commands,
-      workspace: w.workspaces[botId] ?? null,
-      browser: {
-        own: { allow: null, deny: botId === "otto" || botId === "juniper" ? ["browser"] : null },
-        everyBot: { allow: null, deny: [] },
-        gateway: { control: null, plugin: true },
-        plugin: ownBrowser
-          ? { present: true, enabled: true, profile: "bot-otto" }
-          : { present: false, enabled: null, profile: null },
+      commands: {
+        readAt: now,
+        configHash: `c${revision}`,
+        configActive: params.write !== "pending" || revision === 1,
+        commands,
+        sameMachine: others.filter(same),
+        nodes: w.nodes,
+        nodesOmitted: 0,
       },
-      sameSetting: {
-        machine: others.filter(same),
-        workspace: others.filter((id) => w.workspaces[id] === w.workspaces[botId]),
+      workspace: {
+        readAt: now,
+        workspace: w.workspaces[botId] ?? null,
+        sameWorkspace: others.filter((id) => w.workspaces[id] === w.workspaces[botId]),
+      },
+      browser: {
+        readAt: now,
+        browser: {
+          own: { allow: null, deny: botId === "otto" || botId === "juniper" ? ["browser"] : null },
+          everyBot: { allow: null, deny: [] },
+          gateway: { control: null, plugin: true },
+          plugin: ownBrowser
+            ? { present: true, enabled: true, profile: "bot-otto" }
+            : { present: false, enabled: null, profile: null },
+        },
       },
       inventory: {
+        readAt: now,
         accounts:
           botId === "otto"
             ? [
@@ -280,7 +289,11 @@ export function machineCommands(now: number, params: MachineParams) {
         secrets: admin(state)
           ? ["router-admin", "nas-backup", "camera-feed"]
           : { status: "needs-admin" },
-        pluginCredentials: admin(state)
+        workspaceOnly: { value: true, set: "every-bot" },
+      },
+      credentials: {
+        readAt: now,
+        plugins: admin(state)
           ? params.plugins === "none"
             ? []
             : [
@@ -292,10 +305,7 @@ export function machineCommands(now: number, params: MachineParams) {
               ]
           : { status: "needs-admin" },
         pluginsOmitted: 0,
-        workspaceOnly: { value: true, set: "every-bot" },
       },
-      nodes: w.nodes,
-      nodesOmitted: 0,
     };
   }
 
@@ -357,9 +367,22 @@ export function machineCommands(now: number, params: MachineParams) {
       );
     switch (command.type) {
       case "readPlacement":
-        if (params.machine === "loading" || params.slow === command.botId)
+        if (
+          params.machine === "loading" ||
+          params.slow === command.botId ||
+          // As the engine: below admin, or with settings it can't read, nothing is inspected.
+          (params.plugins === "hang" &&
+            command.part === "credentials" &&
+            admin(state) &&
+            !unreadable)
+        )
           return new Promise(() => {});
-        if (unreadable)
+        // The workspace uses agents.list. Below admin, credentials need no settings read either.
+        if (
+          unreadable &&
+          command.part !== "workspace" &&
+          (command.part !== "credentials" || admin(state))
+        )
           return later(0, () => {
             throw new Error(
               "The gateway reports that its settings file isn't valid, so it can't be read.",
@@ -369,7 +392,7 @@ export function machineCommands(now: number, params: MachineParams) {
           return later(300, () => {
             throw new Error("The gateway did not answer.");
           });
-        return later(0, () => placement(get(), command.botId));
+        return later(0, () => placement(get(), command.botId)[command.part]);
       case "readMachines":
         if (params.machine === "loading") return new Promise(() => {});
         if (params.machine === "error")
