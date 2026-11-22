@@ -604,7 +604,7 @@ describe("full access under interleavings", () => {
     }
   });
 
-  it("an approved upgrade whose read of the saved grant waits while a broader request replaces it writes nothing", async () => {
+  it("an approval that arrived before a broader request replaced it saves its rotated token, with no approval shown or reconnect of its own", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null }),
       [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
@@ -646,10 +646,61 @@ describe("full access under interleavings", () => {
     gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
     void client.requestAccess("admin").catch(() => {});
     await until(() => gateway.calls("device.scopes.requestUpgrade").length > 1);
+    const connects = gateway.connects.length;
     release.resolve();
+    // The gateway retired token-A when it rotated: token-U is saved, still a full pairing.
+    await until(() => writes.some((write) => write.token === "token-U"));
+    expect(writes.find((write) => write.token === "token-U")).toMatchObject({ fullGrant: true });
     await sleep(50);
-    // The replaced request's write stops at its check after the read.
-    expect(writes.filter((write) => write.token === "token-U")).toEqual([]);
+    // The replaced request neither reconnects nor shows its approval: the admin request waits.
+    expect(gateway.connects.length).toBe(connects);
+    expect(client.state.connection.upgrade.status).toBe("pending");
+    client.stop();
+  });
+
+  it("an approved rotation whose reads of the saved grant fail is saved with the connection's full grant, and reconnects to the same gateway with it", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", ["operator.read", "operator.pairing"]),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // Every read of the saved grant fails until the rotation is saved.
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (key === tokenKey(URL) && saved(storage)?.token !== "token-U")
+        throw new Error("read failed");
+      return get(key);
+    };
+    const writes = tokenWrites(storage);
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    const before = gateway.connects.length;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => writes.some((write) => write.token === "token-U"));
+    // Saved as a full pairing: the interactive grant, beside pairing held outside the request.
+    const first = writes.find((write) => write.token === "token-U")!;
+    expect(first.fullGrant).toBe(true);
+    expect(first.heldScopes).toEqual(
+      FULL_SCOPES.filter((scope) => [...wanted, "operator.pairing"].includes(scope)),
+    );
+    // The reconnect goes to the same gateway, with the rotated token.
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).auth?.deviceToken).toBe("token-U");
+    expect(client.state.connection.gatewayUrl).toBe(URL);
     client.stop();
   });
 

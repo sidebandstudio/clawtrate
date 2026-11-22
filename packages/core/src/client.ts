@@ -768,6 +768,20 @@ const namedSetupCode = (code: string) =>
 const setupVersion = (value: unknown): string | null =>
   typeof value === "string" && /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(value) ? value : null;
 
+/** Reads of the saved grant an approved rotation tries before it uses the connection's own. */
+const GRANT_READS = 3;
+
+/** A token record's grant as `connectionGrant` keeps it. */
+function grantBits(record: StoredDeviceToken | null): { full: boolean; held: number } {
+  return {
+    full: record?.fullGrant === true,
+    held: FULL_SCOPES.reduce(
+      (bits, scope, index) => (record?.heldScopes.includes(scope) ? bits | (1 << index) : bits),
+      0,
+    ),
+  };
+}
+
 /** The gateway address as a Connect will use it, or null for one it will refuse. */
 function gatewayUrlOrNull(raw: string): string | null {
   try {
@@ -1074,6 +1088,12 @@ export class ClawtrateClient {
    */
   private waitingConnect: { selection: number; url: string | null; cancelled: boolean } | null =
     null;
+  /**
+   * The grant of the token record this connection runs on, as its plan read it or this client
+   * last wrote it: whether it is a full pairing's, and its held scopes as one bit per scope of
+   * `FULL_SCOPES`. Only for an approved rotation whose read of the saved record fails.
+   */
+  private connectionGrant: { generation: number; full: boolean; held: number } | null = null;
   /** A gateway token the person typed for the current attempt, dropped when it ends. */
   private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
@@ -1976,33 +1996,45 @@ export class ClawtrateClient {
         clear: auth.tokenStore.clear,
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only. It retires every token issued before
-        // it, so it is kept even when another socket on this store opened since.
-        // Queued with every other token change, so a late rejection cannot remove it.
+        // it, so it is kept even when another socket on this store opened since, and even when a
+        // newer request replaced the one it answers: only the current request reconnects or shows
+        // its approval. Queued with every other token change, so a late rejection cannot remove it.
         store: ({ deviceId, role, token, scopes }) =>
           this.changeConnection(async () => {
-            const stillOurs = () => {
-              if (
-                generation !== this.generation ||
-                this.settings?.url !== url ||
-                this.scopeUpgrade !== upgrade
-              ) {
+            const sameConnection = () => {
+              if (generation !== this.generation || this.settings?.url !== url) {
                 throw new Error("The gateway changed while access was being approved.");
               }
             };
-            stillOurs();
+            sameConnection();
             // Only what the upgrade asked for, or what an asked scope implies, is kept: a
             // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
             // A full pairing's record stays one: what the upgrade granted of what it asked for,
             // by name, beside what it holds outside the request now: the saved record as read
-            // in this queued write, after every earlier change of any client on this store.
-            const current = await this.loadToken(url, deviceId, role, true);
-            stillOurs();
+            // in this queued write, after every earlier change of any client on this store. A
+            // read that keeps failing never counts as no record: the grant this connection runs
+            // on stands in, so the rotation is saved, a full pairing's still.
+            let current: StoredDeviceToken | null | undefined;
+            for (let read = 0; read < GRANT_READS && current === undefined; read += 1) {
+              current = await this.loadToken(url, deviceId, role, true).catch(() => undefined);
+              sameConnection();
+            }
+            const own =
+              this.connectionGrant?.generation === generation ? this.connectionGrant : null;
+            const fullHeld =
+              current === undefined
+                ? own?.full
+                  ? FULL_SCOPES.filter((_scope, index) => (own.held & (1 << index)) !== 0)
+                  : null
+                : current?.fullGrant
+                  ? current.heldScopes
+                  : null;
             await this.writeToken(
               url,
               deviceId,
               role,
-              current?.fullGrant
-                ? fullUpgrade(current.heldScopes, token, target, scopes)
+              fullHeld
+                ? fullUpgrade(fullHeld, token, target, scopes)
                 : grantRecord(token, scopes, target),
             );
             const key = this.tokenKey(url, deviceId, role);
@@ -2011,6 +2043,7 @@ export class ClawtrateClient {
       },
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
+        if (this.scopeUpgrade !== upgrade) return;
         this.quietReconnect = true;
         void this.open({ keepPendingAnswer: true });
       },
@@ -5870,6 +5903,7 @@ export class ClawtrateClient {
         rotationsAtPlan = this.writes.rotations.get(key) ?? 0;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
+        this.connectionGrant = { generation, ...grantBits(token) };
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
         if (token) this.planHadToken = true;
         else if (this.planHadToken) this.endEligibility();
@@ -8139,6 +8173,8 @@ export class ClawtrateClient {
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
     await this.host.storage.set(key, JSON.stringify(record));
+    if (this.settings?.url === url)
+      this.connectionGrant = { generation: this.generation, ...grantBits(record) };
   }
 
   private tokenParams(deviceId: string) {
