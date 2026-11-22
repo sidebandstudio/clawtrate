@@ -335,6 +335,50 @@ describe("full access under interleavings", () => {
     client.stop();
   }, 12_000);
 
+  it("a pairing wait the gateway ends ends the typed token's attempt, while one to retry keeps it", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    let nextStep = "wait_then_retry";
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: "req-1",
+          deviceId: "device-1",
+          recommendedNextStep: nextStep,
+        },
+      },
+    });
+    const client = new ClawtrateClient(
+      host(gateway, storage, { credentialStatus: async () => "secure" }),
+      FAST,
+    );
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "pairing");
+    // Waiting to retry: Retry still sends the typed token and asks for the six.
+    let before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).auth?.token).toBe("shared");
+    expect((gateway.connects[before] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
+    // The gateway then ends the wait: nothing retries, and the attempt is over.
+    nextStep = "contact_owner";
+    before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    await until(() => JSON.parse(storage.data.get("connection")!).token === null);
+    before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).auth?.token).toBeUndefined();
+    expect((gateway.connects[before] as ConnectParams).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
   it("a Disconnect that couldn't be saved keeps the typed token's attempt, so the next one still ends it", async () => {
     const storage = memoryStorage();
     const gateway = new FakeGateway();

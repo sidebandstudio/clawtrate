@@ -6551,6 +6551,9 @@ export class ClawtrateClient {
         });
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
+      // A wait the gateway ended is over, as an ended request is: its typed token and full-access
+      // eligibility go. One to retry keeps both for the retry.
+      if (terminal) this.endTypedAttempt(url);
       return {
         closeCode: 1000,
         closeReason: "awaiting pairing approval",
