@@ -540,30 +540,45 @@ describe("a routed connection's settings, selection and waiters", () => {
     expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({ suspended: true });
   });
 
-  it("fails a write waiting for access when the gateway that answers after a reconnect isn't the route's", async () => {
-    const { gateway, storage, client, setIdentity } = setup();
-    storage.data.set(ROUTE_TOKEN, WRITE_TOKEN);
-    gateway.connectReply = () => ({
-      ok: true,
-      payload: helloOk(["operator.read", "operator.write"]),
-    });
-    await client.start();
-    await client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1" });
-    await until(
-      () => client.state.connection.status === "connected" && client.state.bots.length > 0,
-    );
-    // The socket drops; a write waits for the access it held, until the next hello.
-    setIdentity("gateway-2");
-    gateway.dropAll();
-    await until(() => client.state.connection.status !== "connected");
-    const writing = client.createTask("main", "hello");
-    const settled = writing.then(
-      () => "resolved",
-      () => "rejected",
-    );
-    await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
-    expect(await Promise.race([settled, sleep(500).then(() => "pending")])).toBe("rejected");
-  });
+  it.each([ROUTE_IDENTITY_CHANGED, ROUTE_NOT_SAVED])(
+    "rejects a write waiting for access when a reconnect ends with %s",
+    async (code) => {
+      const { gateway, storage, client, setIdentity } = setup();
+      storage.data.set(ROUTE_TOKEN, WRITE_TOKEN);
+      gateway.connectReply = () => ({
+        ok: true,
+        payload: helloOk(["operator.read", "operator.write"]),
+      });
+      await client.start();
+      await client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1" });
+      await until(
+        () => client.state.connection.status === "connected" && client.state.bots.length > 0,
+      );
+      // The socket drops; a write waits for the access it held, until the next hello.
+      if (code === ROUTE_IDENTITY_CHANGED) {
+        setIdentity("gateway-2");
+      } else {
+        gateway.connectReply = () => ({
+          ok: true,
+          payload: helloOk(["operator.read", "operator.write"], "replacement-token"),
+        });
+        const set = storage.set;
+        storage.set = async (key, value) => {
+          if (key === ROUTE_TOKEN) throw new Error("disk full");
+          return set(key, value);
+        };
+      }
+      gateway.dropAll();
+      await until(() => client.state.connection.status !== "connected");
+      const writing = client.createTask("main", "hello");
+      const settled = writing.then(
+        () => "resolved",
+        () => "rejected",
+      );
+      await until(() => client.state.connection.error?.code === code);
+      expect(await Promise.race([settled, sleep(500).then(() => "pending")])).toBe("rejected");
+    },
+  );
 
   it("holds a token write only up to MAX_ROUTE_HELD_WRITE_CHARS: a larger token from a hello is never kept", async () => {
     const { gateway, storage, client } = setup();

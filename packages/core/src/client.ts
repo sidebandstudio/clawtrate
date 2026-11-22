@@ -7734,6 +7734,8 @@ export class ClawtrateClient {
       // A token or connection that couldn't be kept ends the attempt; what was kept stays.
       if (!ours()) return;
       this.heldToken = null;
+      const message = "Clawtrate couldn't save this connection on this device, so it disconnected.";
+      this.abandonAccessRequest(message);
       this.close();
       this.dropSetupCredentials();
       this.setConnection({
@@ -7745,7 +7747,7 @@ export class ClawtrateClient {
         canAdmin: false,
         error: {
           code: ROUTE_NOT_SAVED,
-          message: "Clawtrate couldn't save this connection on this device, so it disconnected.",
+          message,
           hint: null,
         },
       });
