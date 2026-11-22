@@ -19,6 +19,7 @@
 // those of settled requests whose ledger entries retention has removed.
 
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { canonical, digestOf } from "./canonical.js";
 import {
   Refusal,
@@ -120,7 +121,11 @@ export class Records {
         throw error;
       }
       if (out.status === "conflict") continue;
-      this.onChange();
+      if (
+        !isDeepStrictEqual(before.proposals, ledger.proposals) ||
+        !isDeepStrictEqual(before.grants, ledger.grants)
+      )
+        this.onChange();
       return result;
     }
     throw new Error("The gateway's request records kept changing. Try again.");

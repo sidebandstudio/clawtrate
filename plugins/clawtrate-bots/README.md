@@ -21,7 +21,7 @@ Every method but the reads needs a person's own connection: a direct operator re
 
 `relay.propose` trusts the authenticated admin connection that sends it to say which grant and generation it acts for. Another admin could send the same pair, and neither value proves which helper sent the request. So the app's relay must take the pair from the helper it authenticated, and keep its own gateway connection out of the helper's reach.
 
-The event `plugin.clawtrate-bots.changed` is empty, at `operator.read`, after every ledger change. The only gateway method the plugin calls is `agents.list`.
+The event `plugin.clawtrate-bots.changed` is empty, at `operator.read`, and fires when a proposal or grant changes, including through expiry or retention. The only gateway method the plugin calls is `agents.list`.
 
 ## Records
 

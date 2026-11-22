@@ -242,6 +242,23 @@ describe("the records", () => {
     expect((await records.sweepOrphans()).sort()).toEqual(["gv1", "gv2"]);
   });
 
+  it("notifies readers when a proposal expires during cleanup and stays quiet for private cleanup writes", async () => {
+    const { c, now, monotonic } = clocks();
+    const onChange = vi.fn();
+    const records = new Records(memoryStore(), memoryStore(), { now, monotonic, onChange });
+    await propose(records, "published", { kind: "bot", bot: "pip" }, "pip");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    onChange.mockClear();
+    await records.persist("orphan", { id: "orphan" });
+    await records.sweepOrphans();
+    expect(onChange).not.toHaveBeenCalled();
+    c.mono += ORPHAN_MS;
+    c.wall += EXPIRES_MS;
+    expect(await records.sweepOrphans()).toEqual(["orphan"]);
+    expect((await records.ledger()).proposals.published.state).toBe("expired");
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
   it("a full store of 512 versions is reclaimed page by page, and takes new records again", async () => {
     const [store, versions] = [memoryStore(), memoryStore({ maxEntries: 512 })];
     const { k, records } = on(store, versions);
