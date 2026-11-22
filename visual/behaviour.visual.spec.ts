@@ -1,5 +1,6 @@
 // The shell's behaviour on fixed state (visual-language.md, section 14, step 9).
 // These need no gateway; e2e/preview.spec.ts checks the same shell against one.
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { DOCK_FROM } from "../packages/ui/src/layout.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
@@ -538,6 +539,101 @@ test.describe("the status strip", () => {
       "connected",
     );
     await expect(page.locator(".load-note")).toHaveCount(0);
+  });
+});
+
+test.describe("a failed history", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  const KEY = "agent:otto:disk-space";
+  /** The fixture bridge's controls for these checks (apps/desktop/src/fixture/bridge-fixture.ts). */
+  type Fixture = {
+    setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    send(command: { type: string; key: string }): Promise<unknown>;
+    sent: Array<{ type: string; key?: string }>;
+    reads: string[];
+    holds(key: string): number;
+  };
+  const holds = (page: Page) =>
+    page.evaluate(
+      (key) => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.holds(key),
+      KEY,
+    );
+  const reads = (page: Page) =>
+    page.evaluate(
+      (key) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.reads.filter(
+          (each) => each === key,
+        ).length,
+      KEY,
+    );
+  /** What another view, such as a second web tab, asks of the same host. */
+  const otherView = (page: Page, type: "openSession" | "closeSession") =>
+    page.evaluate(
+      ([type, key]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.send({ type, key }),
+      [type, KEY] as const,
+    );
+  /** The gateway fails to read the open task's history; `keepItems` keeps what was shown. */
+  const fail = (page: Page, keepItems: boolean) =>
+    page.evaluate(
+      ([key, keepItems]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.setState((s) => ({
+          ...s,
+          transcripts: {
+            ...s.transcripts,
+            [key]: {
+              ...s.transcripts[key]!,
+              status: "error",
+              error: "chat.history timed out after 15 seconds.",
+              items: keepItems ? s.transcripts[key]!.items : [],
+              live: null,
+            },
+          },
+        })),
+      [KEY, keepItems] as const,
+    );
+
+  test("F-105: Try again reads a task that another view also holds once, and both views can still let it go", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    await otherView(page, "openSession");
+    expect(await holds(page)).toBe(2);
+    await fail(page, false);
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    const before = await reads(page);
+
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    expect(await reads(page)).toBe(before + 1);
+    expect(await holds(page)).toBe(2);
+
+    await otherView(page, "closeSession");
+    expect(await holds(page)).toBe(1);
+    await page.getByRole("list", { name: "Otto's tasks" }).getByText("Weekly backup check").click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Weekly backup check");
+    await expect.poll(() => holds(page)).toBe(0);
+  });
+
+  test("F-105: Try again on a refresh that failed reads the task again and keeps what was shown until then", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const turns = await page.getByTestId("transcript-turn").count();
+    expect(turns).toBeGreaterThan(0);
+    await fail(page, true);
+    const note = page.locator(".load-note");
+    await expect(note).toContainText("Couldn't refresh this conversation.");
+    await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
+    const before = await reads(page);
+
+    await note.getByRole("button", { name: "Try again" }).click();
+    await expect(note).toHaveCount(0);
+    await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
+    expect(await reads(page)).toBe(before + 1);
+    expect(await holds(page)).toBe(1);
   });
 });
 

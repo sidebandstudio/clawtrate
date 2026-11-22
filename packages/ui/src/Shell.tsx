@@ -657,11 +657,9 @@ export function Shell({
       : connectionStrip;
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
+  // Reading again keeps every hold: closing and opening would not read while another view holds the task.
   const reload = useCallback(() => {
-    if (!taskKey) return;
-    void send({ type: "closeSession", key: taskKey }).then(() =>
-      send({ type: "openSession", key: taskKey }),
-    );
+    if (taskKey) void send({ type: "reloadSession", key: taskKey });
   }, [taskKey, send]);
 
   return (
