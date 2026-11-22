@@ -660,13 +660,13 @@ function narrowedHeld(held: readonly string[], grant: SignedGrant): string[] {
 
 /** A full pairing's record after an approved upgrade: held outside the request, or granted of it by name. */
 function fullUpgrade(
-  existing: StoredDeviceToken,
+  heldBefore: readonly string[],
   token: string,
   target: readonly string[],
   granted: readonly string[],
 ): StoredDeviceToken {
   const held = FULL_SCOPES.filter((scope) =>
-    target.includes(scope) ? granted.includes(scope) : existing.heldScopes.includes(scope),
+    target.includes(scope) ? granted.includes(scope) : heldBefore.includes(scope),
   );
   return { token, grantedScopes: [...held], heldScopes: held, fullGrant: true };
 }
@@ -1053,8 +1053,11 @@ export class ClawtrateClient {
   private fullEligible = false;
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
-  /** The saved record the latest plan used, for its address. */
-  private plannedRecord: { url: string; record: StoredDeviceToken } | null = null;
+  /**
+   * A full pairing's held scopes in the saved record the latest plan used, for its address: one
+   * bit per scope of `FULL_SCOPES`, so nothing grows here.
+   */
+  private plannedRecord: { url: string; held: number } | null = null;
   /** A gateway token the person typed for the current attempt, dropped when it ends. */
   private typedAttempt: { url: string; token: string; selection: number } | null = null;
 
@@ -1942,13 +1945,18 @@ export class ClawtrateClient {
             // A full pairing's record stays one: what the upgrade granted of what it asked for,
             // by name, beside what it held outside the request. The record is the one this
             // connection planned with, so nothing is read here.
-            const existing = this.plannedRecord?.url === url ? this.plannedRecord.record : null;
+            const planned = this.plannedRecord?.url === url ? this.plannedRecord : null;
             await this.writeToken(
               url,
               deviceId,
               role,
-              existing?.fullGrant
-                ? fullUpgrade(existing, token, target, scopes)
+              planned
+                ? fullUpgrade(
+                    FULL_SCOPES.filter((_scope, index) => (planned.held & (1 << index)) !== 0),
+                    token,
+                    target,
+                    scopes,
+                  )
                 : grantRecord(token, scopes, target),
             );
             const key = this.tokenKey(url, deviceId, role);
@@ -5817,7 +5825,16 @@ export class ClawtrateClient {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
         // A saved token this attempt used is gone: lost, so no full pairing replaces it by itself.
-        this.plannedRecord = token ? { url: settings.url, record: token } : null;
+        this.plannedRecord = token?.fullGrant
+          ? {
+              url: settings.url,
+              held: FULL_SCOPES.reduce(
+                (bits, scope, index) =>
+                  token.heldScopes.includes(scope) ? bits | (1 << index) : bits,
+                0,
+              ),
+            }
+          : null;
         if (token) this.planHadToken = true;
         else if (this.planHadToken) this.fullEligible = false;
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
