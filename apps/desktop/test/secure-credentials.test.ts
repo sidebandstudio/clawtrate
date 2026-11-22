@@ -747,15 +747,19 @@ describe("this device's credentials in secure storage", () => {
       match: (to) => to.endsWith(STATE_FILE),
       run: () => {
         const next = () => {
+          if (switched) return;
           reads.push(credentials.storage.get("connection"));
-          if (!switched) setImmediate(next);
+          setImmediate(next);
         };
         next();
       },
     };
-    await credentials.storage.set("connection", b);
-    switched = true;
-    await new Promise((resolve) => setImmediate(resolve));
+    try {
+      await credentials.storage.set("connection", b);
+    } finally {
+      switched = true;
+    }
+    reads.push(credentials.storage.get("connection"));
     const seen = await Promise.all(reads);
     expect(seen[0]).toBe(a);
     expect(seen.filter((value) => value !== a && value !== b)).toEqual([]);
