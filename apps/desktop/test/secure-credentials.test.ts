@@ -469,10 +469,11 @@ describe("this device's credentials in secure storage", () => {
         },
       }).box,
     );
-    expect(await paired.storage.get("connection")).toBe(CONNECTION);
-    // Pairing done: the settings drop the token; removing the earlier copy fails.
+    // Paired: the earlier token isn't offered, before or after its removal fails.
+    expect(await paired.storage.get("connection")).toBe(NO_TOKEN);
     await paired.storage.set("connection", NO_TOKEN);
     expect(await paired.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
