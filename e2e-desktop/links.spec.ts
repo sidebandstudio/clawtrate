@@ -1,9 +1,10 @@
 // F-248 on the desktop app built from this checkout (docs/design/links.md). The
 // app runs against an in-memory gateway on 127.0.0.1 and is driven over the
 // DevTools protocol, as the update check does. A link reaches it the way Windows
-// and Linux deliver one: as the argument of a second launch with the same data
-// folder, which hands it to the running app and exits, or of the launch that
-// starts the app. macOS sends `open-url` instead, which only the system can.
+// delivers one, with the command the installer registers, `"<app>" -- "%1"`: as
+// the argument of a second launch with the same data folder, which hands it to
+// the running app and exits, or of the launch that starts the app. macOS sends
+// `open-url` instead, which only the system can.
 
 import { chromium, expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -83,9 +84,9 @@ async function quit() {
   app = undefined;
 }
 
-/** Open a link as Windows and Linux do while the app runs: a second launch that hands it over. */
-async function deliver(raw: string) {
-  const second = start([raw]);
+/** Open a link as Windows does while the app runs: a second launch that hands it over. */
+async function deliver(...given: string[]) {
+  const second = start(["--", ...given]);
   try {
     const [code] = (await once(second, "exit", { signal: AbortSignal.timeout(30_000) })) as [
       number | null,
@@ -263,9 +264,16 @@ test("F-248: a link that cannot open says why, and leaves the chat and its draft
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
+test("F-248: a link Windows split in two is invalid, and its second half is no switch", async () => {
+  // Read as a switch, the second half would start a second app on another data folder.
+  await deliver(link("marlow", "Hi"), `--user-data-dir=${join(dir, "other")}`);
+  await expectCantOpen("This Clawtrate link is invalid. Ask for a new link.");
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
 test("F-248: a link that starts the app waits for its connection, then opens the chat", async () => {
   await quit();
-  page = await launch(link("otto", "Check the release notes."));
+  page = await launch("--", link("otto", "Check the release notes."));
   await expect(field()).toHaveAttribute("aria-label", "Message Otto", { timeout: 30_000 });
   await expect(field()).toHaveValue("Check the release notes.");
   await expect(note()).toHaveText(ADDED);

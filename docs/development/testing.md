@@ -18,7 +18,7 @@ CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with Op
 
 `pnpm test:desktop-updates` runs the desktop update flow on macOS and Windows. It builds a temporary Electron app with a loopback feed, launches it with a fresh profile, and checks the renderer through the real preload and main process. It runs independently of packaging and development gateways.
 
-`pnpm test:desktop` checks what only the desktop host does, on macOS and Windows (`e2e-desktop/`). It builds the app from source into a temporary folder, launches it with a fresh profile against an in-memory gateway on 127.0.0.1, and drives it over the DevTools protocol. Clawtrate links reach it as Windows and Linux deliver them: as the argument of a second launch with the same profile, which hands the link over and exits, and of the launch that starts the app. macOS's `open-url` comes only from the system, so no check sends it.
+`pnpm test:desktop` checks what only the desktop host does, on macOS and Windows (`e2e-desktop/`). It builds the app from source into a temporary folder, launches it with a fresh profile against an in-memory gateway on 127.0.0.1, and drives it over the DevTools protocol. Clawtrate links reach it as Windows delivers them, after `--` as the installer's command passes them: as the argument of a second launch with the same profile, which hands the link over and exits, and of the launch that starts the app. macOS's `open-url` comes only from the system, so no check sends it.
 
 ## The scenario check
 

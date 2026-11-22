@@ -7,17 +7,38 @@ const GATEWAY = "ab".repeat(32);
 const LINK = `clawtrate://chat?bot=marlow&gateway=${GATEWAY}&text=Hi`;
 
 describe("links from the operating system", () => {
-  it("F-248: finds the link among a launch's arguments, and nothing else", () => {
-    expect(linkArgument(["/app/Clawtrate", "--flag", LINK])).toBe(LINK);
-    expect(linkArgument(["/app/Clawtrate", "--allow-file-access-from-files", LINK, "--x"])).toBe(
-      LINK,
-    );
+  it("F-248: takes the link from after `--`, as the installer's command passes it, and nothing else", () => {
+    expect(linkArgument(["/app/Clawtrate", "--", LINK])).toBe(LINK);
+    // Switches Chromium adds, and those of a development launch, come before it.
+    expect(
+      linkArgument([
+        "/app/Clawtrate",
+        "--allow-file-access-from-files",
+        "/path/to/app",
+        "--",
+        LINK,
+      ]),
+    ).toBe(LINK);
+    // Without `--` an argument is no link: Chromium has read its switches already.
+    expect(linkArgument(["/app/Clawtrate", LINK])).toBeNull();
     expect(linkArgument(["/app/Clawtrate", "/path/to/app", "--user-data-dir=/tmp/x"])).toBeNull();
-    expect(linkArgument(["/app/Clawtrate", "https://example.com/clawtrate:"])).toBeNull();
+    expect(linkArgument(["/app/Clawtrate", "--"])).toBeNull();
+    expect(linkArgument(["/app/Clawtrate", "--", "https://example.com/clawtrate:"])).toBeNull();
     expect(linkArgument([])).toBeNull();
     // Another case is still a link, so it is shown as invalid rather than ignored.
-    expect(linkArgument(["CLAWTRATE://chat?x"])).toBe("CLAWTRATE://chat?x");
-    expect(linkArgument(["clawtrate://chat?a", "clawtrate://chat?b"])).toBe("clawtrate://chat?b");
+    expect(linkArgument(["/app/Clawtrate", "--", "CLAWTRATE://chat?x"])).toBe("CLAWTRATE://chat?x");
+  });
+
+  it("F-248: a link Windows split into several arguments is one invalid link, and passes no switch", () => {
+    // A link with a quote in it, as `"<app>" -- "%1"` hands it over once Windows splits it.
+    const split = ["/app/Clawtrate", "--", `${LINK}`, "--user-data-dir=/tmp/other", "--x"];
+    const raw = linkArgument(split);
+    expect(raw).toBe(`${LINK} --user-data-dir=/tmp/other --x`);
+    const inbox = new LinkInbox(() => {});
+    inbox.receive(raw!);
+    expect(inbox.take()).toEqual({ id: 1, status: "invalid" });
+    // Only the first `--` ends the switches; a later one is part of the link.
+    expect(linkArgument(["/app/Clawtrate", "--", LINK, "--", "x"])).toBe(`${LINK} -- x`);
   });
 
   it("F-248: holds the latest link, validated, until the window takes it once", () => {

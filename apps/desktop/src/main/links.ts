@@ -1,15 +1,26 @@
 // Clawtrate links from the operating system (docs/design/links.md). macOS sends
-// them as `open-url`, also the one that launched the app; Windows and Linux
-// start the app, or a second copy that hands over, with the link as an
-// argument. Each link is validated here, and only the latest is held until the
-// window takes it. The renderer gets its values, never the raw link.
+// them as `open-url`, also the one that launched the app; Windows starts the
+// app, or a second copy that hands over, with the command its installer
+// registered, `"<app>" -- "%1"`. Each link is validated here, and only the
+// latest is held until the window takes it. The renderer gets its values, never
+// the raw link.
 
 import { CHAT_LINK_SCHEME, deliverChatLink, type ChatLinkDelivery } from "@clawtrate/core";
 
-/** The last of a launch's arguments in Clawtrate's scheme, in any case, or null. */
+/**
+ * The link a launch was given, or null: what follows the first `--`, when it starts
+ * with Clawtrate's scheme in any case. After `--` Chromium reads no switches
+ * (base/command_line.cc), so a link Windows splits at a quote or a space cannot pass
+ * one. One argument is the link; several are a link Windows split, which the parser
+ * refuses, since a link holds no space.
+ */
 export function linkArgument(argv: readonly string[]): string | null {
+  const end = argv.indexOf("--");
+  if (end === -1) return null;
+  const given = argv.slice(end + 1);
   const scheme = `${CHAT_LINK_SCHEME}:`;
-  return argv.findLast((arg) => arg.slice(0, scheme.length).toLowerCase() === scheme) ?? null;
+  if (given[0]?.slice(0, scheme.length).toLowerCase() !== scheme) return null;
+  return given.join(" ");
 }
 
 /** The one link waiting for the window: a later link replaces it. */
