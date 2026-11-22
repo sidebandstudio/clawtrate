@@ -570,28 +570,39 @@ export function createSecureCredentials(options: {
           });
         const next = parseSettings(value);
         if (!next) throw new Error("not gateway settings");
-        await queued(async () => {
-          await mode();
-          await keepSettings({
-            ...settings,
-            [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
-          });
-          // A typed token stays in this process, for its address only, once its settings are kept.
-          typed = next.token === null ? null : { url: next.url, token: next.token };
-        });
-        // An earlier build's saved token goes once these settings no longer carry it.
+        // An earlier build's saved token goes once these settings replace it: another address,
+        // another token, or this device's own token saved for it. Settings that merely drop a
+        // typed token, at a Disconnect or a refusal, keep it. Like a removal, the two files
+        // change together or not at all: the sealed copy first, put back if the settings can't
+        // then be written, so a call that fails changes neither the live nor the saved gateway.
         const current = await mode();
-        if (current.kind === "locked") return;
-        const kept = (await credentials()).values[SETTINGS_KEY];
+        const kept =
+          current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
         const earlier = kept === undefined ? null : parseSettings(kept);
-        // ...only once replaced: another address, another token, or a device token saved for it.
-        // Settings that merely drop a typed token, at a Disconnect or a refusal, keep it.
         const replaced =
           earlier !== null &&
           (earlier.url !== next.url ||
             (next.token !== null && earlier.token !== next.token) ||
             (await thisDeviceHasToken(earlier.url)));
         if (replaced) await change(withoutValue(SETTINGS_KEY));
+        try {
+          await queued(async () => {
+            await mode();
+            await keepSettings({
+              ...settings,
+              [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
+            });
+            // A typed token stays in this process, for its address only, once its settings are kept.
+            typed = next.token === null ? null : { url: next.url, token: next.token };
+          });
+        } catch (error) {
+          if (replaced && kept !== undefined)
+            await change((now) => ({
+              ...now,
+              values: { ...now.values, [SETTINGS_KEY]: kept },
+            })).catch(() => {});
+          throw error;
+        }
       },
       delete: async (key) => {
         if (isCredentialKey(key)) return change(withoutValue(key));

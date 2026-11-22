@@ -393,6 +393,40 @@ describe("this device's credentials in secure storage", () => {
     if (process.platform !== "win32") expect(statSync(dir).mode & 0o077).toBe(0);
   });
 
+  it("a gateway switch that fails at either file changes neither the live nor the saved gateway", async () => {
+    const { dir, pem } = legacyFolder();
+    // This device is paired at A, so switching to B retires A's earlier token too.
+    const setup = open(dir, fakeBox().box);
+    await setup.storage.set(await ownTokenKey(pem), RECORD);
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    // The sealed change fails.
+    let reads = 0;
+    const one = open(
+      dir,
+      fakeBox({
+        decrypt: async (data) => {
+          if ((reads += 1) > 1) throw new Error("locked");
+          return fakeBox().box.decrypt(data);
+        },
+      }).box,
+    );
+    expect(await one.storage.get("connection")).toBe(CONNECTION);
+    await expect(one.storage.set("connection", b)).rejects.toThrow();
+    expect(await one.storage.get("connection")).toBe(CONNECTION);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+    // The settings write fails.
+    const two = open(dir, fakeBox().box);
+    let refuse = true;
+    fsHooks.failRename = (to) => {
+      if (!refuse || !to.endsWith(STATE_FILE)) return false;
+      refuse = false;
+      return true;
+    };
+    await expect(two.storage.set("connection", b)).rejects.toThrow();
+    expect(await two.storage.get("connection")).toBe(CONNECTION);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
