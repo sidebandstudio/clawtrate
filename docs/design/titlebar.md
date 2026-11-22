@@ -1,6 +1,6 @@
 # The title bar, the update button, Settings and the gateway's name
 
-Four changes to the app's frame: a title bar with Clawtrate's mark, wordmark and a Beta pill; the update button moved into it; a gear for Settings; and a name for the gateway connection. The prototype is [`prototype/titlebar.html`](prototype/titlebar.html). With `?sheet=1` it shows every state on one page.
+Four changes to the app's frame: a title bar with Clawtrate's mark, wordmark and a Beta pill; the update button moved into it; a gear for Settings; and a name for the gateway connection.
 
 This changes two earlier decisions. `docs/decisions.md` ("Brand") says the mark appears only on the connection and pairing screens, and section 7 of [visual-language.md](visual-language.md) says the rail has no product name. Both are rewritten when this is built.
 
