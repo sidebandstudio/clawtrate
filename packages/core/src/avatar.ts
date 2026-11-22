@@ -348,6 +348,7 @@ function pngChunks(bytes: Uint8Array): PngChunk[] | null {
   let at = 8;
   let idat: "before" | "in" | "after" = "before";
   let palette = false;
+  let paletteClosed = false;
   let colour = -1;
   let depth = 0;
   // The first two bytes of the image data, across however many IDAT chunks they span.
@@ -379,6 +380,8 @@ function pngChunks(bytes: Uint8Array): PngChunk[] | null {
       if (palette || idat !== "before" || length === 0 || length % 3 !== 0) return null;
       if (colour === 0 || colour === 4 || entries > 256) return null;
       if (colour === 3 && entries > 2 ** depth) return null;
+      // tRNS and bKGD come after a palette when there is one, so a palette after them is out of order.
+      if (paletteClosed) return null;
       palette = true;
     } else if (type === "IDAT") {
       if (idat === "after" || (colour === 3 && !palette)) return null;
@@ -396,6 +399,9 @@ function pngChunks(bytes: Uint8Array): PngChunk[] | null {
     } else if (BEFORE_DATA.has(type)) {
       if (idat !== "before") return null;
       if (AFTER_PALETTE.has(type) && colour === 3 && !palette) return null;
+      // A histogram describes a palette, so it needs one before it.
+      if (type === "hIST" && !palette) return null;
+      if (AFTER_PALETTE.has(type) && !palette) paletteClosed = true;
     }
     if (type !== "IDAT" && idat === "in") idat = "after";
     chunks.push({ type, start: at, end, data });

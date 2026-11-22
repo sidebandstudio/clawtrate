@@ -267,7 +267,8 @@ describe("every creature stays inside the circle an avatar is cropped to", () =>
       creatures += 1;
       for (const state of AVATAR_STATES) {
         const reach = sceneReach(avatarScene(choice, state, avatarVariation("atlas")));
-        if (reach > 19.75)
+        // A reach that isn't a number fails too: NaN is never greater than the limit.
+        if (!(reach <= 19.75))
           outside.push(`${encodeAvatarChoice(choice)} ${state}: ${reach.toFixed(2)}`);
       }
     }
@@ -520,9 +521,11 @@ describe("reading a picture from the gateway", () => {
     // Padding dropped, a space, the wrong alphabet, and pad bits that are not zero.
     expect(readPicture(good.replace(/=+$/, "")).kind).toBe("invalid");
     expect(readPicture(`data:image/png;base64, ${body}`).kind).toBe("invalid");
-    expect(readPicture(good.replace(/\+|\//, "-")).kind).toBe(
-      body.match(/[+/]/) ? "invalid" : "plain",
-    );
+    // A URL-safe character in the payload, with the prefix as it was.
+    const at = body.search(/[A-Za-z0-9]/);
+    const urlSafe = `data:image/png;base64,${body.slice(0, at)}-${body.slice(at + 1)}`;
+    expect(urlSafe).not.toBe(good);
+    expect(readPicture(urlSafe).kind).toBe("invalid");
     const last = body.replace(/=+$/, "").at(-1)!;
     const bumped = B64[B64.indexOf(last) + 1]!;
     expect(
@@ -719,6 +722,19 @@ describe("the PNG rules the reader enforces (fix round 2)", () => {
       "invalid",
     );
     expect(kind([header(8, 3), palette(4), { type: "tRNS", data: [0] }, idat, iend])).toBe("plain");
+    // In a truecolour image too: no palette after tRNS or bKGD, and no histogram without a palette.
+    const six = [0, 0, 0, 0, 0, 0];
+    expect(kind([header(8, 2), { type: "tRNS", data: six }, palette(2), idat, iend])).toBe(
+      "invalid",
+    );
+    expect(kind([header(8, 2), { type: "bKGD", data: six }, palette(2), idat, iend])).toBe(
+      "invalid",
+    );
+    expect(kind([header(8, 2), { type: "hIST", data: [0, 0] }, idat, iend])).toBe("invalid");
+    expect(kind([header(8, 2), palette(2), { type: "hIST", data: [0, 0, 0, 0] }, idat, iend])).toBe(
+      "plain",
+    );
+    expect(kind([header(8, 2), { type: "tRNS", data: six }, idat, iend])).toBe("plain");
   });
 
   it("needs image data that starts with a zlib header PNG allows, across empty IDAT chunks", () => {

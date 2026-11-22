@@ -49,7 +49,12 @@ for (const family of AVATAR_FAMILIES) {
           }),
         ),
       );
-    while (reaches() > FIT_RADIUS) k *= 0.995;
+    for (let reach = reaches(); reach > FIT_RADIUS || !Number.isFinite(reach); reach = reaches()) {
+      // A reach that isn't a number would never shrink to fit: stop and name the creature.
+      if (!Number.isFinite(reach))
+        throw new Error(`${avatarFitKey(choice)}: the reach is ${reach}`);
+      k *= 0.995;
+    }
     const round = (n: number) => Math.round(n * 1000) / 1000 + 0;
     lines.push(
       `  "${avatarFitKey(choice)}": "${round(k)} ${round(-k * (circle.x - 20))} ${round(-k * (circle.y - 20))}",`,
