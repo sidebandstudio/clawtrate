@@ -1,6 +1,8 @@
 // The app's bundle id, shared by the main process and the packaging configuration.
 
 export const APP_ID = "dev.clawtrate.desktop";
+/** The app's name: its bundle, its window and its artifacts' file names. */
+export const PRODUCT_NAME = "Clawtrate";
 
 /**
  * The AppUserModelID the app gives itself on Windows: in a packaged app, the

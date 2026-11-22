@@ -38,7 +38,15 @@ describe("packaging configuration", () => {
     expect(script).toContain('RMDir "$LOCALAPPDATA\\${CLAWTRATE_UPDATER_DIR}"');
   });
 
-  it.each(["1.2.0", "1.2.0-nightly.20261104.10"])(
+  it("validates an output override before packaging on either platform", () => {
+    const output = (path: string) =>
+      builderConfig({ CLAWTRATE_PACKAGE_OUTPUT: path }, "45.3.2").directories?.output;
+    expect(output("  ")).toBe("dist");
+    expect(output(APP)).toBe(APP);
+    expect(() => output("custom-dist")).toThrow("must be an absolute path");
+  });
+
+  it.each(["1.2.0", "1.2.0-beta.20261104.10"])(
     "emits the full signed setup version and setup-only marker for %s",
     (version) => {
       const config = builderConfig({}, "45.3.2");
