@@ -157,6 +157,10 @@ function expectNowhere(dir: string, secrets: string[]) {
   }
 }
 
+/** The device token key of the device whose key this is, for `URL`. */
+const ownTokenKey = async (pem: string) =>
+  `deviceToken:${encodeURIComponent(URL)}:${await deviceIdOf(pem)}:operator`;
+
 const deviceIdOf = async (pem: string) => {
   const dir = emptyFolder();
   writeFileSync(join(dir, "key.pem"), pem);
@@ -310,6 +314,85 @@ describe("this device's credentials in secure storage", () => {
     expect(await credentials.storage.get("connection")).toBe(a);
   });
 
+  // Windows has no folder sync (`syncFolder`), so there is none to fail.
+  it.skipIf(process.platform === "win32")(
+    "cleanup waits for the sealed record's folder to be on disk: a failed sync changes no earlier file",
+    async () => {
+      const { dir } = legacyFolder();
+      await open(dir, fakeBox().box).signer.loadIdentity();
+      // Clear text an interrupted removal left beside the record.
+      writeFileSync(
+        join(dir, STATE_FILE),
+        JSON.stringify({ [TOKEN_KEY]: RECORD.replace(DEVICE, "stale") }),
+      );
+      const before = readFileSync(join(dir, STATE_FILE), "utf8");
+      fsHooks.failFolderSyncs = 1;
+      const again = open(dir, fakeBox().box);
+      expect(await again.status()).toBe("cleanup-pending");
+      expect(readFileSync(join(dir, STATE_FILE), "utf8")).toBe(before);
+      // The next change finishes it.
+      await again.storage.set(TOKEN_KEY, RECORD);
+      expect(await again.status()).toBe("secure");
+      expect(everything(dir)).not.toContain("stale");
+    },
+  );
+
+  it("a pending cleanup is tried again after a credential-only change, and full access waits for it", async () => {
+    const { dir } = legacyFolder();
+    fsHooks.failRename = (to) => to.endsWith(STATE_FILE);
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.status()).toBe("cleanup-pending");
+    // Still failing: the token is kept, the cleanup stays pending.
+    await credentials.storage.set(TOKEN_KEY, RECORD.replace(DEVICE, "token-2"));
+    expect(await credentials.secure()).toBe(false);
+    fsHooks.failRename = null;
+    await credentials.storage.set(TOKEN_KEY, RECORD.replace(DEVICE, "token-3"));
+    expect(await credentials.secure()).toBe(true);
+    expect(existsSync(join(dir, DEVICE_KEY_FILE))).toBe(false);
+    expectNowhere(dir, SECRETS);
+  });
+
+  it("forgetting the gateway removes its settings and an earlier build's token together, or neither", async () => {
+    const { dir } = legacyFolder();
+    // The settings write fails: the gateway, its earlier token included, stays.
+    const one = open(dir, fakeBox().box);
+    expect(await one.storage.get("connection")).toBe(CONNECTION);
+    let refuse = true;
+    fsHooks.failRename = (to) => {
+      if (!refuse || !to.endsWith(STATE_FILE)) return false;
+      refuse = false;
+      return true;
+    };
+    await expect(one.storage.delete("connection")).rejects.toThrow();
+    expect(await one.storage.get("connection")).toBe(CONNECTION);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+    // The sealed record's change fails: the saved gateway stays.
+    let reads = 0;
+    const two = open(
+      dir,
+      fakeBox({
+        decrypt: async (data) => {
+          if ((reads += 1) > 1) throw new Error("locked");
+          return fakeBox().box.decrypt(data);
+        },
+      }).box,
+    );
+    expect(await two.storage.get("connection")).toBe(CONNECTION);
+    await expect(two.storage.delete("connection")).rejects.toThrow();
+    expect(JSON.parse(state(dir).connection!)).toEqual({ url: URL, token: null });
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+  });
+
+  it("a host given secure storage makes its missing data folder, private, before it reads it", async () => {
+    const parent = emptyFolder();
+    const dir = join(parent, "not", "yet");
+    const client = { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" };
+    const host = createNodeHost({ dataDir: dir, client, secretBox: fakeBox().box });
+    expect((await host.signer.loadIdentity()).deviceId).toMatch(/^[0-9a-f]{64}$/);
+    expect(await host.secureCredentials?.()).toBe(true);
+    if (process.platform !== "win32") expect(statSync(dir).mode & 0o077).toBe(0);
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
@@ -359,35 +442,43 @@ describe("this device's credentials in secure storage", () => {
     expect(everything(dir)).not.toContain(DEVICE);
   });
 
-  it("a folder sync that fails after the record's rename drops what is held, and the next use reads the disk", async () => {
-    const { dir } = legacyFolder();
-    const credentials = open(dir, fakeBox().box);
-    expect(await credentials.storage.get(TOKEN_KEY)).toBe(RECORD);
-    const newer = RECORD.replace(DEVICE, "token-B");
-    fsHooks.failFolderSyncs = 2;
-    await expect(credentials.storage.set(TOKEN_KEY, newer)).rejects.toThrow();
-    // Not the snapshot from before the failed write: what the disk holds.
-    expect(await credentials.storage.get(TOKEN_KEY)).toBe(newer);
-    expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(newer);
-    // A later write builds on that, and is kept.
-    const latest = RECORD.replace(DEVICE, "token-C");
-    await credentials.storage.set(TOKEN_KEY, latest);
-    expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(latest);
-  });
+  // Windows has no folder sync (`syncFolder`), so there is none to fail.
+  it.skipIf(process.platform === "win32")(
+    "a folder sync that fails after the record's rename drops what is held, and the next use reads the disk",
+    async () => {
+      const { dir } = legacyFolder();
+      const credentials = open(dir, fakeBox().box);
+      expect(await credentials.storage.get(TOKEN_KEY)).toBe(RECORD);
+      const newer = RECORD.replace(DEVICE, "token-B");
+      fsHooks.failFolderSyncs = 2;
+      await expect(credentials.storage.set(TOKEN_KEY, newer)).rejects.toThrow();
+      // Not the snapshot from before the failed write: what the disk holds.
+      expect(await credentials.storage.get(TOKEN_KEY)).toBe(newer);
+      expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(newer);
+      // A later write builds on that, and is kept.
+      const latest = RECORD.replace(DEVICE, "token-C");
+      await credentials.storage.set(TOKEN_KEY, latest);
+      expect(await open(dir, fakeBox().box).storage.get(TOKEN_KEY)).toBe(latest);
+    },
+  );
 
-  it("a folder sync that fails after the move's rename keeps the earlier files, and the next start finishes the move", async () => {
-    const { dir, pem } = legacyFolder();
-    const before = readFileSync(join(dir, STATE_FILE), "utf8");
-    fsHooks.failFolderSyncs = 2;
-    const credentials = open(dir, fakeBox().box);
-    await expect(credentials.signer.loadIdentity()).rejects.toThrow();
-    expect(readFileSync(join(dir, STATE_FILE), "utf8")).toBe(before);
-    expect(readFileSync(join(dir, DEVICE_KEY_FILE), "utf8")).toBe(pem);
-    const again = open(dir, fakeBox().box);
-    expect((await again.signer.loadIdentity()).deviceId).toBe(await deviceIdOf(pem));
-    expect(await again.secure()).toBe(true);
-    expect(existsSync(join(dir, DEVICE_KEY_FILE))).toBe(false);
-  });
+  // Windows has no folder sync (`syncFolder`), so there is none to fail.
+  it.skipIf(process.platform === "win32")(
+    "a folder sync that fails after the move's rename keeps the earlier files, and the next start finishes the move",
+    async () => {
+      const { dir, pem } = legacyFolder();
+      const before = readFileSync(join(dir, STATE_FILE), "utf8");
+      fsHooks.failFolderSyncs = 2;
+      const credentials = open(dir, fakeBox().box);
+      await expect(credentials.signer.loadIdentity()).rejects.toThrow();
+      expect(readFileSync(join(dir, STATE_FILE), "utf8")).toBe(before);
+      expect(readFileSync(join(dir, DEVICE_KEY_FILE), "utf8")).toBe(pem);
+      const again = open(dir, fakeBox().box);
+      expect((await again.signer.loadIdentity()).deviceId).toBe(await deviceIdOf(pem));
+      expect(await again.secure()).toBe(true);
+      expect(existsSync(join(dir, DEVICE_KEY_FILE))).toBe(false);
+    },
+  );
 
   it("refuses a changed record or wrapped key before using anything in it, and a failed write keeps the record before it", async () => {
     const { dir } = legacyFolder();
@@ -453,24 +544,32 @@ describe("this device's credentials in secure storage", () => {
     );
 
     // Once paired, the settings drop the token, and the earlier build's copy goes with it.
-    const { dir: other } = legacyFolder();
+    const { dir: other, pem } = legacyFolder();
     const paired = open(other, fakeBox().box);
     expect(await paired.storage.get("connection")).toBe(CONNECTION);
+    await paired.storage.set(await ownTokenKey(pem), RECORD);
     await paired.storage.set("connection", NO_TOKEN);
     expect(await open(other, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
 
   it("settings that only drop a token keep an earlier build's saved token until a device token is saved for its address", async () => {
     const dir = emptyFolder();
+    const pem = newDeviceKeyPem();
     writeFileSync(join(dir, STATE_FILE), JSON.stringify({ connection: CONNECTION }));
+    writeFileSync(join(dir, DEVICE_KEY_FILE), pem);
     const credentials = open(dir, fakeBox().box);
     // A Disconnect or a refusal drops the typed token: the earlier saved one stays.
     await credentials.storage.set("connection", NO_TOKEN);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
-    // Once this device is paired there, it goes.
+    // Another device identity's token for the address doesn't replace it.
     const again = open(dir, fakeBox().box);
     await again.storage.set(TOKEN_KEY, RECORD);
     await again.storage.set("connection", NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+    // This device's own does.
+    const paired = open(dir, fakeBox().box);
+    await paired.storage.set(await ownTokenKey(pem), RECORD);
+    await paired.storage.set("connection", NO_TOKEN);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
 

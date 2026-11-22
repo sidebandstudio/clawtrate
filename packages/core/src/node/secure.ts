@@ -23,8 +23,15 @@
 // secure storage works again. Either way the host has no full access
 // (`ClawtrateHost.secureCredentials`), and no credential is written in clear text.
 
-import { createCipheriv, createDecipheriv, createPrivateKey, randomBytes } from "node:crypto";
-import { open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  randomBytes,
+} from "node:crypto";
+import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ClawtrateHost, DeviceSigner, KeyValueStore } from "../host.ts";
 import { createPemSigner, newDeviceKeyPem } from "./index.ts";
@@ -352,6 +359,9 @@ export function createSecureCredentials(options: {
     mode: Extract<Mode, { kind: "secure" }>,
     next: Record<string, string> = settings,
   ) => {
+    // No earlier copy changes until the sealed record's rename is on disk: a sync that fails
+    // here stops the sweep before it touches a file, and the next change tries again.
+    await syncFolder(dataDir);
     await writeSettings(next);
     await rm(keyPath, { force: true });
     await syncFolder(dataDir);
@@ -360,6 +370,8 @@ export function createSecureCredentials(options: {
   };
 
   const openMode = async (): Promise<Mode> => {
+    // The data folder may not exist yet: made private before anything reads or scans it.
+    await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const raw = await readOptional(statePath);
     const saved = raw ? record(raw.toString("utf8")) : {};
     if (!saved || !Object.values(saved).every((value) => typeof value === "string"))
@@ -481,10 +493,19 @@ export function createSecureCredentials(options: {
         return;
       }
       const next = apply(current.sealed.credentials);
-      if (next === current.sealed.credentials) return;
-      const sealed = { ...current.sealed, credentials: next };
-      await commit(sealed);
-      current.sealed = sealed;
+      if (next !== current.sealed.credentials) {
+        const sealed = { ...current.sealed, credentials: next };
+        await commit(sealed);
+        current.sealed = sealed;
+      }
+      // Cleanup still pending: tried again now that the record is kept; full access stays off
+      // until it succeeds.
+      if (!current.swept)
+        await sweep(current).catch(() =>
+          warn(
+            "Could not remove the earlier copy of this device's credentials. Clawtrate tries again at its next change.",
+          ),
+        );
     });
 
   /** Keeps a change to the settings: never while the file still holds credentials it would copy. */
@@ -499,6 +520,17 @@ export function createSecureCredentials(options: {
     if (current.kind === "secure" && !current.swept) await sweep(current, next);
     else if (!(current.kind === "session" && current.holdSettings)) await writeSettings(next);
     settings = next;
+  };
+
+  /** Whether this device, by its own key, has a device token saved for the address. */
+  const thisDeviceHasToken = async (url: string) => {
+    const { deviceKey, values } = await credentials();
+    if (deviceKey === null) return false;
+    const raw = createPublicKey(createPrivateKey(deviceKey))
+      .export({ type: "spki", format: "der" })
+      .subarray(-32);
+    const deviceId = createHash("sha256").update(raw).digest("hex");
+    return values[`deviceToken:${encodeURIComponent(url)}:${deviceId}:operator`] !== undefined;
   };
 
   const withoutValue = (key: string) => (current: Credentials) => {
@@ -558,21 +590,38 @@ export function createSecureCredentials(options: {
           earlier !== null &&
           (earlier.url !== next.url ||
             (next.token !== null && earlier.token !== next.token) ||
-            Object.keys((await credentials()).values).some((key) =>
-              key.startsWith(`deviceToken:${encodeURIComponent(earlier.url)}:`),
-            ));
+            (await thisDeviceHasToken(earlier.url)));
         if (replaced) await change(withoutValue(SETTINGS_KEY));
       },
       delete: async (key) => {
         if (isCredentialKey(key)) return change(withoutValue(key));
-        await queued(async () => {
-          await mode();
-          const { [key]: _removed, ...rest } = settings;
-          await keepSettings(rest);
-          if (key === SETTINGS_KEY) typed = null;
-        });
-        if (key === SETTINGS_KEY && (await mode()).kind !== "locked")
-          await change(withoutValue(SETTINGS_KEY));
+        if (key !== SETTINGS_KEY)
+          return queued(async () => {
+            await mode();
+            const { [key]: _removed, ...rest } = settings;
+            await keepSettings(rest);
+          });
+        // The saved gateway and an earlier build's token for it go together or not at all: the
+        // sealed copy first, and put back if the settings can't then be written.
+        const current = await mode();
+        const kept =
+          current.kind === "locked" ? undefined : (await credentials()).values[SETTINGS_KEY];
+        if (kept !== undefined) await change(withoutValue(SETTINGS_KEY));
+        try {
+          await queued(async () => {
+            await mode();
+            const { [SETTINGS_KEY]: _removed, ...rest } = settings;
+            await keepSettings(rest);
+            typed = null;
+          });
+        } catch (error) {
+          if (kept !== undefined)
+            await change((now) => ({
+              ...now,
+              values: { ...now.values, [SETTINGS_KEY]: kept },
+            })).catch(() => {});
+          throw error;
+        }
       },
     },
     signer: createPemSigner(async () => {
