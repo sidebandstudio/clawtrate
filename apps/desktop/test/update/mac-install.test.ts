@@ -131,6 +131,31 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it("an inspector result without its line ending is inspection-failed, even after exit 0", async () => {
+  const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  Object.defineProperty(process, "resourcesPath", {
+    value: "/fixture/Contents/Resources",
+    configurable: true,
+  });
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: vi.fn() });
+  vi.mocked(spawn).mockImplementationOnce(() => {
+    queueMicrotask(() => {
+      child.stdout.end("ok");
+      child.emit("close", 0);
+    });
+    return child as unknown as ReturnType<typeof spawn>;
+  });
+  try {
+    const file = await candidate();
+    expect(
+      await macInstaller("arm64").inspect({ ...file, path: join(file.path, "absent", "archive") }),
+    ).toBe("inspection-failed");
+  } finally {
+    if (old) Object.defineProperty(process, "resourcesPath", old);
+    else Reflect.deleteProperty(process, "resourcesPath");
+  }
+});
+
 it("a flagged ad hoc bundle reports build-not-signed before opening the archive or creating scratch", async () => {
   const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
   Object.defineProperty(process, "resourcesPath", {
@@ -142,7 +167,7 @@ it("a flagged ad hoc bundle reports build-not-signed before opening the archive 
     expect(args[1]).toEqual(["--running-signature", "dev.clawtrate.desktop"]);
     expect(args[2]).toMatchObject({ stdio: ["ignore", "pipe", "ignore"] });
     queueMicrotask(() => {
-      child.stdout.end("build-not-signed");
+      child.stdout.end("build-not-signed\n");
       child.emit("close", 0);
     });
     return child as unknown as ReturnType<typeof spawn>;

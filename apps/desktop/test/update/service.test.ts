@@ -1499,7 +1499,7 @@ it.skipIf(process.platform === "win32")(
       .mockImplementationOnce(() => {
         const classification = child();
         queueMicrotask(() => {
-          classification.stdout.end("ok");
+          classification.stdout.end("ok\n");
           classification.emit("close", 0);
         });
         return classification as unknown as ReturnType<typeof spawn>;
