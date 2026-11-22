@@ -1235,6 +1235,17 @@ export class RemoteSetup {
     this.watching = null;
   }
 
+  /** Whether the store still holds the record `pending` wrote, as it wrote it. */
+  private ownsRecord(pending: NonNullable<RemoteSetup["pending"]>): boolean {
+    const now = this.options.routes.get(pending.record.id);
+    return (
+      now !== null &&
+      now.key === pending.record.key &&
+      now.lastUsed === pending.record.lastUsed &&
+      now.destination === pending.record.destination
+    );
+  }
+
   private currentPending(): RemoteSetup["pending"] {
     return this.pending;
   }
@@ -1277,19 +1288,20 @@ export class RemoteSetup {
       // A route this attempt recorded goes; what its record replaced (a route of the same id, on
       // another gateway port or profile, with its token) comes back as it was.
       const put = pending.put;
-      if (
-        pending.prior === "no-record" &&
-        (discardNewPairing || pending.record.identity === null)
-      ) {
-        if (put) put.undo();
-        else this.options.routes.remove(id);
-      } else {
-        if (discardNewPairing && pending.prior === "unpaired")
-          this.options.routes.deleteToken(pending.record.key);
-        // A pairing not kept gives back the routes its record displaced, with their tokens and
-        // pins; one the gateway accepted (Back while its bots load) lets them go now.
-        if (discardNewPairing || !pending.accepted) put?.restoreDisplaced();
-        else put?.settle();
+      // A pairing not kept: refused, failed, or let go before its gateway accepted it. One the
+      // gateway accepted (Back while its bots load) is kept, and lets go of what it displaced.
+      const notKept = discardNewPairing || !pending.accepted;
+      if (!notKept) put?.settle();
+      else if (put && this.ownsRecord(pending)) {
+        // Its record is still the one it wrote: the route as it was before (a saved route's own
+        // destination, last use, token and pin), and every route it displaced, come back.
+        put.undo();
+      } else if (put) {
+        put.restoreDisplaced();
+      } else if (pending.prior === "no-record") {
+        this.options.routes.remove(id);
+      } else if (discardNewPairing && pending.prior === "unpaired") {
+        this.options.routes.deleteToken(pending.record.key);
       }
     } catch {
       this.log("Couldn't remove this setup attempt's pairing data.");

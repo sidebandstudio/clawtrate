@@ -2080,6 +2080,36 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       }
     });
 
+    for (const prior of ["paired", "unpaired"] as const)
+      it(`a Pair on a saved ${prior} route whose connect is refused gives the route back as it was: its destination, last use, token and pin`, async () => {
+        const h = host();
+        await connected(h);
+        const [saved] = h.routes.list();
+        if (prior === "unpaired") h.routes.deleteToken(saved!.key);
+        const token = h.routes.getToken(saved!.key, "device-1", "operator");
+        const pin = `clawtrate-route-${saved!.id}-`;
+        await h.remote.closeAll();
+        // Another name for the same endpoint: the same route, written with a new destination.
+        const g = host({ dir: h.dir, storage: h.storage });
+        await g.remote.there("devbox-again");
+        if (g.setup().phase === "key") await g.remote.trustKey();
+        expect(g.setup().phase).toBe("found");
+        const connectRoute = g.client.connectRoute.bind(g.client);
+        g.client.connectRoute = async () => {
+          throw new Error("That SSH route's channel isn't current.");
+        };
+        try {
+          await g.remote.connect();
+        } finally {
+          g.client.connectRoute = connectRoute;
+        }
+        expect(g.setup().there?.failure?.kind).toBe("ssh-stopped");
+        expect(g.routes.get(saved!.id)).toEqual(saved);
+        expect(g.routes.getToken(saved!.key, "device-1", "operator")).toBe(token);
+        expect(g.knownHosts()).toContain(pin);
+        await g.remote.closeAll();
+      });
+
     it("a Pair that fails gives back the oldest saved route its first write let go at the limit, with its token and pin", async () => {
       const h = host();
       await connected(h);
