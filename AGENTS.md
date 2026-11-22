@@ -14,7 +14,7 @@ Every commit, pull request title and body, and issue is published the moment it 
 
 ### The user's gateway is theirs
 
-Clawtrate is a client, and the agent runtime is the user's OpenClaw gateway. Nothing in this repository may put that gateway at risk. Request the smallest operator scopes a feature needs, and keep a read-only connection useful. Provider credentials stay on the gateway. Clawtrate starts the gateway's own sign-in and never reads, stores or copies them.
+Clawtrate is a client, and the agent runtime is the user's OpenClaw gateway. Nothing in this repository may put that gateway at risk. First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway. Clawtrate starts the gateway's own sign-in and never reads, stores or copies them.
 
 ### Say only what the gateway established
 

@@ -9,7 +9,7 @@ import {
   type BridgePolicy,
   type HostInfo,
 } from "@clawtrate/core";
-import { createNodeHost } from "@clawtrate/core/node";
+import { createNodeHost, type SecretBox } from "@clawtrate/core/node";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -90,6 +90,8 @@ export type HostRuntime = {
   client: ClawtrateClient;
   info: HostInfo;
   policy: BridgePolicy;
+  /** Where a host with secure storage keeps this device's credentials; absent without it. */
+  credentialStatus?: () => Promise<"secure" | "cleanup-pending" | "session" | "locked">;
 };
 
 export class SavedGatewayRefusedError extends Error {
@@ -129,6 +131,11 @@ export async function startHostRuntime(options: {
    */
   readOnly?: boolean;
   /**
+   * The system's secure storage for this device's credentials. Without it they stay
+   * in the data folder's files, as before, and the host has no full access.
+   */
+  secretBox?: SecretBox;
+  /**
    * Reopen the gateway the data folder remembers (the default). A development
    * build, an automated run and the web host's setup look pass false: they
    * never resume a saved gateway, whatever its address.
@@ -149,28 +156,27 @@ export async function startHostRuntime(options: {
     const proof = options.recheckDevGateway!();
     return proof !== null && proof.url === dev!.url && proof.token === dev!.token;
   };
-  const client = new ClawtrateClient(
-    createNodeHost({
-      dataDir: options.dataDir,
-      client: {
-        displayName: options.displayName,
-        version: APP_VERSION,
-        platform: process.platform,
-      },
-      approvalInstructions: approvalInstructionsFor(options.devGateway),
-      log: (level, message) => {
-        if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
-      },
-    }),
-    {
-      allowGatewayUrl: (url) => {
-        if (dev && url === dev.url) return stillProven();
-        // Other gateways the user chose deliberately, unless this host is development-only.
-        return !options.devOnly;
-      },
-      ...(options.readOnly ? { readOnly: true } : {}),
+  const host = createNodeHost({
+    dataDir: options.dataDir,
+    client: {
+      displayName: options.displayName,
+      version: APP_VERSION,
+      platform: process.platform,
     },
-  );
+    approvalInstructions: approvalInstructionsFor(options.devGateway),
+    ...(options.secretBox ? { secretBox: options.secretBox } : {}),
+    log: (level, message) => {
+      if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
+    },
+  });
+  const client = new ClawtrateClient(host, {
+    allowGatewayUrl: (url) => {
+      if (dev && url === dev.url) return stillProven();
+      // Other gateways the user chose deliberately, unless this host is development-only.
+      return !options.devOnly;
+    },
+    ...(options.readOnly ? { readOnly: true } : {}),
+  });
   const devOnly = options.devOnly ? dev : null;
   if (devOnly) {
     const saved = await client.savedSettings();
@@ -203,5 +209,6 @@ export async function startHostRuntime(options: {
       devGateway,
       attachments: new AttachmentStore({ newId: randomUUID }),
     },
+    ...(host.credentialStatus ? { credentialStatus: host.credentialStatus } : {}),
   };
 }
