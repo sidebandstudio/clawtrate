@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Admission,
   channelPrologue,
@@ -124,6 +124,29 @@ describe("the end-to-end channel", () => {
     expect(offer.spend(99)).toBe(false);
     expect(offer.matches(secret, 0)).toBe(false);
     expect(() => new EnrollmentOffer(new Uint8Array(16), 100)).toThrow(RelayProtocolError);
+  });
+
+  it("copies the pairing code's byte views without invoking their iterators", () => {
+    const secret = new Uint8Array(40).fill(5).subarray(4, 36);
+    const pin = generateKeyPair().publicKey;
+    const expectedSecret = new Uint8Array(secret);
+    const expectedPin = new Uint8Array(pin);
+    const secretIterator = vi.spyOn(secret, Symbol.iterator);
+    const pinIterator = vi.spyOn(pin, Symbol.iterator);
+    const offer = new EnrollmentOffer(secret, 100);
+    const handshake = new IKHandshake({
+      initiator: true,
+      prologue: channelPrologue(RELAY_ID),
+      staticKey: generateKeyPair(),
+      remoteStaticKey: pin,
+    });
+
+    secret.fill(0);
+    pin.fill(0);
+    expect(secretIterator).not.toHaveBeenCalled();
+    expect(pinIterator).not.toHaveBeenCalled();
+    expect(offer.matches(expectedSecret, 0)).toBe(true);
+    expect(handshake.remoteStaticKey).toEqual(expectedPin);
   });
 
   it("opens only after the confirm record and the host's admission, in that order", () => {

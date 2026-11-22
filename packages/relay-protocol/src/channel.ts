@@ -168,7 +168,7 @@ function checkGateResult(check: unknown): GateCheck {
 
 /**
  * One pairing code's enrollment secret. It is good once, until it expires. `matches` only
- * looks; `redeem` spends it, and belongs in the same transaction that adds the phone's key.
+ * looks; `spend` belongs in the same transaction that adds the phone's key.
  */
 export class EnrollmentOffer {
   readonly #secret: Uint8Array;
@@ -176,10 +176,11 @@ export class EnrollmentOffer {
   #used = false;
 
   constructor(secret: Uint8Array, expiresAtMs: number) {
-    if (secret.length !== ENROLL_SECRET_BYTES)
+    const copy = secret.length === ENROLL_SECRET_BYTES ? new Uint8Array(secret) : null;
+    if (copy?.length !== ENROLL_SECRET_BYTES)
       fail("malformed", "An enrollment secret is 32 bytes.");
     this.expiresAtMs = checkMillis(expiresAtMs, "The offer's expiry");
-    this.#secret = Uint8Array.from(secret);
+    this.#secret = copy;
   }
 
   get used(): boolean {

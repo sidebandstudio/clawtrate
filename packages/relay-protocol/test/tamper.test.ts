@@ -188,6 +188,7 @@ describe("replay, reordering, dropping and reflection", () => {
     // ...but its answer used a fresh ephemeral key, so the recorded confirm fails.
     expect(expectProtocolError(() => replayed.receive(recorded[1]!)).code).toBe("decrypt_failed");
     expect(replayed.currentState).toBe("failed");
+    expect(expectProtocolError(() => replayed.receive(recorded[2]!)).code).toBe("failed");
     expect(events.some((e) => e.type === "open" || e.type === "text")).toBe(false);
     // No second enrollment, and the offer was not spent again.
     expect(pair.gate.enrolled).toHaveLength(1);

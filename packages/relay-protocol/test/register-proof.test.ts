@@ -285,6 +285,12 @@ describe("the connector's register proof", () => {
   });
 });
 
+function proofFor(registration: ControlRegistration, audience = AUDIENCE) {
+  const challenge = decodeRelayToConnector(registration.challengeMessage);
+  if (challenge.t !== "challenge") throw new Error("No challenge.");
+  return createRegisterProof({ secretKey, audience, nonce: challenge.nonce, nowMs: NOW_MS });
+}
+
 describe("one control socket's registration", () => {
   function socket(
     overrides: Partial<{
@@ -306,11 +312,6 @@ describe("one control socket's registration", () => {
       claims: new MemoryKeyClaims(),
       ...overrides,
     });
-  }
-  function proofFor(registration: ControlRegistration, audience = AUDIENCE) {
-    const challenge = decodeRelayToConnector(registration.challengeMessage);
-    if (challenge.t !== "challenge") throw new Error("No challenge.");
-    return createRegisterProof({ secretKey, audience, nonce: challenge.nonce, nowMs: NOW_MS });
   }
   /**
    * The reference store, recording each write and each commit's outcome. `failFailure` makes
@@ -334,26 +335,37 @@ describe("one control socket's registration", () => {
     };
     return { store, seen, latest: () => memory.latest! };
   }
-  /** Key claims that wait in the claim, while the success is prepared, until released. */
+  function pauseStore<T>(name: string) {
+    const called = Promise.withResolvers<void>();
+    const result = Promise.withResolvers<T>();
+    return {
+      enter() {
+        called.resolve();
+        return result.promise;
+      },
+      waitForCall(registration: Promise<unknown>) {
+        return Promise.race([
+          called.promise,
+          registration.then(() => {
+            throw new Error(`Registration settled before ${name} was called.`);
+          }),
+        ]);
+      },
+      release: result.resolve,
+      reject: result.reject,
+    };
+  }
+
   function heldClaims() {
     const pinned = new MemoryKeyClaims();
-    let release = (): void => {};
-    let waiting = false;
+    const hold = pauseStore<void>("claim");
     const claims: KeyClaims = {
-      claim: (id, key, attempt) =>
-        new Promise((resolve) => {
-          waiting = true;
-          release = () => resolve(pinned.claim(id, key, attempt));
-        }),
-    };
-    return {
-      claims,
-      release: () => release(),
-      reach: async () => {
-        for (let i = 0; i < 50 && !waiting; i++) await Promise.resolve();
-        expect(waiting).toBe(true);
+      claim: async (id, key, attempt) => {
+        await hold.enter();
+        return pinned.claim(id, key, attempt);
       },
     };
+    return { claims, pinned, waitForCall: hold.waitForCall, release: hold.release };
   }
 
   it("issues a fresh challenge per socket and registers once", async () => {
@@ -480,43 +492,36 @@ describe("one control socket's registration", () => {
 
   it("a store that outlasts the challenge cannot register: no key claim, no success", async () => {
     let now = 5_000;
-    let release = (): void => {};
+    const hold = pauseStore<void>("consume");
     const store = new MemoryReplayStore();
     const slow: ReplayStore = {
-      consume: (input) =>
-        new Promise((resolve) => {
-          release = () => resolve(store.consume(input));
-        }),
+      consume: async (input) => {
+        await hold.enter();
+        return store.consume(input);
+      },
     };
     let claims = 0;
     const counting: KeyClaims = { claim: () => (claims++, true) };
     const registration = socket({ clock: () => now, replay: slow, claims: counting });
     const pending = registration.register(proofFor(registration));
-    await Promise.resolve();
+    await hold.waitForCall(pending);
     now = 5_000 + 60_001;
-    release();
+    hold.release();
     expect(await pending).toEqual({ ok: false, code: "challenge_expired" });
     expect(claims).toBe(0);
     expect(registration.state).toBe("failed");
   });
 
   it("an abort while the key claim waits stops the claim from taking effect", async () => {
-    const pinned = new MemoryKeyClaims();
-    let release = (): void => {};
-    const waiting: KeyClaims = {
-      claim: (id, key, attempt) =>
-        new Promise((resolve) => {
-          release = () => resolve(pinned.claim(id, key, attempt));
-        }),
-    };
-    const registration = socket({ claims: waiting });
+    const held = heldClaims();
+    const registration = socket({ claims: held.claims });
     const pending = registration.register(proofFor(registration));
-    for (let i = 0; i < 5; i++) await Promise.resolve();
+    await held.waitForCall(pending);
     registration.abort();
-    release();
+    held.release();
     expect(await pending).toEqual({ ok: false, code: "aborted" });
     // Nothing was pinned: a later registration with another key could still claim the id.
-    expect(pinned.claim(relayId, new Uint8Array(32).fill(3), { live: true })).toBe(true);
+    expect(held.pinned.claim(relayId, new Uint8Array(32).fill(3), { live: true })).toBe(true);
   });
 
   it("keeps verifying stored while the success is prepared; an abort then cancels it", async () => {
@@ -524,7 +529,7 @@ describe("one control socket's registration", () => {
     const held = heldClaims();
     const registration = socket({ store: saved.store, claims: held.claims });
     const pending = registration.register(proofFor(registration));
-    await held.reach();
+    await held.waitForCall(pending);
     expect(saved.latest().state).toBe("verifying");
     expect(socket({ restore: saved.latest() }).state).toBe("failed");
     registration.abort();
@@ -545,7 +550,7 @@ describe("one control socket's registration", () => {
       const held = heldClaims();
       const registration = socket({ clock: () => now, store: saved.store, claims: held.claims });
       const pending = registration.register(proofFor(registration));
-      await held.reach();
+      await held.waitForCall(pending);
       if (timerReading === null) {
         registration.abort();
       } else {
@@ -627,7 +632,7 @@ describe("one control socket's registration", () => {
     const held = heldClaims();
     const registration = socket({ store: saved.store, claims: held.claims });
     const pending = registration.register(proofFor(registration));
-    await held.reach();
+    await held.waitForCall(pending);
     registration.abort();
     held.release();
     expect(await pending).toEqual({ ok: false, code: "store_failed" });
@@ -760,30 +765,30 @@ describe("one control socket's registration", () => {
     ];
     for (const [label, end, code] of cases) {
       let now = 5_000;
-      let answer = (_seen: boolean): void => {};
+      const hold = pauseStore<boolean>("consume");
       const saved = recording();
       const registration = socket({
         clock: () => now,
         store: saved.store,
-        replay: { consume: () => new Promise<boolean>((resolve) => (answer = resolve)) },
+        replay: { consume: hold.enter },
       });
       const pending = registration.register(proofFor(registration));
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      await hold.waitForCall(pending);
       end(registration, (ms) => (now = ms));
-      answer(false);
+      hold.release(false);
       expect(await pending, label).toEqual({ ok: false, code });
       expect(saved.latest().state, label).toBe("failed");
     }
     // A storage fault still wins over the cause.
-    let fail = (_error: unknown): void => {};
+    const hold = pauseStore<boolean>("consume");
     const faulty = socket({
-      replay: { consume: () => new Promise<boolean>((_resolve, reject) => (fail = reject)) },
+      replay: { consume: hold.enter },
       store: recording().store,
     });
     const faultPending = faulty.register(proofFor(faulty));
-    for (let i = 0; i < 5; i++) await Promise.resolve();
+    await hold.waitForCall(faultPending);
     faulty.abort();
-    fail(new Error("down"));
+    hold.reject(new Error("down"));
     expect(await faultPending).toEqual({ ok: false, code: "store_failed" });
   });
 
@@ -1054,23 +1059,39 @@ describe("one control socket's registration", () => {
     expect(registration.state).toBe("failed");
   });
 
-  it("stores verifying before any store is asked, and the outcome before it returns", async () => {
-    const saved = recording();
-    const replay = new MemoryReplayStore();
-    const registration = socket({
-      store: saved.store,
-      replay: { consume: (input) => (saved.seen.push("replay"), replay.consume(input)) },
-    });
-    expect((await registration.register(proofFor(registration))).ok).toBe(true);
-    expect(saved.seen).toEqual(["verifying", "replay", "commit", "committed"]);
-    const failing = socket({
-      store: {
-        persist: () => Promise.reject(new Error("down")),
-        commitRegistered: () => "committed",
-      },
-    });
-    expect(await failing.register(proofFor(failing))).toEqual({ ok: false, code: "store_failed" });
-    expect(failing.state).toBe("failed");
+  it.each(["success", "failure"])(
+    "waits for the verifying write before replay or key claims (%s)",
+    async (outcome) => {
+      const saved = recording();
+      const hold = pauseStore<void>("persist(verifying)");
+      const registration = socket({
+        store: {
+          ...saved.store,
+          async persist(snapshot) {
+            if (snapshot.state === "verifying") await hold.enter();
+            await saved.store.persist(snapshot);
+          },
+        },
+        replay: { consume: () => (saved.seen.push("replay"), true) },
+        claims: { claim: () => (saved.seen.push("claim"), true) },
+      });
+      const pending = registration.register(proofFor(registration));
+      await hold.waitForCall(pending);
+      expect(saved.seen).toEqual([]);
+      if (outcome === "success") {
+        hold.release();
+        expect((await pending).ok).toBe(true);
+        expect(saved.seen).toEqual(["verifying", "replay", "claim", "commit", "committed"]);
+      } else {
+        hold.reject(new Error("down"));
+        expect(await pending).toEqual({ ok: false, code: "store_failed" });
+        expect(saved.seen).toEqual(["failed"]);
+        expect(registration.state).toBe("failed");
+      }
+    },
+  );
+
+  it("stores a failure that ends registration before its key claim", async () => {
     // A clock failure ends the attempt early; its failure is stored too.
     let now = 5_000;
     const early = recording();
@@ -1200,7 +1221,10 @@ describe("clock inputs", () => {
         replay: new MemoryReplayStore(),
         claims: new MemoryKeyClaims(),
       });
-      expect(await registration.register(proof)).toEqual({ ok: false, code: "bad_clock" });
+      expect(await registration.register(proofFor(registration))).toEqual({
+        ok: false,
+        code: "bad_clock",
+      });
     }
   });
 
@@ -1245,9 +1269,18 @@ describe("clock inputs", () => {
   it("checks a proof's type and length before trimming or splitting it", async () => {
     const huge = " ".repeat(1_000_000);
     const trim = vi.spyOn(String.prototype, "trim");
-    expect(await verify(huge)).toEqual({ ok: false, code: "malformed_proof" });
-    expect(trim).not.toHaveBeenCalled();
-    trim.mockRestore();
+    const split = vi.spyOn(String.prototype, "split");
+    try {
+      const result = await verify(huge);
+      const trimmedProof = trim.mock.contexts.includes(huge);
+      const splitProof = split.mock.contexts.includes(huge);
+      expect(result).toEqual({ ok: false, code: "malformed_proof" });
+      expect(trimmedProof).toBe(false);
+      expect(splitProof).toBe(false);
+    } finally {
+      trim.mockRestore();
+      split.mockRestore();
+    }
     expect(await verify(7 as unknown as string)).toEqual({ ok: false, code: "missing_proof" });
     expect(await verify("   ")).toEqual({ ok: false, code: "missing_proof" });
   });

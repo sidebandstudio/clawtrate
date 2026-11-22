@@ -240,7 +240,7 @@ export class IKHandshake {
   constructor(options: IKHandshakeOptions) {
     this.#static = options.staticKey;
     this.#random = options.random ?? secureRandomBytes;
-    this.#remoteStatic = options.remoteStaticKey ? Uint8Array.from(options.remoteStaticKey) : null;
+    this.#remoteStatic = options.remoteStaticKey ? new Uint8Array(options.remoteStaticKey) : null;
     if (options.initiator && this.#remoteStatic?.length !== KEY_BYTES) {
       fail("bad_key", "The initiator needs the responder's 32-byte static key.");
     }

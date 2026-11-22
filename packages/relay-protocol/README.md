@@ -20,7 +20,7 @@ phone (Initiator) ── wss ──► relay ◄── wss ── connector (Res
 | Ed25519 registration  | connector | Proving to the relay that it owns its relay id. The relay id is lowercase base32 of the first 16 bytes of SHA-256 over the public key (26 chars). |
 | X25519 Noise static   | connector | The responder's static key. The pairing code carries its public half.                                                                             |
 | X25519 Noise static   | phone     | The initiator's static key. The connector's allowlist holds its public half.                                                                      |
-| 32-byte enroll secret | code      | One-time: enrolls the first phone that presents it before it expires.                                                                             |
+| 32-byte enroll secret | code      | The first live, eligible phone whose transaction spends the offer before expiry enrolls.                                                          |
 
 ## Relay messages (text)
 
