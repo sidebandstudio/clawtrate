@@ -606,6 +606,38 @@ test("F-034: a Create answered after its dialog closed doesn't close or clear th
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Newer");
 });
 
+test("F-034: a Create refusal is announced only for the draft that was submitted", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=release-failed`, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  const name = page.getByRole("textbox", { name: "Name" });
+  await name.fill("First");
+  const next = page.getByRole("button", { name: "Next" });
+  await next.click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  const create = page.getByTestId("create");
+  const status = page.getByTestId("b-announcer");
+  const release = () =>
+    page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+  await create.click();
+  await expect(status).toHaveText("Creating the bot");
+  await page.getByRole("button", { name: "Back to the picture" }).click();
+  await name.fill("Second");
+  await release();
+  await settled(page);
+  await expect(name).toHaveValue("Second");
+  await expect(status).not.toHaveText("Could not create the bot");
+
+  await next.click();
+  await create.click();
+  await expect
+    .poll(async () => (await sent(page)).filter((c) => c.type === "createBot").map((c) => c.name))
+    .toEqual(["First", "Second"]);
+  await release();
+  await expect(status).toHaveText("Could not create the bot");
+});
+
 test("F-037: while a picture is being saved its choices are frozen, so what is saved is what was shown", async ({
   page,
 }) => {

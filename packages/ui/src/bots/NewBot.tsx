@@ -105,8 +105,7 @@ export function NewBot({
     now.gatewayId !== null &&
     now.gatewayId === openedOn;
   const canSubmitHere = matchesGateway(connection);
-  const onItsConnection = () => open.current && matchesGateway(now$.current);
-  const stands = () => onItsConnection() && latest.current === draft;
+  const stands = () => open.current && matchesGateway(now$.current) && latest.current === draft;
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -224,7 +223,7 @@ export function NewBot({
       });
       // An answer for an opening that has gone, from a gateway or connection since replaced, or for
       // a draft changed since, closes, clears and selects nothing.
-      if (!onItsConnection() || latest.current !== sent) return;
+      if (!stands()) return;
       remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
@@ -235,8 +234,7 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      // Nor does a refusal from a gateway or connection since replaced say anything here.
-      if (onItsConnection()) announce("Could not create the bot");
+      if (stands()) announce("Could not create the bot");
     }
   };
   const partial = creation?.status === "partial" ? creation : null;
