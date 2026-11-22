@@ -38,7 +38,7 @@ import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { recordSuccessor } from "../e2e/run-record.ts";
 import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
-import { appEnv, debuggingPort } from "./desktop-driver.ts";
+import { debuggingPort } from "./desktop-driver.ts";
 import { quitWithin } from "./quit.ts";
 import { dictionaryRequests, isDictionary, requestsSoFar } from "./net-log.ts";
 import {
@@ -579,31 +579,47 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
   // a host. macOS builds no Hunspell fallback, so nothing asks for one.
   test.setTimeout(120_000);
   // A new folder each time: one that already holds a dictionary never asks for it.
-  const data = join(mkdtempSync(join(dirname(USER_DATA), "spelling-")), "data");
-  const netLog = join(dirname(data), "net-log.json");
-  mkdirSync(data);
+  const spelling = realpathSync.native(
+    mkdtempSync(join(process.env.CLAWTRATE_PACKAGED_PLACE!, "spelling-")),
+  );
+  const netLog = join(spelling, "net-log.json");
+  // macOS keeps a sandboxed app's data in its sandbox's folder, so the copy gets
+  // a sandbox of its own, as the Keychain check's launches do. Windows reads no
+  // sandbox and keeps its data in the folder the launch names, so the copy names
+  // a new one and passes the run's sandbox, as the second launch does.
+  let data = join(spelling, "data");
+  let sandbox = SANDBOX;
+  if (WINDOWS) mkdirSync(data);
+  else {
+    const own = writeSandbox({ instance: INSTANCE, parent: spelling });
+    data = realpathSync.native(own.appData);
+    sandbox = own.file;
+  }
   writeFileSync(
     join(data, "Preferences"),
     JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
   );
+  // A home, temporary folder and working folder of its own, as every packaged launch has.
+  const place = launchPlace(spelling);
   // Straight to the pictures' port: a proxy the system names could be asked for them.
-  const args = [
-    `--user-data-dir=${data}`,
-    "--remote-debugging-port=0",
-    `--log-net-log=${netLog}`,
-    "--no-proxy-server",
-  ];
+  const copyFlags = [`--log-net-log=${netLog}`, "--no-proxy-server"];
   let copy: ChildProcess;
   if (WINDOWS) {
     // Windows keeps no run record. Node puts the copy in a job object that
     // Windows closes when this worker exits, so the copy ends with it.
-    copy = spawn(packagedExecutable(APP), args, { env: appEnv(), stdio: "ignore" });
-  } else {
-    // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
-    const gated = gatedSpawn(spawn, packagedExecutable(APP), args, {
-      env: appEnv(),
+    copy = spawn(packagedExecutable(APP), [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags], {
+      cwd: place.cwd,
+      env: place.env,
       stdio: "ignore",
     });
+  } else {
+    // Gated until the run record names it, so the run's cleanup stops it even if this test cannot.
+    const gated = gatedSpawn(
+      spawn,
+      packagedExecutable(APP),
+      [...launchArgs(data, sandbox, CHECKOUT), ...copyFlags],
+      { cwd: place.cwd, env: place.env, stdio: "ignore" },
+    );
     copy = gated.child;
     // Until the record names it, a failure aborts the gate, so the copy never starts.
     try {
