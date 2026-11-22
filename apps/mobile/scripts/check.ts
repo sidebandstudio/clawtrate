@@ -213,6 +213,18 @@ export async function main(): Promise<number> {
   writeRecord(RECORD, record);
   try {
     const choice = chooseDevice(env);
+    const name = deviceName(run);
+    record.device = simctl(env, "create", name, choice.type, choice.runtime).trim();
+    writeRecord(RECORD, record);
+    console.log(`Device: ${name} (${choice.label}), ${record.device}`);
+    simctl(env, "boot", record.device);
+    execFileSync("xcrun", ["simctl", "bootstatus", record.device, "-b"], {
+      env,
+      stdio: "inherit",
+    });
+    simctl(env, "ui", record.device, "appearance", "light");
+    simctl(env, "install", record.device, APP_PATH);
+    if (stopping) return 130;
 
     console.log(
       `Starting the development gateway instance ${record.instance} (it seeds its bots; a few minutes)…`,
@@ -221,17 +233,6 @@ export async function main(): Promise<number> {
       throw new Error("The development gateway did not start.");
     const gateway = readDevConnection(REPO, { instance: record.instance });
     if (!gateway) throw new Error(`The instance ${record.instance} is not running.`);
-    if (stopping) return 130;
-
-    const name = deviceName(run);
-    record.device = simctl(env, "create", name, choice.type, choice.runtime).trim();
-    writeRecord(RECORD, record);
-    console.log(`Device: ${name} (${choice.label}), ${record.device}`);
-    simctl(env, "boot", record.device);
-    simctl(env, "bootstatus", record.device, "-b");
-    simctl(env, "ui", record.device, "appearance", "light");
-    simctl(env, "install", record.device, APP_PATH);
-
     const driverEnv = maestroEnv(await closedPort());
     if (stopping) return 130;
 

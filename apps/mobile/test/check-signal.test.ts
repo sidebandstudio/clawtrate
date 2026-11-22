@@ -91,7 +91,7 @@ describe("the Simulator check stopped early", () => {
       expect(io.spawn).not.toHaveBeenCalled();
       const boot = io.execFileSync.mock.calls.findIndex(([, args]) => args[1] === "boot");
       expect(boot).toBeGreaterThanOrEqual(0);
-      expect(io.spawnSync.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(io.spawnSync.mock.invocationCallOrder[0]).toBeGreaterThan(
         io.execFileSync.mock.invocationCallOrder[boot]!,
       );
       expect(io.spawnSync.mock.calls.map((call) => (call as unknown[]).slice(0, 2))).toEqual([
