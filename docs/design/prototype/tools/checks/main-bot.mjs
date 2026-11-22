@@ -42,6 +42,13 @@ async function check(name, run) {
 
 const text = (page, selector) => page.locator(selector).first().innerText();
 const has = async (page, selector, words) => assert.match(await text(page, selector), new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+const focusIn = (page, selector) => page.evaluate((sel) => Boolean(document.activeElement?.closest(sel)), selector);
+async function staysIn(page, selector) {
+  for (const key of ["Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    assert(await focusIn(page, selector), `focus stays in ${selector} after ${key}`);
+  }
+}
 const railName = async (page, id, width) =>
   width === "phone" ? null : (await page.getByTestId(`rail-name-${id}`).innerText()).trim();
 
@@ -237,9 +244,26 @@ await check("MB-12 a bot's own rename is a proposal; Review and save opens the p
   await has(page, '[data-testid="editor"]', "Clawtrate read Pip's instructions again when this opened.");
   assert.match(await page.locator("#ed-0").inputValue(), /Keep answers short/);
   if (width !== "phone") assert.equal(await railName(page, "pip", width), "Pip");
+  // A real modal: the chat behind is inert, focus stays in, and Escape and
+  // Cancel give it back to Review and save.
+  assert.equal(await page.locator(".mb-shell").getAttribute("inert"), "");
+  await staysIn(page, '[data-testid="editor"]');
+  const onReview = () => page.evaluate(() => document.activeElement?.dataset.act === "review" && document.activeElement.closest("article")?.dataset.id === "scout");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByTestId("editor").count(), 0);
+  assert(await onReview(), "Escape returns focus to Review and save");
+  assert.equal(await page.locator(".mb-shell").getAttribute("inert"), null);
+  await card.getByRole("button", { name: "Review and save" }).click();
+  await editor.getByRole("button", { name: "Cancel" }).click();
+  assert(await onReview(), "Cancel returns focus to Review and save");
+  // Save stores what the editor holds.
+  await card.getByRole("button", { name: "Review and save" }).click();
+  await page.locator("#ed-0").fill("Plan errands and trips.\nAnswer in three lines at most.");
   await editor.getByRole("button", { name: "Save" }).click();
   await page.getByTestId("card-saved").waitFor();
   await has(page, '[data-testid="card-saved"]', "Saved by you in Pip's instructions.");
+  await has(page, '[data-testid="card-saved"]', "Answer in three lines at most.");
+  assert.doesNotMatch(await text(page, '[data-testid="card-saved"]'), /use a list/);
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Pip");
   await page.getByRole("button", { name: "Rename Pip to Scout" }).click();
   await page.getByTestId("own-rename-line").waitFor();
@@ -252,15 +276,39 @@ await check("MB-12 a bot's own rename is a proposal; Review and save opens the p
   await page.getByRole("button", { name: "Not now" }).click();
   await has(page, '[data-testid="card-declined"]', "Kept Scout's instructions");
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Scout");
+
+  // Renamed first, then reviewed and saved: the editor and the receipt use
+  // the bot's current name.
+  await open("view=rename");
+  await page.getByRole("button", { name: "Rename Pip to Scout" }).click();
+  await page.getByTestId("own-rename-line").waitFor();
+  await page.getByRole("button", { name: "Review and save" }).click();
+  const renamed = page.getByRole("dialog", { name: "Scout's instructions" });
+  await renamed.waitFor();
+  await has(page, '[data-testid="editor"]', "Clawtrate read Scout's instructions again when this opened.");
+  await renamed.getByRole("button", { name: "Save" }).click();
+  await page.getByTestId("card-saved").waitFor();
+  await has(page, '[data-testid="card-saved"]', "Scout's instructions changed");
+  await has(page, '[data-testid="card-saved"]', "Saved by you in Scout's instructions.");
+  assert.doesNotMatch(await text(page, '[data-testid="card-saved"]'), /Pip/);
 });
 
 await check("MB-13 a changed bot starts the editor from what it says now; Not now keeps everything; Cancel writes nothing", async ({ page, open }) => {
   await open("view=rename&card=stale");
   await page.getByTestId("editor-stale").waitFor();
   await has(page, '[data-testid="editor-stale"]', "Pip's instructions changed since Pip asked.");
+  const now = await page.locator("#ed-0").inputValue();
+  assert.match(now, /Check the weather before outdoor errands\./, "starts from what Pip's instructions say now");
+  assert.match(now, /Keep answers short/, "with Pip's change added");
   await page.getByRole("button", { name: "Cancel" }).click();
   assert.equal(await page.getByTestId("editor").count(), 0);
   assert.equal(await page.getByTestId("card-proposal").count(), 1);
+  await page.getByRole("button", { name: "Review and save" }).click();
+  await page.locator("#ed-0").fill(`${now}\nSkip the hardware store on Sundays.`);
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await page.getByTestId("card-saved").waitFor();
+  await has(page, '[data-testid="card-saved"]', "Check the weather before outdoor errands.");
+  await has(page, '[data-testid="card-saved"]', "Skip the hardware store on Sundays.");
   await open("view=rename&card=declined");
   await has(page, '[data-testid="card-declined"]', "Kept Pip's instructions");
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Pip");
@@ -287,10 +335,25 @@ await check("MB-15 creating by chat: every value shown, the follow-ons gated, Ne
   await dialog.waitFor();
   assert.equal(await page.locator("#ed-0").inputValue(), "Stride");
   assert.equal(await page.locator("#ed-2").inputValue(), "Hands-off");
+  await page.locator("#ed-0").fill(" ");
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await has(page, '[data-testid="editor-problem"]', "Give the new bot a name first.");
+  if (width !== "phone") assert.equal(await page.getByTestId("rail-name-stride").count(), 0);
+  // What's created is what the person left in New bot.
+  await page.locator("#ed-0").fill("Tempo");
+  await page.locator("#ed-2").selectOption("Ask before acting");
+  await page.locator("#ed-3").fill("Plans my tempo runs.");
   await dialog.getByRole("button", { name: "Create" }).click();
   await page.getByTestId("card-saved").waitFor();
   await has(page, '[data-testid="card-saved"]', "Created by you in New bot.");
-  if (width !== "phone") assert.equal(await railName(page, "stride", width), "Stride");
+  await has(page, '[data-testid="card-saved"]', "Created Tempo");
+  await has(page, '[data-testid="card-saved"]', "Ask before acting");
+  await has(page, '[data-testid="card-saved"]', "Plans my tempo runs.");
+  assert.doesNotMatch(await text(page, '[data-testid="card-saved"]'), /Stride|Hands-off/);
+  if (width !== "phone") {
+    assert.equal(await railName(page, "tempo", width), "Tempo");
+    assert.equal(await page.getByTestId("rail-name-stride").count(), 0);
+  }
 });
 
 await check("MB-16 other origins: unconfirmed origin, a name only the person changes, another bot's diff, more freedom", async ({ page, open, width }) => {
@@ -305,8 +368,11 @@ await check("MB-16 other origins: unconfirmed origin, a name only the person cha
   if (width !== "phone") assert.equal(await page.getByTestId("proposals-count").innerText(), "3");
   await page.locator('[data-id="pip-freedom"]').getByRole("button", { name: "Review and save" }).click();
   await has(page, '[data-testid="editor"]', "This gives Pip more freedom.");
+  await page.locator("#ed-0").selectOption("Ask before acting");
   await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
   await page.locator('[data-id="pip-freedom"][data-kind="saved"]').waitFor();
+  await has(page, '[data-id="pip-freedom"]', "Pip asks before acting");
+  assert.doesNotMatch(await text(page, '[data-id="pip-freedom"]'), /Hands-off/);
   assert.equal(await page.locator('[data-id="pip-freedom"]').getByRole("button").count(), 0);
 
   await page.clock.install({ time: new Date("2030-01-01T09:00:00Z") });
@@ -338,6 +404,46 @@ await check("MB-17 agents with access: See by default, no direct changes, the li
   await open("view=agents&step=added");
   await has(page, '[data-testid="added-config"]', "clawtrate-mcp");
   await has(page, '[data-testid="added-config"]', "The secret is shown once.");
+
+  // A real modal: the settings behind are inert, focus stays in, and Escape
+  // and Cancel close it without a grant and give focus back to Add an agent.
+  await open("view=agents");
+  const grants = page.locator('[data-testid="grants"] > li');
+  const onAdd = () => page.evaluate(() => document.activeElement?.dataset.act === "add");
+  await page.getByRole("button", { name: "Add an agent" }).click();
+  assert.equal(await page.locator(".mb-settings").getAttribute("inert"), "");
+  await staysIn(page, '[data-testid="add-agent"]');
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByTestId("add-agent").count(), 0);
+  assert(await onAdd(), "Escape returns focus to Add an agent");
+  await page.getByRole("button", { name: "Add an agent" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await page.getByTestId("add-agent").count(), 0);
+  assert(await onAdd(), "Cancel returns focus to Add an agent");
+  assert.equal(await grants.count(), 1);
+  assert.equal(await page.getByTestId("added-config").count(), 0);
+
+  // Add keeps everything chosen; later bots come only with All bots.
+  await page.getByRole("button", { name: "Add an agent" }).click();
+  await page.locator("#ag-name").fill("Aider");
+  await page.getByRole("dialog").getByRole("radio", { name: /Suggest changes/ }).check();
+  await page.locator("#ag-instructions").check();
+  assert(await page.locator("#ag-later").isDisabled(), "later bots wait for All bots");
+  await page.getByRole("dialog").getByRole("radio", { name: /All bots/ }).check();
+  await page.locator("#ag-later").check();
+  await page.locator("#ag-expires").selectOption("7");
+  await page.getByRole("dialog").getByRole("button", { name: "Add", exact: true }).click();
+  assert.equal(await grants.count(), 2);
+  const aider = page.locator('[data-testid="grants"] > li', { hasText: "Aider" });
+  await has(page, '[data-testid="grants"] > li:last-child', "Suggest changes, with instructions · All bots, including later ones");
+  await has(page, '[data-testid="grants"] > li:last-child', "Expires in 7 days");
+  await has(page, '[data-testid="added-config"]', "Paste this into Aider's MCP settings");
+
+  // Remove takes out only that grant.
+  await aider.getByRole("button", { name: "Remove Aider's access" }).click();
+  assert.equal(await grants.count(), 1);
+  await has(page, '[data-testid="grants"]', "Claude Code");
+  assert.equal(await page.getByTestId("added-config").count(), 0);
 });
 
 await check("MB-18 an ambiguous opening stops and waits for an explicit retry", async ({ page, open }) => {

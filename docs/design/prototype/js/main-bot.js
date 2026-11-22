@@ -266,7 +266,7 @@
       `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
       `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
       `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`;
-    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${phone() ? "" : rail(chat.bot)}${pane}</div>${editorHtml()}`;
+    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}"${editor ? " inert" : ""}>${phone() ? "" : rail(chat.bot)}${pane}</div>${editorHtml()}`;
     const t = root.querySelector(".mb-transcript");
     t.scrollTop = t.scrollHeight;
     if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
@@ -448,23 +448,28 @@
   function editorHtml() {
     if (!editor) return "";
     const { prop } = editor;
-    const fields = prop.card.editor.fields
+    const named = (text) => withName(prop.card, text);
+    // A changed bot starts from what it says now, with the proposal added.
+    const fields = ((editor.stale && prop.card.editor.staleFields) || prop.card.editor.fields)
       .map(
-        ([label, value, multi], i) =>
+        ([label, value, kind], i) =>
           `<label class="mb-field"><span>${esc(label)}</span>` +
-          (multi
+          (kind === true
             ? `<textarea id="ed-${i}" rows="3">${esc(value)}</textarea>`
-            : `<input id="ed-${i}" value="${esc(value)}"/>`) +
+            : Array.isArray(kind)
+              ? `<select id="ed-${i}">${kind.map((o) => `<option${o === value ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`
+              : `<input id="ed-${i}" value="${esc(value)}"/>`) +
           `</label>`,
       )
       .join("");
     const stale = editor.stale
-      ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-stale">${esc(prop.card.editor.stale)}</p>`
+      ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-stale">${esc(named(prop.card.editor.stale))}</p>`
       : "";
     return (
       `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-ed-title" data-testid="editor">` +
-      `<h2 id="mb-ed-title">${esc(prop.card.editor.title)}</h2>` +
-      `<p class="mb-hint">${esc(prop.card.editor.lede)}</p>${stale}${fields}` +
+      `<h2 id="mb-ed-title">${esc(named(prop.card.editor.title))}</h2>` +
+      `<p class="mb-hint">${esc(named(prop.card.editor.lede))}</p>${stale}${fields}` +
+      (editor.problem ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-problem">${esc(editor.problem)}</p>` : "") +
       `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet" data-act="editor-cancel">Cancel</button>` +
       `<button type="button" class="mb-btn" data-variant="primary" data-act="editor-save">${esc(prop.card.editor.save)}</button></div></div>`
     );
@@ -478,28 +483,63 @@
     root.querySelector('[data-testid="editor"] input, [data-testid="editor"] textarea')?.focus();
   }
 
-  async function editorSave() {
+  // "{bot}" in a card's words is the bot's name when they're drawn, so a bot
+  // renamed after it asked is called by its current name.
+  const withName = (card, text) => (card.bot ? text.replaceAll("{bot}", botById(card.bot).name) : text);
+
+  // The editor is modal: the chat behind it is inert, and closing it gives
+  // focus back to its Review and save, or to the card once it's saved.
+  function focusCard(id, act) {
+    const card = root.querySelector(`article[data-id="${id}"]`);
+    const button = act && card?.querySelector(`[data-act="${act}"]`);
+    if (button) return button.focus();
+    if (card) {
+      card.tabIndex = -1;
+      card.focus();
+    }
+  }
+  function closeEditor() {
     const { prop } = editor;
     editor = null;
+    renderChat();
+    focusCard(prop.id, "review");
+  }
+
+  // Saves what the editor holds, not the proposal it was filled from. The
+  // stand-in stores the values and returns them; the saved card shows that.
+  async function editorSave() {
+    const { prop } = editor;
     const c = prop.card;
+    const values = [...root.querySelectorAll('[data-testid="editor"] [id^="ed-"]')].map((f) => f.value);
+    const problem = c.check ? c.check(values) : "";
+    if (problem) {
+      editor.problem = problem;
+      renderChat();
+      root.querySelector("#ed-0")?.focus();
+      return;
+    }
+    editor = null;
     prop.state = "saving";
     c.actions = [];
     c.stateText = "Saving…";
     c.cardKind = "saving";
     renderChat();
-    await gateway.answer(1000, () => c.effect());
+    focusCard(prop.id);
+    const record = await gateway.answer(1000, () => c.effect(values));
+    const done = c.done(record);
     prop.state = "saved";
     Object.assign(c, {
       stateText: "",
       cardKind: "saved",
-      title: c.doneTitle,
+      title: done.title,
       marks: [],
       from: "",
-      note: c.savedNote,
-      rows: c.doneRows,
+      note: withName(c, c.savedNote),
+      rows: done.rows,
       actions: c.ownRename && !c.ownRename.done ? [[c.ownRename.label, "own-rename"]] : [],
     });
     renderChat();
+    focusCard(prop.id);
     say(c.title);
   }
 
@@ -513,6 +553,7 @@
   }
 
   const read = '<span class="mb-read">read back</span>';
+  const lines = (text) => esc(text).replace(/\n/g, "<br>");
   const byYou = (where) => `<span class="mb-read">by you, in ${where}</span>`;
 
   // ---- view: a bot asks to rename itself --------------------------------------
@@ -525,6 +566,7 @@
       kind: "card",
       cardKind: "proposal",
       id: "scout",
+      bot: "pip",
       staleable: true,
       title: "Pip asks to rename itself Scout",
       rows: [
@@ -536,17 +578,19 @@
       ownRename: { bot: "pip", to: "Scout", label: "Rename Pip to Scout" },
       actions: [["Review and save", "review", "primary"], ["Rename Pip to Scout", "own-rename"], ["Not now", "decline"]],
       editor: {
-        title: "Pip's instructions",
-        lede: "Your instructions editor, with Pip's proposed change added. Clawtrate read Pip's instructions again when this opened.",
-        stale: "Pip's instructions changed since Pip asked. This starts from what they say now, with Pip's change added.",
+        title: "{bot}'s instructions",
+        lede: "Your instructions editor, with {bot}'s proposed change added. Clawtrate read {bot}'s instructions again when this opened.",
+        stale: "{bot}'s instructions changed since {bot} asked. This starts from what they say now, with {bot}'s change added.",
         save: "Save",
         fields: [["AGENTS.md", "Plan errands and trips.\nKeep answers short; use a list when it helps.", true]],
+        staleFields: [
+          ["AGENTS.md", "Plan errands and trips.\nCheck the weather before outdoor errands.\nKeep answers short; use a list when it helps.", true],
+        ],
       },
-      doneTitle: "Pip's instructions changed",
-      doneRows: [["Instructions", "updated", read]],
-      savedNote: "Saved by you in Pip's instructions.",
+      savedNote: "Saved by you in {bot}'s instructions.",
       declinedTitle: "Kept Pip's instructions",
-      effect: () => "saved",
+      effect: ([text]) => ({ instructions: (botById("pip").instructions = text) }),
+      done: (r) => ({ title: `${botById("pip").name}'s instructions changed`, rows: [["Instructions", lines(r.instructions), read]] }),
     });
     chat.items.push({ kind: "bot", text: "I've asked to go by Scout and keep answers short. Review and save it when you're ready." });
     renderChat();
@@ -607,23 +651,30 @@
         fields: [
           ["Name", "Stride"],
           ["Account and model", "OpenAI · Personal"],
-          ["Autonomy", "Hands-off"],
+          ["Autonomy", "Hands-off", Object.values(AUTONOMY)],
           ["Role", "Tracks your running training and plans the week's runs.", true],
           ["Routine", "Weekly run plan, Sundays at 6 PM"],
         ],
       },
-      doneTitle: "Created Stride",
-      doneRows: [
-        ["Name", "<strong>Stride</strong>, id stride", byYou("New bot")],
-        ["Autonomy", "Hands-off", byYou("New bot")],
-        ["Role and routine", "saved", byYou("New bot")],
-      ],
       savedNote: "Created by you in New bot.",
       declinedTitle: "Didn't create Stride",
-      effect: () => {
-        gateway.bots.splice(1, 0, { id: "stride", name: "Stride", preview: "New bot", fresh: true });
-        return "saved";
+      check: ([name]) => (norm(name) ? "" : "Give the new bot a name first."),
+      effect: ([name, model, autonomy, role, routine]) => {
+        const id = norm(name).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "bot";
+        const bot = { id, name: norm(name), preview: "New bot", fresh: true, model, autonomy, role: role.trim(), routine: norm(routine) };
+        gateway.bots.splice(1, 0, bot);
+        return bot;
       },
+      done: (b) => ({
+        title: `Created ${b.name}`,
+        rows: [
+          ["Name", `${claw(b.name, 18)} <strong>${esc(b.name)}</strong>, id ${esc(b.id)}`, byYou("New bot")],
+          ["Account and model", esc(b.model), byYou("New bot")],
+          ["Autonomy", esc(b.autonomy), byYou("New bot")],
+          ["Role", b.role ? lines(b.role) : "None", byYou("New bot")],
+          ["Routine", b.routine ? esc(b.routine) : "None", byYou("New bot")],
+        ],
+      }),
     });
     chat.items.push({ kind: "bot", text: "I've drafted Stride for you. Review it and create it when it looks right." });
   }
@@ -659,11 +710,10 @@
         save: "Save",
         fields: [["AGENTS.md", "Check backups every Monday and Thursday.\nTell Juniper when one fails.", true]],
       },
-      doneTitle: "Otto's instructions changed",
-      doneRows: [["AGENTS.md", "updated", read]],
       savedNote: "Saved by you in Otto's instructions.",
       declinedTitle: "Kept Otto's instructions",
-      effect: () => "saved",
+      effect: ([text]) => ({ instructions: (botById("otto").instructions = text) }),
+      done: (r) => ({ title: "Otto's instructions changed", rows: [["AGENTS.md", lines(r.instructions), read]] }),
     });
     addProposal({
       kind: "card",
@@ -680,70 +730,98 @@
         title: "Pip's autonomy",
         lede: "Pip's Autonomy setting, with Pip's proposed choice. This gives Pip more freedom.",
         save: "Save",
-        fields: [["Autonomy", "Hands-off"]],
+        fields: [["Autonomy", "Hands-off", Object.values(AUTONOMY)]],
       },
-      doneTitle: "Pip runs hands-off",
-      doneRows: [["Autonomy", "Hands-off", read]],
       savedNote: "Saved by you in Pip's settings.",
       declinedTitle: "Pip keeps asking before acting",
-      effect: () => "saved",
+      effect: ([autonomy]) => ({ autonomy: (botById("pip").autonomy = autonomy) }),
+      done: (r) => ({
+        title: r.autonomy === AUTONOMY["hands-off"] ? "Pip runs hands-off" : "Pip asks before acting",
+        rows: [["Autonomy", esc(r.autonomy), read]],
+      }),
     });
     renderChat();
   }
 
   // ---- view: agents with access -----------------------------------------------
 
+  // The grants are the fixture's own list: Add keeps everything chosen in the
+  // dialog, and Remove takes out only that grant.
+  const SCOPE = { see: "See bots", suggest: "Suggest changes" };
+  const agents = { grants: [], added: null, adding: false, next: 1 };
+  function seedAgents() {
+    agents.grants = [
+      { id: 0, name: "Claude Code", scope: "suggest", instructions: false, bots: "all", later: true, when: "Added Nov 22 · Expires in 28 days · Last used 2 minutes ago" },
+    ];
+    agents.added = state.step === "added" ? grantFrom({ name: "Codex", scope: "see", instructions: false, bots: "chosen", later: false, days: "30" }) : null;
+    agents.adding = state.step === "add";
+  }
+  function grantFrom(g) {
+    const grant = { ...g, id: agents.next++, when: `Added just now · Expires in ${g.days} days · Not used yet` };
+    agents.grants.push(grant);
+    return grant;
+  }
+  const botsLine = (g) => (g.bots === "all" ? (g.later ? "All bots, including later ones" : "All bots") : "Pip and Otto");
+
   function renderAgents() {
     const nav = ["General", "Bots", "Accounts", "Permissions", "Agents with access", "Gateway"]
       .map((n) => `<li><a href="#" ${n === "Agents with access" ? 'aria-current="page"' : ""}>${n}</a></li>`)
       .join("");
-    const grant = (name, scope, bots, when) =>
-      `<li class="mb-grant"><div><strong>${name}</strong><span>${scope} · ${bots}</span><span>${when}</span></div>` +
-      `<div class="mb-grant-actions"><button type="button" class="mb-btn" data-variant="quiet">See its activity</button>` +
-      `<button type="button" class="mb-btn" data-variant="danger-quiet" data-act="remove">Remove access</button></div></li>`;
-    const added = state.step === "added";
-    const list =
-      grant("Claude Code", "Suggest changes", "All bots, including later ones", "Added Nov 22 · Expires in 28 days · Last used 2 minutes ago") +
-      (added ? grant("Codex", "See bots", "Pip and Otto", "Added just now · Expires in 30 days · Not used yet") : "");
+    const list = agents.grants
+      .map(
+        (g) =>
+          `<li class="mb-grant" data-grant="${g.id}"><div><strong>${esc(g.name)}</strong><span>${SCOPE[g.scope]}${g.instructions ? ", with instructions" : ""} · ${botsLine(g)}</span><span>${g.when}</span></div>` +
+          `<div class="mb-grant-actions"><button type="button" class="mb-btn" data-variant="quiet">See its activity</button>` +
+          `<button type="button" class="mb-btn" data-variant="danger-quiet" data-act="remove" data-grant="${g.id}" aria-label="Remove ${esc(g.name)}'s access">Remove access</button></div></li>`,
+      )
+      .join("");
     root.innerHTML =
-      `<div class="mb-settings"><nav class="mb-settings-nav" aria-label="Settings"><h2>Settings</h2><ul>${nav}</ul></nav>` +
+      `<div class="mb-settings"${agents.adding ? " inert" : ""}><nav class="mb-settings-nav" aria-label="Settings"><h2>Settings</h2><ul>${nav}</ul></nav>` +
       `<section class="mb-settings-body" aria-labelledby="mb-agents-title"><h1 id="mb-agents-title">Agents with access</h1>` +
       `<p class="mb-lede">Coding agents on this Mac that you allow can see your bots and suggest changes through Clawtrate, while Clawtrate is open. You confirm every change. Your gateway's credentials never leave it.</p>` +
       `<ul class="mb-grants" data-testid="grants">${list}</ul>` +
       `<button type="button" class="mb-btn" data-variant="primary" data-act="add">Add an agent</button>` +
-      (state.step === "add" ? addDialog() : "") +
-      (added ? addedNote() : "") +
-      `</section></div>`;
+      (agents.added ? addedNote(agents.added) : "") +
+      `</section></div>` +
+      (agents.adding ? addDialog() : "");
   }
 
   function addDialog() {
-    const radio = (id, title, line, checked) =>
-      `<label class="mb-radio"><input type="radio" name="scope" value="${id}" ${checked ? "checked" : ""}/><span><strong>${title}</strong><span>${line}</span></span></label>`;
+    const radio = (group, id, title, line, checked) =>
+      `<label class="mb-radio"><input type="radio" name="${group}" value="${id}" ${checked ? "checked" : ""}/><span><strong>${title}</strong>${line ? `<span>${line}</span>` : ""}</span></label>`;
     return (
       `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-add-title" data-testid="add-agent">` +
-      `<h2 id="mb-add-title">Add an agent</h2><label class="mb-field"><span>Name</span><input value="Codex"/></label>` +
+      `<h2 id="mb-add-title">Add an agent</h2><label class="mb-field"><span>Name</span><input id="ag-name" value="Codex"/></label>` +
       `<fieldset><legend>What it may do</legend>` +
-      radio("see", "See bots", "List bots and read their settings and routines.", true) +
-      radio("suggest", "Suggest changes", "Also ask for changes, which you confirm in Clawtrate.", false) +
-      `</fieldset><label class="mb-switch"><input type="checkbox"/><span>Include bots' instructions</span></label>` +
+      radio("scope", "see", "See bots", "List bots and read their settings and routines.", true) +
+      radio("scope", "suggest", "Suggest changes", "Also ask for changes, which you confirm in Clawtrate.", false) +
+      `</fieldset><label class="mb-switch"><input type="checkbox" id="ag-instructions"/><span>Include bots' instructions</span></label>` +
       `<p class="mb-hint" data-testid="instructions-hint">Without it, the agent gets no instructions, no instruction changes and no routine prompts, and can't suggest them.</p>` +
-      `<fieldset><legend>Which bots</legend><label class="mb-radio"><input type="radio" name="bots"/><span><strong>All bots</strong></span></label>` +
-      `<label class="mb-radio"><input type="radio" name="bots" checked/><span><strong>Chosen bots</strong><span>Pip, Otto</span></span></label>` +
-      `<label class="mb-switch"><input type="checkbox" disabled/><span>Include bots you add later</span></label></fieldset>` +
-      `<label class="mb-field"><span>Expires</span><select><option>In 30 days</option><option>In 7 days</option><option>In 90 days</option></select></label>` +
+      `<fieldset><legend>Which bots</legend>` +
+      radio("bots", "all", "All bots", "", false) +
+      radio("bots", "chosen", "Chosen bots", "Pip, Otto", true) +
+      `<label class="mb-switch"><input type="checkbox" id="ag-later" disabled/><span>Include bots you add later</span></label></fieldset>` +
+      `<label class="mb-field"><span>Expires</span><select id="ag-expires"><option value="30">In 30 days</option><option value="7">In 7 days</option><option value="90">In 90 days</option></select></label>` +
       `<p class="mb-hint" data-testid="grant-limit">Anything that can read this agent's secret can do what you allow here. Programs running as you on this Mac can read your agent's settings, so give agents the least they need.</p>` +
       `<p class="mb-hint">It never gets credentials, devices, the gateway's settings, completions, or a way to delete bots or message them.</p>` +
-      `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet">Cancel</button><button type="button" class="mb-btn" data-variant="primary" data-act="added">Add</button></div></div>`
+      `<p class="mb-card-note" data-tone="warn" data-testid="add-problem" hidden>Give the agent a name first.</p>` +
+      `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet" data-act="add-cancel">Cancel</button><button type="button" class="mb-btn" data-variant="primary" data-act="added">Add</button></div></div>`
     );
   }
 
-  function addedNote() {
+  function addedNote(g) {
     return (
-      `<div class="mb-added" data-testid="added-config"><h2>Paste this into Codex's MCP settings</h2>` +
+      `<div class="mb-added" data-testid="added-config"><h2>Paste this into ${esc(g.name)}'s MCP settings</h2>` +
       `<p>The secret is shown once. Clawtrate keeps only a digest of it.</p>` +
       `<pre class="mb-code">{\n  "mcpServers": {\n    "clawtrate": {\n      "command": "/Applications/Clawtrate.app/Contents/MacOS/clawtrate-mcp",\n      "env": { "CLAWTRATE_GRANT": "ctg_••••••••••••" }\n    }\n  }\n}</pre>` +
       `<button type="button" class="mb-btn" data-variant="quiet">Copy</button></div>`
     );
+  }
+
+  function closeAdd() {
+    agents.adding = false;
+    renderAgents();
+    root.querySelector('[data-act="add"]').focus();
   }
 
   // ---- events -------------------------------------------------------------------
@@ -787,8 +865,7 @@
     } else if (act === "editor-save") {
       await editorSave();
     } else if (act === "editor-cancel") {
-      editor = null;
-      renderChat();
+      closeEditor();
     } else if (act === "decline") {
       decline(id);
     } else if (act === "grant") {
@@ -862,11 +939,36 @@
       Object.assign(c, { cardKind: "left", note: "Left as it is. You can write to main yourself.", actions: [] });
       renderChat();
     } else if (act === "add") {
-      state.step = "add";
+      agents.adding = true;
       renderAgents();
+      root.querySelector("#ag-name").focus();
+    } else if (act === "add-cancel") {
+      closeAdd();
     } else if (act === "added") {
-      state.step = "added";
+      const dialog = root.querySelector('[data-testid="add-agent"]');
+      const name = norm(dialog.querySelector("#ag-name").value);
+      if (!name) {
+        dialog.querySelector('[data-testid="add-problem"]').hidden = false;
+        return dialog.querySelector("#ag-name").focus();
+      }
+      const bots = dialog.querySelector('input[name="bots"]:checked').value;
+      agents.added = grantFrom({
+        name,
+        scope: dialog.querySelector('input[name="scope"]:checked').value,
+        instructions: dialog.querySelector("#ag-instructions").checked,
+        bots,
+        later: bots === "all" && dialog.querySelector("#ag-later").checked,
+        days: dialog.querySelector("#ag-expires").value,
+      });
+      agents.adding = false;
       renderAgents();
+      root.querySelector('[data-act="add"]').focus();
+    } else if (act === "remove") {
+      const gone = Number(t.dataset.grant);
+      agents.grants = agents.grants.filter((g) => g.id !== gone);
+      if (agents.added?.id === gone) agents.added = null;
+      renderAgents();
+      root.querySelector('[data-act="add"]').focus();
     }
   });
 
@@ -913,18 +1015,24 @@
       root.querySelector('[data-testid="stored-as"]').textContent = storedAs(event.target.value);
     }
     if (event.target.closest?.('[data-testid="also-main"]')) state.alsoMain = event.target.checked;
+    if (event.target.name === "bots") {
+      const later = root.querySelector("#ag-later");
+      later.disabled = event.target.value !== "all";
+      if (later.disabled) later.checked = false;
+    }
     if (guidedCard && event.target.id === "g-role") guidedCard.role = event.target.value;
   });
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && editor) {
-      editor = null;
-      renderChat();
-      return;
-    }
+    if (event.key === "Escape" && editor) return closeEditor();
+    if (event.key === "Escape" && agents.adding && state.view === "agents") return closeAdd();
     if (event.key === "Escape" && state.sheet) closeSheet();
-    if (event.key === "Tab" && state.sheet) {
-      // The setup behind the sheet is inert; Tab and Shift+Tab cycle inside it.
-      const all = [...root.querySelectorAll(".mb-sheet button")];
+    const modal = root.querySelector('.mb-sheet, [data-testid="editor"], [data-testid="add-agent"]');
+    if (event.key === "Tab" && modal) {
+      // What's behind the open sheet, editor or dialog is inert; Tab and
+      // Shift+Tab cycle through its controls (one stop per radio group).
+      const all = [...modal.querySelectorAll("button, input, textarea, select")].filter(
+        (el) => !el.disabled && (el.type !== "radio" || el.checked),
+      );
       const at = all.indexOf(document.activeElement);
       all[(at + (event.shiftKey ? all.length - 1 : 1)) % all.length].focus();
       event.preventDefault();
@@ -948,7 +1056,10 @@
     composer = { value: "" };
     chat = { bot: state.view === "rename" ? "pip" : "main", items: [] };
     if (state.view === "setup") return renderSetup();
-    if (state.view === "agents") return renderAgents();
+    if (state.view === "agents") {
+      seedAgents();
+      return renderAgents();
+    }
     if (state.view === "first") return playFirst();
     if (state.view === "rename") return playRename();
     if (state.view === "create") return playCreate();
