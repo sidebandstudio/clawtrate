@@ -42,7 +42,7 @@ import {
   type HostAnswer,
   type HostQuestion,
 } from "../../src/setup/remote.ts";
-import { RouteStore, routedStorage } from "../../src/setup/routes.ts";
+import { MAX_ROUTES, RouteStore, routedStorage, sshRouteKey } from "../../src/setup/routes.ts";
 import { qrJson } from "../fixtures/openclaw-outputs.ts";
 import {
   alive,
@@ -2078,6 +2078,126 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         retire.mockRestore();
         await h.remote.closeAll();
       }
+    });
+
+    it("a Pair that fails gives back the oldest saved route its first write let go at the limit, with its token and pin", async () => {
+      const h = host();
+      await connected(h);
+      const [saved] = h.routes.list();
+      const token = h.routes.getToken(saved!.key, "device-1", "operator");
+      await h.remote.closeAll();
+      // The store is full: the route above is the oldest of MAX_ROUTES.
+      for (let i = 1; i < MAX_ROUTES; i += 1) {
+        const endpoint = `you@[filler-${i}.example]:22`;
+        const fingerprint = `SHA256:${"F".repeat(42)}${i}`;
+        h.routes.put({
+          ...saved!,
+          id: `r${String(i).padStart(12, "0")}`,
+          destination: `filler-${i}`,
+          name: `filler-${i}`,
+          endpoint,
+          fingerprint,
+          key: sshRouteKey({
+            fingerprint,
+            endpoint,
+            gatewayPort: saved!.gatewayPort,
+            profile: "default",
+          }),
+          lastUsed: Date.now() + 1000 + i,
+        });
+      }
+      expect(h.routes.list()).toHaveLength(MAX_ROUTES);
+      const pin = `clawtrate-route-${saved!.id}-`;
+      expect(h.knownHosts()).toContain(pin);
+      // Another computer's Pair, whose gateway won't say who it is.
+      const g = host({ dir: h.dir, storage: h.storage });
+      await g.remote.there("devbox-local");
+      if (g.setup().phase === "key") await g.remote.trustKey();
+      expect(g.setup().phase).toBe("found");
+      const identity = g.fake.handlers["gateway.identity.get"]!;
+      g.fake.handlers["gateway.identity.get"] = () => {
+        throw new Error("no identity");
+      };
+      try {
+        await g.remote.connect();
+        await until(() => g.setup().phase === "failed", 30_000);
+      } finally {
+        g.fake.handlers["gateway.identity.get"] = identity;
+      }
+      await sleep(300);
+      expect(g.routes.byKey(saved!.key)).toMatchObject({ id: saved!.id });
+      expect(g.routes.getToken(saved!.key, "device-1", "operator")).toBe(token);
+      expect(g.knownHosts()).toContain(pin);
+      expect(g.routes.list()).toHaveLength(MAX_ROUTES);
+      await g.remote.closeAll();
+    });
+
+    it("a Pair through another alias of a route's endpoint that fails gives that route back, with its token and pin", async () => {
+      // "devbox-alt": the same account, host, port and key, with sign-in settings of its own.
+      const config = readFileSync(t.world.personConfig, "utf8");
+      t.writeConfig(
+        `${config}Host devbox-alt\n  HostName 127.0.0.1\n  Port ${sshd.port}\n  User ${t.world.localUser}\n  IdentityFile ${t.userKey}\n  IdentitiesOnly no\n`,
+      );
+      try {
+        const h = host();
+        await connected(h);
+        const [saved] = h.routes.list();
+        const token = h.routes.getToken(saved!.key, "device-1", "operator");
+        const pin = `clawtrate-route-${saved!.id}-`;
+        // Looked at while the route is live: a route id of its own, for the same route key.
+        await h.remote.there("devbox-alt");
+        if (h.setup().phase === "key") await h.remote.trustKey();
+        expect(h.setup().phase).toBe("found");
+        // Disconnect: the route is no longer live when the Pair writes its record.
+        await h.client.suspend();
+        await until(() => h.setup().route?.phase === "disconnected", 10_000);
+        await h.remote.connect();
+        await until(() => h.setup().phase === "failed" || h.setup().phase === "found", 30_000);
+        await sleep(300);
+        expect(h.routes.byKey(saved!.key)).toMatchObject({ id: saved!.id });
+        expect(h.routes.getToken(saved!.key, "device-1", "operator")).toBe(token);
+        expect(h.knownHosts()).toContain(pin);
+        await h.remote.closeAll();
+      } finally {
+        t.writeConfig(config);
+      }
+    });
+
+    it("a restore's end after Disconnect says nothing over a newer attempt that began while it let go", async () => {
+      const h = host();
+      await connected(h);
+      await h.remote.closeAll();
+      const again = host({ dir: h.dir, storage: h.storage });
+      await again.client.start();
+      const r = again.remote as unknown as {
+        letGoPending: (discard?: boolean, keepClient?: boolean) => Promise<void>;
+      };
+      const letGo = r.letGoPending.bind(again.remote);
+      let replaced = false;
+      r.letGoPending = async (discard?: boolean, keepClient?: boolean) => {
+        // The restore's end lets its forward go; a new Look begins and reaches its card meanwhile.
+        if (keepClient && !replaced) {
+          replaced = true;
+          await again.remote.there("devbox");
+        }
+        return letGo(discard, keepClient);
+      };
+      onSpawn = (args) => {
+        if (args.includes("-L")) {
+          onSpawn = null;
+          void again.client.suspend();
+        }
+      };
+      try {
+        await again.remote.resume();
+      } finally {
+        onSpawn = null;
+      }
+      await until(() => replaced, 10_000);
+      await sleep(500);
+      expect(again.setup().phase).toBe("found");
+      expect(again.setup().there?.destination).toBe("devbox");
+      await again.remote.closeAll();
     });
 
     it("Disconnect while a saved route is restored at launch ends the restore: nothing is sent, the route stays chosen and disconnected, and Reconnect opens it", async () => {

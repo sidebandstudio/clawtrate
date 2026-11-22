@@ -37,4 +37,38 @@ describe("the setup host's two setups", () => {
     await looking;
     expect(order).toEqual(["here: reset", "here: cleanup ended", "there: devbox"]);
   });
+
+  for (const [name, meanwhile] of [
+    ["Back", (router: SetupRouter) => router.cancel()],
+    ["a reset", (router: SetupRouter) => router.reset()],
+    ["a Look on this computer", (router: SetupRouter) => void router.look()],
+    ["a newer Look on another computer", (router: SetupRouter) => void router.there("elsewhere")],
+  ] as const) {
+    it(`starts nothing over SSH for a Look on another computer when ${name} came while this computer's cleanup finished`, async () => {
+      const looked: string[] = [];
+      const releases: Array<() => void> = [];
+      const here = {
+        reset: () => new Promise<void>((resolve) => releases.push(resolve)),
+        cancel: () => {},
+        look: async () => {},
+      } as unknown as SetupController;
+      const remote = {
+        active: false,
+        reset: () => {},
+        cancel: () => {},
+        there: async (destination: string) => {
+          looked.push(destination);
+        },
+      } as unknown as RemoteSetup;
+      const router = new SetupRouter(here, remote);
+      const first = router.there("devbox");
+      meanwhile(router);
+      for (const release of releases) release();
+      await first;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      for (const release of releases) release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(looked).not.toContain("devbox");
+    });
+  }
 });

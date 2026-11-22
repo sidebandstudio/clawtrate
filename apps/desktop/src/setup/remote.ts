@@ -221,6 +221,8 @@ export class RemoteSetup {
      * back if the pairing isn't kept, and let go (with their pins) only once it is.
      */
     put: RoutePut | null;
+    /** The gateway answered this attempt's connection as itself: the pairing is accepted. */
+    accepted: boolean;
   } | null = null;
   private live: Live | null = null;
   /** The route the app's saved connection names while it isn't live: Remove and Review act on it. */
@@ -1071,7 +1073,15 @@ export class RemoteSetup {
       return null;
     }
     const forward = opened.forward;
-    this.pending = { forward, record, prior, channel: null, selection: null, put: null };
+    this.pending = {
+      forward,
+      record,
+      prior,
+      channel: null,
+      selection: null,
+      put: null,
+      accepted: false,
+    };
     const up = await this.waitUp(forward, attempt);
     if (attempt !== this.attempt) return null;
     if (up.phase !== "up") {
@@ -1208,6 +1218,7 @@ export class RemoteSetup {
   private acceptPairing(key: string, identity: string): void {
     const pending = this.pending;
     if (!pending || pending.record.key !== key) return;
+    pending.accepted = true;
     if (pending.record.identity === identity) return;
     const record = { ...pending.record, identity };
     try {
@@ -1277,7 +1288,7 @@ export class RemoteSetup {
           this.options.routes.deleteToken(pending.record.key);
         // A pairing not kept gives back the routes its record displaced, with their tokens and
         // pins; one the gateway accepted (Back while its bots load) lets them go now.
-        if (discardNewPairing || pending.record.identity === null) put?.restoreDisplaced();
+        if (discardNewPairing || !pending.accepted) put?.restoreDisplaced();
         else put?.settle();
       }
     } catch {
