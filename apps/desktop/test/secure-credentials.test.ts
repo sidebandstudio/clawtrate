@@ -41,6 +41,8 @@ const fsHooks = vi.hoisted(() => ({
   /** A rename to hold until its gate opens, and folder syncs to refuse right after a rename. */
   holdRename: null as null | { match: (to: string) => boolean; gate: Promise<void> },
   failSyncsAfterRename: null as null | ((to: string) => number),
+  /** Called once, when the next folder handle closes (after its sync). */
+  onFolderClose: null as null | (() => void),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -50,6 +52,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     const folder = args[1] === "r" && (await handle.stat()).isDirectory();
     return new Proxy(handle, {
       get(target, prop, receiver) {
+        if (prop === "close" && folder && fsHooks.onFolderClose) {
+          const hook = fsHooks.onFolderClose;
+          fsHooks.onFolderClose = null;
+          return async () => {
+            await target.close();
+            hook();
+          };
+        }
         if (prop === "sync" && folder && fsHooks.failFolderSyncs > 0)
           return () => {
             fsHooks.failFolderSyncs -= 1;
@@ -130,6 +140,7 @@ afterEach(() => {
   fsHooks.failRm = null;
   fsHooks.holdRename = null;
   fsHooks.failSyncsAfterRename = null;
+  fsHooks.onFolderClose = null;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -595,6 +606,45 @@ describe("this device's credentials in secure storage", () => {
       removal.resolve();
       await switching.catch(() => {});
     }
+  });
+
+  it("removing this device's own token never revives the earlier build's token, live or after relaunch", async () => {
+    const { dir, pem } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.storage.get("connection")).toBe(CONNECTION);
+    const own = await ownTokenKey(pem);
+    // Paired: this device's token retires the earlier one in the same commit.
+    await credentials.storage.set(own, RECORD);
+    expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    // The device token is refused and removed later.
+    await credentials.storage.delete(own);
+    expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
+  it("readers during a switch see the settings and their typed token together, never one without the other", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    const a = JSON.stringify({ url: URL, token: "typed-A" });
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    await credentials.storage.set("connection", a);
+    // Once the new settings' write has synced its folder, a read starts on each of the next
+    // microtasks: across the moment the settings and their typed token are published.
+    const reads: Array<Promise<string | null>> = [];
+    fsHooks.onFolderClose = () => {
+      let left = 40;
+      const next = () => {
+        reads.push(credentials.storage.get("connection"));
+        if ((left -= 1) > 0) queueMicrotask(next);
+      };
+      queueMicrotask(next);
+    };
+    await credentials.storage.set("connection", b);
+    await until(() => reads.length === 40);
+    const seen = await Promise.all(reads);
+    expect(seen.length).toBe(40);
+    expect(seen.filter((value) => value !== a && value !== b)).toEqual([]);
+    expect(seen).toContain(b);
   });
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {

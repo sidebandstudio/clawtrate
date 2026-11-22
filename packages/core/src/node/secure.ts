@@ -339,6 +339,25 @@ function earlierToken(credentials: Credentials, saved: Settings | null): string 
   return earlier.token;
 }
 
+/**
+ * This device's own token for the earlier build's gateway retires that gateway's earlier token
+ * in the same commit: once paired there, the earlier token is dropped with the write that saves
+ * this device's token, or that removes it, so no separate cleanup can fail and revive it.
+ */
+function withoutRetiredEarlier(
+  key: string,
+  next: Credentials,
+  before: Credentials = next,
+): Credentials {
+  const kept = next.values[SETTINGS_KEY];
+  const earlier = kept === undefined ? null : parseSettings(kept);
+  if (!earlier) return next;
+  const own = hasOwnToken(before, earlier.url) || hasOwnToken(next, earlier.url);
+  if (!own || !key.startsWith(`deviceToken:${encodeURIComponent(earlier.url)}:`)) return next;
+  const { [SETTINGS_KEY]: _retired, ...values } = next.values;
+  return { ...next, values };
+}
+
 export function createSecureCredentials(options: {
   dataDir: string;
   box: SecretBox;
@@ -571,13 +590,18 @@ export function createSecureCredentials(options: {
    * carries it to disk. While the file still holds credentials it would copy, `next` is kept in
    * memory for the session and not written.
    */
-  const keepSettings = async (next: Record<string, string>) => {
+  const keepSettings = async (
+    next: Record<string, string>,
+    nextTyped: { url: string; token: string } | null | undefined = undefined,
+  ) => {
     const current = await mode();
     // A pending cleanup finishes first, with the settings as they are: a cleanup that fails
     // leaves `next` unwritten, so a call that fails has changed nothing a later start reads.
     if (current.kind === "secure" && !current.swept) await sweep(current);
     if (!(current.kind === "session" && current.holdSettings)) await writeSettings(next);
+    // The settings and their typed token change in one step: no reader sees one without the other.
     settings = next;
+    if (nextTyped !== undefined) typed = nextTyped;
   };
 
   /** Removes an earlier build's saved token once the settings no longer use it; a failure leaves an unused copy. */
@@ -616,7 +640,9 @@ export function createSecureCredentials(options: {
       set: async (key, value) => {
         if (isCredentialKey(key)) {
           if (!validTokenRecord(value)) throw new Error("not a device token record");
-          return change((current) => ({ ...current, values: { ...current.values, [key]: value } }));
+          return change((current) =>
+            withoutRetiredEarlier(key, { ...current, values: { ...current.values, [key]: value } }),
+          );
         }
         if (key !== SETTINGS_KEY)
           return queued(async () => {
@@ -648,21 +674,26 @@ export function createSecureCredentials(options: {
         const { earlierRetired: _asked, ...wanted } = next;
         await queued(async () => {
           await mode();
-          await keepSettings({
-            ...settings,
-            [SETTINGS_KEY]: JSON.stringify({
-              ...wanted,
-              token: null,
-              ...(retired ? { earlierRetired: true } : {}),
-            }),
-          });
-          // A typed token stays in this process, for its address only, once its settings are kept.
-          typed = next.token === null ? null : { url: next.url, token: next.token };
+          // A typed token stays in this process, for its address only, published with its settings.
+          await keepSettings(
+            {
+              ...settings,
+              [SETTINGS_KEY]: JSON.stringify({
+                ...wanted,
+                token: null,
+                ...(retired ? { earlierRetired: true } : {}),
+              }),
+            },
+            next.token === null ? null : { url: next.url, token: next.token },
+          );
         });
         if (replaced) await retireEarlier();
       },
       delete: async (key) => {
-        if (isCredentialKey(key)) return change(withoutValue(key));
+        if (isCredentialKey(key))
+          return change((current) =>
+            withoutRetiredEarlier(key, withoutValue(key)(current), current),
+          );
         if (key !== SETTINGS_KEY)
           return queued(async () => {
             await mode();
@@ -674,8 +705,7 @@ export function createSecureCredentials(options: {
         await queued(async () => {
           await mode();
           const { [SETTINGS_KEY]: _removed, ...rest } = settings;
-          await keepSettings(rest);
-          typed = null;
+          await keepSettings(rest, null);
         });
         await retireEarlier();
       },
