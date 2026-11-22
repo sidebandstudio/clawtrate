@@ -34,7 +34,7 @@ export const KEYCHAIN_CHECK_SWITCH = "clawtrate-keychain-check";
 
 /**
  * The app name a packaged launch check runs under, `Clawtrate Check <16 hex>`, so the
- * key safeStorage keeps is in a Keychain item of the check's own ("<name> Safe Storage"),
+ * key safeStorage keeps is in a Keychain item of the check's own (service "<name> Safe Storage", account "<name> Key"),
  * never a person's Clawtrate's. Only a sandboxed packaged app on macOS takes it, and the
  * switch itself makes a launch sandboxed (`SANDBOX_SWITCHES`).
  */

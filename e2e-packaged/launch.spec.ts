@@ -889,11 +889,13 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
   const defaultKeychain = spawnSync("security", ["default-keychain"], { encoding: "utf8" });
   expect(defaultKeychain.status).toBe(0);
   expect(defaultKeychain.stdout.trim().replace(/^"|"$/g, "")).toBe(KEYCHAIN_PATH);
-  // The app's name for this run alone: safeStorage keeps its key in "<name> Safe Storage".
+  // The app's name for this run alone: safeStorage keeps its key in the item with service
+  // "<name> Safe Storage" and account "<name> Key" (Electron 45's async provider, seen on CI).
   const hex = randomBytes(8).toString("hex");
   const name = `Clawtrate Check ${hex}`;
   const service = `${name} Safe Storage`;
-  expect(keychainHolds(service, name), "no item of this run's exists before it").toBe(false);
+  const account = `${name} Key`;
+  expect(keychainHolds(service, account), "no item of this run's exists before it").toBe(false);
   const run = process.env.CLAWTRATE_PACKAGED_PLACE!;
   const parent = join(run, "keychain");
   mkdirSync(parent);
@@ -929,7 +931,7 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
     expect(readdirSync(folder).sort()).toEqual(["credentials.bin", "state.json"]);
     expect(Object.keys(state()).some((key) => key.startsWith("deviceToken:"))).toBe(false);
     for (const secret of secrets) expect(holds(folder, secret)).toEqual([]);
-    expect(keychainHolds(service, name), `safeStorage keeps its key in "${service}"`).toBe(true);
+    expect(keychainHolds(service, account), `safeStorage keeps its key in "${service}"`).toBe(true);
 
     // Relaunched: the same identity read back, and the saved pairing reconnects with no approval.
     const reconnect = async (view: Page) => {
@@ -954,13 +956,13 @@ test("keeps this device's credentials in the Keychain: a fresh build moves them 
       "-s",
       service,
       "-a",
-      name,
+      account,
       KEYCHAIN_PATH,
     ]);
     expect(
       removed.status === 0 || removed.status === 44,
       `security delete-generic-password ended with ${removed.status ?? removed.signal}`,
     ).toBe(true);
-    expect(keychainHolds(service, name), "this run's item is gone after it").toBe(false);
+    expect(keychainHolds(service, account), "this run's item is gone after it").toBe(false);
   }
 });
