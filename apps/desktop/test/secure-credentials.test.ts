@@ -4,6 +4,7 @@
 
 import {
   createFileSigner,
+  createNodeHost,
   createSecureCredentials,
   CREDENTIALS_FILE,
   DEVICE_KEY_FILE,
@@ -187,6 +188,18 @@ describe("this device's credentials in secure storage", () => {
     const next = open(dir, box);
     expect(await next.storage.get(TOKEN_KEY)).toBe(null);
     expect((await next.signer.loadIdentity()).deviceId).not.toBe(deviceId);
+  });
+
+  it("a host given secure storage keeps credentials there, and only then says so", async () => {
+    const { dir } = legacyFolder();
+    const client = { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" };
+    const host = createNodeHost({ dataDir: dir, client, secretBox: fakeBox().box });
+    await host.storage.set(TOKEN_KEY, RECORD.replace(DEVICE, "device-token-3"));
+    expect(await host.secureCredentials?.()).toBe(true);
+    for (const secret of [SHARED, DEVICE, "device-token-3", "PRIVATE KEY"])
+      expect(everything(dir)).not.toContain(secret);
+    const plain = createNodeHost({ dataDir: legacyFolder().dir, client });
+    expect(await plain.secureCredentials?.()).toBe(false);
   });
 
   it("once moved, secure storage that can't be read stops, and nothing falls back to the files", async () => {
