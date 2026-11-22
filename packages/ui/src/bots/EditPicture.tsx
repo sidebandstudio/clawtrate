@@ -5,7 +5,7 @@
 // connection or admin access goes.
 
 import type { Bot } from "@clawtrate/core";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
 import {
@@ -45,6 +45,19 @@ export function EditPicture({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const previewRef = useRef<HTMLSpanElement>(null);
+  // Whether this opening still stands: not once it is closed or replaced, and not without access.
+  const live = useRef(true);
+  const allowed = useRef(canSave);
+  useEffect(() => {
+    allowed.current = canSave;
+  }, [canSave]);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const stands = () => live.current && allowed.current;
   const unchanged = same(draft, initial);
   const save = async () => {
     if (saving || busy || unchanged || !canSave) return;
@@ -52,8 +65,10 @@ export function EditPicture({
     setProblem(null);
     try {
       const avatar = await pictureFor(draft, previewRef.current?.querySelector("svg"));
+      if (!stands()) return;
       if (!avatar) throw new Error("not drawn");
       const { confirmed } = await bridge.invoke({ type: "setBotPicture", botId: bot.id, avatar });
+      if (!stands()) return;
       if (!confirmed) {
         setProblem(PICTURE_NOT_CONFIRMED);
         setSaving(false);
@@ -62,6 +77,7 @@ export function EditPicture({
       onSaved();
       onClose();
     } catch {
+      if (!stands()) return;
       setProblem(PICTURE_NOT_SAVED);
       setSaving(false);
     }

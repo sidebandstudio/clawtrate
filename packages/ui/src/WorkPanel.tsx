@@ -6,7 +6,7 @@ import type {
   Task,
   Transcript,
 } from "@clawtrate/core";
-import { useCallback, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { EditPicture } from "./bots/EditPicture.tsx";
 import { useBridge } from "./bridge.tsx";
@@ -17,6 +17,14 @@ import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
 import { TabBar } from "./work/TabBar.tsx";
 import "./work/files.css";
+
+/** One opening of Edit picture, and what it is bound to. */
+type PictureSession = {
+  token: number;
+  botId: string;
+  gateway: string | null;
+  connectedAt: number | null;
+};
 
 /** The pane's tabs, in the order the designs give (work-pane.md §1, bots.md §8). */
 export const WORK_TABS = [
@@ -98,12 +106,25 @@ export function WorkPanel({
   const name = bot?.name ?? "This bot";
   // The pane's announcements, polite, as the conversation's live region speaks.
   const [announcement, setAnnouncement] = useState("");
-  // Edit picture is open for this bot id, and only while it is the pane's bot and saving is allowed.
-  const [editingPicture, setEditingPicture] = useState<string | null>(null);
+  // Each opening of Edit picture is a session with its own token, bound to the bot, the gateway
+  // and the connection it was opened on. It ends when any of them, or admin access, changes.
+  const [pictureSession, setPictureSession] = useState<PictureSession | null>(null);
+  const tokens = useRef(0);
+  const current = useRef<number | null>(null);
   const canEditPicture = connection.canAdmin && online;
-  const editing = editingPicture !== null && editingPicture === bot?.id && canEditPicture;
-  // Settled while rendering, so a closed editor's id is gone before anything can reopen it.
-  if (editingPicture !== null && !editing) setEditingPicture(null);
+  const gatewayKey = connection.gatewayId ?? connection.gatewayUrl;
+  const editing =
+    pictureSession !== null &&
+    canEditPicture &&
+    pictureSession.botId === bot?.id &&
+    pictureSession.gateway === gatewayKey &&
+    pictureSession.connectedAt === connectedAt;
+  // Settled while rendering, so an ended session is gone before anything can reopen it.
+  if (pictureSession !== null && !editing) setPictureSession(null);
+  const liveToken = editing ? pictureSession.token : null;
+  useEffect(() => {
+    current.current = liveToken;
+  }, [liveToken]);
   const announce = useCallback((text: string) => {
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));
@@ -136,7 +157,14 @@ export function WorkPanel({
               className="work-picture"
               aria-label={`Change ${bot.name}'s picture`}
               title="Change picture"
-              onClick={() => setEditingPicture(bot.id)}
+              onClick={() =>
+                setPictureSession({
+                  token: ++tokens.current,
+                  botId: bot.id,
+                  gateway: gatewayKey,
+                  connectedAt,
+                })
+              }
             >
               <Avatar bot={bot} />
             </button>
@@ -145,11 +173,16 @@ export function WorkPanel({
           )}
           {editing && (
             <EditPicture
-              key={bot.id}
+              key={pictureSession.token}
               bot={bot}
               canSave={canEditPicture}
-              onClose={() => setEditingPicture(null)}
-              onSaved={() => announce("Picture saved")}
+              onClose={() => {
+                const token = pictureSession.token;
+                setPictureSession((open) => (open?.token === token ? null : open));
+              }}
+              onSaved={() => {
+                if (current.current === pictureSession.token) announce("Picture saved");
+              }}
             />
           )}
           <h2>{bot.name}</h2>

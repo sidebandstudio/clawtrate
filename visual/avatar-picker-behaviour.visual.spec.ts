@@ -310,6 +310,36 @@ test("F-035: an upload is checked before it is decoded: its real format, then it
   await expect(page.getByRole("alert")).toHaveText(
     "Choose an image no wider or taller than 8,192 pixels and under 16 million pixels.",
   );
+  // A GIF whose logical screen says 1×1 but whose frame is 4×4: its frames are read first.
+  const le16 = (n: number) => [n & 255, (n >> 8) & 255];
+  const gif = Buffer.from([
+    ...Buffer.from("GIF89a"),
+    ...le16(1),
+    ...le16(1),
+    0x80,
+    0,
+    0,
+    0,
+    0,
+    0,
+    255,
+    255,
+    255,
+    0x2c,
+    ...le16(0),
+    ...le16(0),
+    ...le16(4),
+    ...le16(4),
+    0,
+    2,
+    2,
+    0x44,
+    0x01,
+    0,
+    0x3b,
+  ]);
+  await file.setInputFiles({ name: "frame.gif", mimeType: "image/gif", buffer: gif });
+  await expect(page.getByRole("alert")).toHaveText("That image couldn't be read.");
   expect(await page.evaluate(() => (window as unknown as { decoded: number }).decoded)).toBe(0);
 });
 
@@ -348,4 +378,106 @@ test("F-035: Next waits while a picture is read, and a creature chosen meanwhile
     "data-family",
     "shellfolk",
   );
+});
+
+test("F-035: a creature that can't be drawn is not sent: Create keeps the draft open, and Edit picture sends nothing", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&panel=open`, "dark");
+  // The page's canvases give no 2D context from here on.
+  await page.evaluate(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (
+      this: HTMLCanvasElement,
+      kind: string,
+      ...rest: unknown[]
+    ) {
+      return kind === "2d"
+        ? null
+        : (real as (...a: unknown[]) => unknown).call(this, kind, ...rest);
+    } as typeof real;
+  });
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("radio", { name: "Shellfolk" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Couldn't draw that picture. Choose it again, or choose another.",
+  );
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Change Otto's picture" }).click();
+  const dialog = page.getByTestId("edit-picture");
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "Couldn't save the picture. Your changes are still here.",
+  );
+  const commands = (await sent(page)).map((each) => each.type);
+  expect(commands).not.toContain("createBot");
+  expect(commands).not.toContain("setBotPicture");
+});
+
+test("F-037: a save answered after its editor closed does nothing to the editor opened since", async ({
+  page,
+}) => {
+  let dialog = await openEdit(page, "&picturesave=release");
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "Change Otto's picture" }).click();
+  dialog = page.getByTestId("edit-picture");
+  await dialog.getByRole("radio", { name: "Shellfolk" }).click();
+  await page.evaluate(() =>
+    (window as unknown as { releasePictureSave: () => void }).releasePictureSave(),
+  );
+  // The old save lands on the gateway, but the new editor and its draft stay, and nothing is announced.
+  await expect(row(page, "Otto").locator('svg.creature[data-family="lantern"]')).toBeVisible();
+  // The old reply's handling runs after the list shows the picture: give it the time to.
+  await page.waitForTimeout(300);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: "Shellfolk" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.getByTestId("work-announcer")).not.toHaveText("Picture saved");
+});
+
+test("F-037: a picture still being drawn when admin goes is never sent", async ({ page }) => {
+  const dialog = await openEdit(page, "");
+  // Drawing the picture waits until the check lets it finish.
+  await page.evaluate(() => {
+    const w = window as unknown as { releaseDecode: () => void };
+    const real = HTMLImageElement.prototype.decode;
+    HTMLImageElement.prototype.decode = function (this: HTMLImageElement) {
+      return new Promise<void>((resolve, reject) => {
+        w.releaseDecode = () => real.call(this).then(resolve, reject);
+      });
+    };
+  });
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dropAdmin(page);
+  await expect(dialog).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
+  await page.waitForTimeout(300);
+  expect((await sent(page)).map((each) => each.type)).not.toContain("setBotPicture");
+});
+
+test("F-037: a new connection to the gateway, still connected, closes the editor", async ({
+  page,
+}) => {
+  const dialog = await openEdit(page, "");
+  await dialog.getByRole("radio", { name: "Lanterns" }).click();
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: { ...(state.connection as object), connectedAt: Date.now() + 60_000 },
+    })),
+  );
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Change Otto's picture" })).toBeVisible();
 });

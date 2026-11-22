@@ -54,8 +54,11 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
-  /** How Edit picture's save ends: never answered, refused, or answered with a list that differs. */
-  picturesave: "hold" | "refused" | "unconfirmed" | null;
+  /**
+   * How Edit picture's save ends: never answered, refused, answered with a list that differs, or
+   * answered when the page calls `releasePictureSave()`.
+   */
+  picturesave: "hold" | "refused" | "unconfirmed" | "release" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -78,8 +81,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
     picturesave:
       params.get("picturesave") === "hold" ||
       params.get("picturesave") === "refused" ||
-      params.get("picturesave") === "unconfirmed"
-        ? (params.get("picturesave") as "hold" | "refused" | "unconfirmed")
+      params.get("picturesave") === "unconfirmed" ||
+      params.get("picturesave") === "release"
+        ? (params.get("picturesave") as "hold" | "refused" | "unconfirmed" | "release")
         : null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
@@ -1125,14 +1129,22 @@ export function accountCommand(
       if (params.picturesave === "refused")
         return Promise.reject(new Error("agents.update: INVALID_REQUEST (a gateway's own words)"));
       if (params.picturesave === "unconfirmed") return Promise.resolve({ confirmed: false });
-      const state = get();
-      set({
-        ...state,
-        bots: state.bots.map((bot) =>
-          bot.id === command.botId ? { ...bot, avatarUrl: command.avatar } : bot,
-        ),
-      });
-      return Promise.resolve({ confirmed: true });
+      const save = () => {
+        const state = get();
+        set({
+          ...state,
+          bots: state.bots.map((bot) =>
+            bot.id === command.botId ? { ...bot, avatarUrl: command.avatar } : bot,
+          ),
+        });
+        return { confirmed: true };
+      };
+      if (params.picturesave === "release")
+        return new Promise((resolve) => {
+          (globalThis as unknown as { releasePictureSave: () => void }).releasePictureSave = () =>
+            resolve(save());
+        });
+      return Promise.resolve(save());
     }
     case "removeBotFallbacks":
       put((a) => ({
