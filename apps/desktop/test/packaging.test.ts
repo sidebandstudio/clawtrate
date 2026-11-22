@@ -50,28 +50,48 @@ describe("packaging configuration", () => {
     const config = builderConfig({}, "45.3.2");
     expect(config.protocols).toEqual([{ name: "Clawtrate", schemes: ["clawtrate"] }]);
     const script = readFileSync(join(APP, config.nsis!.include!), "utf8");
-    const macro = (name: string) => {
+    /** A macro's statements in order, without comments or blank lines. */
+    const statements = (name: string) => {
       const start = script.indexOf(`!macro ${name}\n`);
       expect(start, name).toBeGreaterThanOrEqual(0);
-      return script.slice(start, script.indexOf("!macroend", start));
+      return script
+        .slice(start, script.indexOf("!macroend", start))
+        .split("\n")
+        .slice(1)
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith(";"));
     };
     const key = '"Software\\Classes\\clawtrate"';
+    const commandKey = '"Software\\Classes\\clawtrate\\shell\\open\\command"';
     const command = '\'"$INSTDIR\\${APP_EXECUTABLE_FILENAME}" -- "%1"\'';
-    // At the install's scope, with `--` before the link (src/main/links.ts).
-    const install = macro("customInstall");
-    expect(install).toContain(`WriteRegStr SHELL_CONTEXT ${key} "URL Protocol" ""`);
-    expect(install).toContain(
-      `WriteRegStr SHELL_CONTEXT "Software\\Classes\\clawtrate\\shell\\open\\command" "" ${command}`,
-    );
-    // Removed only when not updating, at the install's scope again, and only while it
-    // opens this installation.
-    const uninstall = macro("customUnInstall");
-    const guard = uninstall.indexOf("${if} $0 == " + command);
-    const removal = uninstall.indexOf(`DeleteRegKey SHELL_CONTEXT ${key}`);
-    expect(guard).toBeGreaterThan(uninstall.indexOf("${ifNot} ${isUpdated}"));
-    expect(guard).toBeGreaterThan(uninstall.lastIndexOf("SetShellVarContext all"));
-    expect(removal).toBeGreaterThan(guard);
-    expect(script.match(/DeleteRegKey/g)).toHaveLength(1);
+    // At the install's scope, replacing an entry there, with `--` before the link
+    // (src/main/links.ts).
+    expect(statements("customInstall")).toEqual([
+      `WriteRegStr SHELL_CONTEXT ${key} "" "URL:clawtrate"`,
+      `WriteRegStr SHELL_CONTEXT ${key} "URL Protocol" ""`,
+      `WriteRegStr SHELL_CONTEXT ${commandKey} "" ${command}`,
+    ]);
+    expect(statements("customUnInstall")).toEqual([
+      // Not on an update: the copy of the installer, in the current user's folder for
+      // either scope.
+      "${ifNot} ${isUpdated}",
+      '${if} $installMode == "all"',
+      "SetShellVarContext current",
+      "${endif}",
+      'Delete "$LOCALAPPDATA\\${APP_INSTALLER_STORE_FILE}"',
+      'RMDir "$LOCALAPPDATA\\${CLAWTRATE_UPDATER_DIR}"',
+      '${if} $installMode == "all"',
+      "SetShellVarContext all",
+      "${endif}",
+      // At the install's scope again: the link entry, only while it opens this installation.
+      "Push $0",
+      `ReadRegStr $0 SHELL_CONTEXT ${commandKey} ""`,
+      `\${if} $0 == ${command}`,
+      `DeleteRegKey SHELL_CONTEXT ${key}`,
+      "${endif}",
+      "Pop $0",
+      "${endif}",
+    ]);
   });
 
   it.each(["1.2.0", "1.2.0-beta.20261104.10"])(

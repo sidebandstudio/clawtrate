@@ -238,14 +238,17 @@ jobs:
           START_MENU: ${{ steps.install.outputs.start-menu }}
           DESKTOP: ${{ steps.install.outputs.desktop }}
         run: |
+          # A link entry another program has taken over since stays (packaging/installer.nsh).
+          $links = 'HKCU:\Software\Classes\clawtrate'
+          $other = '"' + (Join-Path $env:WINDIR 'System32\notepad.exe') + '" "%1"'
+          Set-Item -LiteralPath "$links\shell\open\command" -Value $other
           $run = Start-Process (Join-Path $env:DIR 'Uninstall Clawtrate.exe') -ArgumentList '/S' -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "the uninstaller exited with $($run.ExitCode)" }
-          # Everything the installer made: the app's folder, the copy of itself, its shortcuts and its three keys.
+          # Everything the installer made: the app's folder, the copy of itself, its shortcuts and its two keys.
           $owned = @(
             $env:DIR, $env:CACHE, $env:START_MENU, $env:DESKTOP,
             "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$env:GUID",
-            "HKCU:\Software\$env:GUID",
-            'HKCU:\Software\Classes\clawtrate'
+            "HKCU:\Software\$env:GUID"
           )
           # The uninstaller carries on from a copy of itself in the temporary folder, so wait for it.
           $deadline = (Get-Date).AddSeconds(60)
@@ -254,6 +257,9 @@ jobs:
             if ($left.Count -eq 0) { break }
             Start-Sleep -Seconds 1
           } while ((Get-Date) -lt $deadline)
+          # Read, then removed by the check itself, before anything else can fail.
+          $kept = (Get-ItemProperty -LiteralPath "$links\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+          Remove-Item -LiteralPath $links -Recurse -ErrorAction SilentlyContinue
           if ($left.Count -gt 0) {
             foreach ($path in $left) {
               $path
@@ -264,6 +270,8 @@ jobs:
             throw "the uninstaller left $($left.Count) of the installer's paths behind"
           }
           "removed: $($owned -join '; ')"
+          if ($kept -ne $other) { throw "the uninstaller removed or changed $links, which another program had taken over" }
+          "kept: $links, which opens $kept"
       # What a failed check saw: Playwright's error context for each failed test.
       - if: failure()
         uses: actions/upload-artifact@v7
