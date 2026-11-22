@@ -104,11 +104,17 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       /** The client's store, kept across a restart of the same host folder. */
       storage?: ReturnType<typeof memoryStorage>;
       identity?: string;
+      /** Whether OpenClaw there may run, asked before each script: the test's stand-in by default. */
+      launcher?: () => boolean;
     } = {},
   ) {
     const dir = options.dir ?? join(root, `host-${(count += 1)}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const world = { ...t.world, appDir: join(dir, "ssh") };
+    const world = {
+      ...t.world,
+      appDir: join(dir, "ssh"),
+      ...(options.launcher ? { launcher: options.launcher } : {}),
+    };
     const transport = new SshTransport(world, { spawn });
     let remote: RemoteSetup | null = null;
     const routes = new RouteStore(dir, {
@@ -1414,6 +1420,280 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
       rmSync(synthetic, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  describe("the read-only rule over SSH: with no verified launcher, OpenClaw there never runs", () => {
+    /** The LOOKs started since `from`: each is one `ssh … /bin/sh -s`. */
+    const looks = (from: number) =>
+      started.slice(from).filter((run) => run.args.includes("/bin/sh"));
+    const readOnly = { outcome: "cant-tell", reason: "read-only" };
+
+    it("the look and a saved route's restore at launch run nothing there, and the card offers Advanced", async () => {
+      let launcher = true;
+      const gate = () => launcher;
+      // A route connected while the stand-in may run, for the restore below.
+      const h = host({ launcher: gate });
+      await connected(h);
+      await h.remote.closeAll();
+      launcher = false;
+      // The look.
+      const fresh = host({ launcher: gate });
+      let calls = stub.calls().length;
+      let from = started.length;
+      await fresh.remote.there("devbox");
+      if (fresh.setup().phase === "key") await fresh.remote.trustKey();
+      expect(fresh.setup().phase).toBe("found");
+      expect(fresh.setup().look).toMatchObject(readOnly);
+      expect(looks(from).length).toBeGreaterThan(0);
+      expect(stub.calls().slice(calls)).toEqual([]);
+      // No Connect and no Start for it.
+      await expect(fresh.remote.connect()).rejects.toThrow();
+      await expect(fresh.remote.start()).rejects.toThrow();
+      // The saved route at launch: its LOOK runs nothing, so nothing is connected or sent.
+      const again = host({ dir: h.dir, storage: h.storage, launcher: gate });
+      calls = stub.calls().length;
+      from = started.length;
+      await again.client.start();
+      await again.remote.resume();
+      expect(looks(from).length).toBeGreaterThan(0);
+      expect(stub.calls().slice(calls)).toEqual([]);
+      expect(again.setup().look).toMatchObject(readOnly);
+      expect(again.fake.sockets).toEqual([]);
+      expect(again.client.state.connection.status).not.toBe("connected");
+      await again.remote.closeAll();
+      await fresh.remote.closeAll();
+    });
+
+    it("Pair's and Start's rechecks run nothing there, and CODE and START are refused before ssh starts", async () => {
+      let launcher = true;
+      const gate = () => launcher;
+      // Pair: the rule applies from the dialog on; its recheck's LOOK runs nothing.
+      let onAnswer = () => {};
+      const h = host({
+        launcher: gate,
+        answer: () => {
+          onAnswer();
+          return { confirmed: true, checked: false };
+        },
+      });
+      await lookOnDevbox(h);
+      onAnswer = () => (launcher = false);
+      let calls = stub.calls().length;
+      let from = started.length;
+      await h.remote.connect();
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(looks(from).length).toBeGreaterThan(0);
+      expect(stub.calls().slice(calls)).toEqual([]);
+      expect(h.routes.list()).toEqual([]);
+      // Start: the same.
+      const stopped = statusJson({ port: gateway.port, home: t.home, running: false });
+      stub.setStatus("default", stopped);
+      try {
+        launcher = true;
+        onAnswer = () => {};
+        await lookOnDevbox(h);
+        expect(h.setup().look?.outcome).toBe("stopped");
+        onAnswer = () => (launcher = false);
+        calls = stub.calls().length;
+        from = started.length;
+        await h.remote.start();
+        expect(h.setup().failure?.kind).toBe("changed");
+        expect(looks(from).length).toBeGreaterThan(0);
+        expect(stub.calls().slice(calls)).toEqual([]);
+        // The rule applying just after a recheck that ran: START itself is refused, nothing runs.
+        launcher = true;
+        onAnswer = () => {};
+        await lookOnDevbox(h);
+        let armed = false;
+        onAnswer = () => (armed = true);
+        onSpawn = (args) => {
+          if (armed && args.includes("/bin/sh")) {
+            armed = false;
+            launcher = false;
+          }
+        };
+        from = started.length;
+        await h.remote.start();
+        expect(h.setup().look).toMatchObject(readOnly);
+        expect(stub.calls().slice(calls)).not.toContain("gateway start");
+        // One script ran there, the recheck's LOOK: none for START.
+        expect(looks(from)).toHaveLength(1);
+      } finally {
+        onSpawn = null;
+        stub.setStatus("default", running());
+      }
+      // CODE, the same way.
+      launcher = true;
+      onAnswer = () => {};
+      await lookOnDevbox(h);
+      let armed = false;
+      onAnswer = () => (armed = true);
+      onSpawn = (args) => {
+        if (armed && args.includes("/bin/sh")) {
+          armed = false;
+          launcher = false;
+        }
+      };
+      try {
+        calls = stub.calls().length;
+        from = started.length;
+        const connects = h.fake.connects.length;
+        await h.remote.connect();
+        expect(h.setup().look).toMatchObject(readOnly);
+        expect(
+          stub
+            .calls()
+            .slice(calls)
+            .some((call) => call.startsWith("qr ")),
+        ).toBe(false);
+        expect(looks(from)).toHaveLength(1);
+        expect(h.fake.connects.length).toBe(connects);
+        expect(h.routes.list()).toEqual([]);
+      } finally {
+        onSpawn = null;
+      }
+      await h.remote.closeAll();
+    });
+
+    it("the forward's verification and its recovery run nothing there: the forward is never up, and the strip never says back", async () => {
+      let launcher = true;
+      const gate = () => launcher;
+      // A first forward whose verifying LOOK may not run OpenClaw: Connect fails and sends nothing.
+      const h = host({ launcher: gate });
+      await lookOnDevbox(h);
+      let calls = -1;
+      let from = -1;
+      onSpawn = (args) => {
+        if (args.includes("-L") && calls === -1) {
+          launcher = false;
+          calls = stub.calls().length;
+          from = started.length;
+        }
+      };
+      const connects = h.fake.connects.length;
+      try {
+        await h.remote.connect();
+      } finally {
+        onSpawn = null;
+      }
+      expect(h.setup().there?.failure?.kind).toBe("service-cant-tell");
+      expect(looks(from).length).toBeGreaterThan(0);
+      expect(stub.calls().slice(calls)).toEqual([]);
+      expect(h.fake.connects.length).toBe(connects);
+      expect(h.routes.list()).toEqual([]);
+      // A live route whose forward drops: each LOOK of its recovery runs nothing, and it isn't back.
+      launcher = true;
+      const r = host({ launcher: gate });
+      await connected(r);
+      const phases: string[] = [];
+      r.client.store.subscribe((state) => {
+        const phase = state.setup?.route?.phase;
+        if (phase && phases.at(-1) !== phase) phases.push(phase);
+      });
+      launcher = false;
+      calls = stub.calls().length;
+      from = started.length;
+      const sockets = r.fake.sockets.length;
+      await sshd.dropSessions();
+      // Two of the recovery's LOOKs: the first has ended when the second starts.
+      await until(() => looks(from).length >= 2, 30_000);
+      expect(stub.calls().slice(calls)).toEqual([]);
+      expect(phases).not.toContain("restored");
+      expect(r.setup().route?.phase).not.toBe("up");
+      expect(r.fake.sockets.length).toBe(sockets);
+      await r.remote.closeAll();
+    });
+  });
+
+  describe("consent and route ownership hold through the forward and the bots", () => {
+    it("a cancelled Connect sends and saves nothing: Back while the forward opens, or while the gateway says who it is, keeps no token, record or saved connection", async () => {
+      // Back while the forward opens: nothing is recorded and no code is sent.
+      const h = host();
+      await lookOnDevbox(h);
+      const connects = h.fake.connects.length;
+      onSpawn = (args) => {
+        if (args.includes("-L")) {
+          onSpawn = null;
+          h.remote.cancel();
+        }
+      };
+      try {
+        await h.remote.connect();
+      } finally {
+        onSpawn = null;
+      }
+      expect(h.fake.connects.length).toBe(connects);
+      expect(h.routes.list()).toEqual([]);
+      expect(h.storage.data.has("connection")).toBe(false);
+      await h.remote.closeAll();
+      // Back while the gateway's identity is read after the hello, with the queued disconnect
+      // slow: what the hello brought (the token, the saved connection) is never kept.
+      const storage = memoryStorage();
+      const remove = storage.delete;
+      let holding = false;
+      let releaseDelete = () => {};
+      storage.delete = async (key) => {
+        if (holding && key === "connection")
+          await new Promise<void>((resolve) => (releaseDelete = resolve));
+        return remove(key);
+      };
+      const g = host({ storage });
+      await lookOnDevbox(g);
+      let releaseIdentity = () => {};
+      g.fake.handlers["gateway.identity.get"] = () =>
+        new Promise((resolve) => {
+          releaseIdentity = () => resolve({ deviceId: "gateway-identity-1", publicKey: "key" });
+        });
+      const connecting = g.remote.connect();
+      await until(
+        () => g.fake.requests.some((request) => request.method === "gateway.identity.get"),
+        30_000,
+      );
+      const key = g.client.route!;
+      expect(g.fake.connects.length).toBeGreaterThan(0);
+      holding = true;
+      g.remote.cancel();
+      releaseIdentity();
+      await sleep(500);
+      expect(g.routes.hasToken(key)).toBe(false);
+      expect(storage.data.has("connection")).toBe(false);
+      expect(g.client.state.connection.gatewayId ?? null).toBeNull();
+      holding = false;
+      releaseDelete();
+      await connecting;
+      await until(() => g.client.state.connection.status === "idle", 10_000);
+      expect(g.routes.list()).toEqual([]);
+      expect(g.routes.hasToken(key)).toBe(false);
+      expect(storage.data.has("connection")).toBe(false);
+      await g.remote.closeAll();
+    });
+
+    it("an expired Connect sends and saves nothing: the dialog's lifetime passing while the forward opens records no route and sends no code", async () => {
+      let clock = Date.now();
+      const h = host({ now: () => clock });
+      await lookOnDevbox(h);
+      const connects = h.fake.connects.length;
+      const sockets = h.fake.sockets.length;
+      onSpawn = (args) => {
+        if (args.includes("-L")) {
+          onSpawn = null;
+          clock += 3 * 60_000;
+        }
+      };
+      try {
+        await h.remote.connect();
+      } finally {
+        onSpawn = null;
+      }
+      expect(h.setup().phase).toBe("failed");
+      expect(h.setup().failure?.kind).toBe("changed");
+      expect(h.fake.sockets.length).toBe(sockets);
+      expect(h.fake.connects.length).toBe(connects);
+      expect(h.routes.list()).toEqual([]);
+      expect(h.storage.data.has("connection")).toBe(false);
+      expect(h.client.route).toBeNull();
+      await h.remote.closeAll();
+    });
   });
 
   it("closing waits for every forward's ssh to end", async () => {

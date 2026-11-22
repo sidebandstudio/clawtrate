@@ -25,7 +25,14 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { memoryStorage } from "../../../packages/core/test/fake-gateway.ts";
-import { parseGatewayStatus, serviceOnPort, type LookFacts } from "../src/main/ssh/look.ts";
+import {
+  parseGatewayStatus,
+  remoteLauncherVerified,
+  serviceOnPort,
+  type LookFacts,
+} from "../src/main/ssh/look.ts";
+import { productionWorld } from "../src/main/ssh/world.ts";
+import { READ_ONLY_VERSIONS } from "../src/setup/look.ts";
 import { statusJson as statusJsonRecorded } from "./fixtures/openclaw-outputs.ts";
 import { approvalInstructionsFor } from "../src/host/runtime.ts";
 import {
@@ -747,6 +754,21 @@ describe("what the found card says over SSH", () => {
     const foreign = sshLook(facts({ gateways: [gateway({ listenerPids: [7, 8] })] }));
     expect(foreign.found).toBeNull();
     expect(foreign.look.outcome).toBe("cant-tell");
+  });
+
+  it("the read-only rule over SSH: production runs OpenClaw there in no version, and a program the LOOK ran nothing of is a can't-tell with no Connect or Start", () => {
+    // No version is verified read-only, and over SSH none can be told without running it.
+    expect(READ_ONLY_VERSIONS.size).toBe(0);
+    expect(remoteLauncherVerified()).toBe(false);
+    expect(productionWorld(tmpdir()).launcher?.()).toBe(false);
+    const held = sshLook(facts({ version: null, gateways: [], launcherHeld: true }));
+    expect(held.look).toMatchObject({ outcome: "cant-tell", reason: "read-only", version: null });
+    expect(held.found).toBeNull();
+    expect(held.stopped).toBeNull();
+    // Nothing found there is still said as it is: no program, or none and no signs of one.
+    expect(sshLook(facts({ program: null, launcherHeld: true })).look.outcome).toBe(
+      "program-missing",
+    );
   });
 
   it("reads each profile's own status: a stopped default beside Clawtrate's profile running on the same port is no Start", () => {

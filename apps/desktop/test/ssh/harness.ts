@@ -141,6 +141,8 @@ export function makeWorld(root: string): TestWorld {
     agent: "none",
     platform: process.platform,
     env: testEnv(),
+    // The test's stand-in `openclaw` has no launcher of its own: the scripts may run it.
+    launcher: () => true,
   };
   return {
     root,

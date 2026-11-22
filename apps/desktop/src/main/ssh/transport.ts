@@ -221,6 +221,8 @@ export type LookResult =
 /** What a CODE, START or STOP script found: the program's place and OpenClaw's answer, in memory. */
 export type ScriptResult =
   | { ok: true; program: ProgramPlace | null; answer: { text: string; exit: number } | null }
+  /** OpenClaw there may not run (`SshWorld.launcher`): no `ssh` was started. */
+  | { ok: false; kind: "read-only" }
   | Failed
   | NotSupportedHere
   | { ok: false; kind: "not-pinned" }
@@ -743,7 +745,9 @@ export class SshTransport {
     if (!client.ok) return client;
     if (!this.current(route)) return STALE;
     if (!this.known.get(route.alias, route.endpoint)) return { ok: false, kind: "not-pinned" };
-    const script = lookScript();
+    // Asked for each LOOK: without it the script finds the program and runs nothing of it.
+    const launcher = this.launcher();
+    const script = lookScript(undefined, launcher);
     const run = await runSsh(
       this.processes,
       this.world,
@@ -761,7 +765,7 @@ export class SshTransport {
     if (run.spawnFailed || run.exit === 255) return this.failed(route, runFailure(run));
     // The script ends with exit 0 after its last fact; anything else is not a whole answer.
     if (run.exit !== 0) return { ok: false, kind: "cant-tell", reason: "script-failed" };
-    const parsed = parseLookOutput(run.stdout, script.requestId);
+    const parsed = parseLookOutput(run.stdout, script.requestId, launcher);
     if (!parsed.ok) return { ok: false, kind: "cant-tell", reason: parsed.reason };
     return { ok: true, facts: parsed.facts };
   }
@@ -811,7 +815,18 @@ export class SshTransport {
     options: { signal?: AbortSignal } = {},
   ): Promise<ScriptResult | AppFilesUnsafe | StaleRoute> {
     if (!this.current(route)) return Promise.resolve(STALE);
+    // Every script runs OpenClaw there: none starts unless it may (`SshWorld.launcher`).
+    if (!this.launcher()) return Promise.resolve({ ok: false, kind: "read-only" });
     return this.track(guardedAsync(() => this.scriptInner(route, kind, values, options)));
+  }
+
+  /** Whether OpenClaw there may run now: the world's verdict, and never without one. */
+  private launcher(): boolean {
+    try {
+      return this.world.launcher?.() === true;
+    } catch {
+      return false;
+    }
   }
 
   /**

@@ -12,6 +12,7 @@ import {
   ROUTE_IDENTITY_CHANGED,
   ROUTE_IDENTITY_UNREAD,
   ROUTE_NOT_SAVED,
+  SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_GONE,
 } from "../src/client.ts";
 import { FakeGateway, helloOk, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
@@ -60,6 +61,25 @@ describe("a routed connection", () => {
     expect((gateway.connects[0] as { auth: { bootstrapToken: string } }).auth.bootstrapToken).toBe(
       "b".repeat(43),
     );
+  });
+
+  it("asks its host's consent again just before the first frame with a credential: one that ran out sends no code and keeps nothing", async () => {
+    const { gateway, storage, client } = setup();
+    await client.start();
+    let consent = true;
+    await client.connectRoute({
+      url: "ws://127.0.0.1:50001",
+      route: ROUTE,
+      code: { bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+      setup: { check: () => true, consent: () => consent },
+    });
+    // The dialog's lifetime passes after Connect was handed over, before the sign-in goes.
+    consent = false;
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+    expect(gateway.connects).toEqual([]);
+    expect(storage.data.has(ROUTE_TOKEN)).toBe(false);
+    expect(storage.data.has("connection")).toBe(false);
   });
 
   it("comes back on another address with the route's own token, keeps what is on screen, and sends nothing while held", async () => {

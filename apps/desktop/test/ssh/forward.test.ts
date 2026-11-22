@@ -168,6 +168,24 @@ describe("the forward's states", () => {
     expect(h.forward.state.phase).toBe("up");
   });
 
+  it("takes the gateway's credential-free health answer as alive only: never identity or consent, so without a LOOK that names the service it is never up", async () => {
+    // Every connection through it answers as HTTP; the LOOK can't say which service (as with the
+    // read-only rule, when it runs nothing of OpenClaw there).
+    const h = harness(
+      [{ kind: "cant-tell" }, { kind: "cant-tell" }, { kind: "cant-tell" }],
+      ["http", "http", "http"],
+    );
+    h.forward.open();
+    await h.up();
+    await h.advance(1000);
+    await h.up();
+    await h.advance(2000);
+    await h.up();
+    expect(h.verifyCalls()).toBe(3);
+    expect(h.states.some((s) => s.phase === "up")).toBe(false);
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "cant-tell" } });
+  });
+
   it("runs one LOOK on the pinned account when the gateway's port closed through a live SSH route, and says stopped only when it is", async () => {
     const h = harness([{ kind: "not-running" }], ["gateway-closed"]);
     h.forward.open();

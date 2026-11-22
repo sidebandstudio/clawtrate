@@ -66,6 +66,9 @@ const empty = (outcome: SetupLook["outcome"], reason: SetupLook["reason"] = null
   others: [],
 });
 
+/** The card for an OpenClaw there that Clawtrate doesn't run (`remoteLauncherVerified`). */
+export const readOnlyLook = (): SetupLook => empty("cant-tell", "read-only");
+
 /** The found card's result from the LOOK's facts, and what Connect or Start would act on. */
 export function sshLook(facts: LookFacts): SshLook {
   const program = facts.program;
@@ -76,6 +79,8 @@ export function sshLook(facts: LookFacts): SshLook {
       signs.defaultState || signs.defaultService || signs.clawtrateState || signs.clawtrateService;
     return { look: empty(seen ? "program-missing" : "not-found"), ...none };
   }
+  // The program there is one the LOOK may not run: nothing of it ran, and Advanced is offered.
+  if (facts.launcherHeld) return { look: readOnlyLook(), ...none };
   if (facts.version === "unreadable" || facts.version === null || facts.programSum === null)
     return { look: empty("cant-tell", "shape"), ...none };
   // The default profile first, then Clawtrate's own: the only two the look covers.

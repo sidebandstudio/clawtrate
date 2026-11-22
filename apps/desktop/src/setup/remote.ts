@@ -32,6 +32,7 @@ import {
   ROUTE_IDENTITY_CHANGED,
   ROUTE_IDENTITY_UNREAD,
   SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   type ApprovalPlace,
   type ClawtrateClient,
@@ -53,7 +54,7 @@ import type { HostKeyCheck, Route, SshTransport } from "../main/ssh/transport.ts
 import { OPERATION_LIFETIME_MS, type Confirmation } from "./controller.ts";
 import { parseSetupCode } from "./parse.ts";
 import { sshRouteKey, type RouteStore, type SshRouteRecord } from "./routes.ts";
-import { sshLook, type SshLook } from "./ssh-look.ts";
+import { readOnlyLook, sshLook, type SshLook } from "./ssh-look.ts";
 
 export { sshRouteKey } from "./routes.ts";
 
@@ -256,6 +257,19 @@ export class RemoteSetup {
 
   private failSetup(kind: SetupFailure["kind"]): void {
     this.publish({ ...this.state, phase: "failed", failure: setupFailure(kind) });
+  }
+
+  /** OpenClaw there may not run: nothing ran, and the card offers Advanced (`readOnlyLook`). */
+  private showReadOnly(): void {
+    this.found = null;
+    this.publish({
+      ...this.state,
+      phase: "found",
+      step: 0,
+      look: readOnlyLook(),
+      failure: null,
+      there: this.withThere({ failure: null }),
+    });
   }
 
   // Channels --------------------------------------------------------------------
@@ -889,6 +903,10 @@ export class RemoteSetup {
         programSum: fresh.programSum,
       });
       if (attempt !== this.attempt) return;
+      if (!made.ok && made.kind === "read-only") {
+        this.showReadOnly();
+        return;
+      }
       if (!made.ok) {
         if (
           made.kind === "failed" ||
@@ -928,16 +946,32 @@ export class RemoteSetup {
     this.publish({ ...this.state, step: 1 });
     const channel = await this.openChannel(route, fresh.found, record, !known, attempt);
     if (!channel) return;
+    // The forward took its time: the consent and the route are still this attempt's, or nothing
+    // is recorded or sent, and the forward goes.
+    if (!this.stillHolds(consent, attempt)) {
+      if (attempt !== this.attempt) return;
+      await this.letGoPending();
+      if (attempt === this.attempt) this.failSetup("changed");
+      return;
+    }
     // The route is recorded before its first token, which only the store keeps.
     this.options.routes.put(record);
     this.publish({ ...this.state, step: 2 });
-    this.watchConnect(attempt, key, channel.url);
-    await this.options.client.connectRoute({
+    const client = this.options.client;
+    // The selection this Connect makes: only its own connection and bots speak for it.
+    const selection = client.nextSelection();
+    this.watchConnect(attempt, key, channel.url, selection);
+    await client.connectRoute({
       url: channel.url,
       route: key,
       identity: record.identity,
       ...(code ? { code } : {}),
-      setup: { check: () => this.isCurrent(channel) },
+      setup: {
+        // Every socket, retries included: this attempt's, on its own channel while current.
+        check: () => attempt === this.attempt && this.route === route && this.isCurrent(channel),
+        // The dialog's consent, asked again just before the first frame with a credential.
+        consent: () => this.stillHolds(consent, attempt),
+      },
     });
   }
 
@@ -998,12 +1032,17 @@ export class RemoteSetup {
     });
   }
 
-  /** Follows Connect's connection on `url`, its channel, until the bots are read, or it failed (§7). */
-  private watchConnect(attempt: number, key: string, url: string): void {
+  /**
+   * Follows Connect's connection on `url`, its channel, made as `selection`,
+   * until the bots are read, or it failed (§7).
+   */
+  private watchConnect(attempt: number, key: string, url: string, selection: number): void {
     this.stopWatching();
     const client = this.options.client;
     const check = (state: ClawtrateState) => {
-      if (attempt !== this.attempt || client.route !== key) return;
+      // This attempt's own route and selection only: another choice since, even of this route,
+      // says nothing about it, and nothing is kept for it.
+      if (attempt !== this.attempt || client.route !== key || !client.isSelected(selection)) return;
       const { connection, discovery } = state;
       // Only this channel's connection: what the store still says of the one it replaces (another
       // route, connected) is not this attempt's.
@@ -1012,7 +1051,8 @@ export class RemoteSetup {
         // The client reads the gateway's identity before it says connected; never live without it.
         if (!connection.gatewayId) return;
         this.acceptPairing(key, connection.gatewayId);
-        if (discovery.status === "ready") {
+        // Ready only for this selection's own read of the bots.
+        if (discovery.status === "ready" && client.readyFor(selection)) {
           this.stopWatching();
           void this.becomeLive(key, connection.gatewayId);
           this.publish({ ...this.state, phase: "done", step: 3 });
@@ -1025,6 +1065,18 @@ export class RemoteSetup {
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
+        // A saved pairing for this route appeared before the code went: nothing was sent, and the
+        // card asks for consent to reuse it.
+        if (code === SETUP_PAIRING_APPEARED) {
+          void this.letGoPending();
+          this.publish({
+            ...this.state,
+            phase: "found",
+            failure: null,
+            look: this.state.look && { ...this.state.look, access: "paired" },
+          });
+          return;
+        }
         const identity = code === ROUTE_IDENTITY_CHANGED || code === ROUTE_IDENTITY_UNREAD;
         const pending = this.pending;
         // Not the route's gateway, or no saying: the same cleanup as on a restore (retireIdentity).
@@ -1097,6 +1149,9 @@ export class RemoteSetup {
     if (!pending) return;
     const client = this.options.client;
     if (client.route === pending.record.key && this.live?.record.key !== pending.record.key) {
+      // At once, before the queued disconnect: the attempt's socket closes, so nothing its hello
+      // brought (a token, the saved connection) is kept after it was let go.
+      client.holdRoute(pending.record.key);
       await client.disconnect();
     }
     if (this.live?.forward !== pending.forward) await pending.forward.close();
@@ -1322,6 +1377,10 @@ export class RemoteSetup {
       programSum: fresh.programSum,
     });
     if (attempt !== this.attempt) return;
+    if (!ran.ok && ran.kind === "read-only") {
+      this.showReadOnly();
+      return;
+    }
     // The script refused before START: its program wasn't the one the look named. Nothing ran.
     if (ran.ok && (ran.program !== fresh.program || !ran.answer)) {
       this.failThere({ kind: "start-not-run", cause: null, exit: null });
@@ -1602,7 +1661,8 @@ export class RemoteSetup {
       return;
     }
     this.publish({ ...this.state, step: 2 });
-    this.watchConnect(attempt, record.key, channel.url);
+    const selection = this.options.client.nextSelection();
+    this.watchConnect(attempt, record.key, channel.url, selection);
     await this.options.client.connectRoute({
       url: channel.url,
       route: record.key,

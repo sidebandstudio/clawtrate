@@ -1448,11 +1448,12 @@ export class ClawtrateClient {
      */
     identity?: string | null;
   }): Promise<void> {
+    // Numbered as it is asked, as every choice of gateway is, even one refused below.
+    const selection = ++this.selectionAsked;
     const url = validateGatewayUrl(options.url);
     if (!ROUTE_KEY.test(options.route)) throw new Error("Not a route key.");
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     const stops = this.stops;
-    const selection = ++this.selectionAsked;
     return this.changeConnection(async () => {
       if (stops !== this.stops) return;
       this.selectionApplied = selection;

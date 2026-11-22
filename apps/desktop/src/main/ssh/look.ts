@@ -1,7 +1,9 @@
 // The LOOK script, run on the other computer as `/bin/sh -s` with the script on
 // standard input (docs/design/setup.md, section 19), and the parser for what it
-// prints. The script is a constant; its one value is the run's request id,
-// which the host makes and validates. It clears every OPENCLAW_ variable the
+// prints. The script is a constant; its values are the run's request id,
+// which the host makes and validates, and whether it may run the program it
+// finds (`remoteLauncherVerified`): without that it finds the program and runs
+// nothing. It clears every OPENCLAW_ variable the
 // login left, so no inherited profile, state, config or port changes what the
 // two profiles name, looks only in fixed places, and prints one JSON line per
 // fact between a begin and an end line carrying that id, so anything a login
@@ -32,10 +34,26 @@ export type ProgramPlace = (typeof PROGRAM_PLACES)[number];
  */
 export const CLEAR_OPENCLAW = String.raw`for v in $(env | sed -n 's/^\(OPENCLAW_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v" || exit 65; done`;
 
+/**
+ * Whether the LOOK, CODE and START may run the other computer's OpenClaw.
+ * Its launcher replays pending package-lifecycle work before it handles any
+ * command, `--version` included, so a command runs only in a version whose
+ * pinned source shows a read-only path past that branch (`READ_ONLY_VERSIONS`,
+ * docs/decisions.md, "What the look runs"). The LOOK can't read the version
+ * there without running the program, and none is verified yet: production
+ * runs it nowhere, and the found card offers Advanced instead. A test's world
+ * names its own stand-in.
+ */
+export const remoteLauncherVerified = (): boolean => false;
+
 /** The script's body. Edit with care: a test runs it under several shells and a hostile login. */
 export const LOOK_SCRIPT_BODY = String.raw`set -eu
 case "$request_id" in
   *[!0-9a-f-]*|'') exit 64 ;;
+esac
+case "$run_launcher" in
+  0|1) ;;
+  *) exit 64 ;;
 esac
 ${CLEAR_OPENCLAW}
 # Stop after 30 seconds, whatever is still running.
@@ -64,7 +82,7 @@ run() {
   case "$code" in ''|*[!0-9]*) code=255 ;; esac
   printf '","exit":%s}\n' "$code"
 }
-if [ -n "$prog" ]; then
+if [ -n "$prog" ] && [ "$run_launcher" = 1 ]; then
   run version --version
   run status-default gateway status --json
   if [ -d "$HOME/.openclaw-clawtrate" ]; then
@@ -79,10 +97,19 @@ line end ",\"id\":\"$request_id\""
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The script as sent: the one assignment the host writes, then the constant body. */
-export function lookScript(requestId: string = randomUUID()): { requestId: string; text: string } {
+/**
+ * The script as sent: the two assignments the host writes, then the constant
+ * body. With `launcher` false (the default) it runs no program.
+ */
+export function lookScript(
+  requestId: string = randomUUID(),
+  launcher = false,
+): { requestId: string; text: string } {
   if (!REQUEST_ID.test(requestId)) throw new Error("Not a request id.");
-  return { requestId, text: `request_id='${requestId}'\n${LOOK_SCRIPT_BODY}` };
+  return {
+    requestId,
+    text: `request_id='${requestId}'\nrun_launcher='${launcher ? 1 : 0}'\n${LOOK_SCRIPT_BODY}`,
+  };
 }
 
 export type Version = { year: number; month: number; day: number; build: string | null };
@@ -118,6 +145,8 @@ export type LookFacts = {
   programSum: string | null;
   /** From `openclaw --version`; null when no program, "unreadable" when it answered something else. */
   version: Version | "unreadable" | null;
+  /** A program was found and the LOOK ran nothing of it (`remoteLauncherVerified`). */
+  launcherHeld?: true;
   gateways: Array<
     GatewayStatus | { profile: "default" | "clawtrate"; exit: number; unreadable: true }
   >;
@@ -285,8 +314,12 @@ export function parseGatewayStatus(
 
 const flag = (value: unknown) => (value === 0 || value === 1 ? value === 1 : null);
 
-/** The script's standard output, parsed in memory. */
-export function parseLookOutput(stdout: string, requestId: string): LookParse {
+/**
+ * The script's standard output, parsed in memory. `launcher`: whether the
+ * script was allowed to run the program; when it wasn't, any answer of the
+ * program is malformed.
+ */
+export function parseLookOutput(stdout: string, requestId: string, launcher = true): LookParse {
   if (stdout.length > MAX_LOOK_OUTPUT) return { ok: false, reason: "too-large" };
   const lines = stdout.split("\n").map((line) => line.replace(/\r$/, ""));
   const begin = lines.findIndex((line) => line === `{"k":"begin","id":"${requestId}"}`);
@@ -327,16 +360,15 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
       case "end": {
         if (fact.id !== requestId) return { ok: false, reason: "malformed" };
         // Every fact the script always prints, and each the program and the state it found call for.
+        const ran = Boolean(facts.program) && launcher;
         const needed = ["uname", "signs"];
-        if (facts.program) needed.push("version", "status-default");
-        if (facts.signs.clawtrateState && facts.program) needed.push("status-clawtrate");
+        if (ran) needed.push("version", "status-default");
+        if (facts.signs.clawtrateState && ran) needed.push("status-clawtrate");
         if (needed.some((name) => !seen.has(name))) return { ok: false, reason: "incomplete" };
-        if (
-          !facts.program &&
-          ["version", "status-default", "status-clawtrate"].some((n) => seen.has(n))
-        ) {
+        if (!ran && ["version", "status-default", "status-clawtrate"].some((n) => seen.has(n))) {
           return { ok: false, reason: "malformed" };
         }
+        if (facts.program && !launcher) facts.launcherHeld = true;
         return { ok: true, facts, noiseLines: begin };
       }
       case "uname": {

@@ -320,6 +320,10 @@ const CANT_TELL: Record<string, string> = {
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
 };
 
+/** Over SSH the version isn't read without running OpenClaw, so the look ran nothing there. */
+const SSH_READ_ONLY =
+  "OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate found its program on that computer and ran nothing. Use Advanced with that gateway's address and a token.";
+
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
   look,
@@ -485,7 +489,11 @@ function LookResult({
               : `Clawtrate couldn't tell what is on ${there ? "that" : "this"} computer`
           }
         >
-          <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
+          <Lede>
+            {there && look.reason === "read-only"
+              ? SSH_READ_ONLY
+              : CANT_TELL[look.reason ?? "shape"]}
+          </Lede>
           <Actions>
             {advanced}
             <Quiet onClick={lookAgain}>Look again</Quiet>

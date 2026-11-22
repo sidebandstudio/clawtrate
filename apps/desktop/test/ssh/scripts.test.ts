@@ -99,7 +99,7 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
 
   it("runs only the program file the LOOK found, by its place and checksum: a file changed since, or another place, runs nothing", () => {
     // The LOOK reports the place and the checksum the host then hands to the scripts.
-    const look = lookScript();
+    const look = lookScript(undefined, true);
     const looked = parseLookOutput(run(look.text).stdout, look.requestId);
     if (!looked.ok) throw new Error(looked.reason);
     expect(looked.facts.program).toBe("~/.openclaw/bin/openclaw");
@@ -117,6 +117,41 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     expect(
       parseScriptOutput("code", run(elsewhere.text).stdout, elsewhere.requestId),
     ).toMatchObject({ ok: true, program: null });
+    expect(calls()).toEqual([]);
+  });
+
+  it("the read-only rule: a LOOK not allowed to run the launcher finds the program and its checksum and runs nothing of it, and a value no host writes ends it first", () => {
+    rmSync(join(home, "calls"), { force: true });
+    const look = lookScript();
+    const out = run(look.text);
+    expect(out.status).toBe(0);
+    const held = parseLookOutput(out.stdout, look.requestId, false);
+    if (!held.ok) throw new Error(held.reason);
+    expect(held.facts).toMatchObject({
+      program: "~/.openclaw/bin/openclaw",
+      programSum: sum,
+      version: null,
+      gateways: [],
+      launcherHeld: true,
+    });
+    // The launcher never started: not even `--version`.
+    expect(calls()).toEqual([]);
+    // Read as if it had been allowed, the same output lacks the program's answers.
+    expect(parseLookOutput(out.stdout, look.requestId, true)).toEqual({
+      ok: false,
+      reason: "incomplete",
+    });
+    // An answer of the program in a LOOK that wasn't allowed to run it isn't read.
+    const ran = lookScript(undefined, true);
+    expect(parseLookOutput(run(ran.text).stdout, ran.requestId, false)).toEqual({
+      ok: false,
+      reason: "malformed",
+    });
+    rmSync(join(home, "calls"), { force: true });
+    for (const value of ["", "2", "1;id", "$(id)"]) {
+      const text = look.text.replace("run_launcher='0'", `run_launcher='${value}'`);
+      expect(run(text).status).toBe(64);
+    }
     expect(calls()).toEqual([]);
   });
 
@@ -139,7 +174,7 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     // The LOOK clears them the same way.
     rmSync(join(home, "env"), { force: true });
     rmSync(join(home, "calls"), { force: true });
-    const look = lookScript();
+    const look = lookScript(undefined, true);
     expect(run(look.text, { OPENCLAW_PROFILE: "work" }).status).toBe(0);
     expect(calls().length).toBeGreaterThan(0);
     expect(seen()).toBe("");

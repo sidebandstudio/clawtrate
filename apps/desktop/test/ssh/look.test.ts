@@ -405,10 +405,13 @@ describe("the gateway service on a port", () => {
 });
 
 describe("the LOOK script", () => {
-  it("is a constant whose one value is a validated request id", () => {
+  it("is a constant whose values are a validated request id and whether it may run the program, which it may not unless told", () => {
     const { requestId, text } = lookScript(ID);
     expect(requestId).toBe(ID);
-    expect(text).toBe(`request_id='${ID}'\n${LOOK_SCRIPT_BODY}`);
+    expect(text).toBe(`request_id='${ID}'\nrun_launcher='0'\n${LOOK_SCRIPT_BODY}`);
+    expect(lookScript(ID, true).text).toBe(
+      `request_id='${ID}'\nrun_launcher='1'\n${LOOK_SCRIPT_BODY}`,
+    );
     expect(() => lookScript("x'; rm -rf ~; '")).toThrow();
     expect(lookScript().requestId).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -472,7 +475,7 @@ describe("the LOOK script", () => {
   const runUnder = (shell: string, homeDir: string) =>
     new Promise<{ status: number | null; parsed: ReturnType<typeof parseLookOutput> }>(
       (resolve) => {
-        const script = lookScript();
+        const script = lookScript(undefined, true);
         const env = testEnv({
           HOME: homeDir,
           ZDOTDIR: homeDir,

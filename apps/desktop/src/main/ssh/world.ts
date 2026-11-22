@@ -11,6 +11,7 @@
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { remoteLauncherVerified } from "./look.ts";
 import { physicalPath, within } from "./paths.ts";
 import { CONFIG_PATH } from "./route-config.ts";
 
@@ -38,6 +39,12 @@ export type SshWorld = {
   platform: NodeJS.Platform;
   /** The environment the app runs in; `ssh` gets only a few of its values (`childEnv`). */
   env: NodeJS.ProcessEnv;
+  /**
+   * Whether the LOOK, CODE and START may run the OpenClaw they find there,
+   * asked before each: production's `remoteLauncherVerified`. Without it,
+   * nothing of OpenClaw runs there.
+   */
+  launcher?: () => boolean;
 };
 
 export type SshAgent = "none" | { socket: string } | "windows-pipe";
@@ -71,6 +78,7 @@ export function productionWorld(appDir: string, env: NodeJS.ProcessEnv = process
     agent: chooseAgent(platform, env),
     platform,
     env,
+    launcher: remoteLauncherVerified,
   };
 }
 
