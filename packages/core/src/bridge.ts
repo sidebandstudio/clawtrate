@@ -87,6 +87,8 @@ export type BridgeCommand =
   | { type: "connectDevGateway" }
   /** Forget the gateway at this address, the one the viewer shows; refused if another is selected. */
   | { type: "disconnect"; gatewayUrl: string }
+  /** A name for this gateway on this device; empty removes it. Never sent to the gateway. */
+  | { type: "nameGateway"; gatewayUrl: string; name: string }
   /** Setting up on the host's computer (`setup.ts`): look there, stop, pair with what was found, start over. */
   | { type: "setupLook" }
   | { type: "setupCancel" }
@@ -1177,6 +1179,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       )
         throw new Error("invalid url");
       return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "nameGateway":
+      if (
+        typeof command.gatewayUrl !== "string" ||
+        command.gatewayUrl.length > MAX_GATEWAY_URL_CHARS
+      )
+        throw new Error("invalid url");
+      if (typeof command.name !== "string" || command.name.length > 1000)
+        throw new Error("invalid name");
+      return { type: "nameGateway", gatewayUrl: command.gatewayUrl, name: command.name };
     case "connectDevGateway":
     case "suspend":
     case "retry":
@@ -1735,6 +1746,8 @@ class ViewerSession implements BridgeSession {
         return client.connect(policy.devGateway);
       case "disconnect":
         return client.disconnect(command.gatewayUrl);
+      case "nameGateway":
+        return client.nameGateway(command.gatewayUrl, command.name);
       case "setupLook":
       case "setupCancel":
       case "setupConnect":

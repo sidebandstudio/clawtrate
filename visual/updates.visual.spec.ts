@@ -72,9 +72,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
                 await expect(
                   page.locator(size.phone ? ".rail-top" : ".rail-footer"),
                 ).toHaveScreenshot(`updates/footer-${size.name}-${theme}.png`);
-              await expect(
-                page.locator(size.phone ? ".rail-status" : ".gateway-pill"),
-              ).toBeVisible();
+              await expect(page.locator(".gateway-pill")).toBeVisible();
               await expect(footer).toHaveCount(1);
               if (size.phone) {
                 const box = await footer.boundingBox();

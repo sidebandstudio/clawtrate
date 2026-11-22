@@ -7,7 +7,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
-import { ACTIVE_RUN_MESSAGE, avatarFor } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE, avatarFor, MAX_GATEWAY_NAME_CHARS } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -19,6 +19,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { Avatar, type FaceState } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
@@ -43,7 +44,6 @@ import {
   SearchIcon,
   SectionIcon,
   SettingsIcon,
-  DownloadIcon,
   SortIcon,
   StarIcon,
   TrashIcon,
@@ -512,8 +512,9 @@ export function Rail({
   onTheme,
   bubbles,
   onBubbles,
-  updateEntry,
+  top,
   onOpenSettings,
+  settingsKeys = "⌘,",
   onNewBot,
   inert,
   interactive = false,
@@ -543,8 +544,11 @@ export function Rail({
   onTheme: (choice: ThemeChoice) => void;
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
-  updateEntry: boolean;
+  /** The one-pane layout's brand and update button, at the start of the top band (titlebar.md). */
+  top?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
+  /** Settings' keys as this platform names them, for the gear's tooltip. */
+  settingsKeys?: string;
   /**
    * "New bot" in the "+" menu (visual-language.md section 7, bots.md section
    * 3); absent, with the "+" itself, when the connection may not write.
@@ -636,7 +640,9 @@ export function Rail({
       document.documentElement.removeAttribute("data-page-hidden");
     };
   }, []);
-  const gateway = gatewayLabel(connection.gatewayUrl);
+  const address = gatewayLabel(connection.gatewayUrl);
+  // The name given on this device, or else the address (titlebar.md, section 4).
+  const gateway = connection.gatewayName ?? address;
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
   const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
@@ -1234,6 +1240,47 @@ export function Rail({
         ...(connection.serverVersion ? [`OpenClaw ${connection.serverVersion}`] : []),
       ],
     },
+    ...(forgetUrl
+      ? [
+          {
+            kind: "item",
+            label: connection.gatewayName ? "Rename gateway…" : "Name this gateway…",
+            icon: <EditIcon />,
+            onSelect: () => {
+              const trigger = menu?.trigger ?? null;
+              setMenu(null);
+              setDialog({
+                title: connection.gatewayName ? "Rename gateway" : "Name this gateway",
+                body: (
+                  <>
+                    <p>
+                      The name shows in the sidebar instead of the address. It stays on this device
+                      and is never sent to the gateway.
+                    </p>
+                    <p className="rail-dialog-address">{address}</p>
+                  </>
+                ),
+                confirm: { label: "Save" },
+                field: {
+                  label: "Name",
+                  placeholder: "For example, Devbox",
+                  maxLength: MAX_GATEWAY_NAME_CHARS,
+                  initial: connection.gatewayName ?? "",
+                  optional: true,
+                  hint: "Leave it empty to show the address.",
+                },
+                onConfirm: async (name) => {
+                  await bridge.invoke({ type: "nameGateway", gatewayUrl: forgetUrl, name });
+                  setAnnouncement(name.trim() ? `Named ${name.trim()}.` : "Showing the address.");
+                  // Back to the card, which now carries the name.
+                  requestAnimationFrame(() => trigger?.focus());
+                },
+                returnTo: trigger,
+              });
+            },
+          } satisfies MenuEntry,
+        ]
+      : []),
     { kind: "rule" },
     { kind: "label", text: "Theme" },
     ...(
@@ -1931,33 +1978,10 @@ export function Rail({
     );
   };
 
-  const updateButton = updateEntry && (
-    <button
-      type="button"
-      className="icon-button update-entry"
-      aria-label="Open Updates"
-      title="Open Updates"
-      onClick={() => onOpenSettings("updates")}
-    >
-      <DownloadIcon />
-    </button>
-  );
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>
       <div className="rail-top">
-        <button
-          type="button"
-          className="icon-button rail-status"
-          aria-haspopup="menu"
-          aria-expanded={menu?.kind === "gateway"}
-          aria-label={gatewayName}
-          onClick={(event) => openGatewayMenu(event.currentTarget)}
-          onKeyDown={onGatewayKey}
-        >
-          <SettingsIcon />
-          <span className="status-dot" data-status={dot} />
-        </button>
-        {updateButton}
+        {top}
         {query === null ? (
           <>
             {onOpenRoutines && (
@@ -2196,10 +2220,19 @@ export function Rail({
           <span className="status-dot" data-status={dot} />
           <span className="gateway-pill-text" aria-hidden="true">
             <strong>{gateway}</strong>
-            <span>{words}</span>
+            {/* Named and connected: the address. Otherwise the state, which matters more. */}
+            <span>{connection.gatewayName && words === "Connected" ? address : words}</span>
           </span>
         </button>
-        {updateButton}
+        <button
+          type="button"
+          className="icon-button settings-gear"
+          aria-label="Settings"
+          title={`Settings (${settingsKeys})`}
+          onClick={() => onOpenSettings()}
+        >
+          <SettingsIcon />
+        </button>
       </div>
       {menu?.kind === "gateway" && (
         <Menu

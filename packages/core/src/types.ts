@@ -79,6 +79,11 @@ export type ConnectionState = {
    * does not give it.
    */
   gatewayId: string | null;
+  /**
+   * The name the person gave this address on this device (`gateway-names.ts`),
+   * or null. Local only: never sent to the gateway.
+   */
+  gatewayName: string | null;
   serverVersion: string | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
@@ -493,6 +498,7 @@ export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
   gatewayId: null,
+  gatewayName: null,
   serverVersion: null,
   protocol: null,
   scopes: [],

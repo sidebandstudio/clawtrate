@@ -251,6 +251,14 @@ import {
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
 import { protectedGatewayUrl, validateGatewayUrl } from "./gateway-url.ts";
 import {
+  GATEWAY_NAMES_KEY,
+  gatewayNameFor,
+  readGatewayNames,
+  withGatewayName,
+  writeGatewayNames,
+  type GatewayNames,
+} from "./gateway-names.ts";
+import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
   CREATION,
@@ -1056,9 +1064,22 @@ export class ClawtrateClient {
    */
   readonly store: Store<ClawtrateState> = createStore(initialState, (next) =>
     withAlarm(
-      enforceState(next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice)),
+      enforceState(
+        this.withGatewayName(
+          next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice),
+        ),
+      ),
     ),
   );
+  /** The names given to gateways on this device, from the host's storage (`gateway-names.ts`). */
+  private gatewayNames: GatewayNames | undefined;
+  /** The current address's name, on every state written, so no reset of the connection loses it. */
+  private withGatewayName(next: ClawtrateState): ClawtrateState {
+    const name = gatewayNameFor(this.gatewayNames ?? [], next.connection.gatewayUrl);
+    return next.connection.gatewayName === name
+      ? next
+      : { ...next, connection: { ...next.connection, gatewayName: name } };
+  }
   /**
    * The host's setup slice (`setup.ts`), kept through every reset of the
    * state, since the host alone writes it (`setSetup`).
@@ -1529,6 +1550,9 @@ export class ClawtrateClient {
     const identity = await this.loadIdentity();
     if (stops !== this.stops) return;
     this.setConnection({ deviceId: identity.deviceId });
+    this.gatewayNames = readGatewayNames(
+      await this.host.storage.get(GATEWAY_NAMES_KEY).catch(() => null),
+    );
     // A turn limit the person chose earlier, unless the host was given one.
     if (this.options.turnLimitMs === undefined) {
       const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
@@ -5834,6 +5858,19 @@ export class ClawtrateClient {
    * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
    * already going are timed against the new limit from when they started.
    */
+  /**
+   * Name the selected gateway on this device, or remove its name with an empty
+   * one. Only the address the person saw: another viewer may have changed it.
+   * Kept in the host's storage first; the gateway is never told.
+   */
+  async nameGateway(gatewayUrl: string, name: string): Promise<void> {
+    if (this.state.connection.gatewayUrl !== gatewayUrl) throw new GatewayChangedError();
+    const next = withGatewayName(this.gatewayNames ?? [], gatewayUrl, name);
+    await this.host.storage.set(GATEWAY_NAMES_KEY, writeGatewayNames(next));
+    this.gatewayNames = next;
+    this.store.update((state) => ({ ...state }));
+  }
+
   async setTurnLimit(minutes: number): Promise<void> {
     if (!validTurnLimit(minutes))
       throw new Error(

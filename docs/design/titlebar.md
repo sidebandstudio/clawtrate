@@ -39,7 +39,7 @@ On Windows the native title bar stays, so the brand appears under it. That is re
 ### One pane (below 688 px: the phone, a narrow browser)
 
 - There is no title bar row. The mark (24 px, without the wordmark) and the Beta pill sit at the left of `.rail-top` in the list view. Without the wordmark, the mark still says which app this is.
-- The update button follows them in its round form: 32 px, or 40 px on touch. Its words are in its tooltip and accessible name. Routines, Sort, Search and "+" stay at the right. At 390 px that is 24 + 42 px of brand and five 40 px buttons, which fits in 366 px.
+- The update button follows them in its round form: 32 px, or 44 px on touch, the tap minimum. Its words are in its tooltip and accessible name. Routines, Sort, Search and "+" stay at the right. At 390 px that is 24 + 42 px of brand, the 44 px button and four 40 px ones, which fits in 366 px.
 - **The footer card and the gear now show on the phone too.** The round gear-with-dot button at the top left goes. A round button with a gear on it that opens a menu would contradict the new gear, and the card now carries the name, which is worth showing. The gateway menu opens upward from the card, as on the desktop.
 - The conversation (detail) view is unchanged: Back, the title pill and Work.
 
@@ -88,7 +88,7 @@ The gateway menu gets "Rename gateway…" (or "Name this gateway…" when there 
 - **Hint:** "Leave it empty to show the address." Save with an empty field removes the name.
 - **Actions:** Cancel and Save. Enter saves; Escape cancels. Focus returns to the card.
 
-**Why a dialog, not inline editing.** The card is a menu button. Its text is `aria-hidden`, and its accessible name is built from the name and the state. A field swapped in where the button was breaks that, and it has to fit a status dot, two lines and the gear in a 248 px rail. A dialog can say where the name lives and show the whole address it belongs to, which the card truncates. It works the same on the phone. `RailDialog` already exists. It needs two small options: an initial value and allowing an empty field.
+**Why a dialog, not inline editing.** The card is a menu button. Its text is `aria-hidden`, and its accessible name is built from the name and the state. A field swapped in where the button was breaks that, and it has to fit a status dot, two lines and the gear in a 248 px rail. A dialog can say where the name lives and show the whole address it belongs to, which the card truncates. It works the same on the phone. `RailDialog` already exists. It needs three small options: an initial value, allowing an empty field, and a hint under it.
 
 ### Where it is stored
 
@@ -114,7 +114,7 @@ The gateway menu gets "Rename gateway…" (or "Name this gateway…" when there 
 - **Names.** The gear is a `button` named "Settings". The update button is a `button` whose name starts with its visible words, so voice control can say what it sees. The mark's image has `alt=""` because the word "Clawtrate" follows it. In the one-pane layout, where the word is hidden, the brand carries a visually hidden "Clawtrate".
 - **Focus.** The app's `:focus-visible` ring (2 px `--accent-line`, offset 2) applies to the update button and the gear. Neither has its own outline rules. Tab order: title bar, rail top, bots, the card, the gear, then the conversation.
 - **Not colour alone.** "Beta" is written. The ready button is filled and also says "Restart to Update". Warning states carry the warning mark and their own words. The card's state is in words whenever it isn't "Connected".
-- **Announcements.** One polite live region in the title bar speaks when the button appears and on each change of state: "Update available", "Ready: Restart to Update", "Couldn't check for updates". It never speaks progress ticks; Updates in Settings keeps its own 10% announcements.
+- **Announcements.** One polite live region, outside the title bar so the phone has it too, speaks when the button appears and on each change of state, with the button's name less "Open Updates": "Update available: Clawtrate 0.2.0", "Restart to Update: Clawtrate 0.2.0", "Couldn't check". It never speaks progress ticks; Updates in Settings keeps its own 10% announcements.
 - **Restarting** is `aria-disabled`, not `disabled`, so it stays focusable and readable.
 - **Touch.** The round form is 40 px on touch, like the rail's other buttons. The card's row is at least 44 px.
 

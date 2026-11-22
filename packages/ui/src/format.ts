@@ -86,6 +86,14 @@ export function gatewayLabel(url: string | null): string {
   }
 }
 
+/** The gateway as this device names it: the name given here, or else its address. */
+export function gatewayTitle(connection: {
+  gatewayUrl: string | null;
+  gatewayName: string | null;
+}) {
+  return connection.gatewayName ?? gatewayLabel(connection.gatewayUrl);
+}
+
 /** A task's context use, for its header: "Context: 18,432 of 128,000 tokens". */
 export function contextWords(
   context: { used: number; window: number; fresh: boolean } | undefined,
