@@ -834,6 +834,17 @@ for (const width of [320, 390]) {
       // Your reply after Otto's report quotes an earlier answer, just under the report's pills.
       await pillsReach(page, "row-9", 2);
     });
+
+    test("F-283: narrow reaction pills side by side each keep a 44 px hit area of their own", async ({
+      page,
+    }) => {
+      await open(page);
+      // Glyphs narrower than an emoji, with one reaction each: drawn, their pills are under 44 px.
+      await react(page, {
+        "row-9": ["☹", "☺"].map((emoji) => ({ emoji, count: 1, mine: false })),
+      });
+      await pillsReach(page, "row-9", 2);
+    });
   });
 }
 

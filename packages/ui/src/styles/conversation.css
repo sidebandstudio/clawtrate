@@ -1522,6 +1522,12 @@ button.reaction {
   margin-bottom: 24px;
 }
 
+/* No narrower than its 44 px area, so a narrow glyph's pill keeps 4 px from the next one's. */
+[data-input="touch"] .reaction {
+  justify-content: center;
+  min-width: 44px;
+}
+
 [data-input="touch"] .msg-actions .icon-button::after,
 [data-input="touch"] .reaction::after,
 [data-input="touch"] .reply-quote::after,
