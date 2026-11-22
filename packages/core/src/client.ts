@@ -5714,7 +5714,11 @@ export class ClawtrateClient {
       if (generation !== this.generation || !this.settings) return;
       const reconnect = this.options.reconnect ?? { initialMs: 1000, maxMs: 30_000 };
       const delayMs = Math.min(reconnect.initialMs * 2 ** attempt, reconnect.maxMs);
-      this.log("warn", "Could not reconnect to the gateway; trying again.");
+      // A host can stop the client synchronously when it receives the retry notification.
+      this.reopenTimer = setTimeout(() => {
+        this.reopenTimer = null;
+        this.reopen(attempt + 1);
+      }, delayMs);
       this.setConnection({
         status: this.everConnected ? "reconnecting" : "connecting",
         error: {
@@ -5724,10 +5728,7 @@ export class ClawtrateClient {
         },
         retryAt: this.now() + delayMs,
       });
-      this.reopenTimer = setTimeout(() => {
-        this.reopenTimer = null;
-        this.reopen(attempt + 1);
-      }, delayMs);
+      this.log("warn", "Could not reconnect to the gateway; trying again.");
     });
   }
 

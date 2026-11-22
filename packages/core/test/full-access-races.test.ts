@@ -811,6 +811,30 @@ describe("full access under interleavings", () => {
     done();
   });
 
+  it("a host that stops the client when it receives a retry notification stays stopped", async () => {
+    const { client, gateway, reads, done } = await rotationWithFailingReads();
+    const priorRetry = client.state.connection.retryAt;
+    const stopped = deferred<void>();
+    const connects = gateway.connects.length;
+    const unsubscribe = client.store.subscribe(({ connection }) => {
+      if (connection.error?.code !== "RECONNECT_FAILED" || connection.retryAt === priorRetry)
+        return;
+      unsubscribe();
+      client.stop();
+      reads.fail = false;
+      stopped.resolve();
+    });
+    try {
+      await stopped.promise;
+      await sleep(150);
+      expect(gateway.connects.length).toBe(connects);
+    } finally {
+      unsubscribe();
+      client.stop();
+      done();
+    }
+  });
+
   it("a reconnect after a saved rotation that keeps failing stops retrying at Disconnect or Forget", async () => {
     for (const end of ["suspend", "disconnect"] as const) {
       const { client, gateway, reads, done } = await rotationWithFailingReads();
