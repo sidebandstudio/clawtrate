@@ -946,7 +946,9 @@ describe("the iOS app", () => {
     await shoot("running-disconnected");
     await steps("reconnect-during-run", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      waitFor({ id: "running-dot-live" }, 60_000),
+      waitGone({ id: "status-strip" }, 120_000),
+      // The restored transcript puts the live indicator after the reply, below the fold.
+      scrollTo({ id: "running-dot-live" }, "DOWN"),
     ]);
     first.release();
     await steps("run-finished", [
