@@ -139,7 +139,13 @@ function poses(name: keyof typeof AVATAR_MOTIONS, origin: [number, number]) {
     };
   };
   for (let n = 0; n + 1 < frames.length; n++)
-    for (let s = 0; s <= 8; s++) out.push(at(frames[n]!, frames[n + 1]!, s / 8));
+    for (let s = 0; s <= 8; s++) {
+      const pose = at(frames[n]!, frames[n + 1]!, s / 8);
+      // A pose takes the opacity of the stretch just before it too: a ring fading to nothing as
+      // it grows is still faintly there right up to its widest.
+      const before = s > 0 ? at(frames[n]!, frames[n + 1]!, (s - 1) / 8).opacity : pose.opacity;
+      out.push({ m: pose.m, opacity: Math.max(pose.opacity, before) });
+    }
   return out;
 }
 
@@ -164,8 +170,8 @@ function placements(shape: AvatarShape): Array<{ m: M; opacity: number }> {
 
 /**
  * Every visible point of the scene, fitted as the renderer fits it, with
- * strokes widened out in eight directions. A pose fainter than 15% opacity is
- * not visible and does not count.
+ * strokes widened out in eight directions. Every pose with any opacity at all
+ * counts, however faint.
  */
 export function scenePoints(scene: AvatarScene, fitted = true): Array<[number, number]> {
   const out: Array<[number, number]> = [];
@@ -183,7 +189,7 @@ export function scenePoints(scene: AvatarScene, fitted = true): Array<[number, n
     }
     const { points, pad } = outline(shape);
     for (const { m, opacity } of mine) {
-      if (opacity * (shape.opacity ?? 1) < 0.15) continue;
+      if (opacity * (shape.opacity ?? 1) <= 0) continue;
       // A stroke that keeps its width on screen: at 18 px one pixel is 40/18 grid units.
       const width = shape.fixedStroke ? ((shape.strokeWidth ?? 1) * 40) / 18 / 2 : pad * stretch(m);
       for (const point of points) {
