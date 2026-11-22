@@ -172,6 +172,7 @@ import {
   timeoutsInARow,
   TIMEOUTS_IN_A_ROW,
   markStopAsked,
+  markWithdrawn,
   MAX_RAW_ENTRY_CHARS,
   runErrorRawId,
   markTurnLimit,
@@ -431,6 +432,8 @@ export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
  */
 export const REQUEST_TIMEOUT_MS = 60_000;
 
+/** How long Stop waits for the gateway to answer the withdrawal of the run's steers. */
+export const STEER_WITHDRAWAL_WAIT_MS = 2_000;
 /** Longest message text the client sends. */
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
@@ -2217,6 +2220,26 @@ export class ClawtrateClient {
         message.status !== "not-sent")
     )
       return;
+    // The gateway keeps a withdrawn steer's id as aborted and answers a send under it with that
+    // abort: it goes again under a new key, in its place on the shelf, with its files.
+    if (message.steer === "withdrawn") {
+      const id = this.randomId();
+      const kept = this.attachmentContent.get(messageId);
+      if (kept) {
+        this.attachmentContent.delete(messageId);
+        this.attachmentContent.set(id, kept);
+      }
+      this.updateActivity(key, (activity) => ({
+        ...activity,
+        outbox: activity.outbox.map((each) => {
+          if (each.id !== messageId) return each;
+          const fresh = { ...each, id };
+          delete fresh.steer;
+          return fresh;
+        }),
+      }));
+      return this.retryMessage(key, id);
+    }
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
     // A message that came from the queue keeps that origin through every attempt, until
@@ -2800,13 +2823,19 @@ export class ClawtrateClient {
           this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
         },
       });
-      // The frame has left: from here a Stop no longer parks it.
-      this.updateActivity(key, (activity) =>
-        updateMessage(activity, messageId, { leftAt: this.now() }),
-      );
+      // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
+      // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
+      // withdrawal of it, need not wait for the answer.
+      const joins = starts ? null : message.runId;
+      this.updateActivity(key, (activity) => {
+        const left = updateMessage(activity, messageId, { leftAt: this.now() });
+        return joins ? registerSteerAlias(left, messageId, joins) : left;
+      });
       result = asRecord(await sent);
     } catch (error) {
       this.noteMissingScope(error);
+      // A Stop withdrew it while the answer was on its way: it stays Not sent.
+      if (this.outgoing(key, messageId)?.steer === "withdrawn") return;
       if (
         error instanceof GatewayProtocolRequestError ||
         error instanceof SendTooLargeError ||
@@ -2833,6 +2862,8 @@ export class ClawtrateClient {
       this.scheduleHistory(key);
       return;
     }
+    // A Stop withdrew it while the answer was on its way: it stays Not sent, whatever the answer.
+    if (this.outgoing(key, messageId)?.steer === "withdrawn") return;
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
@@ -2847,18 +2878,22 @@ export class ClawtrateClient {
           result?.aborted === true && Array.isArray(result.runIds)
             ? result.runIds.filter((id): id is string => typeof id === "string")
             : [];
-        return markStopAsked(
-          dropUnboundRun(
-            updateMessage(activity, messageId, {
-              status: "handled",
-              messageSeq: null,
-              runId: null,
-              error: null,
-            }),
-            messageId,
+        // The gateway's `/stop` withdraws the steers it held too, and names them.
+        return markWithdrawn(
+          markStopAsked(
+            dropUnboundRun(
+              updateMessage(activity, messageId, {
+                status: "handled",
+                messageSeq: null,
+                runId: null,
+                error: null,
+              }),
+              messageId,
+            ),
+            stopped,
+            this.now(),
           ),
           stopped,
-          this.now(),
         );
       }
       if (runId === null && message.mode !== "steer") {
@@ -2987,7 +3022,19 @@ export class ClawtrateClient {
    * many times as the connection drops, until the gateway answers or the run's end arrives.
    */
   private async abortRun(key: string, runId: string): Promise<void> {
+    // The Stop belongs to the gateway it began on: after the wait below, the person may have
+    // switched to another, which must never get this abort. A reconnect to the same one still does.
+    const gateway = this.settings?.url;
     try {
+      // A withdrawal the gateway does not answer must not hold the Stop: after a short wait the
+      // run is aborted anyway, and that steer stays as it was.
+      let waited: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.withdrawSteers(key, runId),
+        new Promise<void>((resolve) => (waited = setTimeout(resolve, STEER_WITHDRAWAL_WAIT_MS))),
+      ]);
+      clearTimeout(waited);
+      if (this.settings?.url !== gateway) return;
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
@@ -3011,6 +3058,43 @@ export class ClawtrateClient {
       const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
       if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
+  }
+
+  /**
+   * Before a run is aborted, each steer sent into it that the gateway may still hold is
+   * withdrawn by its own id. A Stop by the run's id alone leaves a held steer to run as a turn
+   * of its own once the run has stopped; withdrawing it first is the gateway's own order for a
+   * session's Stop (docs/research/steer-stop.md). Only the gateway's answer naming the steer
+   * withdraws it. One that joined the run answers `aborted: false`, and one whose answer is
+   * lost stays as it was: the stop note says the gateway may still run it.
+   */
+  private async withdrawSteers(key: string, runId: string): Promise<void> {
+    // A steer whose frame left counts, answered or not: the gateway may have queued it already.
+    // One whose answer never came has no run named; the alias its key got as it left still does.
+    const transcript = this.state.transcripts[key] ?? emptyActivity;
+    const steers = transcript.outbox.filter(
+      (message) =>
+        message.mode === "steer" &&
+        (message.runId === runId || transcript.steerAliases[message.id] === runId) &&
+        message.leftAt !== null &&
+        ["sending", "sent", "checking", "unknown"].includes(message.status) &&
+        message.steer === undefined,
+    );
+    await Promise.all(
+      steers.map(async (message) => {
+        try {
+          const answer = asRecord(
+            await this.request("chat.abort", { sessionKey: key, runId: message.id }),
+          );
+          if (answer?.aborted === true && Array.isArray(answer.runIds))
+            this.updateActivity(key, (activity) =>
+              markWithdrawn(activity, answer.runIds as unknown[]),
+            );
+        } catch (error) {
+          this.log("warn", `chat.abort of a steer failed: ${errorMessage(error)}`);
+        }
+      }),
+    );
   }
 
   /** The helper runs the gateway's confirmation of a Stop names besides the run (F-098). */
