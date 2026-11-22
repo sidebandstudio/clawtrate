@@ -188,6 +188,38 @@ describe("Give back control and answer: the answer is the viewer's that chose it
     }
   });
 
+  it("F-145: a later hand-back retires the earlier answer waiting for the question", async () => {
+    const nextRelease = deferred<unknown>();
+    let releases = 0;
+    const gateway = computerGateway(() => (++releases === 1 ? released : nextRelease.promise));
+    const { client, transcript, viewer, other } = await inControl(gateway);
+    const list = deferred<unknown>();
+    const questions = { questions: [questionRecord("ask_1", "run-1")] };
+    try {
+      const listed = gateway.calls("question.list").length;
+      gateway.handlers["question.list"] = () => list.promise;
+      await viewer.apply({ type: "computerRelease", answer: ANSWER });
+      await until(() => gateway.calls("question.list").length > listed);
+      await viewer.apply({ type: "computerTake" });
+      await until(
+        () => client.state.computer?.panes[viewer.computerViewer()!]?.control.status === "granted",
+      );
+      await viewer.apply({ type: "computerRelease", answer: ANSWER });
+      await until(() => releases === 2);
+      await viewer.apply({ type: "computerLeave" });
+      list.resolve(questions);
+      nextRelease.resolve(released);
+      await until(() => transcript().questions[0]?.submitting === false);
+      expect(gateway.calls("question.resolve")).toEqual([]);
+    } finally {
+      list.resolve(questions);
+      nextRelease.resolve(released);
+      viewer.dispose();
+      other.dispose();
+      client.stop();
+    }
+  });
+
   for (const drop of [false, true]) {
     it(`F-145: ${drop ? "a dropped socket retires the answer waiting for access" : "the requested scope upgrade keeps the answer alive"}`, async () => {
       const gateway = computerGateway(() => released);

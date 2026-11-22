@@ -1735,7 +1735,12 @@ export class ComputerViews {
     lease.inputs.length = 0;
     lease.sequence = ++this.nextSequence;
     lease.answer = options.answer ?? null;
-    if (lease.answer) live.answerOwner = {};
+    if (lease.answer) {
+      // A new hand-back replaces the answer from the preceding one, even if it is still reading the question.
+      if (live.answerOwner) this.ctx.withdraw(live.answerOwner);
+      live.answering = null;
+      live.answerOwner = {};
+    }
     const sequence = lease.sequence;
     this.patchControl(viewer, {
       status: "releasing",
@@ -1856,9 +1861,16 @@ export class ComputerViews {
   async check(viewer: string): Promise<void> {
     const live = this.lives.get(viewer);
     const lease = live?.lease;
-    const control = this.pane(viewer)?.control;
-    const checked = control?.status;
-    if (!live?.shown || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
+    const pane = this.pane(viewer);
+    const checked = pane?.control.status;
+    if (
+      !live?.shown ||
+      !lease ||
+      pane?.key !== lease.key ||
+      pane.shown !== lease.targetId ||
+      (checked !== "unconfirmed" && checked !== "unverified")
+    )
+      return;
     const closed = live.closed;
     const sequence = lease.sequence;
     const current = () =>
