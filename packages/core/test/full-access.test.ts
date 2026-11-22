@@ -229,6 +229,46 @@ describe("full access behind a flag", () => {
     client.stop();
   });
 
+  it("F-509: a setup retry keeps full access while approval is pending and asks only for read after it ends", async () => {
+    const gateway = new FakeGateway();
+    let nextStep = "wait_then_retry";
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "req-1", recommendedNextStep: nextStep },
+      },
+    });
+    const { client } = fullClient(gateway);
+    try {
+      await client.start();
+      await client.connectWithSetupCode({
+        url: URL,
+        bootstrapToken: CODE,
+        expiresAtMs: Date.now() + 600_000,
+      });
+      await until(() => client.state.connection.status === "pairing");
+
+      nextStep = "contact_owner";
+      await client.retryNow();
+      await until(() => client.state.connection.error?.code === "PAIRING_ENDED");
+      expect(connectAt(gateway, -1)).toMatchObject({
+        scopes: [...FULL_SCOPES],
+        auth: { bootstrapToken: CODE },
+      });
+
+      const before = gateway.connects.length;
+      await client.retryNow();
+      await until(() => gateway.connects.length > before);
+      const retry = connectAt(gateway, before);
+      expect(retry.scopes).toEqual([...READ_SCOPES]);
+      expect(retry.auth?.bootstrapToken).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-509: a limited code refuses the six; nothing is kept and nothing smaller is asked for by itself", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({

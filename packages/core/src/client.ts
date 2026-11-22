@@ -6560,6 +6560,7 @@ export class ClawtrateClient {
       // and connect as soon as an operator approves it.
       const nextStep = details.recommendedNextStep;
       const terminal = nextStep !== undefined && nextStep !== "wait_then_retry";
+      if (terminal) this.endTypedAttempt(url);
       if (terminal && setup) {
         // Its code is gone and nothing retries: an approval wait that can't end is not shown.
         this.dropSetupCredentials();
@@ -6572,9 +6573,6 @@ export class ClawtrateClient {
         });
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
-      // A wait the gateway ended is over, as an ended request is: its typed token and full-access
-      // eligibility go. One to retry keeps both for the retry.
-      if (terminal) this.endTypedAttempt(url);
       return {
         closeCode: 1000,
         closeReason: "awaiting pairing approval",
