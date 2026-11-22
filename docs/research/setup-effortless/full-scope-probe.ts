@@ -28,11 +28,24 @@
 //             without admin, tries to approve device D
 //   repair    a device paired for read alone reconnects presenting the shared
 //             token and asking for all six (the shared-token scope-upgrade path)
+//   code      after `remote`: A makes a setup code with device.pair.setupCode
+//   peer      fix round 1, candidate (e): open a plain TCP socket to the port and
+//             find which process of this account holds the accepted end of that
+//             exact connection (`lsof`, by its four-tuple), before any byte is sent
+//   tls       fix round 1, candidate (b): turn on `gateway.tls` in this development
+//             instance's own config, let the gateway restart itself, pin the
+//             certificate it wrote, and pair over wss:// with all six; then dial an
+//             impostor TLS listener with the same pin and record whether any HTTP
+//             byte reached it
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { createHash, generateKeyPairSync, createPublicKey, createPrivateKey, sign } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { connect as netConnect } from "node:net";
+import { connect as tlsConnect, createServer as createTlsServer } from "node:tls";
+import { execFileSync, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { openInstance, recordedStartOptions } from "../../../tools/dev-gateway/src/cli.ts";
@@ -63,7 +76,8 @@ const config = JSON.parse(readFileSync(configPath, "utf8")) as {
 const port = config.gateway?.port;
 const token = config.gateway?.auth?.token;
 if (typeof port !== "number" || typeof token !== "string") throw new Error("config has no plain port and token");
-const url = `ws://127.0.0.1:${port}`;
+let url = `ws://127.0.0.1:${port}`;
+let tlsFingerprint: string | undefined;
 
 const FULL = [
   "operator.read",
@@ -141,6 +155,7 @@ function connect(device: Device, scopes: string[], opts: { shared: boolean; keep
     };
     const client = new GatewayClient({
       url,
+      ...(tlsFingerprint ? { tlsFingerprint } : {}),
       ...(opts.shared ? { token } : {}),
       clientName: "gateway-client",
       mode: "ui",
@@ -392,7 +407,108 @@ async function code() {
   await watcher.client.stopAndWait().catch(() => {});
 }
 
-const experiments: Record<string, () => Promise<unknown>> = { local, remote, inapp, repair, code };
+/** Who holds the accepted end of this exact TCP connection, as this account can see it. */
+function acceptedEnd(localPort: number) {
+  const out = spawnSync("/usr/sbin/lsof", ["-nP", "-a", `-iTCP@127.0.0.1:${localPort}`, "-sTCP:ESTABLISHED", "-FpLn"], { encoding: "utf8" }).stdout;
+  const ends: Array<{ pid: number; login: string; name: string }> = [];
+  let pid = 0;
+  let login = "";
+  for (const line of out.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("L")) login = line.slice(1);
+    else if (line.startsWith("n")) ends.push({ pid, login, name: line.slice(1) });
+  }
+  // The gateway's end is the one whose local address is the gateway's port.
+  return ends.filter((e) => e.name === `127.0.0.1:${port}->127.0.0.1:${localPort}`);
+}
+
+async function peer() {
+  says();
+  const listener = spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).stdout.trim();
+  say("listener pid(s) on the port:", listener.split("\n"));
+  for (let i = 0; i < 3; i++) {
+    const socket = netConnect(port!, "127.0.0.1");
+    await new Promise<void>((r) => socket.once("connect", () => r()));
+    const started = Date.now();
+    let found = acceptedEnd(socket.localPort!);
+    while (found.length === 0 && Date.now() - started < 1000) {
+      await sleep(20);
+      found = acceptedEnd(socket.localPort!);
+    }
+    say(`socket ${i + 1}, local port ${socket.localPort}: accepted end held by`, found, `after ${Date.now() - started} ms, nothing sent`);
+    socket.destroy();
+  }
+  const me = execFileSync("/usr/bin/id", ["-un"], { encoding: "utf8" }).trim();
+  say("this account:", me);
+}
+
+async function tls() {
+  says();
+  if (!localPairing) throw new Error("`tls` needs an instance started with --default-local-pairing");
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as { gateway: Record<string, unknown> };
+  raw.gateway.tls = { enabled: true };
+  writeFileSync(configPath, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  say("set gateway.tls.enabled in", configPath, "(this development instance only)");
+  const certPath = join(stateDir, "gateway", "tls", "gateway-cert.pem");
+  const keyPath = join(stateDir, "gateway", "tls", "gateway-key.pem");
+  // The gateway restarts itself (reload mode hybrid); wait for a TLS answer.
+  const deadline = Date.now() + 90_000;
+  let served: string | null = null;
+  while (Date.now() < deadline && !served) {
+    served = await new Promise<string | null>((resolve) => {
+      const s = tlsConnect({ host: "127.0.0.1", port: port!, rejectUnauthorized: false }, () => {
+        const fp = s.getPeerCertificate().fingerprint256 ?? null;
+        s.destroy();
+        resolve(fp);
+      });
+      s.once("error", () => resolve(null));
+      s.setTimeout(2000, () => {
+        s.destroy();
+        resolve(null);
+      });
+    });
+    if (!served) await sleep(1000);
+  }
+  say("gateway answers TLS:", Boolean(served));
+  if (!served) return;
+  const mode = (path: string) => (existsSync(path) ? (statSync(path).mode & 0o777).toString(8) : "missing");
+  say("cert file", mode(certPath), "key file", mode(keyPath), "tls folder", mode(join(stateDir, "gateway", "tls")));
+  const pem = readFileSync(certPath, "utf8");
+  const der = Buffer.from(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""), "base64");
+  const fileFingerprint = createHash("sha256").update(der).digest("hex");
+  say("fingerprint from the file matches the served certificate:", fileFingerprint.toUpperCase().match(/../g)!.join(":") === served);
+  url = `wss://127.0.0.1:${port}`;
+  tlsFingerprint = fileFingerprint;
+  const a = newDevice("A-tls");
+  say("A asks for all six over wss:// with the pin:", (await connect(a, FULL, { shared: true })).outcome);
+  say("gateway devices:", devices());
+  url = `ws://127.0.0.1:${port}`;
+  tlsFingerprint = undefined;
+  say("plain ws:// to the same port:", (await connect(newDevice("B-plain"), FULL, { shared: true })).outcome);
+
+  // An impostor TLS listener with its own certificate: does anything reach it?
+  const dir = execFileSync("/usr/bin/mktemp", ["-d", join(tmpdir(), "se-impostor.XXXXXX")], { encoding: "utf8" }).trim();
+  execFileSync("/usr/bin/openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"), "-days", "1", "-subj", "/CN=127.0.0.1"], { stdio: "ignore" });
+  let bytes = 0;
+  let handshakes = 0;
+  const impostor = createTlsServer({ key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) }, (socket) => {
+    handshakes++;
+    socket.on("data", (d) => (bytes += d.length));
+    socket.on("error", () => {});
+  });
+  await new Promise<void>((r) => impostor.listen(0, "127.0.0.1", () => r()));
+  const impostorPort = (impostor.address() as { port: number }).port;
+  url = `wss://127.0.0.1:${impostorPort}`;
+  tlsFingerprint = fileFingerprint;
+  say("A dials the impostor with the gateway's pin:", (await connect(a, FULL, { shared: true })).outcome);
+  await sleep(300);
+  say("impostor: TLS handshakes completed", handshakes, "application bytes received", bytes);
+  impostor.close();
+  for (const f of ["key.pem", "cert.pem"]) spawnSync("/bin/rm", [join(dir, f)]);
+  spawnSync("/bin/rmdir", [dir]);
+}
+
+const experiments: Record<string, () => Promise<unknown>> = { local, remote, inapp, repair, code, peer, tls };
 if (!experiment || !experiments[experiment]) {
   console.log(`usage: full-scope-probe.ts <${Object.keys(experiments).join("|")}> --instance <name>`);
   process.exit(1);

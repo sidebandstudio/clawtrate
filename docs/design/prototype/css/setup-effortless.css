@@ -273,6 +273,78 @@
   box-shadow: var(--shadow-pop);
 }
 
+/* Fix round 1: proof pending, the typed code, the fingerprint. */
+.se-dot[data-state="pending"] {
+  background: var(--text-faint);
+  box-shadow: none;
+}
+
+.se-dot[data-state="warn"] {
+  background: var(--warn);
+  box-shadow: none;
+}
+
+.se-checking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 0 16px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.se-found .b-note {
+  margin: 0 0 var(--space-3);
+}
+
+.se-full-line + .button {
+  margin-top: var(--space-3);
+}
+
+.se-full-line a {
+  color: inherit;
+}
+
+.se-device {
+  font-size: var(--text-base);
+}
+
+.se-gateway {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.se-code-entry {
+  margin-top: var(--space-4);
+}
+
+.se-code-input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.se-match {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.se-print code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 /* A real window as narrow as a phone. */
 @media (max-width: 500px) {
   .se-scopes li {
