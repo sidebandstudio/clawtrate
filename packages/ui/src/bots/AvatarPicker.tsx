@@ -15,7 +15,7 @@ import {
   type Bot,
 } from "@clawtrate/core";
 import { useRef, useState, type KeyboardEvent, type Ref } from "react";
-import { Creature } from "../Avatar.tsx";
+import { Creature, PictureOr } from "../Avatar.tsx";
 
 /** What the picker holds: a creature, and the person's own picture when there is one. */
 export type PictureDraft = { choice: AvatarChoice; upload: string | null };
@@ -118,7 +118,13 @@ export function PicturePreview({
       ref={previewRef}
       data-testid="picture-preview"
     >
-      {draft.upload ? <img src={draft.upload} alt="" /> : <Creature choice={draft.choice} />}
+      {draft.upload ? (
+        <PictureOr url={draft.upload}>
+          <Creature choice={draft.choice} />
+        </PictureOr>
+      ) : (
+        <Creature choice={draft.choice} />
+      )}
     </span>
   );
 }

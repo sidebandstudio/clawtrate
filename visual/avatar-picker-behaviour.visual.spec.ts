@@ -140,3 +140,28 @@ test("F-037: below admin the Work pane's picture is not a button", async ({ page
   await expect(page.locator(".work-hero .avatar")).toBeVisible();
   await expect(page.getByRole("button", { name: /picture/ })).toHaveCount(0);
 });
+
+test("a picture the browser can't decode shows the bot's own Clawling instead", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            f: (s: { bots: Array<{ id: string; avatarUrl: string | null }> }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      // A JPEG label on bytes that are not one: shown as a picture until the browser fails it.
+      bots: state.bots.map((bot) =>
+        bot.id === "marlow" ? { ...bot, avatarUrl: "data:image/jpeg;base64,AAAA" } : bot,
+      ),
+    })),
+  );
+  await expect(row(page, "Marlow").locator("img")).toHaveCount(0);
+  await expect(row(page, "Marlow").locator('svg.creature[data-family="clawling"]')).toBeVisible();
+});

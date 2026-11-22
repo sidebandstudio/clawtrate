@@ -5,13 +5,14 @@ import {
   avatarPose,
   avatarScene,
   avatarVariation,
+  defaultAvatar,
   type AvatarChoice,
   type AvatarMotionName,
   type AvatarShape,
   type AvatarVariation,
   type Bot,
 } from "@clawtrate/core";
-import { useId, useInsertionEffect, type CSSProperties, type ReactElement } from "react";
+import { useId, useInsertionEffect, useState, type CSSProperties, type ReactElement } from "react";
 import "./styles/avatars.css";
 
 // Bot avatars (visual-language.md, section 5): Clawtrate's creatures, drawn as
@@ -154,10 +155,26 @@ export function Creature({
 }
 
 /** A bot's face: its own picture, or its creature in the state given. */
+/**
+ * A picture, or what stands in for it when the browser can't decode it. The
+ * fallback is kept for that one URL only, so a new picture is tried afresh.
+ */
+export function PictureOr({ url, children }: { url: string; children: ReactElement }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (failed === url) return children;
+  return <img src={url} alt="" draggable={false} onError={() => setFailed(url)} />;
+}
+
 function Face({ bot, state }: { bot: Bot; state: FaceState }) {
   const avatar = avatarFor(bot);
-  if (avatar.kind === "image") return <img src={avatar.url} alt="" draggable={false} />;
-  return <Creature choice={avatar.choice} state={state} variation={avatarVariation(bot.id)} />;
+  const variation = avatarVariation(bot.id);
+  if (avatar.kind === "image")
+    return (
+      <PictureOr url={avatar.url}>
+        <Creature choice={defaultAvatar(bot.id)} state={state} variation={variation} />
+      </PictureOr>
+    );
+  return <Creature choice={avatar.choice} state={state} variation={variation} />;
 }
 
 /**
