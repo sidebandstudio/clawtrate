@@ -305,6 +305,8 @@ jobs:
         env:
           KEYCHAIN: ${{ steps.keychain.outputs.path }}
         run: |
+          # The items' names only, never their values: what the run left in its own keychain.
+          security dump-keychain "$KEYCHAIN" | grep -E '"(svce|acct|labl)"' || true
           security default-keychain -d user -s login.keychain-db || true
           security delete-keychain "$KEYCHAIN"
       - if: failure()

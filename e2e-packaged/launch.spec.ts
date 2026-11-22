@@ -781,8 +781,9 @@ async function deviceIdUnderKeychainCheck(
   const place = launchPlace(dir);
   // The account's own home for the Security framework, so the app finds the default keychain,
   // which the test requires to be the disposable one. Under the run's home it finds none and
-  // macOS stops the app with a "keychain cannot be found" dialog.
+  // macOS stops the app with a "Keychain Not Found" dialog (seen on CI).
   delete place.env.CFFIXED_USER_HOME;
+  place.env.HOME = homedir();
   const logFd = openSync(join(dir, "app.log"), "a", 0o600);
   const gated = gatedSpawn(
     spawn,
