@@ -58,6 +58,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/scopes.ts:FULL_SCOPES": "static, six scopes",
+  "apps/desktop/src/main/secret-box.ts:RECOVERY_BUTTONS": "static, two button labels",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
