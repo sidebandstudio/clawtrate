@@ -345,13 +345,18 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   );
 }
 
-/** Connecting for the first time, and loading the bots once connected. */
+/**
+ * Connecting for the first time, and loading the bots once connected. While a
+ * Clawtrate link waits for it, it is the "Loading conversation" screen.
+ */
 function SetupPanel({
   connection,
   loadingBots,
+  linkWaiting,
 }: {
   connection: ConnectionState;
   loadingBots: boolean;
+  linkWaiting: boolean;
 }) {
   const send = useCommand();
   const { forget, failure } = useForget();
@@ -360,7 +365,7 @@ function SetupPanel({
   return (
     <section className="panel" aria-labelledby="setup-title">
       <h2 id="setup-title" className="visually-hidden">
-        Setting up {gatewayLabel(connection.gatewayUrl)}
+        {linkWaiting ? "Loading conversation" : `Setting up ${gatewayLabel(connection.gatewayUrl)}`}
       </h2>
       <SetupSteps connection={connection} loadingBots={loadingBots} />
       {error && !loadingBots && (
@@ -523,6 +528,7 @@ export function ConnectScreen({
   setup,
   mismatch = null,
   inert = false,
+  linkWaiting = false,
 }: {
   connection: ConnectionState;
   discovery: DiscoveryState;
@@ -533,6 +539,8 @@ export function ConnectScreen({
   mismatch?: ConnectionError | null;
   /** Set while Settings covers the screen. */
   inert?: boolean;
+  /** A Clawtrate link waits for this connection (links.md section 3). */
+  linkWaiting?: boolean;
 }) {
   const pairing = connection.status === "pairing" && connection.pairing;
   const host = `${info.kind === "web" ? "Web preview" : "Desktop"} ${info.version}`;
@@ -629,7 +637,11 @@ export function ConnectScreen({
               <p>{SLOGAN}</p>
             </header>
             {settingUp ? (
-              <SetupPanel connection={connection} loadingBots={loadingBots} />
+              <SetupPanel
+                connection={connection}
+                loadingBots={loadingBots}
+                linkWaiting={linkWaiting}
+              />
             ) : (
               <ConnectForm connection={connection} info={info} />
             )}

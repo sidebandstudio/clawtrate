@@ -1,12 +1,12 @@
-import { useRef } from "react";
+import { useMemo, type RefObject } from "react";
 import { Dialog } from "./bots/Dialog.tsx";
 import { LINK_REFUSALS, type LinkRefusal as Refusal } from "./chat-link.ts";
 
 /**
  * "Can't open link" (docs/design/links.md section 3): the confirmation card with
  * the reason and one Close button. Enter or Escape closes it. Focus returns to
- * the control that had it, or, when the app has just opened, to the screen's
- * heading or first control.
+ * the control that had it, or, when the app has just opened, to the heading or
+ * first control of the screen shown when the card closes.
  */
 export function LinkRefusal({
   refusal,
@@ -18,9 +18,17 @@ export function LinkRefusal({
   firstControl: string;
   onClose: () => void;
 }) {
-  const fallback = useRef(
-    document.querySelector<HTMLElement>(".conversation h1[tabindex]") ??
-      document.querySelector<HTMLElement>(firstControl),
+  // Read when the card closes: the screen it opened over may have been replaced since.
+  const fallback = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        return (
+          document.querySelector<HTMLElement>(".conversation h1[tabindex]") ??
+          document.querySelector<HTMLElement>(firstControl)
+        );
+      },
+    }),
+    [firstControl],
   );
   return (
     <Dialog

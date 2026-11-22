@@ -23,6 +23,7 @@ const WINDOWS = process.platform === "win32";
 const ADDED = "Link text added to your draft. Nothing was sent.";
 /** Wide enough for the rail beside the conversation, too narrow to dock Work: a drawer. */
 const DRAWER = { width: 900, height: 800 };
+const PHONE = { width: 390, height: 844 };
 
 const link = (bot: string, text: string, gateway = GATEWAY_ID) =>
   `clawtrate://chat?bot=${bot}&gateway=${gateway}&text=${encodeURIComponent(text)}`;
@@ -388,6 +389,20 @@ test("F-248: when a link's chat is deleted while it asks about the draft, the li
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
+test("F-248: the notice goes when the person leaves the chat", async () => {
+  await page.setViewportSize(PHONE);
+  await deliver(link("wren", "Notes for later."));
+  await expect(field()).toHaveValue("Notes for later.");
+  await expect(note()).toHaveText(ADDED);
+  await page.getByRole("button", { name: "Back to bots" }).click();
+  await expect(shell()).toHaveAttribute("data-view", "list");
+  await botButton("Wren").click();
+  await expect(shell()).toHaveAttribute("data-view", "detail");
+  await expect(field()).toHaveValue("Notes for later.");
+  await expect(note()).toHaveText("");
+  await page.setViewportSize({ width: 1280, height: 800 });
+});
+
 test("F-248: a link Windows split in two is invalid, and its second half is no switch", async () => {
   // Read as a switch, the second half would start a second app on another data folder.
   await deliver(link("marlow", "Hi"), `--user-data-dir=${join(dir, "other")}`);
@@ -397,7 +412,22 @@ test("F-248: a link Windows split in two is invalid, and its second half is no s
 
 test("F-248: a link that starts the app waits for its connection, then opens the chat", async () => {
   await quit();
-  page = await launch("--", link("otto", "Check the release notes."));
+  // The bots load only when the check lets them, so the waiting screen can be seen.
+  const listed = Promise.withResolvers<void>();
+  const agents = served.gateway.handlers["agents.list"]!;
+  served.gateway.handlers["agents.list"] = async (params) => {
+    await listed.promise;
+    return agents(params);
+  };
+  try {
+    page = await launch("--", link("otto", "Check the release notes."));
+    await expect(page.getByRole("region", { name: "Loading conversation" })).toBeVisible({
+      timeout: 30_000,
+    });
+  } finally {
+    listed.resolve();
+    served.gateway.handlers["agents.list"] = agents;
+  }
   await expect(field()).toHaveAttribute("aria-label", "Message Otto", { timeout: 30_000 });
   await expect(field()).toHaveValue("Check the release notes.");
   await expect(note()).toHaveText(ADDED);
@@ -406,4 +436,14 @@ test("F-248: a link that starts the app waits for its connection, then opens the
   await botButton("Marlow").click();
   await expect(field()).toHaveValue("Start over.\nAlso this.");
   expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: closing the card of a link that started the app focuses the screen's heading", async () => {
+  await quit();
+  page = await launch("--", link("nobody", "Hi"));
+  await expect(refusal()).toBeVisible({ timeout: 30_000 });
+  await expectCantOpen(
+    "This bot isn't on the connected gateway. Check the link or ask for a new one.",
+  );
+  await expect(page.locator(".conversation h1[tabindex]").first()).toBeFocused();
 });

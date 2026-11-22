@@ -781,6 +781,7 @@ export function Conversation({
   onShowComputer,
   chatLink = null,
   onChatLinkDone,
+  onScreen = true,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -815,6 +816,8 @@ export function Conversation({
   /** A Clawtrate link's text for this task's composer. */
   chatLink?: { id: number; text: string } | null;
   onChatLinkDone?: ((id: number) => void) | undefined;
+  /** False while the one-pane layout shows the list instead. */
+  onScreen?: boolean;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -1199,6 +1202,7 @@ export function Conversation({
           focusRef={fieldRef}
           chatLink={chatLink}
           onChatLinkDone={onChatLinkDone}
+          onScreen={onScreen}
         />
       )}
       {task && bot && !interactive && (

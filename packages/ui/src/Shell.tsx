@@ -830,6 +830,7 @@ export function Shell({
                 onShowComputer={showComputer}
                 chatLink={linkHere}
                 onChatLinkDone={onChatLinkDone}
+                onScreen={!onePane || view === "detail"}
               />
             </WorkLinksContext.Provider>
           </OpenTaskContext.Provider>

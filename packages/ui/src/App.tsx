@@ -194,6 +194,7 @@ export function App({
           setup={state.setup}
           mismatch={mismatch}
           inert={settingsOpen}
+          linkWaiting={outcome?.kind === "wait"}
         />
       )}
       {refusal && (

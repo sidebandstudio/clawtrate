@@ -33,7 +33,8 @@ export function Dialog({
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   useEffect(() => {
     const dialog = ref.current;
-    const fallback = fallbackFocus?.current;
+    // Its element is read when the dialog closes: the screen it opened over may be gone by then.
+    const fallbackRef = fallbackFocus;
     if (!dialog) return;
     if (!dialog.open) dialog.showModal();
     // The first control that asks for focus, or the title.
@@ -46,6 +47,7 @@ export function Dialog({
       requestAnimationFrame(() => {
         // Behind a dialog still open, the browser does not let it take focus: nothing happens.
         // Opened with nothing focused, the fallback takes focus.
+        const fallback = fallbackRef?.current;
         if (opener?.isConnected && opener !== document.body && !opener.closest("[inert]"))
           opener.focus();
         else if (fallback?.isConnected) fallback.focus();

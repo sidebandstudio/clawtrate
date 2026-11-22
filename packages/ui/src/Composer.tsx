@@ -187,6 +187,7 @@ export function Composer({
   limits,
   chatLink = null,
   onChatLinkDone,
+  onScreen = true,
 }: {
   bot: Bot;
   /** The gateway's address: drafts are kept per gateway and per task. */
@@ -208,6 +209,8 @@ export function Composer({
   chatLink?: { id: number; text: string } | null;
   /** The link's text went in, or the person kept their draft. */
   onChatLinkDone?: ((id: number) => void) | undefined;
+  /** False while the one-pane layout shows the list instead. */
+  onScreen?: boolean;
 }) {
   const ceilings = limits ?? DEFAULT_LIMITS;
   const bridge = useBridge();
@@ -249,6 +252,8 @@ export function Composer({
   // The choice is about one draft: if it changes meanwhile (a send that failed brings its
   // words back), the person is asked again.
   const [linkText, setLinkText] = useState<string | null>(null);
+  // The notice goes on navigation as on edit.
+  if (!onScreen && linkText !== null) setLinkText(null);
   const [choosing, setChoosing] = useState<{ id: number; draft: string } | null>(null);
   const handledLink = useRef<number | null>(null);
   const fillFromLink = useCallback(
