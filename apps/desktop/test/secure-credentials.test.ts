@@ -282,6 +282,34 @@ describe("this device's credentials in secure storage", () => {
     expect(await open(dir, fakeBox().box).storage.get("turn-limit-minutes")).toBe("30");
   });
 
+  it("a gateway settings write or removal that fails changes nothing, typed token included, and a later save keeps the old gateway", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    const a = JSON.stringify({ url: "ws://127.0.0.1:19002", token: "typed-A" });
+    await credentials.storage.set("connection", a);
+    const refuseOnce = () => {
+      let refuse = true;
+      fsHooks.failRename = (to) => {
+        if (!refuse || !to.endsWith(STATE_FILE)) return false;
+        refuse = false;
+        return true;
+      };
+    };
+    refuseOnce();
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    await expect(credentials.storage.set("connection", b)).rejects.toThrow();
+    expect(await credentials.storage.get("connection")).toBe(a);
+    refuseOnce();
+    await expect(credentials.storage.delete("connection")).rejects.toThrow();
+    expect(await credentials.storage.get("connection")).toBe(a);
+    await credentials.storage.set("turn-limit-minutes", "45");
+    expect(JSON.parse(state(dir).connection!)).toEqual({
+      url: "ws://127.0.0.1:19002",
+      token: null,
+    });
+    expect(await credentials.storage.get("connection")).toBe(a);
+  });
+
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
     await open(dir, fakeBox().box).signer.loadIdentity();
