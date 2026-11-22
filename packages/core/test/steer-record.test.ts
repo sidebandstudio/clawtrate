@@ -191,6 +191,22 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     task.client.stop();
   });
 
+  it("F-097 F-468: a withdrawal the gateway confirms after history marked the steer unconfirmed still leaves it Not sent", async () => {
+    const task = await steered();
+    const abort = task.gateway.handlers["chat.abort"]!;
+    const late = deferred<unknown>();
+    task.gateway.handlers["chat.abort"] = (params) =>
+      (params as { runId: string }).runId === RUN ? abort(params) : late.promise;
+    await task.client.stopRun(KEY, RUN);
+    await until(() => run(task)?.state === "stopped");
+    // The run ended and history does not hold the steer: it reads unconfirmed.
+    await until(() => task.transcript().outbox[0]?.status === "unconfirmed");
+    late.resolve({ ok: true, aborted: true, runIds: [task.id] });
+    await until(() => task.transcript().outbox[0]?.status === "not-sent");
+    expect(task.transcript().outbox[0]!.steer).toBe("withdrawn");
+    task.client.stop();
+  }, 15_000);
+
   it("F-097: a withdrawal the gateway does not answer holds the run's Stop only briefly", async () => {
     const task = await steered();
     const abort = task.gateway.handlers["chat.abort"]!;

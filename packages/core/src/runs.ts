@@ -3620,7 +3620,9 @@ export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): 
   for (const message of activity.outbox)
     if (
       message.mode === "steer" &&
-      (message.status === "sent" || message.status === "sending") &&
+      // Left and not settled by history: the gateway's word wins over what this client concluded
+      // meanwhile (a history read can mark it unconfirmed while the answer is on its way).
+      ["sending", "sent", "checking", "unconfirmed", "unknown"].includes(message.status) &&
       ids.includes(message.id) &&
       Object.hasOwn(activity.steerAliases, message.id)
     )
