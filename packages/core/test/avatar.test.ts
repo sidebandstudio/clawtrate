@@ -16,7 +16,10 @@ import {
   defaultAvatar,
   encodeAvatarChoice,
   isGuardedColor,
+  isKeepablePicture,
+  MAX_PICTURE_CHARS,
   parseAvatarChoice,
+  readPicture,
   pictureWithChoice,
   type AvatarChoice,
   type AvatarShape,
@@ -411,5 +414,248 @@ describe("the choice as kept with the bot", () => {
     });
     expect(pictureWithChoice("data:image/jpeg;base64,AAAA", choice)).toBeNull();
     expect(choiceFromPicture("data:image/png;base64,not-a-png")).toBeNull();
+  });
+});
+
+// A PNG built here, chunk by chunk, so each malformation can be made on purpose.
+type RawChunk = { type: string; data: number[]; crc?: number; length?: number };
+
+function base64(bytes: number[]): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i]! << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    out += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!;
+    out += i + 1 < bytes.length ? B64[(n >> 6) & 63]! : "=";
+    out += i + 2 < bytes.length ? B64[n & 63]! : "=";
+  }
+  return out;
+}
+
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const ascii = (text: string) => [...text].map((char) => char.charCodeAt(0));
+
+function chunkBytes({ type, data, crc: forced, length }: RawChunk): number[] {
+  const body = [...ascii(type), ...data];
+  return [...be32(length ?? data.length), ...body, ...be32(forced ?? crc(body))];
+}
+
+/** The 2×2 PNG's own chunks, read from it. */
+function baseChunks(): RawChunk[] {
+  const bytes = bytesOf(PNG);
+  const out: RawChunk[] = [];
+  for (let at = 8; at < bytes.length;) {
+    const length =
+      (bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!;
+    out.push({
+      type: String.fromCharCode(...bytes.slice(at + 4, at + 8)),
+      data: bytes.slice(at + 8, at + 8 + length),
+    });
+    at += 12 + length;
+  }
+  return out;
+}
+
+function build(chunks: RawChunk[], trailing: number[] = []): string {
+  const bytes = [137, 80, 78, 71, 13, 10, 26, 10, ...chunks.flatMap(chunkBytes), ...trailing];
+  return `data:image/png;base64,${base64(bytes)}`;
+}
+
+const text = (value: string, keyword = "clawtrate-avatar"): RawChunk => ({
+  type: "tEXt",
+  data: [...ascii(keyword), 0, ...ascii(value)],
+});
+const CHOICE = "v=1&family=shellfolk&shell=dome&color=green";
+/** The base chunks with extra ones after IHDR. */
+const withAfterHeader = (...extra: RawChunk[]) => {
+  const [head, ...rest] = baseChunks();
+  return [head!, ...extra, ...rest];
+};
+
+describe("reading a picture from the gateway", () => {
+  it("tells a plain picture, a creature picture and an invalid one apart", () => {
+    expect(readPicture(build(baseChunks()))).toEqual({ kind: "plain" });
+    expect(readPicture(build(withAfterHeader(text(CHOICE))))).toEqual({
+      kind: "creature",
+      choice: { family: "shellfolk", shell: "dome", color: "green" },
+    });
+    expect(readPicture("data:image/png;base64,not-a-png")).toEqual({ kind: "invalid" });
+  });
+
+  it("refuses a picture over the shared limit before decoding it", () => {
+    const long = build(withAfterHeader({ type: "tEXt", data: new Array(24_600).fill(65) }));
+    expect(long.length).toBeGreaterThan(MAX_PICTURE_CHARS);
+    expect(readPicture(long)).toEqual({ kind: "invalid" });
+    expect(isKeepablePicture(long)).toBe(false);
+  });
+
+  it("takes only canonical base64", () => {
+    // A picture whose base64 ends in padding, so dropping it and its pad bits can be tried.
+    let good = build(baseChunks());
+    for (let extra = 0; !good.endsWith("="); extra++)
+      good = build(withAfterHeader({ type: "teXt", data: new Array(extra).fill(65) }));
+    const body = good.slice("data:image/png;base64,".length);
+    expect(readPicture(good).kind).toBe("plain");
+    // Padding dropped, a space, the wrong alphabet, and pad bits that are not zero.
+    expect(readPicture(good.replace(/=+$/, "")).kind).toBe("invalid");
+    expect(readPicture(`data:image/png;base64, ${body}`).kind).toBe("invalid");
+    expect(readPicture(good.replace(/\+|\//, "-")).kind).toBe(
+      body.match(/[+/]/) ? "invalid" : "plain",
+    );
+    const last = body.replace(/=+$/, "").at(-1)!;
+    const bumped = B64[B64.indexOf(last) + 1]!;
+    expect(
+      readPicture(good.replace(new RegExp(`${last.replace(/[+/]/, "\\$&")}(=+)$`), `${bumped}$1`))
+        .kind,
+    ).toBe("invalid");
+  });
+
+  it("refuses PNGs that are not well formed", () => {
+    const [ihdr, idat, iend] = baseChunks() as [RawChunk, RawChunk, RawChunk];
+    const header = (width: number, height: number, depth = 8, colour = 2) => ({
+      type: "IHDR",
+      data: [...be32(width), ...be32(height), depth, colour, 0, 0, 0],
+    });
+    const cases: Record<string, string> = {
+      "a wrong CRC": build([ihdr, { ...idat, crc: 1 }, iend]),
+      "a length past the end": build([ihdr, { ...idat, length: 9_999 }, iend]),
+      "IHDR not first": build([idat, ihdr, iend]),
+      "two IHDR": build([ihdr, ihdr, idat, iend]),
+      "a short IHDR": build([{ type: "IHDR", data: ihdr.data.slice(0, 12) }, idat, iend]),
+      "a zero width": build([header(0, 2), idat, iend]),
+      "a side over 8192": build([header(8193, 2), idat, iend]),
+      "an unsupported bit depth": build([header(2, 2, 3), idat, iend]),
+      "no IDAT": build([ihdr, iend]),
+      "IDAT split by another chunk": build([ihdr, idat, text("x", "Comment"), idat, iend]),
+      "no IEND": build([ihdr, idat]),
+      "IEND with data": build([ihdr, idat, { type: "IEND", data: [1] }]),
+      "bytes after IEND": build([ihdr, idat, iend], [0]),
+      "an unknown critical chunk": build([ihdr, { type: "ABCD", data: [] }, idat, iend]),
+      "a type byte that is not a letter": build([ihdr, { type: "ab1d", data: [] }, idat, iend]),
+      "the reserved bit set": build([ihdr, { type: "abcd", data: [] }, idat, iend]),
+      "a palette after the image data": build([
+        ihdr,
+        idat,
+        { type: "PLTE", data: [0, 0, 0] },
+        iend,
+      ]),
+      "more than 128 chunks": build([
+        ihdr,
+        ...new Array(130).fill({ type: "teXt", data: [] }),
+        idat,
+        iend,
+      ]),
+    };
+    for (const [name, url] of Object.entries(cases))
+      expect([name, readPicture(url).kind]).toEqual([name, "invalid"]);
+    // An ancillary chunk the reader doesn't know, before or after the image data, is fine.
+    expect(
+      readPicture(
+        build([
+          ihdr,
+          { type: "teXt", data: [] },
+          idat,
+          { type: "tIME", data: [0, 0, 0, 0, 0, 0, 0] },
+          iend,
+        ]),
+      ).kind,
+    ).toBe("plain");
+  });
+
+  it("reads a choice only from Clawtrate's exact keyword, once, as at most 200 ASCII bytes", () => {
+    expect(readPicture(build(withAfterHeader(text(CHOICE, "clawtrate-avatarX")))).kind).toBe(
+      "plain",
+    );
+    expect(readPicture(build(withAfterHeader(text(CHOICE, "clawtrate-avata")))).kind).toBe("plain");
+    expect(readPicture(build(withAfterHeader(text(CHOICE), text(CHOICE)))).kind).toBe("invalid");
+    expect(readPicture(build(withAfterHeader(text(`${CHOICE}${"&".repeat(200)}`)))).kind).toBe(
+      "invalid",
+    );
+    expect(
+      readPicture(
+        build(
+          withAfterHeader({
+            type: "tEXt",
+            data: [...ascii("clawtrate-avatar"), 0, ...ascii(CHOICE), 0xe9],
+          }),
+        ),
+      ).kind,
+    ).toBe("invalid");
+    expect(readPicture(build(withAfterHeader(text("v=1&family=lobster&color=red")))).kind).toBe(
+      "invalid",
+    );
+    // A valid choice in a file that breaks later is still refused: the whole file is checked first.
+    const [ihdr, idat] = baseChunks() as [RawChunk, RawChunk];
+    expect(readPicture(build([ihdr, text(CHOICE), idat]))).toEqual({ kind: "invalid" });
+  });
+
+  it("draws an invalid picture as the bot's Clawling, and keeps a valid plain one", () => {
+    const broken = build(baseChunks(), [0]);
+    expect(avatarFor({ id: "otto", avatarUrl: broken })).toEqual({
+      kind: "creature",
+      choice: defaultAvatar("otto"),
+      chosen: false,
+    });
+    const plain = build(baseChunks());
+    expect(avatarFor({ id: "otto", avatarUrl: plain })).toEqual({ kind: "image", url: plain });
+    expect(avatarFor({ id: "otto", avatarUrl: "data:image/jpeg;base64,/9j/" })).toEqual({
+      kind: "image",
+      url: "data:image/jpeg;base64,/9j/",
+    });
+  });
+
+  it("writes nothing that would be over the limit, and replaces a choice already there", () => {
+    const near = build(withAfterHeader({ type: "teXt", data: new Array(24_400).fill(65) }));
+    expect(near.length).toBeLessThanOrEqual(MAX_PICTURE_CHARS);
+    expect(
+      pictureWithChoice(near, {
+        family: "lantern",
+        body: "box",
+        lure: "reach",
+        eyes: "one",
+        color: "lime",
+      }),
+    ).toBeNull();
+    const once = pictureWithChoice(build(withAfterHeader(text(CHOICE))), {
+      family: "clawling",
+      body: "dome",
+      eyes: "pair",
+      claws: "even",
+      color: "blue",
+    })!;
+    expect(chunks(once).filter((c) => c.type === "tEXt")).toHaveLength(1);
+    expect(choiceFromPicture(once)?.family).toBe("clawling");
+    expect(
+      pictureWithChoice(build(baseChunks(), [0]), {
+        family: "shellfolk",
+        shell: "dome",
+        color: "green",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("parsing a choice from untrusted input", () => {
+  it("takes only own fields, exactly the family's, with no duplicates", () => {
+    const inherited = Object.create({ shell: "dome" }) as Record<string, string>;
+    Object.assign(inherited, { family: "shellfolk", color: "green" });
+    expect(parseAvatarChoice(inherited)).toBeNull();
+    expect(
+      parseAvatarChoice({ family: "shellfolk", shell: "dome", color: "green", toString: "x" }),
+    ).toBeNull();
+    expect(
+      parseAvatarChoice({ family: "shellfolk", constructor: "dome", color: "green" }),
+    ).toBeNull();
+    expect(
+      parseAvatarChoice(JSON.parse('{"family":"shellfolk","__proto__":"dome","color":"green"}')),
+    ).toBeNull();
+    expect(
+      decodeAvatarChoice("v=1&family=shellfolk&shell=dome&shell=spiral&color=green"),
+    ).toBeNull();
+    expect(decodeAvatarChoice("v=1&family=shellfolk&constructor=dome&color=green")).toBeNull();
+    expect(decodeAvatarChoice("v=1&family=shellfolk&shell=dome&color=green")).toEqual({
+      family: "shellfolk",
+      shell: "dome",
+      color: "green",
+    });
   });
 });

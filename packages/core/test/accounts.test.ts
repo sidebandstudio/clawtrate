@@ -389,12 +389,16 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
   });
 });
 
+/** A real 2×2 PNG: a picture the gateway can keep and Clawtrate can read back. */
+const PICTURE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DAAMIM/4EAAB/uBfsL2WiLAAAAAElFTkSuQmCC";
+
 describe("creating a bot", () => {
   it("on an account: the model with its suffix, an empty fallback list, and the bot read back", async () => {
     const { client, fake, accounts } = await accountsClient();
     const { botId } = await client.createBot({
       name: "Viral",
-      avatar: "data:image/png;base64,iVBORw0KGgo=",
+      avatar: PICTURE,
       account: "acme:home",
       provider: "acme",
       model: "dev-1",
@@ -405,7 +409,7 @@ describe("creating a bot", () => {
       {
         name: "Viral",
         model: "acme/dev-1@acme:home",
-        avatar: "data:image/png;base64,iVBORw0KGgo=",
+        avatar: PICTURE,
       },
     ]);
     const patch = fake.gateway.calls("config.patch").at(-1) as {

@@ -179,14 +179,19 @@ export function encodeAvatarChoice(choice: AvatarChoice): string {
   return fields.join("&");
 }
 
-/** The choice in a text form, or null when anything in it is unknown. */
+/** The choice in a text form, or null when anything in it is unknown, repeated or missing. */
 export function decodeAvatarChoice(text: string): AvatarChoice | null {
-  if (text.length > 200) return null;
-  const fields: Record<string, string> = {};
-  for (const pair of text.split("&")) {
+  if (text.length > MAX_CHOICE_CHARS) return null;
+  const fields: Record<string, string> = Object.create(null) as Record<string, string>;
+  const pairs = text.split("&");
+  // `v` and `family`, the family's parts (three at most) and `color`.
+  if (pairs.length > 6) return null;
+  for (const pair of pairs) {
     const at = pair.indexOf("=");
     if (at <= 0) return null;
-    fields[pair.slice(0, at)] = pair.slice(at + 1);
+    const key = pair.slice(0, at);
+    if (Object.hasOwn(fields, key)) return null;
+    fields[key] = pair.slice(at + 1);
   }
   if (fields.v !== "1") return null;
   delete fields.v;
@@ -199,21 +204,29 @@ function oneOf<T extends string>(list: readonly T[], value: unknown): value is T
 
 /**
  * A choice from untrusted input, such as a bot asking to change its own avatar:
- * an object with `family`, that family's parts and `color`. Null unless every
- * field is known and nothing else is there.
+ * an object with `family`, exactly that family's parts and `color`, each one of
+ * the names above. Null for anything else, an inherited or extra field included.
  */
 export function parseAvatarChoice(input: unknown): AvatarChoice | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const value = input as Record<string, unknown>;
-  const { family, color } = value;
+  const own = (key: string) => (Object.hasOwn(value, key) ? value[key] : undefined);
+  const family = own("family");
+  const color = own("color");
   if (!oneOf(AVATAR_FAMILIES, family) || !oneOf(AVATAR_COLOR_NAMES, color)) return null;
   const parts = AVATAR_PARTS[family] as Record<string, readonly string[]>;
-  const keys = Object.keys(value).filter((key) => key !== "family" && key !== "color");
-  if (keys.length !== Object.keys(parts).length) return null;
-  for (const key of keys) if (!parts[key] || !oneOf(parts[key], value[key])) return null;
-  const choice: Record<string, string> = { family, color };
-  for (const key of keys) choice[key] = value[key] as string;
-  return choice as AvatarChoice;
+  const partKeys = Object.keys(parts);
+  const keys = Object.keys(value);
+  if (keys.length !== partKeys.length + 2) return null;
+  const choice: Record<string, string> = Object.create(null) as Record<string, string>;
+  choice.family = family;
+  for (const key of partKeys) {
+    const part = own(key);
+    if (!Object.hasOwn(parts, key) || !oneOf(parts[key]!, part)) return null;
+    choice[key] = part;
+  }
+  choice.color = color;
+  return { ...choice } as AvatarChoice;
 }
 
 // Kept with the bot: inside its picture -------------------------------------------------
@@ -225,26 +238,44 @@ export function parseAvatarChoice(input: unknown): AvatarChoice | null {
  * choice in a text chunk under this keyword, which Clawtrate reads back.
  */
 export const AVATAR_PNG_KEYWORD = "clawtrate-avatar";
+/**
+ * The longest picture Clawtrate writes, or reads a choice from: the data URL,
+ * prefix included. Within what the gateway keeps.
+ */
+export const MAX_PICTURE_CHARS = 32_768;
+/** The longest text form of a choice. */
+const MAX_CHOICE_CHARS = 200;
+/** Chunks a picture may have before it is refused. */
+const MAX_PNG_CHUNKS = 128;
+/** The widest and tallest picture taken. */
+const MAX_PNG_SIDE = 8192;
 const PNG_PREFIX = "data:image/png;base64,";
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const KEYWORD_BYTES = [...AVATAR_PNG_KEYWORD].map((char) => char.charCodeAt(0));
 
+/** Canonical base64 only: the right alphabet, length and padding, and zero pad bits. */
 function fromBase64(text: string): Uint8Array | null {
+  if (
+    text.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)
+  )
+    return null;
   const clean = text.replace(/=+$/, "");
   const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
   let bits = 0;
   let value = 0;
   let at = 0;
   for (const char of clean) {
-    const digit = B64.indexOf(char);
-    if (digit < 0) return null;
-    value = (value << 6) | digit;
+    value = ((value << 6) | B64.indexOf(char)) & 0xffffff;
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
       out[at++] = (value >> bits) & 0xff;
     }
   }
+  // Bits left over from the last character must be zero.
+  if (bits > 0 && (value & ((1 << bits) - 1)) !== 0) return null;
   return out.subarray(0, at);
 }
 
@@ -277,53 +308,142 @@ function crc32(bytes: Uint8Array): number {
 
 type PngChunk = { type: string; start: number; end: number; data: Uint8Array };
 
-/** The chunks of a PNG, or null when it is not one. */
+const u32 = (bytes: Uint8Array, at: number) =>
+  ((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0;
+const isLetter = (byte: number) => (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
+/** Bit depths each colour type allows. */
+const DEPTHS: Record<number, number[]> = {
+  0: [1, 2, 4, 8, 16],
+  2: [8, 16],
+  3: [1, 2, 4, 8],
+  4: [8, 16],
+  6: [8, 16],
+};
+
+/**
+ * The chunks of a well-formed PNG, or null. At most `MAX_PNG_CHUNKS`; every
+ * length within the file and every CRC right; type bytes letters with the
+ * reserved bit clear; one 13-byte IHDR first with supported fields and sides
+ * of 1 to `MAX_PNG_SIDE`; at most one PLTE, before the image data; one run of
+ * IDAT; a zero-length IEND last, with nothing after it; no other critical chunk.
+ */
 function pngChunks(bytes: Uint8Array): PngChunk[] | null {
   if (bytes.length < 8 || PNG_SIGNATURE.some((byte, i) => bytes[i] !== byte)) return null;
   const chunks: PngChunk[] = [];
   let at = 8;
-  while (at + 12 <= bytes.length) {
-    const length =
-      ((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0;
-    const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8));
+  let idat: "before" | "in" | "after" = "before";
+  let palette = false;
+  while (at < bytes.length) {
+    if (chunks.length >= MAX_PNG_CHUNKS || at + 12 > bytes.length) return null;
+    const length = u32(bytes, at);
     const end = at + 12 + length;
-    if (end > bytes.length) return null;
-    chunks.push({ type, start: at, end, data: bytes.subarray(at + 8, at + 8 + length) });
+    if (length > bytes.length || end > bytes.length) return null;
+    const typeBytes = bytes.subarray(at + 4, at + 8);
+    if (!typeBytes.every(isLetter) || (typeBytes[2]! & 0x20) !== 0) return null;
+    if (crc32(bytes.subarray(at + 4, at + 8 + length)) !== u32(bytes, at + 8 + length)) return null;
+    const type = String.fromCharCode(typeBytes[0]!, typeBytes[1]!, typeBytes[2]!, typeBytes[3]!);
+    const data = bytes.subarray(at + 8, at + 8 + length);
+    const critical = (typeBytes[0]! & 0x20) === 0;
+    if (chunks.length === 0 && type !== "IHDR") return null;
+    if (type === "IHDR") {
+      if (chunks.length !== 0 || length !== 13) return null;
+      const width = u32(data, 0);
+      const height = u32(data, 4);
+      const [depth, colour, compression, filter, interlace] = data.subarray(8);
+      if (width < 1 || height < 1 || width > MAX_PNG_SIDE || height > MAX_PNG_SIDE) return null;
+      if (!DEPTHS[colour!]?.includes(depth!) || compression !== 0 || filter !== 0) return null;
+      if (interlace !== 0 && interlace !== 1) return null;
+    } else if (type === "PLTE") {
+      if (palette || idat !== "before" || length === 0 || length % 3 !== 0) return null;
+      palette = true;
+    } else if (type === "IDAT") {
+      if (idat === "after") return null;
+      idat = "in";
+    } else if (type === "IEND") {
+      if (length !== 0 || idat === "before" || end !== bytes.length) return null;
+      chunks.push({ type, start: at, end, data });
+      return chunks;
+    } else if (critical) {
+      return null;
+    }
+    if (type !== "IDAT" && idat === "in") idat = "after";
+    chunks.push({ type, start: at, end, data });
     at = end;
-    if (type === "IEND") break;
-  }
-  return chunks[0]?.type === "IHDR" ? chunks : null;
-}
-
-function latin1(bytes: Uint8Array): string {
-  return String.fromCharCode(...bytes);
-}
-
-/** The choice a picture carries, or null for any other picture. */
-export function choiceFromPicture(url: string | null): AvatarChoice | null {
-  if (!url || !url.startsWith(PNG_PREFIX)) return null;
-  const bytes = fromBase64(url.slice(PNG_PREFIX.length));
-  const chunks = bytes && pngChunks(bytes);
-  if (!chunks) return null;
-  for (const chunk of chunks) {
-    if (chunk.type === "IDAT") break;
-    if (chunk.type !== "tEXt") continue;
-    const zero = chunk.data.indexOf(0);
-    if (zero < 0 || latin1(chunk.data.subarray(0, zero)) !== AVATAR_PNG_KEYWORD) continue;
-    return decodeAvatarChoice(latin1(chunk.data.subarray(zero + 1)));
   }
   return null;
 }
 
-/**
- * A PNG data URL with the choice written into it, right after its header.
- * Null when the URL is not a PNG.
- */
-export function pictureWithChoice(url: string, choice: AvatarChoice): string | null {
-  if (!url.startsWith(PNG_PREFIX)) return null;
+/** Whether a tEXt chunk is Clawtrate's: the keyword's bytes, then the NUL at its exact length. */
+function isChoiceChunk(chunk: PngChunk): boolean {
+  return (
+    chunk.type === "tEXt" &&
+    chunk.data.length > KEYWORD_BYTES.length &&
+    KEYWORD_BYTES.every((byte, i) => chunk.data[i] === byte) &&
+    chunk.data[KEYWORD_BYTES.length] === 0
+  );
+}
+
+/** The choice text a chunk carries: at most 200 printable ASCII bytes, or null. */
+function choiceText(chunk: PngChunk): string | null {
+  const value = chunk.data.subarray(KEYWORD_BYTES.length + 1);
+  if (value.length === 0 || value.length > MAX_CHOICE_CHARS) return null;
+  let text = "";
+  for (const byte of value) {
+    if (byte < 0x20 || byte > 0x7e) return null;
+    text += String.fromCharCode(byte);
+  }
+  return text;
+}
+
+/** What a PNG data URL from the gateway is: someone's own picture, a creature, or not a picture to show. */
+export type PictureRead =
+  { kind: "plain" } | { kind: "creature"; choice: AvatarChoice } | { kind: "invalid" };
+
+type ReadPng = { read: PictureRead; bytes: Uint8Array; chunks: PngChunk[] };
+
+function readPng(url: string): ReadPng | null {
+  if (url.length > MAX_PICTURE_CHARS || !url.startsWith(PNG_PREFIX)) return null;
   const bytes = fromBase64(url.slice(PNG_PREFIX.length));
   const chunks = bytes && pngChunks(bytes);
   if (!bytes || !chunks) return null;
+  const marked = chunks.filter(isChoiceChunk);
+  if (marked.length === 0) return { read: { kind: "plain" }, bytes, chunks };
+  if (marked.length > 1) return null;
+  const text = choiceText(marked[0]!);
+  const choice = text === null ? null : decodeAvatarChoice(text);
+  return choice ? { read: { kind: "creature", choice }, bytes, chunks } : null;
+}
+
+/**
+ * Read a PNG data URL: a plain picture, a creature picture with its choice, or
+ * invalid (too long, not canonical base64, not a well-formed PNG, or carrying
+ * a choice that is not one). The whole file is checked before a choice is returned.
+ */
+export function readPicture(url: string): PictureRead {
+  return readPng(url)?.read ?? { kind: "invalid" };
+}
+
+/** The choice a picture carries, or null for any other picture. */
+export function choiceFromPicture(url: string | null): AvatarChoice | null {
+  if (!url) return null;
+  const read = readPicture(url);
+  return read.kind === "creature" ? read.choice : null;
+}
+
+/** Whether a picture may be sent to the gateway: a well-formed PNG data URL within the limit. */
+export function isKeepablePicture(url: string): boolean {
+  return readPicture(url).kind !== "invalid";
+}
+
+/**
+ * A PNG data URL with the choice written into it, right after its header,
+ * replacing any choice it carried. Null when the URL is not a well-formed PNG
+ * or the result would be longer than `MAX_PICTURE_CHARS`.
+ */
+export function pictureWithChoice(url: string, choice: AvatarChoice): string | null {
+  const png = readPng(url);
+  if (!png) return null;
+  const { bytes, chunks } = png;
   const text = `${AVATAR_PNG_KEYWORD}\0${encodeAvatarChoice(choice)}`;
   const body = new Uint8Array(4 + text.length);
   for (let i = 0; i < text.length; i++) body[4 + i] = text.charCodeAt(i);
@@ -333,9 +453,7 @@ export function pictureWithChoice(url: string, choice: AvatarChoice): string | n
   view.setUint32(0, text.length);
   chunk.set(body, 4);
   view.setUint32(8 + text.length, crc32(body));
-  const kept = chunks.filter(
-    (each) => !(each.type === "tEXt" && latin1(each.data).startsWith(`${AVATAR_PNG_KEYWORD}\0`)),
-  );
+  const kept = chunks.filter((each) => !isChoiceChunk(each));
   const parts = [bytes.subarray(0, 8), bytes.subarray(kept[0]!.start, kept[0]!.end), chunk];
   for (const each of kept.slice(1)) parts.push(bytes.subarray(each.start, each.end));
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -344,27 +462,36 @@ export function pictureWithChoice(url: string, choice: AvatarChoice): string | n
     out.set(part, at);
     at += part.length;
   }
-  return PNG_PREFIX + toBase64(out);
+  const result = PNG_PREFIX + toBase64(out);
+  return result.length <= MAX_PICTURE_CHARS ? result : null;
 }
 
 /** What a bot's avatar is: its chosen or default creature, or its own picture. */
 export type BotAvatar =
   { kind: "creature"; choice: AvatarChoice; chosen: boolean } | { kind: "image"; url: string };
 
-const read = new Map<string, AvatarChoice | null>();
+const read = new Map<string, PictureRead>();
 
-/** A bot's avatar from its id and the picture its gateway identity carries. */
+/**
+ * A bot's avatar from its id and the picture its gateway identity carries. A
+ * PNG is read: a creature's picture draws the creature, a plain one is shown,
+ * and one that is not well formed gets the Clawling the id gives. Pictures of
+ * other kinds are shown as they are.
+ */
 export function avatarFor(bot: { id: string; avatarUrl: string | null }): BotAvatar {
-  if (!bot.avatarUrl) return { kind: "creature", choice: defaultAvatar(bot.id), chosen: false };
-  let choice = read.get(bot.avatarUrl);
-  if (choice === undefined) {
-    choice = choiceFromPicture(bot.avatarUrl);
+  const url = bot.avatarUrl;
+  const fallback: BotAvatar = { kind: "creature", choice: defaultAvatar(bot.id), chosen: false };
+  if (!url) return fallback;
+  if (!url.startsWith(PNG_PREFIX)) return { kind: "image", url };
+  if (url.length > MAX_PICTURE_CHARS) return fallback;
+  let result = read.get(url);
+  if (result === undefined) {
+    result = readPicture(url);
     if (read.size >= 64) read.delete(read.keys().next().value!);
-    read.set(bot.avatarUrl, choice);
+    read.set(url, result);
   }
-  return choice
-    ? { kind: "creature", choice, chosen: true }
-    : { kind: "image", url: bot.avatarUrl };
+  if (result.kind === "creature") return { kind: "creature", choice: result.choice, chosen: true };
+  return result.kind === "plain" ? { kind: "image", url } : fallback;
 }
 
 // The palette guard --------------------------------------------------------------------

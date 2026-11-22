@@ -55,6 +55,7 @@ import {
   type StoredOrder,
 } from "./accounts.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** What the engine needs from the client. */
@@ -102,7 +103,7 @@ export type CreateBotInput = {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The longest picture New bot sends. */
-export const MAX_CREATE_AVATAR_CHARS = 32_768;
+export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
 
 /** The most steps one sign-in is followed through before Clawtrate stops it. */
 export const MAX_SIGNIN_STEPS = 64;
@@ -1120,12 +1121,11 @@ export class AccountsEngine {
     const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
     if (input.account && accountProvider(input.account) !== input.provider)
       throw new Error("That account belongs to another provider.");
-    const avatar =
-      input.avatar &&
-      input.avatar.startsWith("data:image/png;base64,") &&
-      input.avatar.length <= MAX_CREATE_AVATAR_CHARS
-        ? input.avatar
-        : null;
+    // An explicit picture must be one the gateway can keep and Clawtrate can read back;
+    // null leaves the bot to the Clawling its id gives.
+    if (input.avatar !== null && !isKeepablePicture(input.avatar))
+      throw new Error("That picture can't be kept.");
+    const avatar = input.avatar;
     // The bots there before: kept from the first Create of this name while its answer is in doubt.
     const retrying =
       previous?.status === "failed" && previous.uncertain && previous.name === name && this.planned
@@ -1193,8 +1193,7 @@ export class AccountsEngine {
    */
   async setBotPicture(botId: string, avatar: string): Promise<void> {
     this.requireAdmin("Changing a bot's picture");
-    if (!avatar.startsWith("data:image/png;base64,") || avatar.length > MAX_CREATE_AVATAR_CHARS)
-      throw new Error("That picture is too large to keep.");
+    if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
     await this.ctx.request("agents.update", { agentId: botId, avatar });
     await this.ctx.refreshBots();
     if (this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl !== avatar)

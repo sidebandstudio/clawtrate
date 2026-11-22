@@ -46,11 +46,36 @@ describe("F-037: changing a bot's picture", () => {
     const { client, fake } = await accountsClient();
     await expect(
       client.setBotPicture("otto", "data:image/svg+xml;base64,PHN2Zy8+"),
-    ).rejects.toThrow("too large to keep");
+    ).rejects.toThrow("can't be kept");
     await expect(
       client.setBotPicture("otto", `data:image/png;base64,${"A".repeat(40_000)}`),
     ).rejects.toThrow();
+    // A PNG that is not well formed (bytes after its end) is refused before anything is sent.
+    await expect(client.setBotPicture("otto", `${PICTURE.slice(0, -4)}AAAA`)).rejects.toThrow(
+      "can't be kept",
+    );
     expect(fake.gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
+  it("New bot refuses an explicit picture that is not a well-formed PNG before agents.create", async () => {
+    const { client, fake } = await accountsClient();
+    const input = {
+      name: "Viral",
+      account: "acme:home",
+      provider: "acme",
+      model: "dev-1",
+      effort: null,
+    };
+    await expect(
+      client.createBot({ ...input, avatar: "data:image/png;base64,iVBORw0KGgo=" }),
+    ).rejects.toThrow("can't be kept");
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    // Null is an untouched picture: the bot is made, and its id chooses its Clawling.
+    await client.createBot({ ...input, avatar: null });
+    expect(fake.gateway.calls("agents.create")).toEqual([
+      { name: "Viral", model: "acme/dev-1@acme:home" },
+    ]);
     client.stop();
   });
 });
