@@ -21,6 +21,7 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/computer.ts:BUSY_REASONS": "static, the plugin's five busy codes",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
@@ -44,6 +45,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/client.ts:CLIENT_CAPS": "static, one cap",
   "packages/core/src/client.ts:APPROVAL_CAPS": "static, three caps",
   "packages/core/src/client.ts:APPROVAL_SOURCES": "static, three list readers",
+  "packages/core/src/client.ts:NAMED_CONNECT_CODES": "static, the pinned protocol's connect codes",
   "packages/core/src/runs.ts:TERMINAL_RUN_STATES": "static, the terminal run states",
   "packages/core/src/runs.ts:TIMEOUT_PHASES": "static, five phases",
   "packages/core/src/runs.ts:HARD_TIMEOUT_PHASES": "static, three phases",
@@ -55,12 +57,15 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:READ_SCOPES": "static, one scope",
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
+  "packages/core/src/scopes.ts:FULL_SCOPES": "static, six scopes",
+  "apps/desktop/src/main/secret-box.ts:RECOVERY_BUTTONS": "static, two button labels",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",
   "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
+  "packages/core/src/machines.ts:PLACEMENT_PARTS": "static, the five parts of a bot's placement",
   "packages/core/src/machines.ts:readMachines>places":
     "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":
@@ -88,6 +93,16 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialState.computer.control":
+    "static, an empty list copied on write",
+  "packages/core/src/computer.ts:initialComputerState.control":
+    "static, an empty list copied on write",
+  "packages/core/src/computer.ts:readTabs>tabs":
+    "one answer; the tabs it lists, cut to `MAX_COMPUTER_TABS` before they are kept in the pane",
+  "packages/core/src/computer.ts:stopTask>sent.runIds":
+    "the empty list while the stop is sent; the answer replaces it, never grows it",
+  "packages/core/src/computer.ts:stopTask>stop.runIds":
+    "one answer; the runs it names, cut to `MAX_STOPPED_RUNS` before they are kept in the pane",
   "packages/core/src/routines.ts:initialRoutinesState.routines":
     "the empty list before the first read; the state replaces it, never grows it",
   "packages/core/src/accounts.ts:initialAccountsState.accounts":
@@ -115,6 +130,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/runs.ts:applyQuestionRequested>card.settledBy":
     "the new question card's settling records, empty; kept only in the card, under its bound",
   // Weak: an entry lives only as long as the object it is keyed by.
+  "packages/core/src/client.ts:connectionWrites":
+    "weak, keyed by the host storage shared by its clients",
   "packages/core/src/bounds.ts:bounded": "weak, keyed by retained objects",
   "packages/core/src/bounds.ts:draws": "weak, keyed by bounds, which are static",
   "packages/core/src/runs.ts:sizes": "weak, keyed by retained objects",

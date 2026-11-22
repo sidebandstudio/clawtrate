@@ -26,6 +26,8 @@ export type DeviceSigner = {
 /** The subset of the WHATWG WebSocket that core uses. Browsers, Node 22+ and React Native all provide it. */
 export type WebSocketLike = {
   readonly readyState: number;
+  /** How binary messages arrive; the computer's stream asks for `arraybuffer`. */
+  binaryType?: string;
   send(data: string): void;
   close(code?: number, reason?: string): void;
   onopen: ((event: unknown) => void) | null;
@@ -54,6 +56,17 @@ export type ClawtrateHost = {
   now?: () => number;
   randomId?: () => string;
   log?: (level: "debug" | "info" | "warn" | "error", message: string) => void;
+  /**
+   * Resolves true only while the host keeps this device's credentials (its device
+   * tokens, a saved gateway token and its key) in the system's secure storage.
+   * Full access (`ClientOptions.fullAccess`) needs it; without it, a host has none.
+   */
+  secureCredentials?: () => Promise<boolean>;
+  /**
+   * Where a host with secure storage keeps those credentials now: sealed, sealed with an
+   * earlier clear-text copy still to remove, for this session only, or unreadable.
+   */
+  credentialStatus?: () => Promise<"secure" | "cleanup-pending" | "session" | "locked">;
   /**
    * How to approve a pairing request on this gateway. The host knows whether the
    * gateway is the local development one; core falls back to the generic command.

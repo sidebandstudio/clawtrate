@@ -636,6 +636,13 @@ export type OutgoingMessage = {
   attachments: OutgoingAttachmentInfo[];
   /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
   replyToId?: string;
+  /**
+   * Where the gateway put a steer, by its own record; its acknowledgement says neither
+   * (docs/research/steer-stop.md). `joined`: the bare `chat` final under the steer's own id
+   * came while the run it was sent into went on. `withdrawn`: a Stop's `chat.abort` with that
+   * id answered that it cancelled it, so it never runs, and that id cannot be sent again.
+   */
+  steer?: "joined" | "withdrawn";
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };
@@ -1471,6 +1478,24 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
 }
 
 /**
+ * A Stop whose first abort had not gone is withdrawn before it went: a run still stopping goes
+ * on as `revertStop` leaves it; one settled stopped with no known outcome keeps that inference,
+ * unconfirmed, but no read that names it later sends its abort.
+ */
+export function retireStopIntent(
+  activity: TaskActivity,
+  runId: string,
+  error: string,
+): TaskActivity {
+  const reverted = revertStop(activity, runId, error);
+  return updateRun(reverted, runId, (run) =>
+    run.state === "stopped" && !run.outcomeKnown && run.stopRequestedAt !== null
+      ? { ...run, stopRequestedAt: null }
+      : run,
+  );
+}
+
+/**
  * A steer was sent into the active run, and the gateway answered with a run id
  * of the steer's own. Whether it joined that run is known only from what comes
  * under that id (`steerOwnRun`); until then its bare acknowledgement is not
@@ -1487,7 +1512,15 @@ export function registerSteerAlias(
   // own run, and no alias is recorded; an empty one (the bare acknowledgement, or history's
   // in-flight id with nothing under it) is only the steer, and goes.
   const shown = findRun(activity, aliasId);
-  if (shown && (shown.steps.length > 0 || shown.text || shown.origin === "local")) return activity;
+  if (
+    shown &&
+    (shown.steps.length > 0 ||
+      shown.text ||
+      shown.origin === "local" ||
+      // The gateway's events reported its start: a run of its own, if nothing of it shows yet.
+      (shown.origin === "gateway" && shown.reportedStartAt !== null))
+  )
+    return activity;
   return {
     ...activity,
     runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,
@@ -1610,7 +1643,9 @@ function steerOwnRun(
     event === "agent"
       ? ["lifecycle", "assistant", "thinking", "tool", "item", "command_output"].includes(
           str(payload.stream) ?? "",
-        )
+        ) &&
+        // A steer withdrawn before it ran ends aborted with no start of its own: not a run.
+        !(payload.stream === "lifecycle" && asRecord(payload.data)?.aborted === true)
       : payload.state === "delta"
         ? contentText(message?.content) !== "" || typeof payload.deltaText === "string"
         : // An error ends a run of its own: a joined steer is acknowledged by a bare final only.
@@ -2011,7 +2046,11 @@ export function applyChatEvent(
   if (!raw) return activity;
   const runId = canonicalRunId(activity, raw);
   const own = steerOwnRun(activity, runId, "chat", payload);
-  if (!own) return activity;
+  // The bare final is the gateway's word that the steer joined the run (its id is the message's).
+  if (!own)
+    return payload.state === "final"
+      ? updateMessage(activity, runId, { steer: "joined" })
+      : activity;
   activity = own;
   const existing = findRun(activity, runId);
   const state = payload.state;
@@ -3593,6 +3632,33 @@ export function parkAfterStop(
       runId: null,
     });
   }
+  return next;
+}
+
+/**
+ * Steers the gateway answered it withdrew (`chat.abort` naming their own ids, the messages'
+ * ids): never run, so on the shelf, Not sent, as a message a Stop parked is. Only a steer still
+ * known by its alias alone qualifies. One whose own run the gateway's events showed (the alias
+ * went with them) was delivered, and the answer stopped that run: it is not withdrawn.
+ */
+export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): TaskActivity {
+  let next = activity;
+  for (const message of activity.outbox)
+    if (
+      // Sent as a steer, by its key's alias; a Resend since may have changed its mode.
+      Object.hasOwn(activity.steerAliases, message.id) &&
+      // A retry may be queued or parked under the same key when the confirmation arrives.
+      // Keep that confirmation unless the steer is settled or the person cancelled the retry.
+      message.steer === undefined &&
+      message.status !== "cancelled" &&
+      message.status !== "handled" &&
+      ids.includes(message.id)
+    )
+      next = {
+        // A Resend's own run under the withdrawn key never ran either.
+        ...updateMessage(next, message.id, { status: "not-sent", steer: "withdrawn", runId: null }),
+        runs: next.runs.filter((run) => run.id !== message.id || run.origin !== "local"),
+      };
   return next;
 }
 

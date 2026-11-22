@@ -38,6 +38,8 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${PORT}`,
     locale: "en-US",
     timezoneId: "America/New_York",
+    // The app's own default, for a test that names no theme.
+    colorScheme: "dark",
     trace: "retain-on-failure",
   },
   webServer: {

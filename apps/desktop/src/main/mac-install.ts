@@ -43,7 +43,11 @@ async function runInspector(
       failed = true;
     });
     child.once("close", (code) =>
-      resolve(!failed && !signal.aborted && code === 0 ? output.trim() : "inspection-failed"),
+      resolve(
+        !failed && !signal.aborted && code === 0 && output.endsWith("\n")
+          ? output.slice(0, -1)
+          : "inspection-failed",
+      ),
     );
   });
   switch (reason) {

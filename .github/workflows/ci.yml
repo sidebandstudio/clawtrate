@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      keychain:
+        description: Run only the packaged Keychain check, on a discarded macOS runner
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,8 +36,11 @@ jobs:
       - id: diff
         env:
           BASE: ${{ github.base_ref }}
+          KEYCHAIN_ONLY: ${{ inputs.keychain == true }}
         run: |
           code=true
+          # A run by hand for the Keychain check alone runs no other end-to-end or packaging job.
+          if [ "$KEYCHAIN_ONLY" = "true" ]; then code=false; fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Without rename detection a file moved into docs/ also lists the path it left.
             files=$(git diff --name-only --no-renames "origin/$BASE...HEAD")
@@ -76,8 +84,6 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -90,7 +96,8 @@ jobs:
       - run: npm install --global openclaw@2026.10.6
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm e2e --shard=${{ matrix.shard }}/3
+      # e2e/setup.spec.ts drives the desktop app's development build, which needs a display.
+      - run: xvfb-run --auto-servernum pnpm e2e --shard=${{ matrix.shard }}/3
       # What a failed check saw: traces and error contexts, kept for a few days.
       - if: failure()
         uses: actions/upload-artifact@v7
@@ -113,6 +120,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run apps/desktop/test/update/mac-inspection.test.ts
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
@@ -251,5 +259,60 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: packaged-results
+          path: test-results/
+          retention-days: 3
+
+  # The packaged Keychain check (docs/development/packaging.md), by hand only: it needs a default
+  # login keychain no person uses, so the job makes one on a runner that is discarded afterwards.
+  keychain:
+    if: github.event_name == 'workflow_dispatch' && inputs.keychain
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The gateway version the project tests against (docs/decisions.md), from the public registry.
+      - run: npm install --global openclaw@2026.10.6
+      - name: Make a disposable keychain the default
+        id: keychain
+        run: |
+          path="$RUNNER_TEMP/clawtrate-check-$(openssl rand -hex 8).keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$path"
+          security set-keychain-settings -lut 3600 "$path"
+          security unlock-keychain -p "$password" "$path"
+          security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s "$path"
+          default="$(security default-keychain -d user | tr -d '" ')"
+          echo "default keychain: $default"
+          echo "path=$default" >> "$GITHUB_OUTPUT"
+      # The Keychain test copies the pairing the pairing test makes, which fills the form the
+      # first test opens, so all three run.
+      - name: Run the Keychain check
+        env:
+          # The seeded `ls` result is in byte order, as Linux runners sort it; the macOS runner's
+          # en_US.UTF-8 would put `changes` before the capitalised files.
+          LC_ALL: C
+          CLAWTRATE_CHECK_KEYCHAIN: "1"
+          CLAWTRATE_CHECK_KEYCHAIN_PATH: ${{ steps.keychain.outputs.path }}
+        run: pnpm check:packaged -g "opens its window from the packaged app|pairs with its own development gateway instance|Keychain"
+      - name: Delete the disposable keychain
+        if: ${{ always() && steps.keychain.outputs.path != '' }}
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.path }}
+        run: |
+          # The items' names only, never their values: what the run left in its own keychain.
+          security dump-keychain "$KEYCHAIN" | grep -E '"(svce|acct|labl)"' || true
+          security default-keychain -d user -s login.keychain-db || true
+          security delete-keychain "$KEYCHAIN"
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: keychain-check-results
           path: test-results/
           retention-days: 3

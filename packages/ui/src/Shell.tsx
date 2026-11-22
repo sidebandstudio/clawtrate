@@ -1,6 +1,7 @@
 import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
+import { cardDomId } from "./cards/placement.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
@@ -22,6 +23,11 @@ import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
+import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
+import type { SettingsSection } from "./Settings.tsx";
+
+/** True on a Mac, where ⌘ is the command key; elsewhere Ctrl stands for it. */
+const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -58,7 +64,7 @@ export function Shell({
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
   updateEntry: boolean;
-  onOpenSettings: (section?: "updates") => void;
+  onOpenSettings: (section?: SettingsSection) => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
@@ -154,9 +160,47 @@ export function Shell({
   const backLinkRef = useRef<(() => void) | null>(null);
 
   const [shortcuts, setShortcuts] = useState(false);
+  // The search palette (search.md): ⌘K or Ctrl+K anywhere, unless another dialog is open.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchOpener = useRef<HTMLElement | null>(null);
+  const openPalette = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    searchOpener.current = canFocus(active) ? active : null;
+    setSearchOpen(true);
+  }, []);
+  const closePalette = useCallback((refocus: boolean) => {
+    setSearchOpen(false);
+    const opener = searchOpener.current;
+    searchOpener.current = null;
+    if (refocus)
+      requestAnimationFrame(() => {
+        if (canFocus(opener)) opener.focus();
+      });
+  }, []);
+  /** A message opened from search: scrolled into view and ringed once its conversation shows. */
+  const [reveal, setReveal] = useState<{ key: string; messageId: string; said: string } | null>(
+    null,
+  );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
   const [newBot, setNewBot] = useState(false);
   const openNewBot = useCallback(() => setNewBot(true), []);
+  const mac = isMac();
+  useEffect(() => {
+    if (inert || newBot || shortcuts || searchOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        (mac ? event.metaKey : event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        openPalette();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inert, newBot, shortcuts, searchOpen, mac, openPalette]);
   useEffect(() => {
     if (!interactive || inert) return;
     const onKey = (event: KeyboardEvent) => {
@@ -296,6 +340,10 @@ export function Shell({
   // pane moves nothing except off what has just become inert.
   const drawerWasOpen = useRef(false);
   const panelWasOpen = useRef(panelOpen);
+  const focusOpener = () => {
+    const opener = openerRef.current;
+    (canFocus(opener) ? opener : toggleRef.current)?.focus();
+  };
   useEffect(() => {
     // Right after a resize the last measurement can lag a frame behind, so
     // focus is decided from the pane's width as it is now.
@@ -308,8 +356,7 @@ export function Shell({
     } else if (!panelOpen && panelWasOpen.current) {
       const active = document.activeElement;
       if (drawerWasOpen.current || !active || active === document.body) {
-        const opener = openerRef.current;
-        (canFocus(opener) ? opener : toggleRef.current)?.focus();
+        focusOpener();
       }
     }
     drawerWasOpen.current = drawerNow;
@@ -384,6 +431,91 @@ export function Shell({
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
 
+  const openFromSearch = useCallback(
+    (target: SearchTarget) => {
+      if (target.kind === "setting") {
+        closePalette(false);
+        onOpenSettings(target.section);
+        return;
+      }
+      if (target.kind === "routine") {
+        closePalette(false);
+        // A routine past those the app keeps is found by reading its bot's routines.
+        const kept = state.routines.routines.some((each) => each.id === target.id);
+        openRoutines({ ...ROUTINES_HOME, bot: kept ? null : target.botId, routine: target.id });
+        return;
+      }
+      if (target.kind === "bot") selection.selectBot(target.botId);
+      else selection.selectTask(target.botId, target.key);
+      if (target.kind === "message") {
+        setReveal({ key: target.key, messageId: target.messageId, said: target.said });
+        // As a drawer Work closes, so the message can be seen and take focus.
+        if (drawerOpen) {
+          keepFocus.current = true;
+          setPanel(false);
+        }
+      }
+      openDetail();
+      closePalette(target.kind !== "message" && !onePane);
+    },
+    // openRoutines is redefined each render and reads only refs and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      closePalette,
+      onOpenSettings,
+      selection,
+      openDetail,
+      onePane,
+      drawerOpen,
+      setPanel,
+      state.routines,
+    ],
+  );
+  const revealReady = reveal !== null && reveal.key === taskKey && transcript?.status === "ready";
+  useEffect(() => {
+    if (!revealReady || !reveal) return;
+    let frames = 0;
+    let raf = 0;
+    const find = () => {
+      const unit = mainRef.current?.querySelector<HTMLElement>(
+        `.transcript [data-message="${CSS.escape(reveal.messageId)}"]`,
+      );
+      if (!unit) {
+        if ((frames += 1) < 60) raf = requestAnimationFrame(find);
+        else setReveal(null);
+        return;
+      }
+      setReveal(null);
+      unit.scrollIntoView({ block: "nearest" });
+      const turn = unit.closest<HTMLElement>(".turn") ?? unit;
+      if (!turn.hasAttribute("tabindex")) turn.tabIndex = -1;
+      // The ring on its bubbles marks it; the turn takes focus for the screen reader.
+      turn.dataset.searchFocus = "";
+      turn.focus({ preventScroll: true });
+      const bubbles = [...unit.querySelectorAll<HTMLElement>(".bubble")];
+      for (const bubble of bubbles) {
+        bubble.classList.remove("search-hit");
+        void bubble.offsetWidth;
+        bubble.classList.add("search-hit");
+        bubble.addEventListener("animationend", () => bubble.classList.remove("search-hit"), {
+          once: true,
+        });
+      }
+      // With reduced motion the ring stays until the next scroll or key.
+      const clear = () => {
+        for (const bubble of bubbles) bubble.classList.remove("search-hit");
+        window.removeEventListener("keydown", clear, true);
+        mainRef.current?.querySelector(".transcript")?.removeEventListener("wheel", clear);
+      };
+      window.addEventListener("keydown", clear, true);
+      mainRef.current?.querySelector(".transcript")?.addEventListener("wheel", clear);
+      setChatNote("");
+      requestAnimationFrame(() => setChatNote(reveal.said));
+    };
+    raf = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(raf);
+  }, [revealReady, reveal]);
+
   // The way between a step and its file (work-pane.md, section 10).
   const runs = transcript?.runs;
   const showInChat = useCallback(
@@ -410,6 +542,65 @@ export function Shell({
     },
     [drawerOpen, setPanel, taskKey],
   );
+  // From the Computer tab: a step shown in the chat, and the question card (work-pane.md, section 18).
+  const showStep = useCallback(
+    (stepId: string) => {
+      const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      const fromDrawer = drawerOpen;
+      const reveal = () => {
+        const found = taskKey !== null && revealStep(taskKey, callId);
+        // Nothing in the chat to focus: back to what opened the drawer, or the Work toggle.
+        if (!found && fromDrawer) focusOpener();
+        setChatNote("");
+        requestAnimationFrame(() =>
+          setChatNote(
+            found
+              ? "Showing the step in the chat"
+              : "This step isn't in the chat: it is not loaded here, or not kept.",
+          ),
+        );
+      };
+      if (drawerOpen) {
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else reveal();
+    },
+    [drawerOpen, setPanel, taskKey],
+  );
+  /** Bring a question's card into view and focus it: that question's own, when it is named. */
+  const showQuestion = useCallback(
+    (questionId?: string) => {
+      const fromDrawer = drawerOpen;
+      const reveal = () => {
+        const cards = document.querySelectorAll<HTMLElement>(
+          '.transcript [data-testid="question-card"]',
+        );
+        const card = questionId
+          ? document.querySelector<HTMLElement>(
+              `.transcript #${cardDomId({ kind: "question", id: questionId })}`,
+            )
+          : cards[cards.length - 1];
+        if (!card) {
+          if (fromDrawer) focusOpener();
+          return;
+        }
+        card.scrollIntoView({ block: "center" });
+        (card.querySelector<HTMLElement>("button, input") ?? card).focus({ preventScroll: true });
+      };
+      if (drawerOpen) {
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else requestAnimationFrame(reveal);
+    },
+    [drawerOpen, setPanel],
+  );
+  const showComputer = useCallback(() => {
+    setPanel(true);
+    setWorkTab("computer");
+    requestAnimationFrame(() => document.getElementById("work-tab-computer")?.focus());
+  }, [setPanel, setWorkTab]);
   const goBackToFile = useCallback(() => {
     setPanel(true);
     setWorkTab("files");
@@ -504,7 +695,9 @@ export function Shell({
         onOpenRoutineRun={(id, runAt) =>
           openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })
         }
-        inert={drawerOpen || inert}
+        onOpenPalette={openPalette}
+        paletteKeys={mac ? "⌘K" : "Ctrl+K"}
+        inert={drawerOpen || inert || searchOpen}
         interactive={interactive}
         sidebar={state.sidebar}
         newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
@@ -557,6 +750,7 @@ export function Shell({
                 caughtUp={caughtUp}
                 toggleRef={toggleRef}
                 inert={drawerOpen || inert}
+                onShowComputer={showComputer}
               />
             </WorkLinksContext.Provider>
           </OpenTaskContext.Provider>
@@ -580,6 +774,15 @@ export function Shell({
             fileRequest={fileRequest}
             onShowInChat={showInChat}
             onFilePath={setOpenFilePath}
+            computer={state.computer}
+            connection={state.connection}
+            interactive={interactive}
+            onShowStep={showStep}
+            onShowQuestion={showQuestion}
+            onRequestAccess={
+              info.readOnly ? null : () => void send({ type: "requestAccess" }).catch(() => {})
+            }
+            onOpenMachines={() => onOpenSettings("machines")}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}
@@ -588,12 +791,19 @@ export function Shell({
             bots={state.bots}
             tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
             transcripts={state.transcripts}
-            connection={state.connection}
             info={info}
           />
         )}
       </div>
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
+      {searchOpen && (
+        <SearchPalette
+          state={state}
+          mac={mac}
+          onOpen={openFromSearch}
+          onClose={() => closePalette(true)}
+        />
+      )}
       {newBot && (
         <NewBot
           accounts={state.accounts}

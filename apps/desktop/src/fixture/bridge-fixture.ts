@@ -61,9 +61,17 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import {
+  computerFixture,
+  FIXTURE_VIEWER,
+  withComputerRuns,
+  type ComputerParams,
+} from "./computer.ts";
+import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
+import { NO_SEARCH_PARAMS, searchCommands, withMessageIds, type SearchParams } from "./search.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -475,14 +483,18 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
+  /** `setup`: the desktop's first screen and a state of setup (`setup.ts`), over the connect scene. */
   options: {
     desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
+    setup?: string | null;
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    computer?: ComputerParams;
     checkIns?: CheckInParams;
+    search?: SearchParams;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -504,9 +516,13 @@ export function createFixtureBridge(
    */
   hold(): void;
   release(): void;
+  /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
+  computerRefusals(): number;
 } {
   const now = Date.now();
-  const { initial, steps } = scene(name, now);
+  const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
+  const { initial: sceneInitial, steps } = scene(setupName ? "connect" : name, now);
+  const initial = setupName ? { ...sceneInitial, setup: SETUP_STATES[setupName]! } : sceneInitial;
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
@@ -541,11 +557,41 @@ export function createFixtureBridge(
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
+  // The Computer scenes: a connection that may send and answer (unless read-only is asked for),
+  // Juniper's research run that uses the browser, and the engine answered by a scripted plugin.
+  const computerParams = options.computer ?? {
+    mode: null,
+    firstWatch: false,
+    takeRace: false,
+    readOnly: false,
+  };
+  if (computerParams.mode !== null) {
+    const write = !computerParams.readOnly;
+    state = {
+      ...state,
+      connection: {
+        ...state.connection,
+        scopes: write
+          ? ["operator.read", "operator.write", "operator.approvals", "operator.questions"]
+          : ["operator.read"],
+        canWrite: write,
+        canAnswer: write,
+        canApprove: write,
+      },
+      transcripts: withComputerRuns(state.transcripts, now, computerParams),
+    };
+  }
+  const search = options.search ?? NO_SEARCH_PARAMS;
+  if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
+  // The histories a dropped or failed transcript is read again from; pairing loads its own.
+  let histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
     for (const listener of listeners) listener(state);
   };
+  const computer =
+    computerParams.mode !== null ? computerFixture(computerParams, now, () => state, set) : null;
   // A scene's later steps are timed from when the interface first listens, after it has drawn
   // the first state: timed from here, a slow machine could draw its first frame after them,
   // and never show the state the scene starts from.
@@ -561,6 +607,7 @@ export function createFixtureBridge(
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const timers = holdableTimers();
   const { deferred } = timers;
+  const searchCommand = searchCommands(search, deferred);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
     deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
@@ -577,6 +624,11 @@ export function createFixtureBridge(
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const searched = searchCommand(command, () => state);
+    if (searched) {
+      sent.push(command);
+      return searched;
+    }
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
       sent.push(command);
@@ -633,6 +685,56 @@ export function createFixtureBridge(
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
+    if (computer && command.type.startsWith("computer")) {
+      const e = computer.engine;
+      const v = FIXTURE_VIEWER;
+      switch (command.type) {
+        case "computerShow":
+          e.show(v, command.key);
+          return { viewer: v };
+        case "computerLeave":
+          return e.leave(v);
+        case "computerTabs":
+          return e.readTabs(v);
+        case "computerChoose":
+          return e.choose(v, command.targetId);
+        case "computerWatch":
+          return e.watch(v);
+        case "computerStopWatching":
+          return e.stopWatching(v);
+        case "computerFrame":
+          return e.frame(v, command.n, command.after);
+        case "computerTake":
+          return computer.take(v);
+        case "computerCancelTake":
+          return e.cancelTake(v);
+        case "computerInput":
+          return { sent: e.input(v, command.input) };
+        case "computerRelease":
+          return e.release(v, command.answer ? { answer: command.answer } : {});
+        case "computerCheck":
+          return e.check(v);
+        case "computerDismiss":
+          return e.dismiss(v);
+        case "computerStopTask":
+          return e.stopTask(v);
+      }
+    }
+    if (command.type === "readMachine") {
+      if (!computer) throw new Error("Not connected to the gateway.");
+      return computer.machine(command.key, command.probe);
+    }
+    if (
+      setupCommand(
+        command,
+        () => state,
+        set,
+        () => loaded(Date.now()),
+        (ms, run) => deferred(run, ms),
+        setupName === "found-protocol" ? "protocol" : "connected",
+      )
+    )
+      return;
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -653,7 +755,14 @@ export function createFixtureBridge(
           await new Promise((resolve) => setTimeout(resolve, 500));
           pairingChecks += 1;
           if (pairingChecks === 1) set(withConnection(state, { retryAt: Date.now() + 5000 }));
-          else set(loaded(Date.now()));
+          else {
+            const loadedNow = loaded(Date.now());
+            const next = search.ids
+              ? { ...loadedNow, transcripts: withMessageIds(loadedNow.transcripts) }
+              : loadedNow;
+            histories = next.transcripts;
+            set(next);
+          }
           return;
         }
         if (status === "connected" && state.discovery.status !== "error") return;
@@ -685,8 +794,27 @@ export function createFixtureBridge(
         setTimeout(() => set(caughtUp(state)), 700);
         return;
       }
-      case "openSession":
+      case "reloadSession":
+      case "openSession": {
+        // A history the state no longer holds, or that failed since, is read again: loading at
+        // once, as the engine shows it, then loaded as a delayed answer a test can hold.
+        const { key } = command;
+        const history = histories[key];
+        const current = state.transcripts[key];
+        if (!history || history === current || (current && current.status !== "error")) return;
+        const reading = { ...history, status: "loading" as const, error: null };
+        set({ ...state, transcripts: { ...state.transcripts, [key]: reading } });
+        // Only onto the read it answers: a disconnect or a replacement since has the last word.
+        later(120, (now) =>
+          now.transcripts[key] === reading
+            ? { ...now, transcripts: { ...now.transcripts, [key]: history } }
+            : now,
+        );
+        return;
+      }
       case "closeSession":
+        // Answered as a delayed answer, so a test can hold a close while the page moves on.
+        return new Promise<void>((resolve) => deferred(resolve, 0));
       case "requestAccess":
         return;
       case "resolveApproval": {
@@ -885,7 +1013,11 @@ export function createFixtureBridge(
 
   return {
     desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
-    info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
+    info: setupName
+      ? setupInfo(FIXTURE_INFO, setupName)
+      : name === "access-pinned"
+        ? { ...FIXTURE_INFO, readOnly: true }
+        : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -913,5 +1045,6 @@ export function createFixtureBridge(
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,
+    computerRefusals: () => computer?.refusals() ?? 0,
   };
 }

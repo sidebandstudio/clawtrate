@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: the Main Bot and bots that set themselves up</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <link rel="stylesheet" href="css/main-bot.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/prototype.js"></script>
+    <script src="js/main-bot.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- docs/design/main-bot-onboarding.md. js/main-bot.js draws one view
+             from the address (view=, at=, card=, opening=, existing=, plugin=,
+             grant=, step=)
+             and plays it on a stand-in gateway that answers after a delay. -->
+        <div class="mb" id="mb-root" data-testid="main-bot"></div>
+        <p class="visually-hidden" id="mb-live" role="status" aria-live="polite"></p>
+      </div>
+    </main>
+  </body>
+</html>

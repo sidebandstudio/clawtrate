@@ -139,6 +139,12 @@ export function BotSettings({
     setPick(null);
   }
 
+  // Every connect clears the gateway's id until its identity read answers, the reconnect that
+  // brings an access grant too. The memory page stays through that; only another gateway replaces it.
+  const [memoryGateway, setMemoryGateway] = useState(connection.gatewayId);
+  if (connection.gatewayId !== null && connection.gatewayId !== memoryGateway)
+    setMemoryGateway(connection.gatewayId);
+
   const focusIn = useCallback((selector: string) => {
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
   }, []);
@@ -220,7 +226,7 @@ export function BotSettings({
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <BotMemory
-          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${connection.gatewayId ?? ""}`}
+          key={`${bot.id}\n${connection.gatewayUrl ?? ""}\n${connection.deviceId ?? ""}\n${memoryGateway ?? ""}`}
           botId={bot.id}
           visible={visible}
           name={name}

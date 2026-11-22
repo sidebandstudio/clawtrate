@@ -5,6 +5,56 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { tempDir } from "./harness.ts";
 
+// The shipped helper, built with packaging's flags (packaging/config.ts) and
+// its own main(). The test process is the helper's parent, and it isn't a
+// signed Clawtrate, so a run that reaches inspect() classifies that signature.
+describe.skipIf(process.platform !== "darwin")("Mac update inspection helper", () => {
+  let dir: ReturnType<typeof tempDir>, helper: string;
+  beforeAll(() => {
+    dir = tempDir();
+    helper = join(dir.path, "ClawtrateUpdateInspection");
+    execFileSync("/usr/bin/xcrun", [
+      "clang",
+      "-fobjc-arc",
+      "-Wall",
+      "-Werror",
+      "-O2",
+      "-arch",
+      "arm64",
+      "-arch",
+      "x86_64",
+      "-mmacosx-version-min=12.0",
+      "-framework",
+      "Foundation",
+      "-framework",
+      "Security",
+      "-larchive.2",
+      resolve(import.meta.dirname, "../../packaging/mac/inspect-archive.m"),
+      "-o",
+      helper,
+    ]);
+  }, 60000);
+  afterAll(() => dir.remove());
+  it.each([
+    ["the running signature", ["--running-signature", "dev.clawtrate.desktop"]],
+    ["a downloaded archive", ["scratch", "dev.clawtrate.desktop", "1.2.0", arch()]],
+  ])("starts and classifies %s", (_, args) => {
+    const archive = join(dir.path, "empty.zip");
+    writeFileSync(archive, "");
+    const fd = openSync(archive, "r");
+    try {
+      const output = execFileSync(helper, args, {
+        cwd: dir.path,
+        stdio: ["ignore", "pipe", "pipe", fd],
+        encoding: "utf8",
+      }).trim();
+      expect(["build-not-signed", "running-signature-untrusted"]).toContain(output);
+    } finally {
+      closeSync(fd);
+    }
+  });
+});
+
 // Exercise the ZIP reader and bundle metadata with inert fixtures. This
 // executable has no caller for the Security or framework handoff functions.
 describe.skipIf(process.platform !== "darwin")("Mac archive preflight", () => {
