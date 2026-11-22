@@ -798,4 +798,56 @@ describe("full access under interleavings", () => {
     expect(client.state.connection.requestedScopes).toEqual([...FULL_SCOPES]);
     client.stop();
   });
+
+  it("a refusal for a gateway while a Connect to it waits still stands after another gateway's attempt ends", async () => {
+    const URL_C = "ws://127.0.0.1:19964";
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    const asked: Array<{ url: string; scopes: string[] }> = [];
+    let refuse = new Set<string>();
+    gateway.connectReply = (params, url) => {
+      const scopes = [...(params as ConnectParams).scopes];
+      asked.push({ url: url ?? "", scopes });
+      if (!refuse.has(url ?? "")) return { ok: true, payload: helloOk(scopes, "token-A") };
+      // This gateway refuses its saved token; C ends its attempt with a refusal that pauses.
+      return refusal(url === URL_C ? "AUTH_RATE_LIMITED" : "AUTH_TOKEN_MISMATCH");
+    };
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "connected");
+    // A Connect to C, then one back to this gateway: both wait at their saves, in turn.
+    const gates = [deferred<void>(), deferred<void>()];
+    let saves = 0;
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === "connection" && saves < gates.length) await gates[saves++]!.promise;
+      return set(key, value);
+    };
+    const toC = client.connect({ url: URL_C, token: "shared-C" });
+    await until(() => saves === 1);
+    const back = client.connect({ url: URL, token: "shared" });
+    // This gateway refuses its saved token after the Connect back to it began.
+    refuse = new Set([URL]);
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_TOKEN_MISMATCH");
+    // C's attempt then ends too, before the Connect back is applied.
+    refuse = new Set([URL_C]);
+    gates[0]!.resolve();
+    await toC;
+    await until(() => saves === 2);
+    await until(
+      () =>
+        client.state.connection.gatewayUrl === URL_C &&
+        client.state.connection.error?.code === "AUTH_RATE_LIMITED",
+    );
+    refuse = new Set();
+    const before = asked.length;
+    gates[1]!.resolve();
+    await back;
+    await until(() => asked.slice(before).some((each) => each.url === URL));
+    // The refusal accepted after the Connect back began stands: its new pairing asks for read.
+    expect(asked.slice(before).find((each) => each.url === URL)!.scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
 });

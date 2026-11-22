@@ -1059,11 +1059,13 @@ export class ClawtrateClient {
    */
   private eligibilityEnds = 0;
   /**
-   * The gateway the latest of those ended it for. While a Connect's save is pending, the
-   * selection is still the earlier one, so every end in that time is for the connected gateway:
-   * a Connect to another address isn't cancelled by it.
+   * The gateway the latest of those ended it for, and the count before the first of the latest
+   * run of ends for it. Ends while a Connect waits are for the gateway selected then, which
+   * queued Connects may change: a Connect is cancelled by ends for its own address, not by ends
+   * that were all for another, and when they were for more than one it counts them as its own.
    */
   private lastEndUrl: string | null = null;
+  private endRunStart = 0;
   /**
    * The grant of the token record this client last read or wrote, by its key: whether it is a
    * full pairing's, and its held scopes as one bit per scope of `FULL_SCOPES`, so nothing grows
@@ -1485,7 +1487,7 @@ export class ClawtrateClient {
       this.typedAttempt = token ? { url, token, selection } : null;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibilityEnds === endsAtStart || this.lastEndUrl !== url;
+      this.fullEligible = this.eligibleSince(endsAtStart, url);
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
@@ -1519,7 +1521,7 @@ export class ClawtrateClient {
       this.selectionApplied = selection;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibilityEnds === endsAtStart || this.lastEndUrl !== url;
+      this.fullEligible = this.eligibleSince(endsAtStart, url);
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -1722,9 +1724,18 @@ export class ClawtrateClient {
 
   /** Full-access eligibility ends now, and a Connect already under way doesn't grant it back. */
   private endEligibility(url: string | null = this.settings?.url ?? null): void {
-    this.lastEndUrl = url;
+    if (url !== this.lastEndUrl) {
+      this.lastEndUrl = url;
+      this.endRunStart = this.eligibilityEnds;
+    }
     this.fullEligible = false;
     this.eligibilityEnds += 1;
+  }
+
+  /** Whether a Connect to `url` begun when `endsAtStart` ends had happened may grant full access. */
+  private eligibleSince(endsAtStart: number, url: string): boolean {
+    if (this.eligibilityEnds === endsAtStart) return true;
+    return endsAtStart >= this.endRunStart && this.lastEndUrl !== url;
   }
 
   /** The attempt on this address ended: no full pairing by itself, and its typed token is done. */
