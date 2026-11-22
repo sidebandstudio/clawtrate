@@ -1147,6 +1147,7 @@ export function ShelfRow({
         className="shelf-row"
         data-kind="could-not-start"
         data-tone="danger"
+        data-elsewhere={elsewhere ? "" : undefined}
         data-testid="shelf-row"
       >
         <span className="shelf-text" title={message.error ?? undefined}>

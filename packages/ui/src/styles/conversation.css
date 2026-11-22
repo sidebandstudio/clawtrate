@@ -641,6 +641,20 @@
   color: var(--text);
 }
 
+/* Refused because its task is gone: the reason, what a new task leaves behind and the words wrap,
+   beside the longer choice or above it on a narrow screen, instead of being cut. */
+.shelf-row[data-elsewhere] {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding-block: 6px;
+}
+
+.shelf-row[data-elsewhere] .shelf-text {
+  flex: 1 1 240px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
 .shelf-row .button {
   background: var(--bg-selected);
 }
