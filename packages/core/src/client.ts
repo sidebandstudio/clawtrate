@@ -1491,27 +1491,28 @@ export class ClawtrateClient {
    */
   async start(options: { resume?: boolean | "disconnected" } = {}): Promise<void> {
     const stops = this.stops;
-    return this.changeConnection(async () => {
-      if (stops !== this.stops) return;
-      const identity = await this.loadIdentity();
-      if (stops !== this.stops) return;
-      this.setConnection({ deviceId: identity.deviceId });
-      // A turn limit the person chose earlier, unless the host was given one.
-      if (this.options.turnLimitMs === undefined) {
-        const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-        if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
-      }
-      this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
-      if (options.resume === false) return;
-      const settings = await this.savedSettings();
-      if (stops !== this.stops) return;
-      this.settings = settings;
-      if (settings && (settings.suspended || options.resume === "disconnected")) {
-        this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
-        return;
-      }
-      if (settings) await this.open();
-    });
+    const selection = this.selectionApplied;
+    const prior = this.settings;
+    const identity = await this.loadIdentity();
+    if (stops !== this.stops) return;
+    this.setConnection({ deviceId: identity.deviceId });
+    // A turn limit the person chose earlier, unless the host was given one.
+    if (this.options.turnLimitMs === undefined) {
+      const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
+      if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+    }
+    this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
+    if (options.resume === false) return;
+    // Startup needs to open the socket without waiting for another client's credential write.
+    const settings = await this.savedSettings();
+    if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
+      return;
+    this.settings = settings;
+    if (settings && (settings.suspended || options.resume === "disconnected")) {
+      this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
+      return;
+    }
+    if (settings) await this.open();
   }
 
   /** Connect to a gateway. A token is only needed until this device is paired. */

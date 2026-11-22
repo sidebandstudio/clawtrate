@@ -200,7 +200,7 @@ describe("a saved gateway at start", () => {
     resumed.stop();
   });
 
-  it("finishes restoring a saved gateway before applying a new connection", async () => {
+  it("discards a late startup read once the person connects to another gateway", async () => {
     const saved = JSON.stringify({ url: URL_A, token: "old" });
     const storage = memoryStorage({ connection: saved });
     const reading = deferred<void>();
@@ -216,16 +216,14 @@ describe("a saved gateway at start", () => {
     try {
       const starting = client.start({ resume: "disconnected" });
       await reading.promise;
-      const connecting = client.connect({ url: URL_B, token: "new" });
-      await Promise.resolve();
-      const savedDuringRestore = storage.data.get("connection");
-      restore.resolve(saved);
-      await Promise.all([starting, connecting]);
+      await client.connect({ url: URL_B, token: "new" });
       await until(() => client.state.connection.status === "connected");
-      expect(savedDuringRestore).toBe(saved);
+      restore.resolve(saved);
+      await starting;
       expect(client.state.connection.gatewayUrl).toBe(URL_B);
       expect(connectParams(gateway).auth?.token).toBe("new");
     } finally {
+      restore.resolve(saved);
       client.stop();
     }
   });
