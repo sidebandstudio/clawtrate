@@ -255,4 +255,104 @@ describe("full access under interleavings", () => {
       expect(each.auth?.token).toBeUndefined();
     client.stop();
   });
+
+  it("a switch that couldn't be saved leaves the open attempt as it was: it doesn't start asking for the six", async () => {
+    const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: "shared" }) });
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => gateway.connects.length >= 1);
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === "connection") throw new Error("disk full");
+      return set(key, value);
+    };
+    await expect(client.connect({ url: "ws://127.0.0.1:19961", token: "other" })).rejects.toThrow();
+    storage.set = set;
+    const before = gateway.connects.length;
+    await until(() => gateway.connects.length >= before + 2);
+    for (const each of gateway.connects as ConnectParams[])
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a token lost right after the first full pairing ends that pairing's request for the six", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes], "token-A"),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "connected");
+    await until(() => saved(storage) !== null);
+    // Lost before any later plan read it.
+    storage.data.delete(tokenKey(URL));
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    const before = gateway.connects.length;
+    gateway.dropAll();
+    await until(() => gateway.connects.length >= before + 1);
+    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("Retry after a tokenless pairing request ended asks for read, not the six", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    let request = 0;
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: `req-${(request += 1)}`,
+          deviceId: "device-1",
+        },
+      },
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "pairing");
+    expect((gateway.connects[0] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
+    // The next answer names another request: the first one ended.
+    await until(() => client.state.connection.status === "error", 8_000);
+    const before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    expect((gateway.connects[before] as ConnectParams).scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  }, 12_000);
+
+  it("a Disconnect that couldn't be saved keeps the typed token's attempt, so the next one still ends it", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    const client = new ClawtrateClient(
+      host(gateway, storage, { credentialStatus: async () => "secure" }),
+      FAST,
+    );
+    await client.start();
+    await client.connect({ url: URL, token: "typed-token-3" });
+    await until(() => gateway.connects.length >= 1);
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === "connection") throw new Error("disk full");
+      return set(key, value);
+    };
+    await expect(client.suspend()).rejects.toThrow();
+    storage.set = set;
+    await client.suspend();
+    expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({
+      token: null,
+      suspended: true,
+    });
+    client.stop();
+  });
 });

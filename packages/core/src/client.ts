@@ -1441,16 +1441,17 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-      // The person chose to connect: a new pairing may ask for full access.
-      this.fullEligible = true;
-      this.planHadToken = false;
       const token = options.token?.trim() || null;
       const switched = this.settings?.url !== url;
       await this.saveSettings({ url, token });
       // The selection changes only once this choice was valid and saved: a refused one leaves
-      // the connection that stays open its own.
+      // the connection that stays open its own, and its attempt as it was.
       this.selectionApplied = selection;
       this.typedAttempt = token ? { url, token, selection } : null;
+      // The person chose to connect, and that choice is now the attempt: a new pairing may ask
+      // for full access.
+      this.fullEligible = true;
+      this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.setupCheck = null;
@@ -1478,12 +1479,13 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
-      // The person chose to connect: a new pairing may ask for full access.
+      if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
+      this.selectionApplied = selection;
+      // The person chose to connect, and that choice is now the attempt: a new pairing may ask
+      // for full access.
       this.fullEligible = true;
       this.planHadToken = false;
       this.typedAttempt = null;
-      if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
-      this.selectionApplied = selection;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
       this.settings = { url, token: null };
       this.pairingSeen = null;
@@ -1631,12 +1633,15 @@ export class ClawtrateClient {
     return this.changeConnection(async () => {
       if (!this.settings) return;
       // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
-      const typed = this.typedTokenEnds(this.settings.url);
+      const url = this.settings.url;
+      const typed = this.typedTokenEnds(url);
       await this.saveSettings({
         ...this.settings,
         suspended: true,
         ...(typed ? { token: null } : {}),
       });
+      // Only once that is saved does the attempt end: a Disconnect that failed keeps it.
+      this.endAttempt(url);
       // The connection stops: writes waiting for access fail, as on any lost connection.
       // Runs are kept as they are and reconciled with history after Reconnect.
       this.abandonAccessRequest("Disconnected from the gateway.");
@@ -1653,7 +1658,6 @@ export class ClawtrateClient {
   private typedTokenEnds(url: string): boolean {
     const typed = this.typedAttempt;
     if (!typed || typed.url !== url) return false;
-    this.typedAttempt = null;
     return (
       this.host.credentialStatus !== undefined &&
       this.selectionApplied === typed.selection &&
@@ -1668,7 +1672,9 @@ export class ClawtrateClient {
    */
   private endTypedAttempt(url: string): void {
     const selection = this.typedAttempt?.selection;
-    if (!this.typedTokenEnds(url) || !this.settings) return;
+    const typed = this.typedTokenEnds(url);
+    this.endAttempt(url);
+    if (!typed || !this.settings) return;
     this.settings = { ...this.settings, token: null };
     void this.changeConnection(async () => {
       const current = this.settings;
@@ -1676,6 +1682,13 @@ export class ClawtrateClient {
       if (current.token !== null) return;
       await this.saveSettings(current);
     }).catch(() => this.log("warn", "Could not drop the gateway token from this device."));
+  }
+
+  /** The attempt on this address ended: no full pairing by itself, and its typed token is done. */
+  private endAttempt(url: string): void {
+    if (this.settings?.url !== url) return;
+    this.fullEligible = false;
+    if (this.typedAttempt?.url === url) this.typedAttempt = null;
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
@@ -6092,6 +6105,8 @@ export class ClawtrateClient {
                       ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
                     },
             );
+            // This attempt holds a token now: losing it later ends its full pairing.
+            this.planHadToken = true;
             return true;
           });
           if (!written) return;
@@ -8099,6 +8114,8 @@ export class ClawtrateClient {
           grant?.asked.some((scope) => !READ_SCOPES.includes(scope))
         ) {
           await this.writeToken(url, deviceId, role, fullRecord(token, grant.granted, grant.asked));
+          // This attempt holds a token now: losing it later ends its full pairing.
+          this.planHadToken = true;
           return;
         }
         // A full pairing's replacement token and its narrowed grant go in one write.
@@ -8115,6 +8132,7 @@ export class ClawtrateClient {
           ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
           ...(existing?.fullGrant ? { fullGrant: true } : {}),
         });
+        this.planHadToken = true;
       });
     };
     return {
