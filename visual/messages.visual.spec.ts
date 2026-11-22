@@ -142,6 +142,37 @@ test.describe("message actions", () => {
     await expect.poll(() => shown(actions)).toBe(false);
   });
 
+  test("F-066: a hovered message whose top lies under the header or at the foot keeps its actions beside it, where the pointer reaches them", async ({
+    page,
+  }) => {
+    await open(page);
+    // Otto's list of what fills the disk: a bubble with room beside it for the bar.
+    const message = page.locator('[data-message="row-7"]');
+    const bubble = message.locator(".msg > .bubble");
+    const actions = message.getByTestId("message-actions");
+    const header = (await page.locator(".conversation-header").boundingBox())!;
+    const view = (await page.locator(".transcript").boundingBox())!;
+    // Its top 10 px under the header, then 20 px above the transcript's foot.
+    for (const top of [header.y + header.height - 10, view.y + view.height - 20]) {
+      await page.mouse.move(0, 0);
+      await bubble.evaluate((el, top) => {
+        el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+      }, top);
+      await settle(page);
+      const box = (await bubble.boundingBox())!;
+      await page.mouse.move(box.x + 20, Math.max(box.y, header.y + header.height) + 6);
+      await expect.poll(() => shown(actions)).toBe(true);
+      const bar = (await actions.boundingBox())!;
+      expect(bar.x).toBeGreaterThanOrEqual(box.x + box.width);
+      // On its way across, the pointer stays on the message, so the bar stays to take it.
+      const react = actions.getByRole("button", { name: "Add a reaction" });
+      const at = (await react.boundingBox())!;
+      await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2, { steps: 20 });
+      expect(await shown(actions)).toBe(true);
+      expect(await react.evaluate((el) => el.matches(":hover"))).toBe(true);
+    }
+  });
+
   test("F-066: the actions are one tab stop; Left and Right move between them and they show while focused", async ({
     page,
   }) => {

@@ -177,8 +177,11 @@ export function MessageActions({
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
     const height = toolbar.offsetHeight;
-    // Room counts the touch areas the buttons reach past the bar, within what shows of the
-    // transcript: below the band kept clear for the header and the strip, which lie over it.
+    // On touch, room counts the touch areas the buttons reach past the bar, within what shows of
+    // the transcript: below the band kept clear for the header and the strip, which lie over it.
+    // A mouse's bar stays beside the bubble wherever there is room: above or below it, the
+    // pointer would leave the message on its way to the bar, and the bar would hide.
+    const touch = document.documentElement.dataset.input === "touch";
     const reach = reachPast(toolbar);
     const scroller = turn.closest<HTMLElement>(".transcript");
     const view = scroller?.getBoundingClientRect();
@@ -187,7 +190,7 @@ export function MessageActions({
       : 0;
     const first = view ? view.top + band + reach - turnBox.top : -Infinity;
     const last = view ? view.bottom - reach - height - turnBox.top : Infinity;
-    const fits = (top: number) => top >= first && top <= last;
+    const fits = (top: number) => !touch || (top >= first && top <= last);
     const left =
       role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
     const max = turnBox.width - width;
