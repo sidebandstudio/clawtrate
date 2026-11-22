@@ -454,3 +454,91 @@ describe("a task archived elsewhere (F-277)", () => {
     client.stop();
   });
 });
+
+describe('"Start a new task with this message" (F-278, F-277)', () => {
+  const FILE = {
+    fileName: "notes.txt",
+    mimeType: "text/plain",
+    type: "file",
+    content: "aGk=",
+  };
+
+  /** A message with a file and a reply, refused because its task was deleted elsewhere. */
+  async function refused(options: { files: boolean }) {
+    const opened = await shown({ session: null });
+    const { client, gateway, transcript } = opened;
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError(MOVED);
+    };
+    let made = 0;
+    gateway.handlers["sessions.create"] = () => ({
+      ok: true,
+      key: `agent:otto:fresh-${(made += 1)}`,
+      sessionId: `s-new-${made}`,
+    });
+    const id = client.sendMessage(KEY, "Are you still there?", {
+      ...(options.files ? { attachments: [FILE] } : {}),
+      replyToId: "row-2",
+    });
+    await until(() => transcript().outbox[0]?.error === TASK_DELETED_ELSEWHERE);
+    const creations = () =>
+      gateway.calls("sessions.create") as Array<{ message: string; attachments?: unknown }>;
+    return { ...opened, id, creations };
+  }
+
+  it("starts one task with its words; with files, the message stays with them and its reply, records where its words went, and is not started again, the task opened again too", async () => {
+    const { client, transcript, id, creations } = await refused({ files: true });
+    const bytes = client.retainedAttachmentBytes;
+    expect(bytes).toBeGreaterThan(0);
+    // Asked twice at once: one task.
+    const [first, second] = await Promise.all([
+      client.startTaskFromMessage(KEY, id),
+      client.startTaskFromMessage(KEY, id),
+    ]);
+    expect(second).toBe(first);
+    expect(creations()).toHaveLength(1);
+    expect(creations()[0]).toMatchObject({ message: "Are you still there?" });
+    expect(creations()[0]).not.toHaveProperty("attachments");
+    expect(transcript().outbox[0]).toMatchObject({
+      id,
+      startedTask: first,
+      replyToId: "row-2",
+      attachments: [{ fileName: "notes.txt" }],
+    });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow(
+      "Its words already went to a new task.",
+    );
+    // The task is left and opened again: the record is the engine's, not a view's.
+    client.closeSession(KEY);
+    client.openSession(KEY);
+    expect(transcript().outbox[0]?.startedTask).toBe(first);
+    await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow();
+    expect(creations()).toHaveLength(1);
+    client.stop();
+  });
+
+  it("without files, the message leaves its task for the new one", async () => {
+    const { client, transcript, id, creations } = await refused({ files: false });
+    const key = await client.startTaskFromMessage(KEY, id);
+    expect(key).toBe("agent:otto:fresh-1");
+    expect(transcript().outbox).toHaveLength(0);
+    await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow();
+    expect(creations()).toHaveLength(1);
+    client.stop();
+  });
+
+  it("is refused for a message that failed for another reason", async () => {
+    const { client, gateway, transcript } = await shown({ session: { sessionId: "s-1" } });
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
+    };
+    const id = client.sendMessage(KEY, "hello");
+    await until(() => transcript().outbox[0]?.status === "failed");
+    await expect(client.startTaskFromMessage(KEY, id)).rejects.toThrow(
+      "That message can't start a new task.",
+    );
+    expect(gateway.calls("sessions.create")).toHaveLength(0);
+    client.stop();
+  });
+});

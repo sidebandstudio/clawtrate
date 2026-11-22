@@ -1351,6 +1351,41 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByTestId("shelf-row")).toHaveCount(0);
   });
 
+  test("F-278: a queued message refused because its task was deleted elsewhere offers a new task with it and Delete, not Try again", async ({
+    page,
+  }) => {
+    await open(page, "queued-refused-deleted");
+    const row = page.getByTestId("shelf-row");
+    await expect(row).toContainText("Couldn't start");
+    await expect(row).toContainText("This task was deleted elsewhere.");
+    await expect(row).toContainText("Then send me a summary.");
+    await expect(row.getByRole("button", { name: "Try again" })).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
+    // Its words were all of it: it leaves this task for the new one.
+    await row.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+  });
+
+  test("F-277: a refused message with files and a reply says what a new task leaves behind; once its words went to one, it is not offered again, opened again too", async ({
+    page,
+  }) => {
+    await open(page, "send-archived-files");
+    const sent = () => page.getByTestId("outgoing");
+    const start = () => sent().getByRole("button", { name: "Start a new task with this message" });
+    await expect(sent()).toContainText("Not sent. This task was archived elsewhere.");
+    await expect(sent()).toContainText("A new task can't take files yet, so they stay here.");
+    await expect(sent()).toContainText("The new task won't show it as a reply.");
+    await start().click();
+    await expect(sent()).toContainText("Its words went to a new task, and its files stay here.");
+    await expect(sent()).toContainText("disk-usage.txt");
+    await expect(start()).toHaveCount(0);
+    // Opened again, the conversation reads where the words went from the engine, not from itself.
+    await page.getByTestId("task").filter({ hasText: "Weekly backup check" }).click();
+    await page.getByTestId("task").filter({ hasText: "Disk almost full" }).click();
+    await expect(sent()).toContainText("Its words went to a new task, and its files stay here.");
+    await expect(start()).toHaveCount(0);
+  });
+
   test("F-421: a message sent while the run is stopping is queued, with no Send now", async ({
     page,
   }) => {

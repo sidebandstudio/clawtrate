@@ -2703,6 +2703,40 @@ export class ClawtrateClient {
     });
   }
 
+  /**
+   * "Start a new task with this message", on one the gateway refused because its task was deleted
+   * or archived elsewhere (F-278, F-277): only by the person's choice, a task under the same bot
+   * starts with its words, as "Start as new task" does. Task creation takes no files, and the new
+   * task shows no reply. A message without files leaves this task. One with files keeps them here,
+   * with its reply reference, and records the task its words went to, so they never go twice. The
+   * caller holds one interest in the new task, as `createTask` gives it.
+   */
+  async startTaskFromMessage(
+    key: string,
+    messageId: string,
+    options: { owner?: object } = {},
+  ): Promise<string> {
+    const message = this.outgoing(key, messageId);
+    const botId = botIdFromSessionKey(key);
+    if (
+      !message ||
+      !botId ||
+      !message.text ||
+      message.status !== "failed" ||
+      (message.error !== TASK_DELETED_ELSEWHERE && message.error !== TASK_ARCHIVED_ELSEWHERE)
+    )
+      throw new Error("That message can't start a new task.");
+    if (message.startedTask) throw new Error("Its words already went to a new task.");
+    // The same words asked again while the first is out join it: one task, never two.
+    const started = await this.createTask(botId, message.text, options);
+    if (message.attachments.length === 0) this.deleteMessage(key, messageId);
+    else
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { startedTask: started }),
+      );
+    return started;
+  }
+
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
   sendQueuedNow(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);

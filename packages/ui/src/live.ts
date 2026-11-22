@@ -15,6 +15,8 @@ import {
   isActive,
   runningRunId,
   questionPending,
+  TASK_ARCHIVED_ELSEWHERE,
+  TASK_DELETED_ELSEWHERE,
   type OutgoingMessage,
   type Run,
   type Transcript,
@@ -296,6 +298,17 @@ export function sendName(mode: SendMode): string {
 /** A queued message the gateway refused to start: it stays on the shelf, "Couldn't start". */
 export function couldNotStart(message: OutgoingMessage): boolean {
   return message.status === "failed" && message.mode === "queue";
+}
+
+/**
+ * A message the gateway refused because its task was deleted or archived elsewhere: sent again it
+ * would be refused the same way, so it offers a new task instead (F-278, F-277).
+ */
+export function refusedElsewhere(message: OutgoingMessage): boolean {
+  return (
+    message.status === "failed" &&
+    (message.error === TASK_DELETED_ELSEWHERE || message.error === TASK_ARCHIVED_ELSEWHERE)
+  );
 }
 
 /** Messages shown as your bubbles at the foot of the transcript, in the order sent. */

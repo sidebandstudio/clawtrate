@@ -643,6 +643,8 @@ export type OutgoingMessage = {
    * known: it is then sent only once a read of the task names one.
    */
   sessionId?: string;
+  /** The task "Start a new task with this message" started with its words; its files stay here. */
+  startedTask?: string;
   /**
    * Where the gateway put a steer, by its own record; its acknowledgement says neither
    * (docs/research/steer-stop.md). `joined`: the bare `chat` final under the steer's own id

@@ -431,6 +431,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
   sessionId: ID,
+  startedTask: ID,
   steer: ENUM,
 });
 const questionOption = object<QuestionOption>()({

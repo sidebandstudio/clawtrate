@@ -29,11 +29,13 @@ import {
   composerFor,
   couldNotStart,
   questionPending,
+  refusedElsewhere,
   sendName,
   shelfMessages,
   type ComposerView,
   type SendMode,
 } from "./live.ts";
+import { useStartFromMessage } from "./LiveTurn.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 
 /** The gateway's limits, checked as files are added (conversation.md, section 15). */
@@ -684,6 +686,7 @@ export function Composer({
           ]);
         }}
         onNotice={onNotice}
+        onAnnounce={onAnnounce}
       />,
     );
   }
@@ -1080,8 +1083,9 @@ function isLive(run: Run): boolean {
 
 /**
  * One unsent message on the shelf, in the same words and with the same recovery wherever it
- * shows: "Not sent" (Send, Remove), "Couldn't start" (Try again, Delete), "Held until you answer"
- * (Edit, Cancel) or "Queued" (Send now, Cancel) (conversation.md, section 15).
+ * shows: "Not sent" (Send, Remove), "Couldn't start" (Try again, Delete; or, refused because its
+ * task was deleted or archived elsewhere, Start a new task with this message, Delete), "Held until
+ * you answer" (Edit, Cancel) or "Queued" (Send now, Cancel) (conversation.md, section 15).
  */
 export function ShelfRow({
   message,
@@ -1091,6 +1095,7 @@ export function ShelfRow({
   act,
   onTakenBack,
   onNotice,
+  onAnnounce,
 }: {
   message: OutgoingMessage;
   taskKey: string;
@@ -1101,8 +1106,10 @@ export function ShelfRow({
   /** Edit: the held message's words and files, held again, back where it was written. */
   onTakenBack: (back: { text: string; attachments: AttachmentInfo[] }) => void;
   onNotice: (notice: Omit<Notice, "id">) => void;
+  onAnnounce: (text: string) => void;
 }) {
   const bridge = useBridge();
+  const startNew = useStartFromMessage(message, taskKey, onAnnounce);
   const send = (type: "retryMessage" | "deleteMessage" | "cancelQueued" | "sendQueuedNow") =>
     act(() => bridge.send({ type, key: taskKey, messageId: message.id }));
   if (message.status === "not-sent") {
@@ -1133,6 +1140,8 @@ export function ShelfRow({
     );
   }
   if (couldNotStart(message)) {
+    // Refused because its task is gone: tried again it would be refused the same way.
+    const elsewhere = refusedElsewhere(message);
     return (
       <div
         className="shelf-row"
@@ -1142,16 +1151,32 @@ export function ShelfRow({
       >
         <span className="shelf-text" title={message.error ?? undefined}>
           <b>Couldn't start</b> {message.error && <span>{message.error}</span>}{" "}
+          {elsewhere && startNew.note && <span>{startNew.note} </span>}
           <span>{message.text}</span>
+          {startNew.error && <span role="alert"> Couldn't start a new task: {startNew.error}</span>}
         </span>
-        <button
-          type="button"
-          className="button"
-          data-size="sm"
-          onClick={() => send("retryMessage")}
-        >
-          Try again
-        </button>
+        {!elsewhere ? (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => send("retryMessage")}
+          >
+            Try again
+          </button>
+        ) : (
+          startNew.offered && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={startNew.starting}
+              onClick={() => act(startNew.start)}
+            >
+              Start a new task with this message
+            </button>
+          )
+        )}
         <button
           type="button"
           className="button"

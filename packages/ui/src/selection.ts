@@ -136,9 +136,9 @@ export function visibleTasks<T extends { key: string }>(
 
 /**
  * The task on screen, when the gateway deleted or archived it while a message written in it was on
- * its way, or refused the message for that reason: it stays on screen with the message and its
- * words until the person leaves it or deletes the message (F-278, F-277). Null for a task still
- * listed, or any other.
+ * its way, queued or held, or refused the message for that reason: it stays on screen with the
+ * message and its words until the person leaves it or deletes the message (F-278, F-277). Null for
+ * a task still listed, or any other.
  */
 export function keptOnScreen(
   shown: Task | null,
@@ -152,6 +152,8 @@ export function keptOnScreen(
       message.status === "sending" ||
       message.status === "awaiting-access" ||
       message.status === "checking" ||
+      message.status === "queued" ||
+      message.status === "held" ||
       (message.status === "failed" &&
         (message.error === TASK_DELETED_ELSEWHERE || message.error === TASK_ARCHIVED_ELSEWHERE)),
   );

@@ -672,6 +672,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
                 setText((current) => (current.trim() ? `${current}\n${back.text}` : back.text))
               }
               onNotice={(notice) => setError(`${notice.title} ${notice.reason ?? ""}`.trim())}
+              onAnnounce={env.announce}
             />
           ) : (
             <OutgoingBubble

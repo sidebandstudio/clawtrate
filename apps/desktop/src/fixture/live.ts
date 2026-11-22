@@ -10,6 +10,8 @@ import {
   newRun,
   parseExecApproval,
   RawTable,
+  TASK_ARCHIVED_ELSEWHERE,
+  TASK_DELETED_ELSEWHERE,
   type ApprovalCard,
   type BridgeCommand,
   type ClawtrateState,
@@ -49,6 +51,8 @@ export const LIVE_SCENES = [
   "send-unknown",
   "stopped-not-sent",
   "queued-refused",
+  "queued-refused-deleted",
+  "send-archived-files",
   "offline-send",
   "message-actions",
   "message-actions-read",
@@ -708,6 +712,39 @@ export function liveScene(
         })),
         steps: [],
       };
+    case "queued-refused-deleted":
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [
+            message("msg-3", "Then send me a summary.", now - 10 * SECOND, {
+              mode: "queue",
+              status: "failed",
+              runId: null,
+              error: TASK_DELETED_ELSEWHERE,
+            }),
+          ],
+        })),
+        steps: [],
+      };
+    case "send-archived-files":
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [
+            message("msg-1", ASK, now - 10 * SECOND, {
+              status: "failed",
+              runId: null,
+              error: TASK_ARCHIVED_ELSEWHERE,
+              attachments: [
+                { fileName: "disk-usage.txt", mimeType: "text/plain", sizeBytes: 2048 },
+              ],
+              replyToId: "msg-gateway-1",
+            }),
+          ],
+        })),
+        steps: [],
+      };
     case "send-unknown":
       return {
         initial: withTranscript(interactive(base), (transcript) => ({
@@ -969,6 +1006,26 @@ export function liveCommand(
       return Promise.resolve();
     case "createTask":
       return Promise.resolve({ key: "agent:otto:new-task" });
+    case "startTaskFromMessage": {
+      // As the engine does: a message without files leaves its task; one with files stays, with
+      // the task its words went to, and is offered the choice no more.
+      const refused = get().transcripts[OPEN_TASK]?.outbox.find(
+        (each) => each.id === command.messageId,
+      );
+      if (!refused || refused.startedTask)
+        return Promise.reject(new Error("That message can't start a new task."));
+      const key = "agent:otto:new-task";
+      update((transcript) => ({
+        ...transcript,
+        outbox:
+          refused.attachments.length === 0
+            ? transcript.outbox.filter((each) => each.id !== command.messageId)
+            : transcript.outbox.map((each) =>
+                each.id === command.messageId ? { ...each, startedTask: key } : each,
+              ),
+      }));
+      return Promise.resolve({ key });
+    }
     case "setTurnLimit":
       set({ ...get(), turnLimitMinutes: command.minutes });
       return Promise.resolve();

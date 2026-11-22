@@ -131,6 +131,11 @@ export type BridgeCommand =
   | { type: "sendAgain"; key: string; messageId: string }
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
+  /**
+   * "Start a new task with this message", on one refused because its task was deleted or archived
+   * elsewhere: a new task under the same bot with its words. The viewer then has it open.
+   */
+  | { type: "startTaskFromMessage"; key: string; messageId: string }
   | { type: "stopRun"; key: string; runId: string }
   /** Each answer is text as typed, or a shown option named by its original place (`{option}`). */
   | {
@@ -406,7 +411,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
     ? { messageId: string }
     : C extends { type: "takeBackMessage" }
       ? { text: string; attachments: AttachmentInfo[] }
-      : C extends { type: "createTask" }
+      : C extends { type: "createTask" | "startTaskFromMessage" }
         ? { key: string }
         : C extends { type: "readStepRaw" }
           ? StepRead | null
@@ -1203,6 +1208,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "sendQueuedNow":
     case "takeBackMessage":
     case "sendAgain":
+    case "startTaskFromMessage":
       return {
         type: command.type,
         key: sessionKey(command.key),
@@ -1892,6 +1898,10 @@ class ViewerSession implements BridgeSession {
             ...(command.label ? { label: command.label } : {}),
             owner,
           }),
+        );
+      case "startTaskFromMessage":
+        return this.created(() =>
+          client.startTaskFromMessage(this.mine(command.key), command.messageId, { owner }),
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
