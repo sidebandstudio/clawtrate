@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../packaging/config.ts";
@@ -231,6 +231,34 @@ describe.skipIf(!posix)("opening the settings file", () => {
   });
 });
 
+it("reads nothing on Windows, and looks up, resolves and opens no home first", async () => {
+  // A home that doesn't exist: the guard would refuse it, and holding it would fail.
+  const missing = join(scratch, "no-such-windows-home");
+  for (const home of [missing, "relative\\home"])
+    await expect(
+      openSettingsFile({
+        home,
+        folder: ".openclaw",
+        file: "openclaw.json",
+        platform: "win32",
+        helper: null,
+        sandboxed: true,
+      }),
+    ).resolves.toEqual(unsafe("helper"));
+  expect(
+    await readLocalSettings({
+      home: missing,
+      platform: "win32",
+      helper: null,
+      sandboxed: false,
+      worker: WORKER,
+    }),
+  ).toEqual([
+    { profile: "default", outcome: unsafe("helper") },
+    { profile: "clawtrate", outcome: unsafe("helper") },
+  ]);
+});
+
 describe.skipIf(!posix)("the home folder", () => {
   it("refuses a home or a name that isn't one plain step, before opening anything", async () => {
     const { path } = home();
@@ -283,34 +311,6 @@ describe.skipIf(!posix)("the home folder", () => {
     ],
   ])("refuses %s in a sandboxed run", async (_, path) => {
     await expect(openIn(path())).rejects.toBeInstanceOf(SetupRefusedError);
-  });
-
-  it("reads nothing on Windows, and looks up, resolves and opens no home first", async () => {
-    // A home that doesn't exist: the guard would refuse it, and holding it would fail.
-    const missing = join(scratch, "no-such-windows-home");
-    for (const home of [missing, "relative\\home"])
-      await expect(
-        openSettingsFile({
-          home,
-          folder: ".openclaw",
-          file: "openclaw.json",
-          platform: "win32",
-          helper: null,
-          sandboxed: true,
-        }),
-      ).resolves.toEqual(unsafe("helper"));
-    expect(
-      await readLocalSettings({
-        home: missing,
-        platform: "win32",
-        helper: null,
-        sandboxed: false,
-        worker: WORKER,
-      }),
-    ).toEqual([
-      { profile: "default", outcome: unsafe("helper") },
-      { profile: "clawtrate", outcome: unsafe("helper") },
-    ]);
   });
 
   it("takes the temporary roots from this machine, whichever platform's reader is asked for", async () => {
@@ -844,7 +844,7 @@ describe("the account's real home", () => {
     const marker = join(scratch, "helper-ran");
     const spy = join(scratch, "spy");
     writeFileSync(spy, `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o700 });
-    for (const path of [real!, `${real!}/`]) {
+    for (const path of [real!, `${real!}${sep}`]) {
       await expect(
         openSettingsFile({
           home: path,
@@ -870,8 +870,8 @@ describe("the account's real home", () => {
 
   // Every guardHome call here passes a stand-in for the account's home: the real one is never
   // looked up, and nothing is opened, since the guard decides before anything is.
-  const synthetic = join("/", "clawtrate-synthetic-home");
-  const elsewhere = join("/", "clawtrate-other-home");
+  const synthetic = resolve("/", "clawtrate-synthetic-home");
+  const elsewhere = resolve("/", "clawtrate-other-home");
 
   it("is refused unless the caller says the run is a production one, and no marker says otherwise", () => {
     for (const path of [synthetic, "/usr"]) {
@@ -890,10 +890,10 @@ describe("the account's real home", () => {
     const production = (home: string, account: string | null) => () =>
       guardHome(home, false, {}, () => account);
     expect(production(synthetic, synthetic)).not.toThrow();
-    expect(production(synthetic, `${synthetic}/`)).not.toThrow();
+    expect(production(synthetic, `${synthetic}${sep}`)).not.toThrow();
     // A home the caller names that isn't the account's, or no account home at all, refuses.
     expect(production(elsewhere, synthetic)).toThrow(SetupRefusedError);
-    expect(production(`${synthetic}/`, synthetic)).toThrow(SetupRefusedError);
+    expect(production(`${synthetic}${sep}`, synthetic)).toThrow(SetupRefusedError);
     expect(production(join(synthetic, ".openclaw"), synthetic)).toThrow(SetupRefusedError);
     expect(production(synthetic, null)).toThrow(SetupRefusedError);
   });
