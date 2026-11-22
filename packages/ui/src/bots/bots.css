@@ -226,6 +226,18 @@
   gap: 6px 14px;
 }
 
+/* new: the picker's groups, frozen together while the picture is saved. */
+.b-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.b-picker:disabled {
+  opacity: 0.6;
+}
+
 /* new: the three creature families, a creature over its name. */
 .b-families {
   display: grid;

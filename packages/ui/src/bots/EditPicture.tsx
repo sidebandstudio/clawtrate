@@ -105,7 +105,7 @@ export function EditPicture({
             label={`${bot.name}'s new picture`}
             previewRef={previewRef}
           />
-          <AvatarPicker draft={draft} onChange={setDraft} onBusy={setBusy} />
+          <AvatarPicker draft={draft} onChange={setDraft} onBusy={setBusy} frozen={saving} />
         </div>
         <footer className="b-foot">
           {problem && (

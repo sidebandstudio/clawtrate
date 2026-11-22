@@ -339,11 +339,14 @@ export function AvatarPicker({
   draft,
   onChange,
   onBusy,
+  frozen = false,
 }: {
   draft: PictureDraft;
   onChange: (next: PictureDraft) => void;
   /** True while a chosen file is being read: whatever advances or saves waits for it. */
   onBusy?: (busy: boolean) => void;
+  /** While the picture is being saved, it can't be changed: what is saved is what is shown. */
+  frozen?: boolean;
 }) {
   const { choice } = draft;
   const file = useRef<HTMLInputElement>(null);
@@ -363,6 +366,7 @@ export function AvatarPicker({
     [],
   );
   const set = (next: AvatarChoice) => {
+    if (frozen) return;
     attempt.current += 1;
     onBusy?.(false);
     setProblem(null);
@@ -374,7 +378,7 @@ export function AvatarPicker({
   const family = (next: AvatarFamily) =>
     next === choice.family ? choice : firstChoice(next, choice.color);
   return (
-    <>
+    <fieldset className="b-picker" disabled={frozen}>
       <p className="b-label" id="b-family-label">
         Creature
       </p>
@@ -514,6 +518,6 @@ export function AvatarPicker({
           </p>
         )}
       </div>
-    </>
+    </fieldset>
   );
 }
