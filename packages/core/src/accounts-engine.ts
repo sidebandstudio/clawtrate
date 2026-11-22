@@ -1331,7 +1331,7 @@ export class AccountsEngine {
     };
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
-    if (retrying) botId = await this.findMade(ctx, name);
+    if (retrying) botId = await this.findMade(ctx, name, mark);
     if (!botId) {
       try {
         const answer = asRecord(
@@ -1346,7 +1346,7 @@ export class AccountsEngine {
         // Only a refusal that establishes nothing was written ends here. Anything else (no
         // answer, a dropped connection, "saved but not applied") may have made the bot.
         if (isCertainRefusal(error)) return failed(error, false);
-        botId = await this.findMade(ctx, name);
+        botId = await this.findMade(ctx, name, mark);
         if (!botId) return failed(error, true);
       }
     }
@@ -1534,9 +1534,13 @@ export class AccountsEngine {
   /**
    * The bot a create may have made: once connected, read the list and find a
    * bot of that name that was not there before the first Create of it. Never
-   * one that was: without what was there before, nothing is found.
+   * one that was. Only a successful read without a match returns null.
    */
-  private async findMade(ctx: AccountsContext, name: string): Promise<string | null> {
+  private async findMade(
+    ctx: AccountsContext,
+    name: string,
+    mark: WriteMark,
+  ): Promise<string | null> {
     ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
     const before = new Set(this.before);
     // Until a read of the list succeeds, within the deadline: an answer lost to a dropped
@@ -1557,7 +1561,15 @@ export class AccountsEngine {
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
-    return null;
+    // No list was read. Keep the original Create in doubt, including while its gateway is
+    // unidentified. A reset, a different gateway, or a newer Create has replaced the owner.
+    if (this.creating !== mark) throw new WriteRetired();
+    const target = ctx.gatewayNow() === null ? this.ctx : ctx;
+    return this.creationFailed(
+      target,
+      new Error("The gateway's bot list could not be read."),
+      true,
+    );
   }
 
   /**
@@ -1617,7 +1629,7 @@ export class AccountsEngine {
             slow: false,
             uncertain,
             error: uncertain
-              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}), and Clawtrate found no new bot of that name. Create again looks for it first.`
+              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}). Create again looks for it first.`
               : errorText(error),
           }
         : null,
