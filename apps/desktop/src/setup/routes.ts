@@ -105,6 +105,8 @@ export const NO_SEAL: TokenSeal = {
   open: () => null,
 };
 
+const FOLDER_NOT_PRIVATE = "The route store's folder isn't proven private.";
+
 /** The route file is there and couldn't be read: nothing is written over it. */
 export class RouteStoreUnreadable extends Error {
   override name = "RouteStoreUnreadable";
@@ -187,6 +189,7 @@ export class RouteStore {
     if (!this.folderIsPrivate()) {
       // Nothing is read from, or kept in, a folder that isn't proven private; nothing is cached
       // either, so a later read of the proven folder starts from its file, never from empty.
+      if (forWrite) throw new Error(FOLDER_NOT_PRIVATE);
       return empty;
     }
     const read = readPrivateFile(this.path, this.options.readAcl);
@@ -208,7 +211,7 @@ export class RouteStore {
     // A store of an earlier draft kept its tokens unsealed: removed, in this proven folder, and
     // the person pairs again.
     if (shape?.version === 1) rmSync(this.path, { force: true });
-    else if (shape !== null && (shape.version !== 2 || !Array.isArray(shape.routes))) {
+    else if (read.kind === "text" && (shape?.version !== 2 || !Array.isArray(shape.routes))) {
       if (forWrite) throw new RouteStoreUnreadable();
       return empty;
     }
@@ -232,7 +235,7 @@ export class RouteStore {
   }
 
   private save(next: FileShape): void {
-    if (!this.folderIsPrivate()) throw new Error("The route store's folder isn't proven private.");
+    if (!this.folderIsPrivate()) throw new Error(FOLDER_NOT_PRIVATE);
     // Measured before anything is written: a file larger than a read accepts would lose every route.
     const data = Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8");
     if (data.length > MAX_ROUTE_FILE_BYTES)

@@ -174,6 +174,23 @@ describe.skipIf(process.platform === "win32")("the route store", () => {
     expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
   });
 
+  it("refuses a write if the folder privacy check fails before reading saved routes", async () => {
+    const dir = fresh("clawtrate-routes-private-");
+    const writer = new RouteStore(dir, { seal: testSeal });
+    const one = record();
+    writer.put(one);
+    await routedStorage(memoryStorage(), writer).set(tokenKey(one.key), TOKEN);
+    const before = readFileSync(writer.path, "utf8");
+    let checks = 0;
+    const store = new RouteStore(dir, { seal: testSeal, folderIsPrivate: () => ++checks > 1 });
+    const other = record({ id: "r999999999999", endpoint: "you@[elsewhere.example]:22" });
+    expect(() => store.put(other)).toThrow(/isn't proven private/);
+    expect(readFileSync(writer.path, "utf8")).toBe(before);
+    store.put(other);
+    expect(store.get(other.id)).toEqual(other);
+    expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
+  });
+
   it("a route file that is there and can't be read is never taken for an empty store: nothing is written over it, the next call reads it again, and a missing file is a first save", async () => {
     const dir = fresh("clawtrate-routes-unreadable-");
     const one = record();
@@ -204,12 +221,14 @@ describe.skipIf(process.platform === "win32")("the route store", () => {
     ).toEqual([one.id, other.id].sort());
     expect(store.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
     // A file that isn't whole JSON, or isn't this store's shape, is refused the same way.
-    for (const text of ["{ not json", JSON.stringify({ version: 3, routes: [] })]) {
+    for (const text of ["{ not json", "null", JSON.stringify({ version: 3, routes: [] })]) {
       writeFileSync(writer.path, text);
       const broken = new RouteStore(dir, { seal: testSeal });
       expect(broken.list()).toEqual([]);
       expect(() => broken.put(record({ id: "r888888888888" }))).toThrow(RouteStoreUnreadable);
       expect(readFileSync(writer.path, "utf8")).toBe(text);
+      writeFileSync(writer.path, before);
+      expect(broken.getToken(one.key, "device-1", "operator")).toBe(TOKEN);
     }
     // No file at all is an empty store, and the first save makes it.
     const first = new RouteStore(fresh("clawtrate-routes-first-"), { seal: testSeal });
