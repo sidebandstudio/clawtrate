@@ -182,6 +182,9 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/ssh/transport.ts:startForward>exits":
     "one forward process's listener from its supervisor, gone with the process",
   // The avatar spec (avatar.ts): constant part lists, geometry and keyframes, and one bounded cache.
+  "packages/core/src/avatar.ts:BEFORE_PALETTE": "static, eight PNG chunk types",
+  "packages/core/src/avatar.ts:BEFORE_DATA": "static, six PNG chunk types",
+  "packages/core/src/avatar.ts:AFTER_PALETTE": "static, three PNG chunk types",
   "packages/core/src/avatar.ts:AVATAR_FAMILIES": "static, one avatar part or state list",
   "packages/core/src/avatar.ts:CLAWLING_BODIES": "static, one avatar part or state list",
   "packages/core/src/avatar.ts:CLAWLING_EYES": "static, one avatar part or state list",

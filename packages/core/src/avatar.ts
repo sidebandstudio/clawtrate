@@ -250,6 +250,8 @@ const MAX_PNG_CHUNKS = 128;
 /** The widest and tallest picture taken. */
 const MAX_PNG_SIDE = 8192;
 const PNG_PREFIX = "data:image/png;base64,";
+/** A PNG data URL's prefix, in any case, as the bot list takes it (`safeAvatarUrl`). */
+const isPngUrl = (url: string) => /^data:image\/png;base64,/i.test(url);
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const KEYWORD_BYTES = [...AVATAR_PNG_KEYWORD].map((char) => char.charCodeAt(0));
@@ -311,6 +313,12 @@ type PngChunk = { type: string; start: number; end: number; data: Uint8Array };
 const u32 = (bytes: Uint8Array, at: number) =>
   ((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0;
 const isLetter = (byte: number) => (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
+/** Known ancillary chunks that must come before PLTE and the image data (the PNG specification's ordering). */
+const BEFORE_PALETTE = new Set(["cHRM", "gAMA", "iCCP", "sBIT", "sRGB", "cICP", "mDCV", "cLLI"]);
+/** Known ancillary chunks that must come before the image data; the last three also after any PLTE. */
+const BEFORE_DATA = new Set(["pHYs", "sPLT", "eXIf", "bKGD", "hIST", "tRNS"]);
+const AFTER_PALETTE = new Set(["bKGD", "hIST", "tRNS"]);
+
 /** Whether a colour type allows a bit depth (the PNG specification's table). */
 function depthAllowed(colour: number, depth: number): boolean {
   switch (colour) {
@@ -340,6 +348,10 @@ function pngChunks(bytes: Uint8Array): PngChunk[] | null {
   let at = 8;
   let idat: "before" | "in" | "after" = "before";
   let palette = false;
+  let colour = -1;
+  let depth = 0;
+  // The first two bytes of the image data, across however many IDAT chunks they span.
+  const stream: number[] = [];
   while (at < bytes.length) {
     if (chunks.length >= MAX_PNG_CHUNKS || at + 12 > bytes.length) return null;
     const length = u32(bytes, at);
@@ -356,28 +368,46 @@ function pngChunks(bytes: Uint8Array): PngChunk[] | null {
       if (chunks.length !== 0 || length !== 13) return null;
       const width = u32(data, 0);
       const height = u32(data, 4);
-      const [depth, colour, compression, filter, interlace] = data.subarray(8);
+      const [d, c, compression, filter, interlace] = data.subarray(8);
       if (width < 1 || height < 1 || width > MAX_PNG_SIDE || height > MAX_PNG_SIDE) return null;
-      if (!depthAllowed(colour!, depth!) || compression !== 0 || filter !== 0) return null;
+      if (!depthAllowed(c!, d!) || compression !== 0 || filter !== 0) return null;
       if (interlace !== 0 && interlace !== 1) return null;
+      [colour, depth] = [c!, d!];
     } else if (type === "PLTE") {
+      // Not for greyscale; at most 256 entries, and no more than an indexed image's depth can name.
+      const entries = length / 3;
       if (palette || idat !== "before" || length === 0 || length % 3 !== 0) return null;
+      if (colour === 0 || colour === 4 || entries > 256) return null;
+      if (colour === 3 && entries > 2 ** depth) return null;
       palette = true;
     } else if (type === "IDAT") {
-      if (idat === "after") return null;
+      if (idat === "after" || (colour === 3 && !palette)) return null;
       idat = "in";
+      for (let k = 0; k < data.length && stream.length < 2; k++) stream.push(data[k]!);
     } else if (type === "IEND") {
       if (length !== 0 || idat === "before" || end !== bytes.length) return null;
+      if (!zlibHeader(stream)) return null;
       chunks.push({ type, start: at, end, data });
       return chunks;
     } else if (critical) {
       return null;
+    } else if (BEFORE_PALETTE.has(type)) {
+      if (palette || idat !== "before") return null;
+    } else if (BEFORE_DATA.has(type)) {
+      if (idat !== "before") return null;
+      if (AFTER_PALETTE.has(type) && colour === 3 && !palette) return null;
     }
     if (type !== "IDAT" && idat === "in") idat = "after";
     chunks.push({ type, start: at, end, data });
     at = end;
   }
   return null;
+}
+
+/** Whether image data starts with a zlib header PNG allows: deflate, a window up to 32 KiB, no preset dictionary. */
+function zlibHeader([cmf, flg]: number[]): boolean {
+  if (cmf === undefined || flg === undefined) return false;
+  return (cmf & 0x0f) === 8 && cmf >> 4 <= 7 && (cmf * 256 + flg) % 31 === 0 && (flg & 0x20) === 0;
 }
 
 /** Whether a tEXt chunk is Clawtrate's: the keyword's bytes, then the NUL at its exact length. */
@@ -409,7 +439,7 @@ export type PictureRead =
 type ReadPng = { read: PictureRead; bytes: Uint8Array; chunks: PngChunk[] };
 
 function readPng(url: string): ReadPng | null {
-  if (url.length > MAX_PICTURE_CHARS || !url.startsWith(PNG_PREFIX)) return null;
+  if (url.length > MAX_PICTURE_CHARS || !isPngUrl(url)) return null;
   const bytes = fromBase64(url.slice(PNG_PREFIX.length));
   const chunks = bytes && pngChunks(bytes);
   if (!bytes || !chunks) return null;
@@ -461,6 +491,8 @@ export function pictureWithChoice(url: string, choice: AvatarChoice): string | n
   chunk.set(body, 4);
   view.setUint32(8 + text.length, crc32(body));
   const kept = chunks.filter((each) => !isChoiceChunk(each));
+  // The choice is one chunk more: a picture already at the reader's limit can't take it.
+  if (kept.length + 1 > MAX_PNG_CHUNKS) return null;
   const parts = [bytes.subarray(0, 8), bytes.subarray(kept[0]!.start, kept[0]!.end), chunk];
   for (const each of kept.slice(1)) parts.push(bytes.subarray(each.start, each.end));
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -489,7 +521,7 @@ export function avatarFor(bot: { id: string; avatarUrl: string | null }): BotAva
   const url = bot.avatarUrl;
   const fallback: BotAvatar = { kind: "creature", choice: defaultAvatar(bot.id), chosen: false };
   if (!url) return fallback;
-  if (!url.startsWith(PNG_PREFIX)) return { kind: "image", url };
+  if (!isPngUrl(url)) return { kind: "image", url };
   if (url.length > MAX_PICTURE_CHARS) return fallback;
   let result = read.get(url);
   if (result === undefined) {

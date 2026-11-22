@@ -685,3 +685,88 @@ describe("parsing a choice from untrusted input", () => {
     });
   });
 });
+
+describe("the PNG rules the reader enforces (fix round 2)", () => {
+  const [ihdr, idat, iend] = baseChunks() as [RawChunk, RawChunk, RawChunk];
+  const header = (depth: number, colour: number): RawChunk => ({
+    type: "IHDR",
+    data: [...be32(2), ...be32(2), depth, colour, 0, 0, 0],
+  });
+  const palette = (entries: number): RawChunk => ({
+    type: "PLTE",
+    data: new Array(entries * 3).fill(0),
+  });
+  const gama: RawChunk = { type: "gAMA", data: be32(45455) };
+  const kind = (chunks: RawChunk[]) => readPicture(build(chunks)).kind;
+
+  it("checks palettes against the image's colour type and depth", () => {
+    expect(kind([header(8, 3), palette(4), idat, iend])).toBe("plain");
+    expect(kind([header(8, 3), idat, iend])).toBe("invalid"); // indexed with no palette
+    expect(kind([header(8, 0), palette(2), idat, iend])).toBe("invalid"); // greyscale with a palette
+    expect(kind([header(8, 4), palette(2), idat, iend])).toBe("invalid"); // greyscale and alpha
+    expect(kind([header(8, 2), palette(257), idat, iend])).toBe("invalid"); // over 256 entries
+    expect(kind([header(1, 3), palette(3), idat, iend])).toBe("invalid"); // more than 2 ** 1
+    expect(kind([header(1, 3), palette(2), idat, iend])).toBe("plain");
+    expect(kind([header(8, 2), palette(2), idat, iend])).toBe("plain"); // a suggested palette
+  });
+
+  it("keeps the known ancillary chunks in the specification's order", () => {
+    expect(kind([ihdr, gama, idat, iend])).toBe("plain");
+    expect(kind([ihdr, idat, gama, iend])).toBe("invalid"); // gAMA after the image data
+    expect(kind([header(8, 3), palette(4), gama, idat, iend])).toBe("invalid"); // after PLTE
+    expect(kind([ihdr, idat, { type: "pHYs", data: new Array(9).fill(0) }, iend])).toBe("invalid");
+    expect(kind([header(8, 3), { type: "tRNS", data: [0] }, palette(4), idat, iend])).toBe(
+      "invalid",
+    );
+    expect(kind([header(8, 3), palette(4), { type: "tRNS", data: [0] }, idat, iend])).toBe("plain");
+  });
+
+  it("needs image data that starts with a zlib header PNG allows, across empty IDAT chunks", () => {
+    const empty: RawChunk = { type: "IDAT", data: [] };
+    const zlib = idat.data;
+    expect(kind([ihdr, empty, idat, empty, iend])).toBe("plain");
+    // Split so the header's two bytes land in different chunks.
+    expect(
+      kind([
+        ihdr,
+        { type: "IDAT", data: zlib.slice(0, 1) },
+        { type: "IDAT", data: zlib.slice(1) },
+        iend,
+      ]),
+    ).toBe("plain");
+    expect(kind([ihdr, empty, iend])).toBe("invalid"); // an empty run
+    expect(kind([ihdr, withAfterHeader(text(CHOICE))[1]!, empty, iend])).toBe("invalid"); // marked, empty run
+    const bad = (cmf: number, flg: number) =>
+      kind([ihdr, { type: "IDAT", data: [cmf, flg, ...zlib.slice(2)] }, iend]);
+    expect(bad(zlib[0]!, zlib[1]!)).toBe("plain");
+    expect(bad(0x79, 0x18)).toBe("invalid"); // CM 9, not deflate; its check bits are right
+    expect(bad(0x88, 0x1c)).toBe("invalid"); // CINFO 8, a window too large
+    expect(bad(0x78, 0x9d)).toBe("invalid"); // check bits wrong
+    expect(bad(0x78, 0xbb)).toBe("invalid"); // a preset dictionary
+  });
+
+  it("takes the PNG prefix in any case, the same way for reading and for drawing", () => {
+    const url = build(withAfterHeader(text(CHOICE)));
+    const upper = url.replace("data:image/png;base64,", "DATA:IMAGE/PNG;BASE64,");
+    expect(readPicture(upper).kind).toBe("creature");
+    expect(avatarFor({ id: "otto", avatarUrl: upper }).kind).toBe("creature");
+    const broken = build(baseChunks(), [0]).replace("data:image/png", "data:image/PNG");
+    expect(avatarFor({ id: "otto", avatarUrl: broken })).toMatchObject({
+      kind: "creature",
+      chosen: false,
+    });
+  });
+
+  it("writes no choice into a picture that already has as many chunks as the reader takes", () => {
+    const full = build([ihdr, ...new Array(125).fill({ type: "teXt", data: [] }), idat, iend]);
+    expect(readPicture(full).kind).toBe("plain");
+    expect(
+      pictureWithChoice(full, { family: "shellfolk", shell: "dome", color: "green" }),
+    ).toBeNull();
+    const roomy = build([ihdr, ...new Array(124).fill({ type: "teXt", data: [] }), idat, iend]);
+    expect(
+      readPicture(pictureWithChoice(roomy, { family: "shellfolk", shell: "dome", color: "green" })!)
+        .kind,
+    ).toBe("creature");
+  });
+});
