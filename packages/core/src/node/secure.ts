@@ -632,15 +632,17 @@ export function createSecureCredentials(options: {
     storage: {
       get: async (key) => {
         if (isCredentialKey(key)) return (await credentials()).values[key] ?? null;
-        await mode();
+        const current = await mode();
+        // No wait from here on: the settings, their typed token, the retirement mark and the
+        // record are read in one step, all as of the same moment.
         if (key !== SETTINGS_KEY) return settings[key] ?? null;
         const saved =
           settings[SETTINGS_KEY] === undefined ? null : parseSettings(settings[SETTINGS_KEY]);
         if (!saved) return null;
         let token = typed?.url === saved.url ? typed.token : null;
-        if (token === null && (await mode()).kind !== "locked")
+        if (token === null && current.kind !== "locked")
           token = earlierToken(
-            await credentials(),
+            current.kind === "secure" ? current.sealed.credentials : current.credentials,
             saved,
             settings[EARLIER_RETIRED_KEY] === "true",
           );
