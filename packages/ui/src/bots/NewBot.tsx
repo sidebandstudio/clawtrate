@@ -19,16 +19,21 @@ import { defaultAccount, defaultRef, firstEffort, firstModel, providerName } fro
 
 type Draft = {
   name: string;
-  picture: PictureDraft;
+  /** Null until the person changes the picture: the new bot then gets the Clawling its id gives. */
+  picture: PictureDraft | null;
   /** An account id, `GATEWAY_CHOICE`, or null: nothing chosen. */
   account: string | null;
   model: string | null;
   effort: string | null;
 };
 
+/** What New bot shows before the picture is changed: an example, not what is sent. */
+const STARTER: PictureDraft = { choice: firstChoice("clawling", "blue"), upload: null };
+const PICTURE_FAILED = "Couldn't draw that picture. Choose it again, or choose another.";
+
 const freshDraft = (): Draft => ({
   name: "",
-  picture: { choice: firstChoice("clawling", "blue"), upload: null },
+  picture: null,
   account: null,
   model: null,
   effort: null,
@@ -59,6 +64,8 @@ export function NewBot({
     () => recall<Kept>(KEPT)?.step ?? "look",
   );
   const [announcer, announce] = useAnnouncer();
+  const [pictureFailed, setPictureFailed] = useState(false);
+  const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
@@ -133,12 +140,22 @@ export function NewBot({
   const busy = creation?.status === "creating" || creation?.status === "checking";
   const create = async () => {
     if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
+    // A picture the person chose must be drawn to be sent; if it can't be, nothing is created.
+    const avatar = draft.picture
+      ? await pictureFor(draft.picture, previewRef.current?.querySelector("svg"))
+      : null;
+    if (draft.picture && !avatar) {
+      setPictureFailed(true);
+      announce(PICTURE_FAILED);
+      return;
+    }
+    setPictureFailed(false);
     announce("Creating the bot");
     try {
       const { botId, missing } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
-        avatar: await pictureFor(draft.picture, previewRef.current?.querySelector("svg")),
+        avatar,
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
         provider,
         model: draft.model,
@@ -202,7 +219,7 @@ export function NewBot({
     );
     body = (
       <>
-        <PicturePreview draft={draft.picture} label={`${name}'s picture`} previewRef={previewRef} />
+        <PicturePreview draft={shown} label={`${name}'s picture`} previewRef={previewRef} />
         <label className="visually-hidden" htmlFor="b-name">
           Name
         </label>
@@ -223,7 +240,7 @@ export function NewBot({
           }}
         />
         <AvatarPicker
-          draft={draft.picture}
+          draft={shown}
           onChange={(picture) => setDraft((was) => ({ ...was, picture }))}
         />
       </>
@@ -255,7 +272,12 @@ export function NewBot({
     const who = provider ? providerName(provider) : null;
     body = (
       <>
-        <PicturePreview draft={draft.picture} label={null} previewRef={previewRef} small />
+        <PicturePreview draft={shown} label={null} previewRef={previewRef} small />
+        {pictureFailed && (
+          <p className="b-field-error" role="alert" style={{ textAlign: "center" }}>
+            {PICTURE_FAILED}
+          </p>
+        )}
         <p className="b-lead">
           Choose the account {name} runs on. The sign-in stays on your gateway.
         </p>

@@ -196,7 +196,8 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
     model: "grok-build-0.1",
     effort: null,
   });
-  expect(String(create!.avatar)).toMatch(/^data:image\/png;base64,/);
+  // The picture was left as it was: none is sent, and the bot's id chooses its Clawling.
+  expect(create!.avatar).toBeNull();
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();

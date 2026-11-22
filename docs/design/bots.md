@@ -126,7 +126,7 @@ The words after the first sentence, by screen: "Creating a bot changes the gatew
 
 The "+" menu's "New bot" and ⌘N open the New bot dialog (F-034). On a phone it is a sheet that covers the screen, as Grok Bot's is.
 
-**The picture and the name.** Title "New bot". In the middle, the creature at 104 px, drawn live from the choice (`visual-language.md` §5); a fresh dialog starts on a blue Clawling. Under it the name field: a 52 px pill on `--bg-inset`, centred text at 17/500, placeholder "Name", a visually hidden label "Name", focused when the dialog opens. Then the picker, every group's label 13, faint, centred:
+**The picture and the name.** Title "New bot". In the middle, the creature at 104 px, drawn live from the choice (`visual-language.md` §5). A fresh dialog shows a blue Clawling as an example only: if the picture is left as it is, Create sends no picture and the new bot gets the Clawling its id gives, the same on every device. Under it the name field: a 52 px pill on `--bg-inset`, centred text at 17/500, placeholder "Name", a visually hidden label "Name", focused when the dialog opens. Then the picker, every group's label 13, faint, centred:
 
 1. "Creature": the three families, Clawlings, Shellfolk and Lanterns, as 96 px tiles, each a creature over its name. Choosing a family keeps the colour and starts on that family's first parts.
 2. One group per part of the chosen family: "Body", "Eyes" and "Claws" for Clawlings; "Shell" for Shellfolk; "Body", "Lure" and "Eyes" for Lanterns. Each option is a 56 px tile drawing the creature with that part.
@@ -134,6 +134,8 @@ The "+" menu's "New bot" and ⌘N open the New bot dialog (F-034). On a phone it
 4. "Use your own picture", a quiet button that takes an image file (PNG, JPEG, WebP or GIF, under 25 MB), crops it to its centre square and shows it in place of the creature; "Use the creature" goes back. A file too large or not an image says so under the button and changes nothing.
 
 One primary button at the foot: "Next". Enter in the name field is Next. (F-034, F-035)
+
+If a picture the person chose can't be drawn when Create is pressed, nothing is created and the Account step says "Couldn't draw that picture. Choose it again, or choose another."; everything entered is kept.
 
 - An empty name is allowed; the bot is then called "New bot". (F-036)
 - Every group is a radio group named by its label, with one tab stop: arrows move and choose, Home and End go to the ends. Each option's accessible name is a plain word: "Shellfolk", "Fiddler claw", "Pink".

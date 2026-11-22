@@ -1,7 +1,7 @@
 // The picture picker (docs/design/bots.md, sections 3 and 8): New bot sends
 // the chosen creature inside its picture and the new bot is drawn as it; the
 // person's own picture instead; and Edit picture from the Work pane on admin.
-import { choiceFromPicture } from "../packages/core/src/avatar.ts";
+import { AVATAR_COLORS, choiceFromPicture, defaultAvatar } from "../packages/core/src/avatar.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 
@@ -74,6 +74,29 @@ test("F-035: New bot picks a family, its parts and a colour, and the new bot is 
   });
   await expect(row(page, "Viral").locator('svg.creature[data-family="lantern"]')).toBeVisible();
   await expect(row(page, "Viral").locator("img")).toHaveCount(0);
+});
+
+test("F-035: left untouched, New bot sends no picture and the new bot gets the Clawling its id gives", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await page.getByTestId("create").click();
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  const create = (await sent(page)).find((each) => each.type === "createBot")!;
+  expect(create.avatar).toBeNull();
+  // The fixture makes the bot "viral"; its Clawling comes from that id, not from the example shown.
+  const own = defaultAvatar("viral");
+  const creature = row(page, "Viral").locator("svg.creature");
+  await expect(creature).toHaveAttribute("data-family", "clawling");
+  await expect(creature.locator('[data-part="body"]')).toHaveAttribute(
+    "fill",
+    AVATAR_COLORS[own.color],
+  );
+  await expect(creature.locator('[data-part="eye"]')).toHaveCount(own.eyes === "single" ? 1 : 2);
 });
 
 test("F-035: the person's own picture replaces the creature; a file of 25 MB or more is refused", async ({
