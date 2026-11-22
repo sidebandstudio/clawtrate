@@ -67,6 +67,7 @@ import {
   withComputerRuns,
   type ComputerParams,
 } from "./computer.ts";
+import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
 import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
@@ -481,10 +482,12 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
+  /** `setup`: the desktop's first screen and a state of setup (`setup.ts`), over the connect scene. */
   options: {
     desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
+    setup?: string | null;
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
@@ -513,7 +516,9 @@ export function createFixtureBridge(
   release(): void;
 } {
   const now = Date.now();
-  const { initial, steps } = scene(name, now);
+  const setupName = isSetupState(options.setup ?? null) ? options.setup! : null;
+  const { initial: sceneInitial, steps } = scene(setupName ? "connect" : name, now);
+  const initial = setupName ? { ...sceneInitial, setup: SETUP_STATES[setupName]! } : sceneInitial;
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
@@ -705,6 +710,17 @@ export function createFixtureBridge(
       if (!computer) throw new Error("Not connected to the gateway.");
       return computer.machine(command.key, command.probe);
     }
+    if (
+      setupCommand(
+        command,
+        () => state,
+        set,
+        () => loaded(Date.now()),
+        (ms, run) => deferred(run, ms),
+        setupName === "found-protocol" ? "protocol" : "connected",
+      )
+    )
+      return;
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -957,7 +973,11 @@ export function createFixtureBridge(
 
   return {
     desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
-    info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
+    info: setupName
+      ? setupInfo(FIXTURE_INFO, setupName)
+      : name === "access-pinned"
+        ? { ...FIXTURE_INFO, readOnly: true }
+        : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);

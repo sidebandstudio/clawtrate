@@ -95,7 +95,7 @@ const test = base.extend<{
       server.route("/stable", json(manifest));
       server.route(
         "/nightly",
-        json({ ...manifest, track: "nightly", version: "0.1.0-nightly.20261101.1" }),
+        json({ ...manifest, track: "nightly", version: "0.1.0-beta.20261101.1" }),
       );
       server.route(filePath, async (_, response) => {
         response.writeHead(200, { "content-length": body.length });
@@ -154,13 +154,29 @@ const test = base.extend<{
               UPDATE_SCREEN_TEST_INSTALLER: installer,
               CLAWTRATE_DEV_INSTANCE: "update-ui-test",
             },
-            stdio: "ignore",
+            stdio: ["ignore", "pipe", "pipe"],
           },
         );
         previous = app;
+        // The app's own output, its last 16 KiB, read as it comes so a full pipe never holds it.
+        let output = "";
+        const keep = (chunk: Buffer) => (output = (output + chunk.toString("utf8")).slice(-16_384));
+        app.stdout!.on("data", keep);
+        app.stderr!.on("data", keep);
         cleanup.defer(() => stopElectron(app));
         await once(app, "spawn");
-        const port = await debuggingPort(profile, app);
+        const port = await debuggingPort(profile, app).catch((error: Error) => {
+          // What the app printed and what its data folder holds say where its start stopped.
+          let files: string;
+          try {
+            files = readdirSync(profile).join(", ");
+          } catch (cause) {
+            files = String(cause);
+          }
+          throw new Error(`${error.message}\nData folder: ${files}\nApp output:\n${output}`, {
+            cause: error,
+          });
+        });
         const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
         cleanup.defer(() => browser.close());
         const context = browser.contexts()[0]!;
@@ -237,7 +253,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
   expect(server.requests).toEqual(["/stable"]);
   await expect(page.locator("#update-source")).toHaveText(
-    "Downloads Clawtrate 1.1.0 from 127.0.0.1, only when you choose to.",
+    "Downloads Clawtrate 1.1.0, only when you choose to.",
   );
   const download = page.getByRole("button", { name: "Download", exact: true });
   const hold = join(desktopApp.profile, "hold-inspect");
@@ -269,14 +285,14 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     { timeout: 30_000 },
   );
   await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
-  const nightly = page.getByRole("radio", { name: "Nightly" });
+  const nightly = page.getByRole("radio", { name: "Beta" });
   await nightly.click();
   await expect(nightly).toBeChecked();
   await expect(line).toHaveText("Not checked yet.");
   expect(server.requests).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText(
-    "No newer Nightly build was offered. Clawtrate 0.1.0 is still running.",
+    "No newer Beta build was offered. Clawtrate 0.1.0 is still running.",
   );
   expect(server.requests).toEqual(["/stable", filePath, "/nightly"]);
 
@@ -400,7 +416,7 @@ for (const stage of ["check", "download"] as const) {
       const check = page.getByRole("button", { name: "Check for Updates" });
       const download = page.getByRole("button", { name: "Download", exact: true });
       const stable = page.getByRole("radio", { name: "Stable" }),
-        nightly = page.getByRole("radio", { name: "Nightly" });
+        nightly = page.getByRole("radio", { name: "Beta" });
       await check.focus();
       const notes = test.info().annotations;
       notes.push({ type: "focus before Enter", description: await focusedElement(page) });
@@ -431,7 +447,7 @@ for (const stage of ["check", "download"] as const) {
       await nightly.click();
       const pending = page
         .locator(".b-hint")
-        .filter({ hasText: "Saving Nightly as the update track…" });
+        .filter({ hasText: "Saving Beta as the update track…" });
       await expect(pending).toBeVisible();
       await expect(stable).toBeChecked();
       await expect(check).toHaveCount(0);
@@ -512,7 +528,7 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   expect(choice.outcome).toBe("accepted");
   await expect(page.getByRole("radio", { name: "Stable" })).toBeChecked();
   await check.click();
-  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Beta" })).toBeChecked();
   await expect(page.locator(".update-result")).toContainText(
     "The update track changed. Check the selected source again.",
   );
@@ -578,6 +594,8 @@ if (process.platform !== "win32")
     const gateway = await sidebarGateway();
     const mode = statSync(profile).mode & 0o777;
     try {
+      // The first screen asks where OpenClaw runs; the address-and-token form is under Advanced.
+      await page.getByRole("button", { name: "Advanced" }).click();
       await page.getByPlaceholder("Gateway address").fill(gateway.url);
       await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
       await expect(page.locator(".rail")).toBeVisible();
@@ -667,7 +685,7 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
       async function locked(text: string) {
         await expect(result).toContainText(text);
         await expect(result.getByRole("button")).toHaveCount(0);
-        await expect(page.getByRole("radio", { name: "Nightly" })).toBeDisabled();
+        await expect(page.getByRole("radio", { name: "Beta" })).toBeDisabled();
         await expect(result).toBeFocused();
       }
       await locked("Preparing Clawtrate");

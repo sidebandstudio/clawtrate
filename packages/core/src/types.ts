@@ -6,6 +6,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
@@ -402,6 +403,12 @@ export type ClawtrateState = {
    * device's own. Absent where a host does not show it.
    */
   computer?: ComputerState;
+  /**
+   * Setting up on the host's own computer (`setup.ts`): the look's result and
+   * where Connect stands. Written by the host alone; absent where a host
+   * offers no setup.
+   */
+  setup?: SetupState;
   /**
    * The bots' check-ins (`check-ins.ts`): their heartbeat jobs, the scheduler,
    * their own settings and the save under way. Absent until a screen reads them

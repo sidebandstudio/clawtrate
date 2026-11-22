@@ -15,6 +15,7 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &computer=control      the Work pane's Computer states (computer.ts), with &firstwatch=1,
 //                          &takerace=grant, &access=read
+//   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
 //   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
@@ -102,6 +103,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   computer: computerParams(params),
   accounts: accountParams(params),
+  setup: params.get("setup"),
   checkIns: checkInParams(params),
   routines: routineParams(params),
   usage: usageParams(params),
