@@ -465,7 +465,7 @@ Undo exists only on the plugin's apply path, so on 2026.10.6 there is no Undo fr
 
 ### Proposal records
 
-Two kinds of storage, in one retained keyed store (R22). On OpenClaw 2026.10.6 a retained store has no eviction and rejects `maxEntries`, `overflowPolicy` and TTLs (`docs/plugins/sdk-runtime/state-and-system.md`, lines 162 and 174), so the ledger enforces the limits below and the plugin's own sweep does expiry and retention:
+Two kinds of storage, in keyed stores (R22). On OpenClaw 2026.10.6 a retained store has no eviction and rejects `maxEntries`, `overflowPolicy` and TTLs (`docs/plugins/sdk-runtime/state-and-system.md`, lines 162 and 174). So the ledger is retained, enforces the limits below and is swept by the plugin for expiry and retention, and the versions are in a bounded namespace with `overflowPolicy: "reject-new"`, which refuses new versions when full and leaves room for every ledger decision:
 
 - **Immutable versions**, written once and never changed: a proposal's details, an Undo's details, a grant's details, and each journal entry.
 - **One ledger row per gateway**, the only mutable record that decides anything. It references versions by id and digest.

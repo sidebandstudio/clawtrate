@@ -24,7 +24,7 @@ The event `plugin.clawtrate-bots.changed` is empty, at `operator.read`, after ev
 
 ## Records
 
-One retained keyed store in the gateway's database (`lib/records.js`):
+Two keyed stores in the gateway's database (`lib/records.js`): the ledger in a retained namespace, so a decision can always be stored, and the versions in a bounded one (512 rows, `overflowPolicy: "reject-new"`), which refuses new records with `records-full` when full. Nothing deletes a version in this part.
 
 - **Versions** are immutable and written once: a proposal's details, or a grant's.
 - **The ledger** is one row. It is the only record that decides anything (`lib/ledger.js`), and it changes only through `compareAndApply`. Admission enforces 200 open proposals, 20 per source, and one open proposal per bot and field (a newer one supersedes). Revoking a grant moves its generation on and withdraws its open suggestions in the same update. A claim checks the digest and the grant's generation.
