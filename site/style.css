@@ -1232,3 +1232,640 @@ h3 {
 .download-note a {
   color: var(--text);
 }
+
+/* The download page's tracks: Beta, out now, and Stable, not released yet.
+   Each has its own Claw. Beta's card is the deep sea at night in both themes. */
+.download-lede {
+  margin-top: 14px;
+  max-width: 34em;
+  color: var(--text-muted);
+}
+.tracks {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 16px;
+  margin-top: 40px;
+}
+.track {
+  display: flex;
+  flex-direction: column;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+.track-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: clamp(240px, 22vw, 300px);
+  overflow: hidden;
+}
+.track-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  padding: clamp(24px, 3vw, 40px);
+}
+.track-body h2 {
+  margin-top: 12px;
+}
+.track-tag {
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--t-s);
+  font-weight: 500;
+}
+.track .download-version,
+.track-text {
+  margin-top: 12px;
+  max-width: 34em;
+}
+.track .download-choices {
+  margin-top: 24px;
+}
+.claw-name {
+  position: absolute;
+  left: 22px;
+  bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.track-beta {
+  --text: #eef5f8;
+  --text-muted: #b6c7d1;
+  --bg-inverse: #f3f3f2;
+  --text-inverse: #111213;
+  --bg-bubble: rgba(255, 255, 255, 0.1);
+  --bg-raised: rgba(255, 255, 255, 0.16);
+  --accent: #3ee6c1;
+  --accent-line: #3ee6c1;
+  --accent-ink: #04261f;
+  --accent-soft: rgba(62, 230, 193, 0.14);
+  background: #081723;
+  color: var(--text);
+}
+.track-beta .track-stage {
+  background:
+    radial-gradient(60% 70% at 50% 108%, rgba(69, 189, 245, 0.2), transparent 70%),
+    linear-gradient(180deg, #0b2030, #081723);
+}
+.claw-lantern {
+  width: clamp(150px, 14vw, 196px);
+  margin-top: 8px;
+}
+.js .claw-lantern {
+  animation: drift 7s ease-in-out infinite;
+}
+@keyframes drift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -8px;
+  }
+}
+/* Marine snow, falling up past the Lantern. */
+.snow i,
+.fizz i {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+}
+.snow i {
+  bottom: -8px;
+  width: 3px;
+  height: 3px;
+  background: rgba(214, 238, 250, 0.4);
+  animation: snow 12s linear infinite;
+}
+.snow i:nth-child(1) {
+  left: 12%;
+}
+.snow i:nth-child(2) {
+  left: 27%;
+  animation-delay: -4s;
+  animation-duration: 15s;
+}
+.snow i:nth-child(3) {
+  left: 41%;
+  animation-delay: -9s;
+  width: 2px;
+  height: 2px;
+}
+.snow i:nth-child(4) {
+  left: 63%;
+  animation-delay: -2s;
+  animation-duration: 14s;
+}
+.snow i:nth-child(5) {
+  left: 78%;
+  animation-delay: -7s;
+  width: 2px;
+  height: 2px;
+}
+.snow i:nth-child(6) {
+  left: 90%;
+  animation-delay: -11s;
+  animation-duration: 16s;
+}
+@keyframes snow {
+  from {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  15%,
+  80% {
+    opacity: 1;
+  }
+  to {
+    transform: translate(14px, -320px);
+    opacity: 0;
+  }
+}
+/* A press sends up a few bubbles. */
+.fizz i {
+  left: calc(50% + var(--x));
+  top: 46%;
+  width: var(--d);
+  height: var(--d);
+  border: 1.5px solid rgba(191, 233, 255, 0.75);
+  opacity: 0;
+}
+.fizz i:nth-child(1) {
+  --x: -38px;
+  --d: 10px;
+}
+.fizz i:nth-child(2) {
+  --x: 30px;
+  --d: 7px;
+  --fizz-delay: 120ms;
+}
+.fizz i:nth-child(3) {
+  --x: -12px;
+  --d: 6px;
+  --fizz-delay: 240ms;
+}
+.fizz i:nth-child(4) {
+  --x: 46px;
+  --d: 12px;
+  --fizz-delay: 360ms;
+}
+.fizz i:nth-child(5) {
+  --x: -56px;
+  --d: 6px;
+  --fizz-delay: 480ms;
+}
+[data-burst] .fizz i {
+  animation: fizz 1.6s cubic-bezier(0.2, 0.6, 0.3, 1) var(--fizz-delay, 0ms) both;
+}
+@keyframes fizz {
+  from {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-150px) scale(1);
+    opacity: 0;
+  }
+}
+
+/* Stable: daybreak on the shore, the sun not quite up. */
+.track-stable .track-stage {
+  background:
+    radial-gradient(
+      42% 60% at 50% 88%,
+      color-mix(in srgb, var(--stage-yellow) 22%, transparent),
+      transparent 70%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--stage-sky) var(--wash), var(--bg-rail)),
+      var(--bg-rail)
+    );
+}
+.shore {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -64%;
+  height: 100%;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 7%, var(--bg-bubble));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+.claw-clawling {
+  position: relative;
+  width: clamp(140px, 13vw, 180px);
+  align-self: end;
+  margin-bottom: 4%;
+}
+.track-stable .track-tag {
+  background: var(--bg-code);
+  color: var(--text-muted);
+}
+
+/* The Claws: Clawtrate's creatures, drawn in a 40-unit box. Each pose is a
+   data-s group, shown while the drawing's data-state names it. */
+.claw-defs {
+  position: absolute;
+  overflow: hidden;
+}
+.claw {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 20px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.claw:focus-visible {
+  outline-offset: 4px;
+}
+.claw-art {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.claw-art [data-s] {
+  display: none;
+}
+.claw-art[data-state="idle"] [data-s~="idle"],
+.claw-art[data-state="thinking"] [data-s~="thinking"],
+.claw-art[data-state="working"] [data-s~="working"],
+.claw-art[data-state="waiting"] [data-s~="waiting"],
+.claw-art[data-state="blocked"] [data-s~="blocked"],
+.claw-art[data-state="done"] [data-s~="done"] {
+  display: inline;
+}
+.claw-art .cr {
+  transform-box: view-box;
+  transform-origin: 20px 35px;
+  transition: rotate 280ms var(--ease);
+}
+.claw-art .blink {
+  animation: claw-blink 5.6s infinite;
+}
+.claw-art[data-state="done"] .cr {
+  animation: claw-hop 3.2s cubic-bezier(0.3, 0, 0.2, 1) infinite;
+}
+/* The white ball keeps an edge on a light page. */
+:root[data-theme="light"] .claw-perch .ball,
+:root[data-theme="light"] .track-stable .ball {
+  stroke: rgba(17, 18, 19, 0.24);
+  stroke-width: 0.45;
+}
+
+.clawling .arm {
+  transform-box: view-box;
+  transition: rotate 280ms var(--ease);
+}
+.clawling .arm-l {
+  transform-origin: 10.1px 27.5px;
+}
+.clawling .arm-r {
+  transform-origin: 29.9px 27.5px;
+}
+.clawling[data-state="waiting"] .arm-r {
+  animation: claw-wave 0.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.clawling[data-state="done"] .arm-l {
+  rotate: 42deg;
+}
+.clawling[data-state="done"] .arm-r {
+  rotate: -42deg;
+}
+.clawling[data-state="blocked"] {
+  filter: saturate(0.4) brightness(0.85);
+}
+.clawling[data-state="blocked"] .cr {
+  rotate: 6deg;
+}
+.clawling[data-state="blocked"] .arm-l {
+  rotate: -62deg;
+}
+.clawling[data-state="blocked"] .arm-r {
+  rotate: 62deg;
+}
+
+.lantern .lure {
+  transform-box: view-box;
+  transform-origin: 20px 14.8px;
+  transition: rotate 300ms var(--ease);
+}
+.lantern[data-state="thinking"] .lure {
+  animation: claw-sway-lure 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.lantern[data-state="working"] .lure {
+  animation: claw-conduct 0.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.lantern[data-state="thinking"] .glow {
+  animation: claw-pulse 2.6s ease-in-out infinite;
+}
+.lantern .halo {
+  opacity: 0.3;
+  transition: opacity 400ms var(--ease);
+}
+.lantern[data-state="thinking"] .halo {
+  animation: claw-pulse 2.6s ease-in-out infinite;
+}
+.lantern:not([data-state="thinking"]) .halo {
+  opacity: 1;
+}
+.lantern .ping {
+  display: none;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.lantern[data-state="waiting"] .ping {
+  display: inline;
+  animation: claw-ping 2.6s cubic-bezier(0.2, 0, 0.4, 1) infinite;
+}
+
+@keyframes claw-blink {
+  0%,
+  91%,
+  100% {
+    translate: 0 0;
+  }
+  93.5% {
+    translate: 0 var(--b);
+  }
+  96% {
+    translate: 0 0;
+  }
+}
+@keyframes claw-hop {
+  0%,
+  4% {
+    translate: 0 0;
+  }
+  10% {
+    translate: 0 -2.8px;
+  }
+  16% {
+    translate: 0 0;
+  }
+  20% {
+    translate: 0 -0.9px;
+  }
+  24%,
+  100% {
+    translate: 0 0;
+  }
+}
+@keyframes claw-wave {
+  0%,
+  100% {
+    rotate: -30deg;
+  }
+  50% {
+    rotate: -78deg;
+  }
+}
+@keyframes claw-sway-lure {
+  0%,
+  100% {
+    rotate: -9deg;
+  }
+  50% {
+    rotate: 9deg;
+  }
+}
+@keyframes claw-conduct {
+  0%,
+  100% {
+    rotate: -16deg;
+  }
+  50% {
+    rotate: 14deg;
+  }
+}
+@keyframes claw-ping {
+  0% {
+    scale: 1;
+    opacity: 0.85;
+  }
+  60%,
+  100% {
+    scale: 3;
+    opacity: 0;
+  }
+}
+@keyframes claw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* The home page's Clawling sits on the demo window's ledge, its body behind
+   the window. The button covers only the part that shows. */
+.demo {
+  position: relative;
+  margin-top: 76px;
+}
+.demo .win {
+  position: relative;
+  z-index: 1;
+}
+.claw-perch {
+  position: absolute;
+  z-index: 0;
+  right: clamp(24px, 8%, 64px);
+  top: -73px;
+  width: 100px;
+  height: 73px;
+}
+.claw-perch .claw-art {
+  width: 100px;
+  height: 100px;
+}
+
+/* Under reduced motion every Claw holds a still pose; a press still changes it. */
+@media (prefers-reduced-motion: reduce) {
+  .claw-art,
+  .claw-art *,
+  .js .claw-lantern,
+  .snow i,
+  .fizz i {
+    animation: none !important;
+  }
+  .lantern .ping,
+  .snow {
+    display: none !important;
+  }
+}
+
+/* Built by engineers from: the logos in one colour, each at its own height. */
+.pedigree {
+  --s: 1;
+  padding-top: clamp(64px, 8vw, 112px);
+}
+.download .pedigree {
+  padding: clamp(48px, 6vw, 80px) 0 0;
+}
+.pedigree-title {
+  color: var(--text-muted);
+  font-size: clamp(1.0625rem, 0.95rem + 0.45vw, 1.3125rem);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.pedigree-logos {
+  list-style: none;
+  padding: 0;
+  margin-top: clamp(28px, 3vw, 40px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+}
+.pedigree-logos li {
+  display: flex;
+  justify-content: center;
+}
+.pedigree-logos img {
+  display: block;
+  width: auto;
+  height: calc(var(--h) * var(--s));
+  filter: brightness(0) invert(1);
+  opacity: 0.8;
+}
+:root[data-theme="light"] .pedigree-logos img {
+  filter: brightness(0);
+  opacity: 0.74;
+}
+.logo-aws {
+  --h: 46px;
+}
+.logo-amazon {
+  --h: 38px;
+}
+.logo-sonos {
+  --h: 24px;
+}
+.logo-mit-lincoln-laboratory {
+  --h: 34px;
+}
+.logo-summit-partners {
+  --h: 34px;
+}
+.logo-philips {
+  --h: 21px;
+}
+/* The logos come in one after another, once. */
+.js .pedigree[data-reveal] li {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 600ms var(--ease),
+    transform 700ms var(--ease);
+}
+.js .pedigree.in li {
+  opacity: 1;
+  transform: none;
+}
+.pedigree li:nth-child(2) {
+  transition-delay: 70ms;
+}
+.pedigree li:nth-child(3) {
+  transition-delay: 140ms;
+}
+.pedigree li:nth-child(4) {
+  transition-delay: 210ms;
+}
+.pedigree li:nth-child(5) {
+  transition-delay: 280ms;
+}
+.pedigree li:nth-child(6) {
+  transition-delay: 350ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .js .pedigree[data-reveal] li {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Below 1160px the row no longer fits: two rows, AWS, Amazon and Sonos, then
+   MIT Lincoln Laboratory, Summit Partners and Philips. The ::before is the
+   line break (flex has none), its height the gap between rows. */
+@media (max-width: 1160px) {
+  .pedigree {
+    --s: 0.9;
+  }
+  .pedigree-logos {
+    flex-wrap: wrap;
+    gap: 0 24px;
+  }
+  .pedigree-logos::before {
+    content: "";
+    order: 1;
+    flex: 0 0 100%;
+    height: 40px;
+  }
+  .pedigree-logos li:nth-child(n + 4) {
+    order: 2;
+  }
+}
+@media (max-width: 900px) {
+  .tracks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Phones and small tablets: three rows, MIT Lincoln Laboratory alone in the middle. */
+@media (max-width: 720px) {
+  .pedigree {
+    --s: 0.8;
+  }
+  .pedigree-logos {
+    gap: 0 16px;
+  }
+  .pedigree-logos::before,
+  .pedigree-logos::after {
+    content: "";
+    flex: 0 0 100%;
+    height: 32px;
+  }
+  .pedigree-logos::after {
+    order: 3;
+  }
+  .pedigree-logos li:nth-child(n + 5) {
+    order: 4;
+  }
+  .pedigree-logos li:nth-child(4) {
+    flex: 0 0 100%;
+    justify-content: flex-start;
+  }
+  .pedigree-logos .logo-mit-lincoln-laboratory {
+    width: min(100%, 340px);
+    height: auto;
+  }
+  .track {
+    border-radius: 22px;
+  }
+  .track-stage {
+    height: 220px;
+  }
+  .track .download-choices .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+@media (max-width: 360px) {
+  .pedigree {
+    --s: 0.72;
+  }
+}

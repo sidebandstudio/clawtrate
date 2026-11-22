@@ -1,5 +1,6 @@
-// The site's only script: the theme switch, copy buttons, the approval demo,
-// the questions, and the entrances. The page reads fully without it, in dark.
+// The home page's script: the theme switch, copy buttons, the approval demo,
+// the questions, and the entrances. claws.js adds the Claws and the logo row.
+// The page reads fully without either, in dark.
 // Screens follow the theme through CSS, so the first paint is already right.
 
 (function () {
