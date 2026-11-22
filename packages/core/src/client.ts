@@ -51,10 +51,11 @@ import {
 import {
   MachinesEngine,
   type ApprovalsFile,
-  type BotPlacement,
   type ConfigSave,
   type DefaultsChoice,
   type MachinesView,
+  type PlacementPart,
+  type PlacementParts,
 } from "./machines.ts";
 import {
   admitApproval,
@@ -4402,9 +4403,9 @@ export class ClawtrateClient {
 
   // Where a bot runs and Machines (`machines.ts`; controls.md sections 14 and 15) ----------
 
-  /** A bot's command machine, workspace, browser and inventory, read now. */
-  readPlacement(botId: string): Promise<BotPlacement> {
-    return this.machines.readPlacement(botId);
+  /** One part of a bot's placement: its command machine, workspace, browser, inventory or plugin credentials, read now. */
+  readPlacement<P extends PlacementPart>(botId: string, part: P): Promise<PlacementParts[P]> {
+    return this.machines.readPlacement(botId, part);
   }
 
   /** The gateway's machines, their approvals files (admin) and paired devices (pairing), read now. */

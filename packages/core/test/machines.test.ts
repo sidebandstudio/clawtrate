@@ -9,6 +9,7 @@ import {
   MAX_MACHINE_NAME_CHARS,
   MAX_NODES,
   MAX_PATH_CHARS,
+  PLACEMENT_PARTS,
   readBrowserSettings,
   readCommandPlace,
   readDevices,
@@ -300,7 +301,7 @@ describe("where a bot runs: the engine", () => {
 
   it("F-046: a save sends the revision the page showed, never one read at the click", async () => {
     const gw = gateway();
-    const shown = await engine(gw).readPlacement("otto");
+    const shown = await engine(gw).readPlacement("otto", "commands");
     expect(shown.configHash).toBe("c1");
     // Another writer changes the config after the page read it.
     await engine(gw, { admin: true }).setCommandMachine("pip", { host: "gateway" }, "c1");
@@ -347,7 +348,7 @@ describe("where a bot runs: the engine", () => {
       active: "pending",
       place: { ownHost: "gateway", ownNode: null },
     });
-    expect((await engine(gw).readPlacement("otto")).configActive).toBe(false);
+    expect((await engine(gw).readPlacement("otto", "commands")).configActive).toBe(false);
   });
 
   /** A gateway whose `config.patch` persists the change, then refuses with `message`. */
@@ -532,7 +533,11 @@ describe("where a bot runs: the engine", () => {
     });
     const unreadable =
       "The gateway reports that its settings file isn't valid, so it can't be read.";
-    await expect(engine(gw).readPlacement("otto")).rejects.toThrow(unreadable);
+    for (const part of ["commands", "browser", "inventory"] as const)
+      await expect(engine(gw).readPlacement("otto", part)).rejects.toThrow(unreadable);
+    await expect(engine(gw, { admin: true }).readPlacement("otto", "credentials")).rejects.toThrow(
+      unreadable,
+    );
     await expect(engine(gw).readMachines()).rejects.toThrow(unreadable);
   });
 
@@ -548,27 +553,29 @@ describe("where a bot runs: the engine", () => {
         mcp: { servers: { coder: {}, t3code: {} } },
       },
     });
-    const read = await engine(gw).readPlacement("otto");
-    expect(read.inventory.accounts).toEqual([
+    const read = await engine(gw).readPlacement("otto", "inventory");
+    expect(read.accounts).toEqual([
       { id: "acme:work", label: "Work", bound: true },
       { id: "acme:home", label: null, bound: false },
     ]);
-    expect(read.inventory.toolServers).toEqual([
+    expect(read.toolServers).toEqual([
       { name: "coder", deniedBy: null, offered: null },
       { name: "t3code", deniedBy: { list: "bot", entry: "t3code__*" }, offered: null },
     ]);
-    expect(read.inventory.secrets).toEqual({ status: "needs-admin" });
-    expect(read.inventory.pluginCredentials).toEqual({ status: "needs-admin" });
-    expect(read.inventory.workspaceOnly).toEqual({ value: true, set: "every-bot" });
+    expect(read.secrets).toEqual({ status: "needs-admin" });
+    expect((await engine(gw).readPlacement("otto", "credentials")).plugins).toEqual({
+      status: "needs-admin",
+    });
+    expect(read.workspaceOnly).toEqual({ value: true, set: "every-bot" });
     expect(gw.calls.map(([method]) => method)).not.toContain("secrets.store.list");
-    const admin = await engine(gw, { admin: true }).readPlacement("otto");
-    expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
+    const admin = await engine(gw, { admin: true }).readPlacement("otto", "inventory");
+    expect(admin.secrets).toEqual(["router-admin", "nas-backup"]);
   });
 
   it("F-274: the bot's workspace is the one the gateway lists, even before the client lists its bots", async () => {
-    const read = await engine(gateway(), { noBots: true }).readPlacement("otto");
+    const read = await engine(gateway(), { noBots: true }).readPlacement("otto", "workspace");
     expect(read.workspace).toBe("/srv/claw/workspaces/otto");
-    expect(read.sameSetting.workspace).toEqual([]);
+    expect(read.sameWorkspace).toEqual([]);
   });
 
   it("F-047: a tool server is offered only by a listed tool of its own that the session doesn't deny", () => {
@@ -617,19 +624,19 @@ describe("where a bot runs: the engine", () => {
       providers: [],
       unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE", message },
     });
-    expect((await engine(gw).readPlacement("otto")).inventory.accounts).toEqual({
+    expect((await engine(gw).readPlacement("otto", "inventory")).accounts).toEqual({
       status: "failed",
       message,
     });
     gw.handlers["models.authStatus"] = () => ({ ts: 1, providers: [] });
-    expect((await engine(gw).readPlacement("otto")).inventory.accounts).toEqual([]);
+    expect((await engine(gw).readPlacement("otto", "inventory")).accounts).toEqual([]);
   });
 
   it("F-047: a refused read at the tier says which access it needs, not that there is nothing", async () => {
     const gw = gateway();
     gw.refuse.set("secrets.store.list", "missing scope: operator.admin");
-    const read = await engine(gw, { admin: true }).readPlacement("otto");
-    expect(read.inventory.secrets).toEqual({ status: "needs-admin" });
+    const read = await engine(gw, { admin: true }).readPlacement("otto", "inventory");
+    expect(read.secrets).toEqual({ status: "needs-admin" });
   });
 
   it("F-047: a plugin's credentials are read field by field with the descriptor's path and the revision, and a failed read is unavailable, never none", async () => {
@@ -646,8 +653,8 @@ describe("where a bot runs: the engine", () => {
       if (params.pluginId === "mailer") throw new Error('Plugin "mailer" not found.');
       return inspect(params);
     };
-    const read = await engine(gw, { admin: true }).readPlacement("otto");
-    expect(read.inventory.pluginCredentials).toEqual([
+    const read = await engine(gw, { admin: true }).readPlacement("otto", "credentials");
+    expect(read.plugins).toEqual([
       {
         plugin: "weather",
         fields: [{ label: "API key", kind: "configured", unresolved: false }],
@@ -685,12 +692,12 @@ describe("where a bot runs: the engine", () => {
         throw new Error("Credential metadata is unavailable. Reload Settings and try again.");
       return credentials(params);
     };
-    const read = await engine(gw, { admin: true }).readPlacement("otto");
+    const read = await engine(gw, { admin: true }).readPlacement("otto", "credentials");
     const unreported = {
       status: "failed",
       message: "The gateway did not report credential fields.",
     };
-    expect(read.inventory.pluginCredentials).toEqual([
+    expect(read.plugins).toEqual([
       { plugin: "empty", fields: [], fieldsOmitted: 0 },
       { plugin: "missing", fields: unreported, fieldsOmitted: 0 },
       { plugin: "pathless", fields: unreported, fieldsOmitted: 0 },
@@ -705,6 +712,40 @@ describe("where a bot runs: the engine", () => {
     ]);
   });
 
+  it("F-046 F-047: a plugin credential read that never answers holds back the plugin credentials only", async () => {
+    const gw = gateway({
+      config: {
+        agents: {
+          entries: {
+            otto: {
+              workspace: "/srv/claw/workspaces/otto",
+              tools: { exec: { host: "node", node: NODE }, deny: ["browser"] },
+            },
+          },
+        },
+        plugins: { entries: { weather: {} } },
+      },
+    });
+    gw.plugins.weather = [
+      { path: ["plugins", "entries", "weather", "config", "apiKey"], label: "API key" },
+    ];
+    gw.handlers["plugins.credentials.inspect"] = () => new Promise(() => {});
+    const e = engine(gw, { admin: true });
+    const credentials = e.readPlacement("otto", "credentials").then(() => "answered");
+    const [commands, workspace, browser, inventory] = await Promise.all([
+      e.readPlacement("otto", "commands"),
+      e.readPlacement("otto", "workspace"),
+      e.readPlacement("otto", "browser"),
+      e.readPlacement("otto", "inventory"),
+    ]);
+    expect(commands.commands).toMatchObject({ host: "node", node: { id: NODE } });
+    expect(workspace.workspace).toBe("/srv/claw/workspaces/otto");
+    expect(browser.browser.own.deny).toEqual(["browser"]);
+    expect(inventory.secrets).toEqual(["router-admin", "nas-backup"]);
+    expect(gw.calls.some(([method]) => method === "plugins.credentials.inspect")).toBe(true);
+    expect(await Promise.race([credentials, Promise.resolve("waiting")])).toBe("waiting");
+  });
+
   it("F-272: bots with the same stored node or the same reported path are named as having the same setting", async () => {
     const gw = gateway();
     await engine(gw, { admin: true }).setCommandMachine(
@@ -717,11 +758,9 @@ describe("where a bot runs: the engine", () => {
       { host: "node", nodeId: NODE },
       "c2",
     );
-    const pip = await engine(gw).readPlacement("pip");
-    expect(pip.sameSetting.machine).toEqual(["otto"]);
-    expect(pip.sameSetting.workspace).toEqual(["marlow"]);
-    const otto = await engine(gw).readPlacement("otto");
-    expect(otto.sameSetting.workspace).toEqual([]);
+    expect((await engine(gw).readPlacement("pip", "commands")).sameMachine).toEqual(["otto"]);
+    expect((await engine(gw).readPlacement("pip", "workspace")).sameWorkspace).toEqual(["marlow"]);
+    expect((await engine(gw).readPlacement("otto", "workspace")).sameWorkspace).toEqual([]);
   });
 
   it("F-272: workspace paths are kept whole: a shared long prefix is not the same setting, and an oversize one is unavailable", async () => {
@@ -740,11 +779,11 @@ describe("where a bot runs: the engine", () => {
       },
     });
     expect(ottoPath.slice(0, 1_024)).toBe(pipPath.slice(0, 1_024));
-    const otto = await engine(gw).readPlacement("otto");
+    const otto = await engine(gw).readPlacement("otto", "workspace");
     expect(otto.workspace).toBe(ottoPath);
-    expect(otto.sameSetting.workspace).toEqual([]);
-    expect((await engine(gw).readPlacement("pip")).workspace).toBe(pipPath);
-    expect((await engine(gw).readPlacement("marlow")).workspace).toBeNull();
+    expect(otto.sameWorkspace).toEqual([]);
+    expect((await engine(gw).readPlacement("pip", "workspace")).workspace).toBe(pipPath);
+    expect((await engine(gw).readPlacement("marlow", "workspace")).workspace).toBeNull();
   });
 
   it("F-273: the browser is the stored tool lists and the computer plugin's profile, and nothing more", () => {
@@ -1180,8 +1219,8 @@ describe("the answers' size", () => {
       now: () => 1,
     });
     const machines = JSON.stringify(await e.readMachines()).length;
-    const placement = JSON.stringify(await e.readPlacement(bots[0]!)).length;
     expect(machines).toBeLessThan(FRAME);
-    expect(placement).toBeLessThan(FRAME);
+    for (const part of PLACEMENT_PARTS)
+      expect(JSON.stringify(await e.readPlacement(bots[0]!, part)).length).toBeLessThan(FRAME);
   });
 });
