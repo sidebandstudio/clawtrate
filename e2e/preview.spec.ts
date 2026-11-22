@@ -498,6 +498,7 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     "Sort bots: Recent activity",
   );
 
+  let previewed = 0;
   for (const agent of bots) {
     const row = botRow(page, name(agent));
     // F-015: the gateway's default bot carries the star, and only it.
@@ -510,13 +511,19 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     const newest = sessions
       .filter((s) => s.agentId === agent.id && !s.archived)
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
-    const words = newest
-      .lastMessagePreview!.replace(/[*_`#|]/g, "")
-      .split(/\s+/)
-      .slice(0, 3);
-    await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+    // The gateway previews only a task with a message. One another check just made has none
+    // yet, and the row shows that task's title instead.
+    if (newest.lastMessagePreview) {
+      const words = newest.lastMessagePreview
+        .replace(/[*_`#|]/g, "")
+        .split(/\s+/)
+        .slice(0, 3);
+      await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
+      previewed += 1;
+    }
     await expect(row.locator(".bot-time")).toHaveText(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/);
   }
+  expect(previewed).toBeGreaterThan(0);
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
@@ -733,7 +740,11 @@ test("on one pane a bot unfolds in place, and folding never changes the conversa
 });
 
 test("the gateway menu opens from the keyboard and keeps the theme", async ({ page }) => {
+  // The web host opens dark on a light system when nothing has been chosen.
+  await page.emulateMedia({ colorScheme: "light" });
   await openShell(page);
+  const scheme = () => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+  expect(await scheme()).toBe("dark");
   const trigger = page.getByRole("button", { name: /Open the gateway menu\.$/ });
   for (const key of ["ArrowUp", "ArrowDown"]) {
     await trigger.focus();
@@ -743,15 +754,58 @@ test("the gateway menu opens from the keyboard and keeps the theme", async ({ pa
     await page.keyboard.press("Escape");
     await expect(trigger).toBeFocused();
   }
+  const html = page.locator("html");
+  const stored = () => page.evaluate(() => localStorage.getItem("clawtrate.theme"));
+  const reload = async () => {
+    await page.reload();
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  };
+
+  // Dark is also what an empty store gives, so the save itself is checked.
   await trigger.click();
   await page.getByRole("menuitemradio", { name: "Dark" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  expect(await stored()).toBe("dark");
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  expect(await stored()).toBe("dark");
+
+  // Light stays light on a dark system, from before the bundle runs.
+  await trigger.click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  expect(await stored()).toBe("light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/assets\/index-[^/]*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.reload({ waitUntil: "commit" });
+  const ground = () =>
+    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+  await expect.poll(ground, { timeout: 5_000 }).not.toBe("");
+  expect(await ground()).toBe("#fff");
+  expect(await page.locator("#root > *").count()).toBe(0);
+  release();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(html).toHaveAttribute("data-theme", "light");
+  expect(await scheme()).toBe("light");
+
+  // Match the system is kept, and follows the system both ways.
   await trigger.click();
   await page.getByRole("menuitemradio", { name: "Match the system" }).click();
-  await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+  expect(await stored()).toBe("system");
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "system");
+  expect(await stored()).toBe("system");
+  expect(await scheme()).toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(scheme).toBe("light");
+  // And it is still kept after a reload on the light system.
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "system");
+  expect(await scheme()).toBe("light");
 });
 
 test("the drawer is modal, and focus follows it across the docking width", async ({ page }) => {

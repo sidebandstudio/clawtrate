@@ -27,7 +27,8 @@ export const SIZES: Size[] = [
 export const THEMES = ["light", "dark"] as const;
 export type Theme = (typeof THEMES)[number];
 
-export function contextFor(size: Size, theme: Theme) {
+/** A test that names no theme gets the app's default, dark. */
+export function contextFor(size: Size, theme: Theme = "dark") {
   return {
     viewport: { width: size.width, height: size.height },
     deviceScaleFactor: 1,
@@ -38,7 +39,7 @@ export function contextFor(size: Size, theme: Theme) {
 }
 
 /** Open the fixture on a scene, with the clock fixed and the fonts loaded. */
-export async function openFixture(page: Page, query: string, theme: Theme): Promise<void> {
+export async function openFixture(page: Page, query: string, theme: Theme = "dark"): Promise<void> {
   await page.clock.setFixedTime(NOW);
   await page.goto(`/?${query}&theme=${theme}`);
   await page.locator(".app").waitFor();
@@ -60,14 +61,16 @@ export const release = (page: Page) =>
     (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
   );
 
-/** Let layout, ResizeObservers and the follow-to-end logic settle. */
+/**
+ * Let layout, ResizeObservers and the follow-to-end logic settle: wait until the browser has
+ * drawn two more frames. `page.clock` swaps the page's requestAnimationFrame for a timer that
+ * fires whether or not anything was drawn, so a busy runner could reach the screenshot with
+ * the last change still unpainted and spend the screenshot's whole timeout waiting for it.
+ * waitForFunction's "raf" polling keeps the browser's own: the predicate runs once now and
+ * once per frame, so its third run comes two frames later.
+ */
 export async function settle(page: Page): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await page.waitForFunction((seen) => ++seen.runs > 2, { runs: 0 }, { polling: "raf" });
 }
 
 /**
@@ -111,72 +114,57 @@ export async function paintedFinal(page: Page): Promise<void> {
       { message: "fonts loaded and images decoded" },
     )
     .toBe(true);
-  // When the wait times out, keep what each frame looked like so the artifact shows
-  // whether the transcript stopped following the end or the shelf kept moving.
-  const frames: Array<{
+  type Geometry = {
     scrollTop: number | null;
     scrollHeight: number | null;
     clientHeight: number | null;
     shelf: number[][];
-  }> = [];
+  };
+  // When the wait times out, keep what each frame looked like so the artifact shows
+  // whether the transcript stopped following the end or the shelf kept moving.
+  const frames: Geometry[] = [];
   try {
     await expect
       .poll(
         async () => {
-          const attempt = await page.evaluate(
-            () =>
-              new Promise<{
-                atEnd: boolean;
-                frames: Array<{
-                  scrollTop: number | null;
-                  scrollHeight: number | null;
-                  clientHeight: number | null;
-                  shelf: number[][];
-                }>;
-              }>((resolve) => {
-                const geometry = () => {
-                  const transcript = document.querySelector<HTMLElement>(
-                    "[data-testid=transcript]",
-                  );
-                  const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
-                  return {
-                    scrollTop: transcript ? transcript.scrollTop : null,
-                    scrollHeight: transcript ? transcript.scrollHeight : null,
-                    clientHeight: transcript ? transcript.clientHeight : null,
-                    shelf: rows.map((row) => {
-                      const box = row.getBoundingClientRect();
-                      return [box.left, box.top, box.width, box.height];
-                    }),
-                  };
-                };
-                const atEnd = () => {
-                  const transcript = document.querySelector<HTMLElement>(
-                    "[data-testid=transcript]",
-                  );
-                  return (
-                    !transcript ||
-                    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
-                  );
-                };
-                const seen = [geometry()];
-                const frame = () => {
-                  seen.push(geometry());
-                  if (seen.length < 4) requestAnimationFrame(frame);
-                  else {
-                    // Record the full boxes, but keep the wait on the original vertical layout.
-                    const layouts = seen.map(({ shelf, ...transcript }) =>
-                      JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
-                    );
-                    resolve({ atEnd: new Set(layouts).size === 1 && atEnd(), frames: seen });
-                  }
-                };
-                requestAnimationFrame(frame);
-              }),
+          // One sample now and one in each of the next three drawn frames (see settle).
+          const handle = await page.waitForFunction(
+            (seen: Geometry[]) => {
+              const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
+              const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
+              seen.push({
+                scrollTop: transcript ? transcript.scrollTop : null,
+                scrollHeight: transcript ? transcript.scrollHeight : null,
+                clientHeight: transcript ? transcript.clientHeight : null,
+                shelf: rows.map((row) => {
+                  const box = row.getBoundingClientRect();
+                  return [box.left, box.top, box.width, box.height];
+                }),
+              });
+              return seen.length === 4 && seen;
+            },
+            [] as Geometry[],
+            { polling: "raf" },
           );
-          frames.push(...attempt.frames);
-          return attempt.atEnd;
+          // waitForFunction resolves only once the predicate returns the samples.
+          const seen = (await handle.jsonValue()) as Geometry[];
+          frames.push(...seen);
+          const last = seen[3]!;
+          const atEnd =
+            last.scrollTop === null ||
+            last.scrollHeight! - last.scrollTop - last.clientHeight! <= 1;
+          // Record the full boxes, but keep the wait on the original vertical layout.
+          const layouts = seen.map(({ shelf, ...transcript }) =>
+            JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
+          );
+          return new Set(layouts).size === 1 && atEnd;
         },
-        { message: "the transcript at its end and the shelf, unchanged for three frames" },
+        {
+          message: "the transcript at its end and the shelf, unchanged for three frames",
+          // A drawn frame can take longer than the default assertion timeout.
+          // Let the test deadline bound this wait, as it does for settle().
+          timeout: 0,
+        },
       )
       .toBe(true);
   } catch (error) {

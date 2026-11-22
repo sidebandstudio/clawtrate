@@ -48,6 +48,12 @@ import {
 } from "./files.ts";
 import { MAX_ROUTINE_UPDATES } from "./routines.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
+import {
+  MAX_COMPUTER_PANES,
+  MAX_FRAME_BYTES,
+  MAX_INPUT_TEXT,
+  MAX_QUEUED_INPUTS,
+} from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -131,6 +137,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // A task's `agent.wait` check in flight, and the ids of the active runs it last checked.
   endChecking: { max: T, each: ID, row: "bookkeeping" },
   endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
+  // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
+  // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
+  unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
@@ -245,6 +254,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
+  // Each failed request's log policy; an entry lives only as long as that error object.
+  dispatchedQuiet: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
   // sign-ins Clawtrate started; what it set for each bot; bots whose empty fallback list did not land.
   // Keys and values are bounded where they enter (`prefProfileId`, `prefBotId`, `readIntent`).
@@ -267,6 +278,21 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     max: MAX_FILE_TRANSFERS,
     each: ID + Math.ceil(MAX_TRANSFER_BYTES / 3) * 4 + 4 * N,
     row: "fileTransfers",
+  },
+  // Each viewer's Computer tab, apart from the state (`computer.ts`): its ids, the view's ticket
+  // until the stream opens, the stream's socket, the newest frame not yet drawn, the lease's
+  // generation, the input waiting to go out, an answer waiting behind a release, and timers.
+  // Queued text counts as JSON would write it: up to six characters (`\uXXXX`) for each typed one.
+  "computer.lives": {
+    max: MAX_COMPUTER_PANES,
+    each:
+      8 * ID +
+      12 * N +
+      Math.ceil(MAX_FRAME_BYTES / 3) * 4 +
+      MAX_QUEUED_INPUTS * (6 * MAX_INPUT_TEXT + 4 * N),
+    row: "computer",
+    opaque:
+      "a viewer's live part: one frame of at most `MAX_FRAME_BYTES`, at most `MAX_QUEUED_INPUTS` inputs of at most `MAX_INPUT_TEXT`, a socket and timer handles",
   },
 };
 
@@ -299,6 +325,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   usage: "UsageEngine",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
+  computer: "ComputerViews",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

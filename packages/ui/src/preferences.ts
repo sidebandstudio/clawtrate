@@ -23,28 +23,27 @@ export function writePreference(key: string, value: string | null): void {
 
 export type ThemeChoice = "system" | "light" | "dark";
 
-function applyTheme(choice: ThemeChoice): void {
-  const root = document.documentElement;
-  if (choice === "system") delete root.dataset.theme;
-  else root.dataset.theme = choice;
-}
+/** The theme for a viewer who has chosen none. */
+export const DEFAULT_THEME: ThemeChoice = "dark";
 
 /**
- * Theme preference: follows the OS until the viewer picks one. `?theme=`
- * overrides it. "system" stores nothing and removes `data-theme`, so the
- * stylesheet's `prefers-color-scheme` rules apply.
+ * Theme preference: dark until the viewer picks one. `?theme=` overrides it.
+ * The choice is stored and set as `data-theme`; the stylesheet's root is dark,
+ * and "system" turns light only where the system asks for light.
  */
 export function useTheme(): [ThemeChoice, (choice: ThemeChoice) => void] {
   const [choice, setChoice] = useState<ThemeChoice>(() => {
     const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("theme");
     const stored = fromUrl ?? readPreference("theme");
-    return stored === "light" || stored === "dark" ? stored : "system";
+    return stored === "system" || stored === "light" || stored === "dark" ? stored : DEFAULT_THEME;
   });
 
-  useEffect(() => applyTheme(choice), [choice]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = choice;
+  }, [choice]);
 
   const choose = useCallback((next: ThemeChoice) => {
-    writePreference("theme", next === "system" ? null : next);
+    writePreference("theme", next);
     setChoice(next);
   }, []);
 
