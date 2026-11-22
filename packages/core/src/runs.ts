@@ -1478,6 +1478,24 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
 }
 
 /**
+ * A Stop whose first abort had not gone is withdrawn before it went: a run still stopping goes
+ * on as `revertStop` leaves it; one settled stopped with no known outcome keeps that inference,
+ * unconfirmed, but no read that names it later sends its abort.
+ */
+export function retireStopIntent(
+  activity: TaskActivity,
+  runId: string,
+  error: string,
+): TaskActivity {
+  const reverted = revertStop(activity, runId, error);
+  return updateRun(reverted, runId, (run) =>
+    run.state === "stopped" && !run.outcomeKnown && run.stopRequestedAt !== null
+      ? { ...run, stopRequestedAt: null }
+      : run,
+  );
+}
+
+/**
  * A steer was sent into the active run, and the gateway answered with a run id
  * of the steer's own. Whether it joined that run is known only from what comes
  * under that id (`steerOwnRun`); until then its bare acknowledgement is not

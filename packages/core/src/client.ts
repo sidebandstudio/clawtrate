@@ -195,6 +195,7 @@ import {
   throughRunAliases,
   removeMessage,
   requestStop,
+  retireStopIntent,
   revertStop,
   runsFromHistory,
   settleMissingQuestions,
@@ -293,6 +294,16 @@ import {
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
+import {
+  CONTROL_EVENT,
+  ComputerViews,
+  initialComputerState,
+  type ClosedCode,
+  type ComputerFrame,
+  type ComputerInput,
+  type StopAnswer,
+} from "./computer.ts";
+import { readMachine, type MachineFacts } from "./machine.ts";
 import {
   initialConnectionState,
   initialScopeUpgrade,
@@ -1066,6 +1077,12 @@ export class ClawtrateClient {
   private attachmentBytes = 0;
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
+  /**
+   * Computer Stops whose first abort has not gone (`task\0run`), and who asked: it goes once the
+   * send's answer or history names the run, unless the owner is withdrawn first. Removed when it
+   * goes, when the run settles, or with its owner.
+   */
+  private readonly unsentStops = new Map<string, object>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1202,6 +1219,38 @@ export class ClawtrateClient {
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
+
+  /**
+   * Every viewer's Computer tab (`computer.ts`): what the plugin answered, the
+   * views and the control. Tickets, streams, frames, generations and queued
+   * input stay in it; only codes and plain facts reach the state.
+   */
+  private readonly computer: ComputerViews = new ComputerViews({
+    request: (method, params) => this.request(method, params),
+    openStream: (url) => {
+      const socket = this.host.createWebSocket(url);
+      // Frames arrive as bytes; a socket without the setting gives bytes of its own kind.
+      socket.binaryType = "arraybuffer";
+      return socket;
+    },
+    gatewayUrl: () => this.state.connection.gatewayUrl,
+    canWrite: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canWrite &&
+      !this.options.readOnly,
+    online: () => this.state.connection.status === "connected",
+    now: () => this.now(),
+    get: () => this.state.computer ?? initialComputerState,
+    set: (computer) => this.store.update((state) => ({ ...state, computer })),
+    pendingQuestion: (key) =>
+      this.state.transcripts[key]?.questions.find((q) => q.status === "pending") ?? null,
+    questionStatus: (key, id) =>
+      this.state.transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
+    answer: (key, id, answers, owner) => this.answerQuestion(key, id, answers, { owner }),
+    withdraw: (owner) => this.withdraw(owner),
+    stopTask: (key, owner) => this.stopTask(key, owner),
+    log: (level, message) => this.log(level, message),
+  });
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
@@ -1713,7 +1762,7 @@ export class ClawtrateClient {
       reconnect: () => {
         if (generation !== this.generation || this.settings?.url !== url) return;
         this.quietReconnect = true;
-        void this.open();
+        void this.open({ keepPendingAnswer: true });
       },
     });
     this.scopeUpgrade = upgrade;
@@ -1860,6 +1909,16 @@ export class ClawtrateClient {
     this.withdrawnOwners.add(owner);
     this.fileTransfers.release(owner);
     for (const readers of this.approvalReads.values()) readers.delete(owner);
+    // A Computer Stop whose first abort has not gone goes with it; one already sent is left as it is.
+    for (const [id, asker] of [...this.unsentStops]) {
+      if (asker !== owner) continue;
+      this.unsentStops.delete(id);
+      const [key, runId] = id.split("\u0000") as [string, string];
+      if (this.state.transcripts[key])
+        this.updateActivity(key, (activity) =>
+          retireStopIntent(activity, runId, new WithdrawnError().message),
+        );
+    }
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
@@ -2808,7 +2867,10 @@ export class ClawtrateClient {
     // Stop was pressed before the gateway had taken the send: abort the run it named now.
     if (runId && !command && message.mode !== "steer") {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
-      if (run?.state === "stopping") void this.abortRun(key, runId);
+      if (run?.state === "stopping") {
+        this.unsentStops.delete(`${key}\u0000${runId}`);
+        void this.abortRun(key, runId);
+      }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     if (command) this.dropAttachments(messageId);
@@ -2847,12 +2909,13 @@ export class ClawtrateClient {
   /**
    * Stop a running or waiting run with `chat.abort`. The run is `stopping`
    * until the gateway reports how it ended: `stopped` when the abort took,
-   * `completed` with `finishedBeforeStop` when the run finished first.
+   * `completed` with `finishedBeforeStop` when the run finished first. With `taskOnly` (the
+   * Computer tab's Stop), the runs of other bots this run's messages started are not stopped.
    */
   async stopRun(
     key: string,
     asked: string,
-    options: { owner?: object; everyRun?: boolean } = {},
+    options: { owner?: object; everyRun?: boolean; taskOnly?: boolean } = {},
   ): Promise<void> {
     const transcript = this.state.transcripts[key];
     const runId = transcript
@@ -2867,7 +2930,17 @@ export class ClawtrateClient {
     if (runId === null) return;
     const run = transcript && findRun(transcript, runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
-    this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
+    this.updateActivity(key, (activity) => {
+      const stopping = requestStop(activity, runId, this.now());
+      // A task-only Stop leaves the recipients alone, as if already asked (`stopRecipients`); a
+      // later Stop of the conversation's own, after that one was refused, asks them again.
+      if (options.taskOnly || run.stoppedWith?.recipientsAsked)
+        return noteStoppedWith(stopping, runId, (now) => ({
+          ...now,
+          recipientsAsked: options.taskOnly === true,
+        }));
+      return stopping;
+    });
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
@@ -2877,7 +2950,11 @@ export class ClawtrateClient {
       // has taken the send stops nothing, with or without the run's id, and the turn then runs
       // in full. So a run the gateway has not named yet is aborted once the send's answer
       // names it (`deliver`); an answer that says it is over already needs no abort.
-      if (!current.bound) return;
+      if (!current.bound) {
+        if (options.taskOnly && options.owner)
+          this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
+        return;
+      }
       await this.abortRun(key, current.id);
     } catch (error) {
       this.noteMissingScope(error);
@@ -5181,6 +5258,16 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     void this.settleEndedRuns(key);
+    // A run event can name the run before the send reply dispatches its first abort.
+    for (const id of this.unsentStops.keys()) {
+      const [task, runId] = id.split("\u0000") as [string, string];
+      if (task !== key) continue;
+      const run = findRun(transcript, runId);
+      const waiting =
+        run?.stopRequestedAt != null &&
+        (run.state === "stopping" || (run.state === "stopped" && !run.outcomeKnown));
+      if (!waiting) this.unsentStops.delete(id);
+    }
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -5387,8 +5474,8 @@ export class ClawtrateClient {
     return this.options.allowGatewayUrl ? this.options.allowGatewayUrl(url) : true;
   }
 
-  private async open(): Promise<void> {
-    this.close();
+  private async open(options?: { keepPendingAnswer: boolean }): Promise<void> {
+    this.close(options);
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
@@ -5426,6 +5513,7 @@ export class ClawtrateClient {
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
     if (!sameGateway) {
+      this.computer.reset();
       this.rows = new Map();
       this.raw.clear();
       // Work kept for another gateway's tasks is never carried to this one.
@@ -5899,6 +5987,7 @@ export class ClawtrateClient {
         this.discoveryRead = null;
         this.selectionReady = -1;
         this.streams.clear();
+        this.computer.connectionLost();
         this.accounts.onClose();
         this.invalidateCheckIns();
         this.routines.onClose();
@@ -5997,6 +6086,7 @@ export class ClawtrateClient {
       for (const waiter of waiters) waiter.reject(new Error("Switched to another gateway."));
     }
     this.creationWaiters.clear();
+    this.unsentStops.clear();
     this.approvalOutcomes.clear();
     this.waiting.clear();
     this.unrouted.clear();
@@ -6019,7 +6109,7 @@ export class ClawtrateClient {
       this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
   }
 
-  private close(): void {
+  private close(options?: { keepPendingAnswer: boolean }): void {
     this.generation += 1;
     this.discoveryRead = null;
     this.selectionReady = -1;
@@ -6033,6 +6123,7 @@ export class ClawtrateClient {
     this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
+    this.computer.connectionLost(options?.keepPendingAnswer);
     this.streams.clear();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
@@ -6283,6 +6374,13 @@ export class ClawtrateClient {
     this.settleAccessWaiters();
     this.checkCreations();
     this.checkUnknownDecisions();
+    // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
+    // connection while control was held read the browser's leases again before offering anything.
+    this.computer.reconnected();
+    const methods = asRecord(hello.features)?.methods;
+    this.computer.hello(
+      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
+    );
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -6844,7 +6942,10 @@ export class ClawtrateClient {
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
-      for (const run of toStop) void this.abortRun(key, run.id);
+      for (const run of toStop) {
+        this.unsentStops.delete(`${key}\u0000${run.id}`);
+        void this.abortRun(key, run.id);
+      }
       void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
@@ -7028,10 +7129,15 @@ export class ClawtrateClient {
         if (resolution) this.noteApprovalOutcome(resolution);
         return;
       }
+      case CONTROL_EVENT:
+        this.computer.controlEvent(event.payload);
+        return;
       case "question.resolved": {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        // Read from the runs as they were, told once the transcript records the closure.
+        const closed = this.questionClosures(id, payload.status);
         if (this.waiting.onQuestionResolved(id)) this.publishTasks();
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
@@ -7052,11 +7158,155 @@ export class ClawtrateClient {
             );
           }
         }
+        for (const [key, code] of closed) this.computer.questionClosed(key, id, code);
         return;
       }
       default:
         return;
     }
+  }
+
+  // The Computer tab (`computer.ts`, `machine.ts`) ---------------------------------------
+
+  /**
+   * How a question closed, for each task that holds it, read from its run before the
+   * resolution is applied: an answer queued behind a release of that task's browser is removed,
+   * and the control bar learns the question went, once the transcript records it.
+   */
+  private questionClosures(id: string, status: unknown): Array<[string, ClosedCode]> {
+    const out: Array<[string, ClosedCode]> = [];
+    for (const transcript of Object.values(this.state.transcripts)) {
+      const question = transcript.questions.find((q) => q.id === id);
+      if (!question) continue;
+      const run = question.runId ? findRun(transcript, question.runId) : undefined;
+      // Only a run that has ended ended it; one still stopping has a Stop the gateway hasn't
+      // confirmed, and the question it cancels was cancelled.
+      const runOver = run !== undefined && isTerminal(run.state);
+      const code: ClosedCode =
+        status === "answered"
+          ? "answered"
+          : status === "expired"
+            ? "expired"
+            : runOver
+              ? "run-ended"
+              : status === "cancelled"
+                ? run?.state === "stopping"
+                  ? "cancelled"
+                  : "dismissed"
+                : "cancelled";
+      out.push([transcript.sessionKey, code]);
+    }
+    return out;
+  }
+
+  /**
+   * "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going,
+   * each by its own id as archive and delete stop them, even when none is established as the
+   * current one. Asked for `owner`, it is withdrawn with it while it waits for write access.
+   */
+  private async stopTask(key: string, owner: object | null): Promise<StopAnswer> {
+    const runs = (this.state.transcripts[key]?.runs ?? []).filter(
+      (run) => run.state === "running" || run.state === "waiting",
+    );
+    if (runs.length === 0) {
+      await this.ensureScope(WRITE_SCOPE, owner);
+      this.checkNotWithdrawn(owner);
+      const result = asRecord(await this.request("chat.abort", { sessionKey: key }));
+      // As the gateway said it: `aborted` true or false, or null when its answer didn't say.
+      return { runIds: [], aborted: typeof result?.aborted === "boolean" ? result.aborted : null };
+    }
+    // Each as the conversation's Stop: stopping until the run's end, back to running with the
+    // gateway's refusal (`revertStop`).
+    // All at once: one run's slow answer never holds another's Stop back.
+    await Promise.all(
+      runs.map((run) =>
+        this.stopRun(
+          key,
+          run.id,
+          // "The request affects only this task": nothing these runs' messages started is stopped.
+          owner ? { owner, everyRun: true, taskOnly: true } : { everyRun: true, taskOnly: true },
+        ),
+      ),
+    );
+    return { runIds: runs.map((run) => run.id), aborted: null };
+  }
+
+  /** A viewer id for a bridge session: its pane in `state.computer.panes`. */
+  computerViewer(): string {
+    return this.computer.newViewer();
+  }
+  computerShow(viewer: string, key: string): void {
+    this.computer.show(viewer, key);
+  }
+  computerLeave(viewer: string): void {
+    this.computer.leave(viewer);
+  }
+  computerDispose(viewer: string): void {
+    this.computer.dispose(viewer);
+  }
+  computerTabs(viewer: string): Promise<void> {
+    return this.computer.readTabs(viewer);
+  }
+  computerChoose(viewer: string, targetId: string): void {
+    this.computer.choose(viewer, targetId);
+  }
+  computerWatch(viewer: string): Promise<void> {
+    return this.computer.watch(viewer);
+  }
+  computerStopWatching(viewer: string): void {
+    this.computer.stopWatching(viewer);
+  }
+  computerFrame(viewer: string, n: number, after: number): Promise<ComputerFrame | null> {
+    return this.computer.frame(viewer, n, after);
+  }
+  computerTake(viewer: string): Promise<void> {
+    return this.computer.take(viewer);
+  }
+  computerCancelTake(viewer: string): void {
+    this.computer.cancelTake(viewer);
+  }
+  computerInput(viewer: string, input: ComputerInput): boolean {
+    return this.computer.input(viewer, input);
+  }
+  computerRelease(
+    viewer: string,
+    answer: { questionId: string; itemId: string; option: number } | null,
+  ): void {
+    this.computer.release(viewer, answer ? { answer } : {});
+  }
+  computerCheck(viewer: string): Promise<void> {
+    return this.computer.check(viewer);
+  }
+  computerDismiss(viewer: string): void {
+    this.computer.dismiss(viewer);
+  }
+  computerStopTask(viewer: string, options: { owner?: object } = {}): Promise<void> {
+    return this.computer.stopTask(viewer, options.owner ?? null);
+  }
+
+  /** Where the task's bot runs its commands, and the named nodes' records, read now. */
+  async readMachine(key: string, nodes: string[], probe = false): Promise<MachineFacts> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    const botId = botIdFromSessionKey(key);
+    if (!botId) throw new Error("This task's bot is not known.");
+    // Read on the gateway it started on, all of it: one chosen since answers nothing for it.
+    const generation = this.generation;
+    const same = () => {
+      if (generation !== this.generation) throw new Error("Switched to another gateway.");
+    };
+    const request = async (method: string, params: unknown) => {
+      same();
+      const result = await this.request(method, params);
+      same();
+      return result;
+    };
+    // "Prepare it again" asks the gateway to prepare its own desktop; everything else only reads.
+    if (probe) await request("computer.status", { probe: true }).catch(() => null);
+    same();
+    const facts = await readMachine(request, botId, nodes, this.now());
+    same();
+    return facts;
   }
 
   // Managing tasks and the rail's arrangement (`task-actions.ts`, `sidebar.ts`) --------
