@@ -6,7 +6,7 @@ import type {
   Task,
   Transcript,
 } from "@clawtrate/core";
-import { useCallback, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { EditPicture } from "./bots/EditPicture.tsx";
 import { useBridge } from "./bridge.tsx";
@@ -98,7 +98,13 @@ export function WorkPanel({
   const name = bot?.name ?? "This bot";
   // The pane's announcements, polite, as the conversation's live region speaks.
   const [announcement, setAnnouncement] = useState("");
-  const [editingPicture, setEditingPicture] = useState(false);
+  // Edit picture is open for this bot id, and only while it is the pane's bot and saving is allowed.
+  const [editingPicture, setEditingPicture] = useState<string | null>(null);
+  const canEditPicture = connection.canAdmin && online;
+  const editing = editingPicture !== null && editingPicture === bot?.id && canEditPicture;
+  useEffect(() => {
+    if (editingPicture !== null && !editing) setEditingPicture(null);
+  }, [editingPicture, editing]);
   const announce = useCallback((text: string) => {
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));
@@ -125,20 +131,28 @@ export function WorkPanel({
       </button>
       {bot && (
         <div className="work-hero">
-          {connection.canAdmin && online ? (
+          {canEditPicture ? (
             <button
               type="button"
               className="work-picture"
               aria-label={`Change ${bot.name}'s picture`}
               title="Change picture"
-              onClick={() => setEditingPicture(true)}
+              onClick={() => setEditingPicture(bot.id)}
             >
               <Avatar bot={bot} />
             </button>
           ) : (
             <Avatar bot={bot} />
           )}
-          {editingPicture && <EditPicture bot={bot} onClose={() => setEditingPicture(false)} />}
+          {editing && (
+            <EditPicture
+              key={bot.id}
+              bot={bot}
+              canSave={canEditPicture}
+              onClose={() => setEditingPicture(null)}
+              onSaved={() => announce("Picture saved")}
+            />
+          )}
           <h2>{bot.name}</h2>
           {bot.theme && <p>{bot.theme}</p>}
         </div>

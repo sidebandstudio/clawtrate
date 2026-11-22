@@ -1188,16 +1188,16 @@ export class AccountsEngine {
   }
 
   /**
-   * Change a bot's picture (bots.md section 8): `agents.update` with the new
-   * picture, then the bot list read again. It is saved once that list shows it.
+   * Change a bot's picture (bots.md section 8), in this order: check access
+   * and the picture, `agents.update` with it, the bot list read again, and a
+   * comparison. `confirmed` is whether that list shows the picture sent.
    */
-  async setBotPicture(botId: string, avatar: string): Promise<void> {
+  async setBotPicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
     this.requireAdmin("Changing a bot's picture");
     if (!isKeepablePicture(avatar)) throw new Error("That picture can't be kept.");
     await this.ctx.request("agents.update", { agentId: botId, avatar });
     await this.ctx.refreshBots();
-    if (this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl !== avatar)
-      throw new Error("The gateway took the picture, but its bot list doesn't show it yet.");
+    return { confirmed: this.ctx.bots().find((bot) => bot.id === botId)?.avatarUrl === avatar };
   }
 
   /**

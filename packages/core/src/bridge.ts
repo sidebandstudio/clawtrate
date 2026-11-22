@@ -404,7 +404,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                 ? { cancelled: boolean }
                                                 : C extends { type: "dismissSignIn" }
                                                   ? { dismissed: boolean }
-                                                  : C extends { type: "saveApiKey" }
+                                                  : C extends { type: "setBotPicture" }
+                                                    ? { confirmed: boolean }
+                                                    : C extends { type: "saveApiKey" }
                                                     ? { profileId: string | null }
                                                     : C extends {
                                                           type: "createBot" | "finishBot";

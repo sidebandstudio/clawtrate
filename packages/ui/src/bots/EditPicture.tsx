@@ -1,33 +1,68 @@
 // Edit picture (bots.md section 8): the Work pane's picture opens the same
 // picker New bot has. Save sends the picture to the gateway with
-// `agents.update` and closes once the gateway's bot list shows it.
+// `agents.update` and closes once the gateway's bot list shows it. The pane
+// owns the dialog: it opens it for one bot, and closes it when that bot, the
+// connection or admin access goes.
 
 import type { Bot } from "@clawtrate/core";
 import { useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
-import { AvatarPicker, PicturePreview, draftOf, pictureFor } from "./AvatarPicker.tsx";
+import {
+  AvatarPicker,
+  PicturePreview,
+  draftOf,
+  pictureFor,
+  type PictureDraft,
+} from "./AvatarPicker.tsx";
 import { Dialog } from "./Dialog.tsx";
-import { useAnnouncer } from "./parts.tsx";
 
-export function EditPicture({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+/** What the foot says when a save did not land. Fixed words: the gateway's own stay in its log. */
+export const PICTURE_NOT_SAVED = "Couldn't save the picture. Your changes are still here.";
+export const PICTURE_NOT_CONFIRMED = "The gateway hasn't confirmed this picture yet.";
+
+const same = (a: PictureDraft, b: PictureDraft) =>
+  a.upload === b.upload &&
+  (a.upload !== null || JSON.stringify(a.choice) === JSON.stringify(b.choice));
+
+export function EditPicture({
+  bot,
+  canSave,
+  onClose,
+  onSaved,
+}: {
+  bot: Bot;
+  /** Admin access on a live connection: what saving needs. */
+  canSave: boolean;
+  onClose: () => void;
+  /** Told once the gateway's list shows the picture, after the dialog has gone. */
+  onSaved: () => void;
+}) {
   const bridge = useBridge();
-  const [draft, setDraft] = useState(() => draftOf(bot));
+  const [initial] = useState(() => draftOf(bot));
+  const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [announcer, announce] = useAnnouncer();
   const previewRef = useRef<HTMLSpanElement>(null);
+  const unchanged = same(draft, initial);
   const save = async () => {
+    if (saving || busy || unchanged || !canSave) return;
     setSaving(true);
     setProblem(null);
     try {
       const avatar = await pictureFor(draft, previewRef.current?.querySelector("svg"));
-      if (!avatar) throw new Error("The picture couldn't be drawn.");
-      await bridge.invoke({ type: "setBotPicture", botId: bot.id, avatar });
-      announce("Picture saved");
+      if (!avatar) throw new Error("not drawn");
+      const { confirmed } = await bridge.invoke({ type: "setBotPicture", botId: bot.id, avatar });
+      if (!confirmed) {
+        setProblem(PICTURE_NOT_CONFIRMED);
+        setSaving(false);
+        return;
+      }
+      onSaved();
       onClose();
-    } catch (error) {
-      setProblem(error instanceof Error ? error.message : String(error));
+    } catch {
+      setProblem(PICTURE_NOT_SAVED);
       setSaving(false);
     }
   };
@@ -54,12 +89,12 @@ export function EditPicture({ bot, onClose }: { bot: Bot; onClose: () => void })
             label={`${bot.name}'s new picture`}
             previewRef={previewRef}
           />
-          <AvatarPicker draft={draft} onChange={setDraft} />
+          <AvatarPicker draft={draft} onChange={setDraft} onBusy={setBusy} />
         </div>
         <footer className="b-foot">
           {problem && (
             <p className="b-field-error" role="alert" style={{ textAlign: "center", margin: 0 }}>
-              Couldn't save the picture. {problem}
+              {problem}
             </p>
           )}
           <button
@@ -67,13 +102,12 @@ export function EditPicture({ bot, onClose }: { bot: Bot; onClose: () => void })
             className="button"
             data-variant="primary"
             data-size="lg"
-            disabled={saving}
+            disabled={saving || busy || unchanged || !canSave}
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}
           </button>
         </footer>
-        {announcer}
       </div>
     </Dialog>
   );

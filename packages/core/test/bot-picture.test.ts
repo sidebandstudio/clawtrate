@@ -17,7 +17,9 @@ describe("F-037: changing a bot's picture", () => {
   it("sends it with agents.update and is saved once the bot list shows it, as the creature chosen", async () => {
     const { client, fake } = await accountsClient();
     const viewer = createBridgeSession(client);
-    await viewer.apply({ type: "setBotPicture", botId: "otto", avatar: PICTURE });
+    expect(await viewer.apply({ type: "setBotPicture", botId: "otto", avatar: PICTURE })).toEqual({
+      confirmed: true,
+    });
     expect(fake.gateway.calls("agents.update")).toEqual([{ agentId: "otto", avatar: PICTURE }]);
     const otto = client.state.bots.find((bot) => bot.id === "otto")!;
     expect(otto.avatarUrl).toBe(PICTURE);
@@ -29,12 +31,12 @@ describe("F-037: changing a bot's picture", () => {
     client.stop();
   });
 
-  it("says so when the gateway answers but its bot list does not show the picture", async () => {
+  it("answers unconfirmed when the gateway took it but its bot list does not show the picture", async () => {
     const { client, fake } = await accountsClient();
     fake.keepNoPicture = true;
-    await expect(client.setBotPicture("otto", PICTURE)).rejects.toThrow(
-      "its bot list doesn't show it yet",
-    );
+    expect(await client.setBotPicture("otto", PICTURE)).toEqual({ confirmed: false });
+    // In order: the update, then the list read again.
+    expect(fake.gateway.calls("agents.update")).toHaveLength(1);
     client.stop();
   });
 

@@ -4673,7 +4673,7 @@ export class ClawtrateClient {
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
-  setBotPicture(botId: string, avatar: string): Promise<void> {
+  setBotPicture(botId: string, avatar: string): Promise<{ confirmed: boolean }> {
     return this.accounts.setBotPicture(botId, avatar);
   }
 

@@ -54,6 +54,8 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  /** How Edit picture's save ends: never answered, refused, or answered with a list that differs. */
+  picturesave: "hold" | "refused" | "unconfirmed" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -73,6 +75,12 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    picturesave:
+      params.get("picturesave") === "hold" ||
+      params.get("picturesave") === "refused" ||
+      params.get("picturesave") === "unconfirmed"
+        ? (params.get("picturesave") as "hold" | "refused" | "unconfirmed")
+        : null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -94,6 +102,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  picturesave: null,
 };
 
 const MINUTE = 60_000;
@@ -1112,6 +1121,10 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "setBotPicture": {
+      if (params.picturesave === "hold") return new Promise(() => {});
+      if (params.picturesave === "refused")
+        return Promise.reject(new Error("agents.update: INVALID_REQUEST (a gateway's own words)"));
+      if (params.picturesave === "unconfirmed") return Promise.resolve({ confirmed: false });
       const state = get();
       set({
         ...state,
@@ -1119,7 +1132,7 @@ export function accountCommand(
           bot.id === command.botId ? { ...bot, avatarUrl: command.avatar } : bot,
         ),
       });
-      return Promise.resolve();
+      return Promise.resolve({ confirmed: true });
     }
     case "removeBotFallbacks":
       put((a) => ({
