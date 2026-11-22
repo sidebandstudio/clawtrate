@@ -6612,7 +6612,10 @@ export class ClawtrateClient {
     // Applied here too, so a bot list that fails or is slow to read does not
     // keep the identity back.
     void gatewayId.then((id) => {
-      if (id !== null && sameSocket()) this.setConnection({ gatewayId: id });
+      if (id === null || !sameSocket()) return;
+      this.setConnection({ gatewayId: id });
+      // A bot creation asked of another gateway stays with it.
+      this.accounts.onGateway(id);
     });
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.

@@ -152,6 +152,8 @@ export class AccountsEngine {
   private resets = 0;
   /** The bound write whose Create the state's creation and the slow timer belong to. */
   private creating: WriteMark | null = null;
+  /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
+  private creationGateway: string | null = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -1247,6 +1249,7 @@ export class AccountsEngine {
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
     };
     this.creating = mark;
+    this.creationGateway = mark?.gatewayId ?? null;
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1474,14 +1477,39 @@ export class AccountsEngine {
    * effort, the bot list showing it, the first task), never create it again.
    */
   async finishBot(botId: string): Promise<CreatedBot> {
+    // Bound to the gateway the creation was asked of: never finished on another.
+    return this.boundTo(this.creationGateway ?? undefined, (ctx, mark) =>
+      this.finish(ctx, botId, mark),
+    );
+  }
+
+  private async finish(
+    ctx: AccountsContext,
+    botId: string,
+    mark: WriteMark | null,
+  ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
-    const creation = this.ctx.get().creation;
+    const creation = ctx.get().creation;
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
-    this.ctx.update((a) =>
+    this.creating = mark;
+    ctx.update((a) =>
       a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
     );
-    return this.complete(this.ctx, creation.name, botId, creation.missing);
+    return this.complete(ctx, creation.name, botId, creation.missing);
+  }
+
+  /**
+   * A connection said which gateway it is. A creation asked of another gateway is that
+   * gateway's alone: it is not shown, kept or finished here. The same gateway back keeps it.
+   */
+  onGateway(gatewayId: string): void {
+    if (this.creationGateway === null || this.creationGateway === gatewayId) return;
+    this.creationGateway = null;
+    this.creating = null;
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    this.ctx.update((a) => (a.creation ? { ...a, creation: null } : a));
   }
 
   private creationFailed(ctx: AccountsContext, error: unknown, uncertain: boolean): never {
@@ -1698,6 +1726,7 @@ export class AccountsEngine {
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
     this.resets += 1;
     this.creating = null;
+    this.creationGateway = null;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();
