@@ -1,0 +1,258 @@
+// Full access under interleavings: the six are asked for only in an attempt the person
+// started, the signed scopes match the saved grant when the frame goes, a replacement token
+// and its narrowed grant are one write, a narrowing that waited never lands for a socket
+// another took over from, and a typed gateway token ends with its attempt.
+
+import { describe, expect, it } from "vitest";
+import { ClawtrateClient, type ClientOptions } from "../src/client.ts";
+import type { ClawtrateHost, KeyValueStore } from "../src/host.ts";
+import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import {
+  deferred,
+  FakeGateway,
+  helloOk,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
+
+const URL = "ws://127.0.0.1:19960";
+const FAST: ClientOptions = { reconnect: { initialMs: 20, maxMs: 40 }, fullAccess: true };
+type ConnectParams = { scopes: string[]; auth?: { token?: string; deviceToken?: string } };
+
+const host = (
+  gateway: FakeGateway,
+  storage: KeyValueStore,
+  extra: Partial<ClawtrateHost> = {},
+): ClawtrateHost => ({
+  ...testHost(gateway, storage as KeyValueStore & { data: Map<string, string> }),
+  secureCredentials: async () => true,
+  ...extra,
+});
+
+const fullRecord = (token: string, held: readonly string[] = FULL_SCOPES) =>
+  JSON.stringify({ token, grantedScopes: held, heldScopes: held, fullGrant: true });
+
+const saved = (storage: { data: Map<string, string> }) =>
+  JSON.parse(storage.data.get(tokenKey(URL)) ?? "null") as {
+    token: string;
+    heldScopes: string[];
+  } | null;
+
+const refusal = (code: string) => ({
+  ok: false as const,
+  error: { code: "UNAUTHORIZED", message: "refused", details: { code } },
+});
+
+describe("full access under interleavings", () => {
+  it("a refusal accepted while its token's removal waits stops the next attempt asking for the six", async () => {
+    const storage = memoryStorage();
+    const removal = deferred<void>();
+    const remove = storage.delete;
+    storage.delete = async (key) => {
+      if (key === tokenKey(URL)) await removal.promise;
+      return remove(key);
+    };
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes], "token-A"),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "shared" });
+    await until(() => client.state.connection.status === "connected");
+    // Refused; the client retries by itself while the token's removal still waits.
+    const before = gateway.connects.length;
+    gateway.connectReply = () => refusal("AUTH_TOKEN_MISMATCH");
+    gateway.dropAll();
+    await until(() => gateway.connects.length >= before + 3);
+    expect((gateway.connects[before] as ConnectParams).auth?.deviceToken).toBe("token-A");
+    // No retry asks for the six in the refused token's place.
+    for (const each of (gateway.connects as ConnectParams[]).slice(before + 1)) {
+      expect(each.auth?.deviceToken).toBeUndefined();
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    }
+    removal.resolve();
+    client.stop();
+  });
+
+  it("a grant narrowed by another connection while this one signed doesn't go out as the six", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A"),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const signing = deferred<void>();
+    let holdSign = false;
+    let signHeld = false;
+    const client = new ClawtrateClient(
+      host(gateway, storage, {
+        signer: {
+          loadIdentity: async () => ({ deviceId: "device-1", publicKey: "public-key" }),
+          sign: async () => {
+            if (holdSign) {
+              holdSign = false;
+              signHeld = true;
+              await signing.promise;
+            }
+            return "signature";
+          },
+        },
+      }),
+      FAST,
+    );
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    holdSign = true;
+    gateway.dropAll();
+    await until(() => signHeld);
+    // Meanwhile the same token is narrowed to read.
+    storage.data.set(tokenKey(URL), fullRecord("token-A", READ_SCOPES));
+    const before = gateway.connects.length;
+    signing.resolve();
+    await until(() => gateway.connects.length > before);
+    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+      expect(each.scopes).toEqual([...READ_SCOPES]);
+    client.stop();
+  });
+
+  it("a replacement token and its narrowed grant are saved together, in one write", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A"),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes], "token-A"),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    const writes: string[] = [];
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === tokenKey(URL)) writes.push(value);
+      return set(key, value);
+    };
+    gateway.connectReply = () => ({ ok: true, payload: helloOk([...READ_SCOPES], "token-B") });
+    gateway.dropAll();
+    await until(() => saved(storage)?.token === "token-B");
+    await sleep(50);
+    expect(
+      writes.map((value) => JSON.parse(value) as { token: string; heldScopes: string[] }),
+    ).toEqual([expect.objectContaining({ token: "token-B", heldScopes: [...READ_SCOPES] })]);
+    client.stop();
+  });
+
+  it("a narrowing whose read waited while another socket took over the store writes nothing", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A"),
+    });
+    const gateway = new FakeGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    const held = deferred<void>();
+    let holdNext = false;
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    // This client's next hello grants read without a new token: its narrowing read waits.
+    gateway.connectReply = () => {
+      holdNext = true;
+      return { ok: true, payload: helloOk([...READ_SCOPES]) };
+    };
+    gateway.dropAll();
+    await until(() => waiting);
+    // Another connection on the same store takes it over and keeps the six.
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const other = new ClawtrateClient(host(otherGateway, storage), FAST);
+    // It takes the store over as it opens; its own hello waits behind this client's queue.
+    await other.start();
+    await until(() => otherGateway.connects.length === 1);
+    held.resolve();
+    await until(() => other.state.connection.status === "connected");
+    await sleep(50);
+    expect(saved(storage)?.heldScopes).toEqual([...FULL_SCOPES]);
+    other.stop();
+    client.stop();
+  });
+
+  it("a typed gateway token ends with a refusal, and Reconnect doesn't send it", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => refusal("AUTH_RATE_LIMITED");
+    const client = new ClawtrateClient(
+      host(gateway, storage, { credentialStatus: async () => "secure" }),
+      FAST,
+    );
+    await client.start();
+    await client.connect({ url: URL, token: "typed-token-1" });
+    await until(() => client.state.connection.error?.code === "AUTH_RATE_LIMITED");
+    await until(() => JSON.parse(storage.data.get("connection")!).token === null);
+    const before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+      expect(each.auth?.token).toBeUndefined();
+    client.stop();
+  });
+
+  it("a typed gateway token ends with Disconnect while its approval waits, and Reconnect doesn't send it", async () => {
+    const storage = memoryStorage();
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "req-1", deviceId: "device-1" },
+      },
+    });
+    const client = new ClawtrateClient(
+      host(gateway, storage, { credentialStatus: async () => "secure" }),
+      FAST,
+    );
+    await client.start();
+    await client.connect({ url: URL, token: "typed-token-2" });
+    await until(() => client.state.connection.status === "pairing");
+    // Retries while the approval waits keep the token: the attempt goes on.
+    await until(() => gateway.connects.length >= 2);
+    expect((gateway.connects.at(-1) as ConnectParams).auth?.token).toBe("typed-token-2");
+    await client.suspend();
+    expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({
+      token: null,
+      suspended: true,
+    });
+    const before = gateway.connects.length;
+    await client.retryNow();
+    await until(() => gateway.connects.length > before);
+    for (const each of (gateway.connects as ConnectParams[]).slice(before))
+      expect(each.auth?.token).toBeUndefined();
+    client.stop();
+  });
+});
