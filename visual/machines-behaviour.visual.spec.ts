@@ -348,6 +348,56 @@ test("F-046 F-047: a plugin credential read that never answers leaves the rest o
   await page.getByRole("button", { name: "Change…" }).click();
   await expect(page.getByRole("textbox", { name: /path on the gateway's machine/ })).toBeFocused();
   await expect(signins).toHaveText("Reading…");
+  // Below admin nothing is inspected, so nothing hangs: the page says which access it needs.
+  await reconnect(page, false);
+  await expect(signins).toHaveText("Needs admin access");
+});
+
+/** Answers every `readPlacement` of `part` with `change` applied, from now on. */
+const changePart = (page: Page, part: string, change: "fail-once" | "later") =>
+  page.evaluate(
+    ([part, change]) => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      let failures = 1;
+      fixture.invoke = async (command) => {
+        if (command.type !== "readPlacement" || (command as { part?: string }).part !== part)
+          return original(command);
+        if (change === "fail-once" && failures-- > 0)
+          throw new Error("The gateway did not answer.");
+        const result = (await original(command)) as { readAt: number };
+        return change === "later" ? { ...result, readAt: result.readAt + 120_000 } : result;
+      };
+    },
+    [part, change] as const,
+  );
+
+test("F-046 F-273: a browser read that fails says so and offers Try again once, and the other parts stay shown", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await changePart(page, "browser", "fail-once");
+  await openRunsOn(page);
+  await expect(page.getByTestId("runs-on-browser")).toHaveText(
+    "Couldn't read: The gateway did not answer.",
+  );
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: media-box · Connected",
+  );
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByTestId("runs-on-browser")).toHaveText("Allow: not set · Deny: browser");
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+});
+
+test("F-046 F-047: parts read at different times say so", async ({ page }) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await changePart(page, "credentials", "later");
+  await openRunsOn(page);
+  await expect(page.getByTestId("runs-on-read-at")).toContainText(
+    /, read from \d{1,2}:\d{2}\s[AP]M to \d{1,2}:\d{2}\s[AP]M\./,
+  );
 });
 
 test("F-046 F-047: below admin every value shows, nothing can be changed, and the bar asks for admin by an explicit request", async ({

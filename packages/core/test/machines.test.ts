@@ -224,7 +224,13 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
 
 function engine(
   gw: ReturnType<typeof gateway>,
-  access: { admin?: boolean; pairing?: boolean; readOnly?: boolean; noBots?: boolean } = {},
+  access: {
+    admin?: boolean;
+    pairing?: boolean;
+    readOnly?: boolean;
+    noBots?: boolean;
+    now?: () => number;
+  } = {},
 ) {
   const ctx: MachinesContext = {
     request: gw.request,
@@ -242,7 +248,7 @@ function engine(
           ],
     latestTask: () => null,
     deviceId: () => "dev-self",
-    now: () => 42,
+    now: access.now ?? (() => 42),
   };
   return new MachinesEngine(ctx);
 }
@@ -744,6 +750,18 @@ describe("where a bot runs: the engine", () => {
     expect(inventory.secrets).toEqual(["router-admin", "nas-backup"]);
     expect(gw.calls.some(([method]) => method === "plugins.credentials.inspect")).toBe(true);
     expect(await Promise.race([credentials, Promise.resolve("waiting")])).toBe("waiting");
+  });
+
+  it("F-273: the browser part is timed when its settings answer, not when they were asked for", async () => {
+    const gw = gateway();
+    let clock = 1;
+    const get = gw.handlers["config.get"]!;
+    gw.handlers["config.get"] = (params) => {
+      clock = 2;
+      return get(params);
+    };
+    const read = await engine(gw, { now: () => clock }).readPlacement("otto", "browser");
+    expect(read.readAt).toBe(2);
   });
 
   it("F-046: the parts read together send one config.get, and a read after it settles or after a write sends another", async () => {

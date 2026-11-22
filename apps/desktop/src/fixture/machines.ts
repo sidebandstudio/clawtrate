@@ -370,7 +370,11 @@ export function machineCommands(now: number, params: MachineParams) {
         if (
           params.machine === "loading" ||
           params.slow === command.botId ||
-          (params.plugins === "hang" && command.part === "credentials")
+          // As the engine: below admin, or with settings it can't read, nothing is inspected.
+          (params.plugins === "hang" &&
+            command.part === "credentials" &&
+            admin(state) &&
+            !unreadable)
         )
           return new Promise(() => {});
         // `agents.list` still answers when the settings file can't be read.

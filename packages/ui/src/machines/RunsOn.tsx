@@ -352,6 +352,17 @@ export function RunsOnPage({
   const readAt = Object.values(read).flatMap((each) =>
     each.status === "ready" ? [each.value.readAt] : [],
   );
+  const readSpan =
+    readAt.length > 0 ? [clockTime(Math.min(...readAt)), clockTime(Math.max(...readAt))] : null;
+  // Try again reads every part again; it is offered once, at the first part whose read failed.
+  const failed = PLACEMENT_PARTS.find((part) => read[part].status === "error");
+  const tryAgain = (
+    <div className="b-actions">
+      <button type="button" className="button" data-size="sm" onClick={reload}>
+        Try again
+      </button>
+    </div>
+  );
 
   return (
     <div className="b-tab m-page" data-testid="runs-on-page">
@@ -417,6 +428,7 @@ export function RunsOnPage({
           )}
         </Fact>
       </dl>
+      {failed === "workspace" && tryAgain}
       <p className="b-hint">{botName}'s workspace, as the gateway reports it.</p>
       <p className="b-hint">This control sets the bot's workspace in the gateway's settings.</p>
       {admin && editing === null && workspace.status === "ready" && (
@@ -495,6 +507,7 @@ export function RunsOnPage({
           )}
         </Fact>
       </dl>
+      {failed === "browser" && tryAgain}
       <p className="b-hint" data-testid="runs-on-browser-choice">
         As stored in the gateway's settings. <Mark kind="shown" /> Choosing or creating a browser
         profile isn't offered here.
@@ -589,9 +602,14 @@ export function RunsOnPage({
           )}
         </Fact>
       </dl>
-      {readAt.length > 0 && (
+      {(failed === "inventory" || failed === "credentials") && tryAgain}
+      {readSpan && (
         <p className="b-hint" data-testid="runs-on-read-at">
-          From {botName}'s settings and the gateway's, read at {clockTime(Math.min(...readAt))}.
+          From {botName}'s settings and the gateway's, read{" "}
+          {readSpan[0] === readSpan[1]
+            ? `at ${readSpan[0]}`
+            : `from ${readSpan[0]} to ${readSpan[1]}`}
+          .
           {inventory.status === "ready" && inventory.value.listing
             ? ` Tool servers offered: the listing of ${botName}'s latest task listed here, read at ${clockTime(inventory.value.listing.readAt)}.`
             : ""}

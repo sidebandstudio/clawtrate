@@ -659,10 +659,10 @@ export class MachinesEngine {
     const parts: { [K in PlacementPart]: () => Promise<PlacementParts[K]> } = {
       commands: () => this.readCommandsPart(botId),
       workspace: () => this.readWorkspacePart(botId),
-      browser: async () => ({
-        readAt: this.ctx.now(),
-        browser: readBrowserSettings((await this.placementConfig()).config, botId),
-      }),
+      browser: async () => {
+        const { config } = await this.placementConfig();
+        return { readAt: this.ctx.now(), browser: readBrowserSettings(config, botId) };
+      },
       inventory: () => this.readInventoryPart(botId),
       credentials: () => this.readCredentialsPart(),
     };
