@@ -43,7 +43,6 @@ import { dictionaryRequests, isDictionary, requestsSoFar } from "./net-log.ts";
 import { packagedExecutable, processesUsing } from "./global-setup.ts";
 import {
   askToClose,
-  forceEnd,
   integrityLevels,
   mainWindowTitle,
   taskbarOverlayDescription,
@@ -626,8 +625,8 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     pictures.close();
     // Whatever is left is ended by PID: nothing outlives the test.
     if (copy.exitCode === null && copy.signalCode === null) {
-      if (WINDOWS) forceEnd(copy.pid!);
-      else copy.kill("SIGKILL");
+      // Only the copy: on Windows this ends its process alone, not its tree.
+      copy.kill("SIGKILL");
       // Bounded: a copy that could not be ended never exits. The list below names it.
       await Promise.race([exited, sleep(10_000)]);
     }
