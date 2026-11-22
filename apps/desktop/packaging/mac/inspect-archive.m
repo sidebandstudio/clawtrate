@@ -110,6 +110,48 @@ static BOOL extractEntry(struct archive *zip, struct archive_entry *entry, int r
     return ok;
 }
 
+static uint32_t le16(const unsigned char *p) { return p[0] | p[1] << 8; }
+static uint32_t le32(const unsigned char *p) { return le16(p) | le16(p + 2) << 16; }
+static BOOL readAt(int fd, unsigned char *buf, size_t size, off_t at) {
+    return pread(fd, buf, size, at) == (ssize_t)size;
+}
+
+// libarchive's seekable reader indexes the whole central directory on its first header and
+// decodes methods packaging never writes. Before it opens the archive, walk that directory
+// with fixed buffers and accept only the shape a release ZIP has.
+static BOOL preflight(int fd) {
+    unsigned char end[22], record[46], local[30];
+    struct stat info;
+    if (fstat(fd, &info) != 0) return NO;
+    const off_t endAt = info.st_size - 22; // pread refuses it below zero.
+    // A 32-bit end record at EOF with no comment, on one disk.
+    if (!readAt(fd, end, 22, endAt) || le32(end) != 0x06054b50 || le16(end + 20)) return NO;
+    if (le16(end + 4) || le16(end + 6) || le16(end + 8) != le16(end + 10)) return NO;
+    // libarchive reads a ZIP64 locator just before the end record in preference to it.
+    if (endAt >= 20 && (!readAt(fd, local, 4, endAt - 20) || le32(local) == 0x07064b50)) return NO;
+    const uint32_t count = le16(end + 10), size = le32(end + 12), start = le32(end + 16);
+    if (size > 8 * 1024 * 1024 || (off_t)start + size != endAt) return NO;
+    off_t at = start;
+    uint32_t walked = 0;
+    for (; at < endAt; ++walked) {
+        if (walked == 32768 || !readAt(fd, record, 46, at) || le32(record) != 0x02014b50) return NO;
+        // ZIP64 sizes come from an extra field. An offset of 0xffffffff fails the bound below.
+        if (le32(record + 20) == 0xffffffff || le32(record + 24) == 0xffffffff) return NO;
+        const uint32_t method = le16(record + 10), offset = le32(record + 42);
+        if (method != 0 && method != 8) return NO;
+        // The local offset counts from the entry's own disk, which must be this one.
+        if (le16(record + 34)) return NO;
+        if ((off_t)offset + 30 > start || !readAt(fd, local, 30, offset) || le32(local) != 0x04034b50)
+            return NO;
+        // libarchive decodes with the local header's method. A data descriptor's zero
+        // local sizes pass; ZIP64 sentinels don't.
+        if (le16(local + 8) != 0 && le16(local + 8) != 8) return NO;
+        if (le32(local + 18) == 0xffffffff || le32(local + 22) == 0xffffffff) return NO;
+        at += 46 + le16(record + 28) + le16(record + 30) + le16(record + 32);
+    }
+    return at == endAt && walked == count;
+}
+
 static BOOL unpackWithBudget(int archiveFD, int scratchFD, unsigned entries) {
     struct archive *zip = archive_read_new();
     if (!zip) return NO;
@@ -212,14 +254,21 @@ int main(int argc, char **argv) {
     alarm(120);
     BOOL classify = argc == 3 && strcmp(argv[1], "--running-signature") == 0;
     if (!classify && argc != 5) return 1;
-    // No RLIMIT_DATA: macOS rejects every finite value with EINVAL. The reader bounds
-    // entries seen and paths created (32,768 each), regular-file bytes (2 GiB in all,
-    // streamed through a 64 KiB buffer), Info.plist (1 MiB), names (1,024 characters,
-    // 48 parts) and time (the 120 s alarm). libarchive's own index of the central
-    // directory is built before those limits apply and isn't capped by them (#330).
-    // A helper that dies prints nothing, which the app reads as inspection-failed.
+    // No RLIMIT_DATA: macOS rejects every finite value with EINVAL. Before anything else
+    // reads the archive, preflight() checks it with fixed buffers: one 32-bit end record
+    // at EOF, with no comment and no ZIP64 locator, on one disk; a central directory of
+    // at most 8 MiB that ends at that record and walks to its count, at most 32,768
+    // records; each entry on disk 0, with its local header before the directory; no
+    // ZIP64 sizes and only Store or Deflate, in both headers. That bounds libarchive's index. Its early per-entry reads have fixed caps:
+    // a symlink target of 64 KiB compressed, inflated into one 256 KiB buffer (no LZMA),
+    // and __MACOSX metadata of 10 MiB. The reader then bounds entries seen and paths
+    // created (32,768 each), regular-file bytes (2 GiB in all, streamed through a 64 KiB
+    // buffer, so a large valid Deflate stream costs time, not memory), Info.plist
+    // (1 MiB), names (1,024 characters, 48 parts) and time (the 120 s alarm). A helper
+    // that dies prints nothing, which the app reads as inspection-failed.
     @autoreleasepool {
         if (classify) puts(inspect(nil, @(argv[2]), nil, nil));
+        else if (!preflight(3)) puts("mac-archive");
         else puts(inspect(@(argv[1]), @(argv[2]), @(argv[3]), @(argv[4])));
     }
     return 0;
