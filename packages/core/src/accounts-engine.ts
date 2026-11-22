@@ -90,11 +90,22 @@ type WriteMark = { gatewayId: string; resets: number; retired: boolean };
 
 /** A bot write retired because its gateway is no longer the one connected. */
 class WriteRetired extends Error {
-  constructor() {
+  /**
+   * A bot made before the write was cut off with no gateway saying who it is, and what of it is
+   * left: kept for that gateway's Finish, should it come back.
+   */
+  unfinished: { name: string; botId: string; missing: MissingStep[] } | null = null;
+  /** No gateway said who it is, so the one asked may yet come back. */
+  readonly unknown: boolean;
+  constructor(unknown = false) {
     super("The gateway changed before the bot was finished, so nothing more was sent.");
     this.name = "WriteRetired";
+    this.unknown = unknown;
   }
 }
+
+/** A creation's steps after the bot is made, in the order they are written: one string, not a collection kept. */
+const STEP_ORDER = "preference fallbacks listed task";
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
 export class AdminNeededError extends Error {
@@ -1163,8 +1174,9 @@ export class AccountsEngine {
       if (!live()) throw new WriteRetired();
       const here = await base.gateway();
       if (!live() || here === null || here !== mark.gatewayId) {
+        const unknown = live() && here === null;
         mark.retired = true;
-        throw new WriteRetired();
+        throw new WriteRetired(unknown);
       }
     };
     const ctx: AccountsContext = {
@@ -1197,9 +1209,27 @@ export class AccountsEngine {
           this.creating = null;
           if (this.slowTimer) clearTimeout(this.slowTimer);
           this.slowTimer = null;
+          // A bot made on a gateway that has only gone quiet is kept, with what is left, for its
+          // Finish once it says who it is again (`onGateway`); another gateway, or a reset, drops it.
+          const left = error instanceof WriteRetired ? error.unfinished : null;
           base.update((a) =>
             a.creation?.status === "creating" || a.creation?.status === "checking"
-              ? { ...a, creation: null }
+              ? {
+                  ...a,
+                  creation: left
+                    ? {
+                        name: left.name,
+                        status: "partial",
+                        slow: false,
+                        botId: left.botId,
+                        error: this.scrub(
+                          `${left.name} was created, but the connection to its gateway was lost before it was finished.`,
+                        ),
+                        missing: left.missing,
+                        uncertain: false,
+                      }
+                    : null,
+                }
               : a,
           );
         }
@@ -1303,7 +1333,7 @@ export class AccountsEngine {
     if (!botId) return failed(new Error("The gateway did not say which bot it made."), true);
     assertCreating();
     this.planned = { ...this.planned, botId };
-    return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"]);
+    return this.complete(ctx, name, botId, ["preference", "fallbacks", "listed", "task"], mark);
   }
 
   /**
@@ -1347,6 +1377,7 @@ export class AccountsEngine {
     name: string,
     botId: string,
     steps: MissingStep[],
+    mark: WriteMark | null,
   ): Promise<CreatedBot> {
     const plan = this.planned?.botId === botId ? this.planned : null;
     const missing: MissingStep[] = [];
@@ -1357,9 +1388,23 @@ export class AccountsEngine {
       errors.push(`${words}${why}`);
       this.log(`${botId}: ${words}${why}`);
     };
+    // Cut off with no gateway saying who it is: the bot is made, and this step, those after it
+    // and those that failed before are what its Finish will write.
+    const cut = (error: WriteRetired, step: MissingStep) => {
+      if (error.unknown)
+        error.unfinished = {
+          name,
+          botId,
+          missing: [
+            ...missing,
+            ...steps.filter((s) => STEP_ORDER.indexOf(s) >= STEP_ORDER.indexOf(step)),
+          ],
+        };
+      return error;
+    };
     if (steps.includes("preference") && plan) {
       const error = await this.recordIntent(botId, plan.intent, ctx);
-      if (error instanceof WriteRetired) throw error;
+      if (error instanceof WriteRetired) throw cut(error, "preference");
       if (error !== null)
         failed("preference", "Clawtrate's record of its account was not saved", error);
     }
@@ -1374,7 +1419,7 @@ export class AccountsEngine {
           );
         this.unwritten.delete(botId);
       } catch (error) {
-        if (error instanceof WriteRetired) throw error;
+        if (error instanceof WriteRetired) throw cut(error, "fallbacks");
         this.unwritten.add(botId);
         if (this.unwritten.size > MAX_ACCOUNTS)
           this.unwritten.delete(this.unwritten.values().next().value!);
@@ -1395,7 +1440,7 @@ export class AccountsEngine {
         await ctx.refreshBots();
         shown = ctx.bots().some((bot) => bot.id === botId);
       } catch (error) {
-        if (error instanceof WriteRetired) throw error;
+        if (error instanceof WriteRetired) throw cut(error, "listed");
         readError = error;
       }
       if (!shown)
@@ -1411,11 +1456,11 @@ export class AccountsEngine {
       try {
         await ctx.createMainTask(botId);
       } catch (error) {
-        if (error instanceof WriteRetired) throw error;
+        if (error instanceof WriteRetired) throw cut(error, "task");
         failed("task", "its first task was not made", error);
       }
     }
-    return this.settleCreation(ctx, name, botId, missing, errors);
+    return this.settleCreation(ctx, name, botId, missing, errors, mark);
   }
 
   /** The creation's end: created, or partial with what it lacks. */
@@ -1425,9 +1470,14 @@ export class AccountsEngine {
     botId: string,
     missing: MissingStep[],
     errors: string[],
+    mark: WriteMark | null,
   ): Promise<CreatedBot> {
-    if (this.slowTimer) clearTimeout(this.slowTimer);
-    this.slowTimer = null;
+    // The timer is the Create's that owns the creation: one retired by a reset, settling late,
+    // leaves the timer of a Create begun since.
+    if (mark === null || this.creating === mark) {
+      if (this.slowTimer) clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
     ctx.update((a) => ({
       ...a,
       creation: {
@@ -1501,7 +1551,7 @@ export class AccountsEngine {
       ctx.update((a) =>
         a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
       );
-      return await this.complete(ctx, creation.name, botId, creation.missing);
+      return await this.complete(ctx, creation.name, botId, creation.missing, mark);
     } finally {
       if (this.finishing === creation) this.finishing = null;
     }

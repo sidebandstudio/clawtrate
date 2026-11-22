@@ -708,6 +708,127 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  /** Start Create A and hold its record of the account, the first write after the bot is made. */
+  async function heldAtPreference(
+    client: Awaited<ReturnType<typeof accountsClient>>["client"],
+    fake: AccountsGateway,
+  ) {
+    const original = fake.gateway.handlers["users.prefs.set"]!;
+    fake.gateway.handlers["users.prefs.set"] = () => new Promise(() => {});
+    const created = createBridgeSession(client)
+      .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+      .then(
+        (result) => result,
+        (error: Error) => error.message,
+      );
+    await until(() => fake.gateway.calls("users.prefs.set").length === 1);
+    fake.gateway.handlers["users.prefs.set"] = original;
+    // Wrapped, so awaiting the start doesn't wait for the Create.
+    return { created };
+  }
+
+  it("keeps A's made bot when A drops during its record of the account, and A back finishes only what is left", async () => {
+    const { client, fake } = await accountsClient();
+    const { created } = await heldAtPreference(client, fake);
+    // A drops after answering agents.create; while it is away no gateway says who it is.
+    const from = requested(fake);
+    await reconnected(client, fake);
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    // A says who it is again: the bot it made is kept, unfinished, with what is left.
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    expect(client.state.accounts.creation).toMatchObject({
+      status: "partial",
+      botId: "viral",
+      missing: ["preference", "fallbacks", "listed", "task"],
+    });
+    expect(client.state.accounts.creation).toMatchObject({ status: "partial", botId: "viral" });
+    const creates = fake.gateway.calls("agents.create").length;
+    expect(
+      await createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(creates);
+    expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    client.stop();
+  });
+
+  it("drops A's made bot once another gateway says who it is, after none had", async () => {
+    const { client, fake } = await accountsClient();
+    const { created } = await heldAtPreference(client, fake);
+    fake.identity = "";
+    const from = requested(fake);
+    await reconnected(client, fake);
+    await created;
+    expect(client.state.accounts.creation).toMatchObject({ status: "partial", botId: "viral" });
+    fake.identity = "gateway-b";
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    expect(client.state.accounts.creation).toBeNull();
+    expect(sentSince(fake, from)).toEqual([]);
+    client.stop();
+  });
+
+  it("sends nothing more, and keeps nothing, when its record of the account is cut off by another gateway", async () => {
+    const { client, fake } = await accountsClient();
+    const { created } = await heldAtPreference(client, fake);
+    fake.identity = "gateway-b";
+    const from = requested(fake);
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    expect(await created).toMatch("gateway changed");
+    expect(sentSince(fake, from)).toEqual([]);
+    expect(client.state.accounts.creation).toBeNull();
+    client.stop();
+  });
+
+  for (const outcome of ["refused", "answered"] as const)
+    it(`retired by a reset, its last task ${outcome} late leaves the slow note of a Create begun since`, async () => {
+      const { client, fake } = await accountsClient();
+      const original = fake.gateway.handlers["sessions.create"]!;
+      const task = deferred<void>();
+      fake.gateway.handlers["sessions.create"] = (params) =>
+        task.promise.then(() => {
+          if (outcome === "refused") throw new GatewayError({ code: "UNAVAILABLE", message: "no" });
+          return original(params);
+        });
+      const first = createBridgeSession(client)
+        .apply({ type: "createBot", ...input, gatewayId: "gateway-a" })
+        .then(
+          () => "settled",
+          (error: Error) => error.message,
+        );
+      await until(() => fake.gateway.calls("sessions.create").length === 1);
+      (client as unknown as { accounts: { reset(): void } }).accounts.reset();
+      (
+        client as unknown as {
+          store: { update(change: (state: typeof client.state) => typeof client.state): void };
+        }
+      ).store.update((state) => ({ ...state, accounts: { ...state.accounts, creation: null } }));
+      const answer = deferred<void>();
+      const made = fake.gateway.handlers["agents.create"]!;
+      fake.gateway.handlers["agents.create"] = (params) => answer.promise.then(() => made(params));
+      const second = createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        name: "Bee",
+        gatewayId: "gateway-a",
+      });
+      await until(() => fake.gateway.calls("agents.create").length === 2);
+      task.resolve();
+      await first;
+      expect(client.state.accounts.creation).toMatchObject({ name: "Bee", status: "creating" });
+      // The Create begun since keeps its timer: it is said to be slow when it is.
+      await until(() => client.state.accounts.creation?.slow === true, SLOW_CREATE_MS + 2_000);
+      fake.gateway.handlers["sessions.create"] = original;
+      answer.resolve();
+      expect(await second).toEqual({ botId: "bee", missing: [] });
+      client.stop();
+    }, 15_000);
+
   it("is retired by a reset: nothing more is sent once the client forgets the gateway", async () => {
     const { client, fake } = await accountsClient();
     const release = holdCreate(fake);
