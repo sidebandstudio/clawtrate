@@ -32,7 +32,7 @@ import { newRunId, processIdentity } from "../../../../tools/dev-gateway/src/sta
 import { defaultSpawn, type Spawn } from "../../src/main/ssh/run.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { SetupSlice } from "../../src/setup/host.ts";
-import { readOnlyProgram } from "../../src/setup/look.ts";
+import { installedVersion } from "../../src/setup/look.ts";
 import { isChannelUrl, RemoteSetup } from "../../src/setup/remote.ts";
 import { RouteStore, routedStorage } from "../../src/setup/routes.ts";
 import {
@@ -82,7 +82,8 @@ async function openclawHere(): Promise<string | null> {
         await file.close();
       }
     }
-    const { version } = await readOnlyProgram(launcher);
+    // The pinned development package ships a roughly 146 KiB manifest.
+    const version = await installedVersion(launcher, 256 * 1024);
     return version === TESTED_OPENCLAW_VERSION ? path : null;
   } catch {
     return null;
