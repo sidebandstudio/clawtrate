@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { memoryStorage } from "../../../packages/core/test/fake-gateway.ts";
@@ -39,6 +39,7 @@ import {
   chooseDataDir,
   readAclWithLs,
   ensurePrivateDir,
+  followSystemLinks,
   sshTransportFor,
   type AclReading,
 } from "../src/setup/private-dir.ts";
@@ -680,6 +681,60 @@ describe.skipIf(process.platform === "win32")("the app-data privacy check", () =
       at: "D:\\Clawtrate\\gateway",
     });
   });
+
+  it("an owned leaf is made 0700 and kept so, and a run as root keeps the sticky folder's rule for root's own /tmp", () => {
+    // A folder of this account's that no one else can open, and this account can't use either.
+    const root = fresh("clawtrate-data-0500-");
+    mkdirSync(join(root, "gateway"), { mode: 0o700 });
+    chmodSync(join(root, "gateway"), 0o500);
+    expect(ensurePrivateDir(join(root, "gateway"), { root })).toEqual({
+      ok: true,
+      verified: "posix",
+    });
+    expect(statSync(join(root, "gateway")).mode & 0o777).toBe(0o700);
+    // As root: root's sticky /tmp, open to everyone, is passed as for any account, and the walk
+    // reaches the folder below it (missing here, and not made).
+    const tmp = realpathSync("/tmp");
+    if ((statSync(tmp).mode & 0o1777) === 0o1777 && statSync(tmp).uid === 0) {
+      expect(
+        ensurePrivateDir(join(tmp, `clawtrate-root-run-${process.pid}`), {
+          uid: 0,
+          create: false,
+          readAcl: () => ({ kind: "none" }),
+        }),
+      ).toMatchObject({ ok: false, reason: "missing" });
+    }
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "only the system's own links are followed, and only while the folder they are in is closed to everyone else by its access control list too",
+    () => {
+      // Spelt through `/var`, the system's link to `/private/var`.
+      const viaSystem = mkdtempSync("/var/tmp/clawtrate-data-alias-");
+      dirs.push(viaSystem);
+      expect(chooseDataDir(join(viaSystem, "gateway"))).toMatchObject({
+        ok: true,
+        dir: join(realpathSync(viaSystem), "gateway"),
+      });
+      // `/` with an entry that lets everyone add or remove entries: its `/var` link isn't followed,
+      // and the folder spelt through it is refused.
+      const opened = (path: string): AclReading =>
+        path === "/"
+          ? {
+              kind: "entries",
+              entries: [
+                { principal: "group:everyone", allow: true, rights: ["add_file", "delete_child"] },
+              ],
+            }
+          : { kind: "none" };
+      expect(followSystemLinks(join(viaSystem, "gateway"), { readAcl: opened })).toBe(
+        join(viaSystem, "gateway"),
+      );
+      expect(chooseDataDir(join(viaSystem, "gateway"), { readAcl: opened })).toMatchObject({
+        ok: false,
+      });
+    },
+  );
 
   it.skipIf(process.platform !== "darwin")(
     "the launch's data folder below a folder with a macOS ACL that lets everyone add files is refused and not made",

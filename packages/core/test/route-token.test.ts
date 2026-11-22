@@ -439,6 +439,167 @@ describe("a routed connection's gateway", () => {
   });
 });
 
+describe("a routed connection's settings, selection and waiters", () => {
+  const CHANNEL = "ws://c0000000000000001.ssh.invalid";
+  const WRITE_TOKEN = JSON.stringify({
+    token: "token-1",
+    grantedScopes: ["operator.read", "operator.write"],
+    heldScopes: ["operator.read", "operator.write"],
+  });
+
+  it("asks its route's address again at the frame that carries the credential: a channel withdrawn while the listener is read again sends nothing", async () => {
+    let allowed = true;
+    const { gateway, storage, client } = setup({ allowed: () => allowed });
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    await client.start();
+    let verifies = 0;
+    await client.connectRoute({
+      url: CHANNEL,
+      route: ROUTE,
+      identity: "gateway-1",
+      setup: {
+        check: () => true,
+        verify: async () => {
+          verifies += 1;
+          // The read just before the credential's frame: the host withdraws the channel meanwhile.
+          if (verifies === 2) allowed = false;
+          return true;
+        },
+      },
+    });
+    await until(() => client.state.connection.status === "error");
+    expect(verifies).toBe(2);
+    expect(client.state.connection.error?.code).toBe("GATEWAY_NOT_ALLOWED");
+    expect(gateway.connects).toEqual([]);
+  });
+
+  it("saves an ordinary route's settings before it is selected: one that can't be saved leaves the connection that stays open as it was", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    await client.start();
+    await client.connect({ url: "ws://127.0.0.1:50001", token: "shared-token-a" });
+    await until(() => client.state.connection.status === "connected");
+    const set = storage.set;
+    storage.set = async (key, value) => {
+      if (key === "connection") throw new Error("the disk is full");
+      return set(key, value);
+    };
+    const sockets = gateway.sockets.length;
+    await expect(
+      client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1" }),
+    ).rejects.toThrow();
+    storage.set = set;
+    expect(client.route).toBeNull();
+    expect(client.state.connection).toMatchObject({
+      status: "connected",
+      gatewayUrl: "ws://127.0.0.1:50001",
+    });
+    expect(gateway.sockets.length).toBe(sockets);
+    expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({
+      url: "ws://127.0.0.1:50001",
+    });
+  });
+
+  it("letting go of a route still pairing keeps the gateway saved before it: Remove and a cleanup of that selection forget only what names the route", async () => {
+    for (const letGo of ["forget", "disconnect"] as const) {
+      const { gateway, storage, client } = setup();
+      await client.start();
+      await client.connect({ url: "ws://127.0.0.1:50001", token: "shared-token-a" });
+      await until(() => client.state.connection.status === "connected");
+      const saved = storage.data.get("connection");
+      // A first pairing on the route, its identity read waiting: selected in memory alone.
+      gateway.handlers["gateway.identity.get"] = () => new Promise(() => {});
+      const selection = client.nextSelection();
+      await client.connectRoute({
+        url: CHANNEL,
+        route: ROUTE,
+        code: { bootstrapToken: "b".repeat(43), expiresAtMs: Date.now() + 60_000 },
+      });
+      await until(() => gateway.requests.some((r) => r.method === "gateway.identity.get"));
+      expect(client.route).toBe(ROUTE);
+      if (letGo === "forget") await client.forgetRoute(ROUTE);
+      else await client.disconnect(CHANNEL, selection);
+      expect(client.route, letGo).toBeNull();
+      expect(storage.data.get("connection"), letGo).toBe(saved);
+    }
+  });
+
+  it("is reopened only by its host: without one, Reconnect leaves a disconnected route as it is", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    storage.data.set(
+      "connection",
+      JSON.stringify({ url: CHANNEL, token: null, route: ROUTE, suspended: true }),
+    );
+    await client.start();
+    expect(client.state.connection.status).toBe("disconnected");
+    await client.retryNow();
+    await sleep(100);
+    expect(gateway.sockets).toEqual([]);
+    expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({ suspended: true });
+  });
+
+  it("fails a write waiting for access when the gateway that answers after a reconnect isn't the route's", async () => {
+    const { gateway, storage, client, setIdentity } = setup();
+    storage.data.set(ROUTE_TOKEN, WRITE_TOKEN);
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read", "operator.write"]),
+    });
+    await client.start();
+    await client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1" });
+    await until(
+      () => client.state.connection.status === "connected" && client.state.bots.length > 0,
+    );
+    // The socket drops; a write waits for the access it held, until the next hello.
+    setIdentity("gateway-2");
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const writing = client.createTask("main", "hello");
+    const settled = writing.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+    expect(await Promise.race([settled, sleep(500).then(() => "pending")])).toBe("rejected");
+  });
+
+  it("saves a route's reused pairing only once that socket's gateway said who it is, and a save that fails ends the attempt as not saved", async () => {
+    const { gateway, storage, client } = setup();
+    storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    let answer: (value: unknown) => void = () => {};
+    gateway.handlers["gateway.identity.get"] = () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      });
+    await client.start();
+    await client.connectRoute({ url: CHANNEL, route: ROUTE, identity: "gateway-1", setup: {} });
+    await until(() => gateway.requests.some((r) => r.method === "gateway.identity.get"));
+    await sleep(100);
+    expect(storage.data.has("connection")).toBe(false);
+    answer({ deviceId: "gateway-1", publicKey: "key" });
+    await until(() => storage.data.has("connection"));
+    expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({ route: ROUTE });
+    // The same, with a store that refuses the save: the attempt ends with the typed outcome.
+    const again = setup();
+    again.storage.data.set(ROUTE_TOKEN, SAVED_TOKEN);
+    const set = again.storage.set;
+    again.storage.set = async (key, value) => {
+      if (key === "connection") throw new Error("the disk is full");
+      return set(key, value);
+    };
+    await again.client.start();
+    await again.client.connectRoute({
+      url: CHANNEL,
+      route: ROUTE,
+      identity: "gateway-1",
+      setup: {},
+    });
+    await until(() => again.client.state.connection.status === "error");
+    expect(again.client.state.connection.error?.code).toBe(ROUTE_NOT_SAVED);
+  });
+});
+
 describe("forgetting a route", () => {
   it("is decided in the connection queue: a Connect to another route queued first stays connected", async () => {
     const OTHER = "ssh-fedcba9876543210fedcba98";

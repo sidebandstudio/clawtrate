@@ -239,9 +239,10 @@ export function ensurePrivateDir(dir: string, options: PrivateDirOptions = {}): 
   for (let i = 0; i < existing; i += 1) {
     const leaf = i === chain.length - 1;
     const childUid = i + 1 < existing ? Number(infos[i + 1]!.uid) : uid;
-    // A folder of this account's that isn't the leaf is closed to others too.
+    // A folder of this account's that isn't the leaf is closed to others too. Root's own folders
+    // are root's: for a run as root, `prove` applies the sticky folder's rule to them, as to any.
     const info = infos[i]!;
-    if (!leaf && info.uid === uid && (Number(info.mode) & 0o022) !== 0)
+    if (!leaf && uid !== 0 && info.uid === uid && (Number(info.mode) & 0o022) !== 0)
       return fail("writable-by-others", chain[i]!);
     const problem = prove(chain[i]!, info, leaf, childUid);
     if (problem) return problem;
@@ -285,8 +286,10 @@ export function ensurePrivateDir(dir: string, options: PrivateDirOptions = {}): 
   try {
     const info = fstatSync(fd);
     if (!info.isDirectory() || info.uid !== uid) return fail("another-account", spelt);
-    if ((info.mode & 0o077) !== 0) fchmodSync(fd, info.mode & 0o700);
-    if ((fstatSync(fd).mode & 0o077) !== 0) return fail("writable-by-others", spelt);
+    // Made 0700 and kept so: closed to everyone else, and one this account can use (a 0500
+    // folder passes the rest, and nothing could be kept in it).
+    if ((info.mode & 0o777) !== 0o700) fchmodSync(fd, 0o700);
+    if ((fstatSync(fd).mode & 0o777) !== 0o700) return fail("writable-by-others", spelt);
   } catch {
     return fail("unverifiable", spelt);
   } finally {
@@ -323,13 +326,35 @@ export function sshTransportFor<T>(
 }
 
 /**
- * `dir` with the system's own links followed: a link owned by root, in a
- * folder owned by root that no one else can write (macOS's `/var` and
- * `/tmp`), can't be redirected by another account, and is resolved. Any other
- * link is left as it is spelt, for `ensurePrivateDir` to refuse.
+ * The system's own links, by where they are and where they lead: macOS keeps
+ * `/var`, `/tmp` and `/etc` below `/private`. No other link is followed.
  */
-export function followSystemLinks(dir: string): string {
+const SYSTEM_LINKS: ReadonlyMap<string, string> = new Map([
+  ["/var", "/private/var"],
+  ["/tmp", "/private/tmp"],
+  ["/etc", "/private/etc"],
+]);
+
+/**
+ * `dir` with the system's own links followed: one of `SYSTEM_LINKS`, leading
+ * where it should, owned by root, in a folder owned by root that no one else
+ * can write by its mode or its access control list, as they are now. Any other
+ * link, or one that fails a check, is left as it is spelt, for
+ * `ensurePrivateDir` to refuse.
+ */
+export function followSystemLinks(
+  dir: string,
+  options: Pick<PrivateDirOptions, "readAcl" | "platform"> = {},
+): string {
   if (!isAbsolute(dir)) return dir;
+  const readAcl = options.readAcl ?? readAclWithLs;
+  const platform = options.platform ?? process.platform;
+  let me: string;
+  try {
+    me = userInfo().username;
+  } catch {
+    return resolve(dir);
+  }
   const parts = resolve(dir).split(sep).filter(Boolean);
   let current: string = sep;
   for (let i = 0; i < parts.length; i += 1) {
@@ -348,13 +373,23 @@ export function followSystemLinks(dir: string): string {
       } catch {
         return resolve(dir);
       }
-      const systems = info.uid === 0 && parent.uid === 0 && (Number(parent.mode) & 0o022) === 0;
+      const expected = SYSTEM_LINKS.get(next);
+      const systems =
+        expected !== undefined &&
+        info.uid === 0 &&
+        parent.isDirectory() &&
+        parent.uid === 0 &&
+        (Number(parent.mode) & 0o022) === 0 &&
+        aclOpensIt(readAcl(current, platform), me, false) === false;
       if (!systems) return resolve(dir);
+      let target: string;
       try {
-        current = realpathSync(next);
+        target = realpathSync(next);
       } catch {
         return resolve(dir);
       }
+      if (target !== expected) return resolve(dir);
+      current = target;
       continue;
     }
     current = next;
@@ -391,7 +426,7 @@ export function chooseDataDir(
     return { ok: true, dir, verified: "windows-unverified" };
   }
   // The system's own links followed (macOS's temporary folders are under `/var`); no other.
-  const real = followSystemLinks(dir);
+  const real = followSystemLinks(dir, options);
   const verdict = ensurePrivateDir(real, options);
   return verdict.ok
     ? { ok: true, dir: real, verified: "posix" }

@@ -1472,13 +1472,18 @@ export class ClawtrateClient {
     const stops = this.stops;
     return this.changeConnection(async () => {
       if (stops !== this.stops) return;
+      const setup = options.setup ?? (options.code ? {} : null);
+      const next: ConnectionSettings = { url, token: null, route: options.route };
+      // An ordinary reconnect of a route is saved before anything changes here: one that can't
+      // be saved leaves the connection that stays open, and its selection, as they are. A
+      // pairing's is saved only once its token and identity were checked.
+      if (!options.code && !setup) await this.host.storage.set(SETTINGS_KEY, JSON.stringify(next));
       this.selectionApplied = selection;
       if (this.settings?.route !== options.route)
         this.abandonAccessRequest("Switched to another gateway.");
       this.routeIdentity = { route: options.route, identity: options.identity ?? null };
-      this.settings = { url, token: null, route: options.route };
+      this.settings = next;
       this.pairingSeen = null;
-      const setup = options.setup ?? (options.code ? {} : null);
       this.setupCheck = setup ? setupCheckFor(url, setup) : null;
       this.setupIntent = setup ? { url, reuse: !options.code } : null;
       this.setupCode = options.code
@@ -1488,8 +1493,6 @@ export class ClawtrateClient {
             expiresAtMs: options.code.expiresAtMs,
           }
         : null;
-      if (!options.code && !setup)
-        await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
       if (stops === this.stops) await this.open();
     });
   }
@@ -1504,12 +1507,11 @@ export class ClawtrateClient {
     const asked = ++this.selectionAsked;
     // Asked inside the queue: a Connect queued before this one may have selected another route.
     await this.changeConnection(async () => {
-      if (this.settings?.route === route) {
-        await this.disconnectNow(asked);
-        return;
-      }
+      // The saved connection goes only if it names this route: a route still pairing is selected
+      // in memory alone, and the gateway saved before it stays saved.
       const saved = await this.savedSettings();
       if (saved?.route === route) await this.host.storage.delete(SETTINGS_KEY);
+      if (this.settings?.route === route) await this.disconnectNow(asked, { keepSaved: true });
     });
   }
 
@@ -1559,16 +1561,32 @@ export class ClawtrateClient {
       if (selection !== undefined && this.selectionApplied !== selection) {
         throw new GatewayChangedError();
       }
-      await this.disconnectNow(asked);
+      // And it forgets the saved connection only if that is the selection it lets go: one still
+      // pairing, never saved, leaves the gateway saved before it as it was.
+      const keepSaved = selection !== undefined && !this.namesSelection(await this.savedSettings());
+      await this.disconnectNow(asked, { keepSaved });
     });
   }
 
-  /** Disconnect's work, inside the connection queue, as the selection `asked`. */
-  private async disconnectNow(asked: number): Promise<void> {
+  /** Whether `saved` is the connection selected now: the same route, or the same plain address. */
+  private namesSelection(saved: ConnectionSettings | null): boolean {
+    const current = this.settings;
+    if (!saved || !current) return false;
+    return current.route
+      ? saved.route === current.route
+      : !saved.route && saved.url === current.url;
+  }
+
+  /**
+   * Disconnect's work, inside the connection queue, as the selection `asked`.
+   * With `keepSaved`, the saved connection is left as it is (the caller
+   * decided it).
+   */
+  private async disconnectNow(asked: number, { keepSaved = false } = {}): Promise<void> {
     if (!this.settings) return;
     // Forgotten first: a gateway the host could not forget stays connected, as it stays saved,
     // and stays the selection it was.
-    await this.host.storage.delete(SETTINGS_KEY);
+    if (!keepSaved) await this.host.storage.delete(SETTINGS_KEY);
     this.selectionApplied = asked;
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
@@ -1602,9 +1620,11 @@ export class ClawtrateClient {
       if (this.protocol?.connected && this.state.connection.status === "connected") {
         return this.generation;
       }
+      // A route's address is its host's forward of the moment: only the host opens the route
+      // again, and without one nothing is reopened, the route staying disconnected.
+      if (this.settings.route && !this.options.reopenRoute) return null;
       if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
-      // A route's address is its host's forward of the moment: the host opens the route again.
-      if (this.settings.route && this.options.reopenRoute) {
+      if (this.settings.route) {
         reopen = this.settings.route;
         return null;
       }
@@ -5833,6 +5853,8 @@ export class ClawtrateClient {
           this.close();
           throw new Error("the setup connection's endpoint changed");
         }
+        // And a route's address still its host's current channel, at the frame itself.
+        if (settings.route && !this.isAllowed(settings.url)) this.refuseRouteAddress(generation);
         const code = this.setupCode;
         if (code?.url === settings.url && this.now() >= code.expiresAtMs) {
           this.setupEndpointChanged(settings.url, generation);
@@ -5946,6 +5968,23 @@ export class ClawtrateClient {
         }
         // A setup that reused this device's pairing saves its gateway once its hello is in.
         const reuse = this.setupIntent?.url === settings.url && this.setupIntent.reuse;
+        // A route's reuse is saved only once this socket's gateway said who it is, held with its
+        // tokens (checkRouteIdentity): a save that fails then ends the attempt as not saved.
+        if (reuse && settings.route) {
+          const saveReuse = () =>
+            this.changeConnection(async () => {
+              const current = this.settings;
+              if (!live() || generation !== this.generation || current?.url !== settings.url)
+                return;
+              if (this.setupEndpointFails(settings.url, generation)) {
+                this.close();
+                return;
+              }
+              await this.saveSettings(current);
+            });
+          if (!this.holdForRoute(helloSocket, saveReuse)) await saveReuse();
+          return;
+        }
         // Queued with Connect and Disconnect, so it never writes back a gateway forgotten meanwhile.
         await this.changeConnection(async () => {
           // Only this connection may drop this gateway's bootstrap secret.
@@ -7626,10 +7665,12 @@ export class ClawtrateClient {
       this.settings?.route === route;
     if (!ours()) return;
     if (id === null || (expected !== null && id !== expected)) {
-      // Terminal for this attempt: what it would have kept is forgotten, and nothing retries.
+      // Terminal for this attempt: what it would have kept is forgotten, and nothing retries, so
+      // a write waiting for access fails now rather than waiting on a connection that won't come.
       this.routeHeldWrites = [];
       this.routeHeldFor = null;
       this.heldToken = null;
+      this.abandonAccessRequest("The gateway that answered isn't this route's.");
       this.close();
       this.dropSetupCredentials();
       this.setConnection({
