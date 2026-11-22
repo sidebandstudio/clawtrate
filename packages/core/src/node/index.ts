@@ -11,6 +11,7 @@ import {
 } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createSecureCredentials, DEVICE_KEY_FILE, STATE_FILE, type SecretBox } from "./secure.ts";
 import type {
   ClawtrateHost,
   ClientIdentity,
@@ -18,6 +19,17 @@ import type {
   KeyValueStore,
   WebSocketLike,
 } from "../host.ts";
+
+export {
+  createSecureCredentials,
+  CREDENTIALS_FILE,
+  DEVICE_KEY_FILE,
+  isCredentialKey,
+  SecureStorageUnavailableError,
+  STATE_FILE,
+  type SecretBox,
+  type SecureCredentials,
+} from "./secure.ts";
 
 async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -78,21 +90,36 @@ function rawPublicKey(publicKeyPem: string): Buffer {
   return Buffer.from(der.subarray(der.length - 32));
 }
 
+/** A new Ed25519 private key, PKCS#8 PEM. */
+export function newDeviceKeyPem(): string {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  return privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+}
+
+/** The device key in a private PEM file, created there on first use. */
+export async function fileDeviceKey(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const privateKeyPem = newDeviceKeyPem();
+    await writePrivateFile(path, privateKeyPem);
+    return privateKeyPem;
+  }
+}
+
 /** Ed25519 device identity in a PEM file, created on first use. */
 export function createFileSigner(path: string): DeviceSigner {
+  return createPemSigner(() => fileDeviceKey(path));
+}
+
+/** Ed25519 device identity from a PEM key `loadPem` gives, read once and kept. */
+export function createPemSigner(loadPem: () => Promise<string>): DeviceSigner {
   let loaded: Promise<{ privateKeyPem: string; deviceId: string; publicKey: string }> | null = null;
 
   const load = () =>
     (loaded ??= (async () => {
-      let privateKeyPem: string;
-      try {
-        privateKeyPem = await readFile(path, "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        const { privateKey } = generateKeyPairSync("ed25519");
-        privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
-        await writePrivateFile(path, privateKeyPem);
-      }
+      const privateKeyPem = await loadPem();
       const publicKeyPem = createPublicKey(createPrivateKey(privateKeyPem))
         .export({ type: "spki", format: "pem" })
         .toString();
@@ -121,16 +148,33 @@ export function createFileSigner(path: string): DeviceSigner {
 export type NodeHostOptions = {
   /** Directory for the device key and saved connection state. Created with mode 0700. */
   dataDir: string;
+  /**
+   * The system's secure storage. With it, this device's credentials are kept
+   * encrypted by it (`createSecureCredentials`); without it, in the files as before.
+   */
+  secretBox?: SecretBox;
   client: ClientIdentity;
   log?: ClawtrateHost["log"];
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
 };
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
+  const credentials = options.secretBox
+    ? createSecureCredentials({
+        dataDir: options.dataDir,
+        box: options.secretBox,
+        ...(options.log ? { log: options.log } : {}),
+      })
+    : {
+        storage: createFileStore(join(options.dataDir, STATE_FILE)),
+        signer: createFileSigner(join(options.dataDir, DEVICE_KEY_FILE)),
+        secure: async () => false,
+      };
   return {
     createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
-    storage: createFileStore(join(options.dataDir, "state.json")),
-    signer: createFileSigner(join(options.dataDir, "device-key.pem")),
+    storage: credentials.storage,
+    signer: credentials.signer,
+    secureCredentials: credentials.secure,
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),

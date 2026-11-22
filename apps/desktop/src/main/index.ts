@@ -15,6 +15,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  safeStorage,
   session,
   shell,
   type WebContents,
@@ -29,6 +30,12 @@ import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
+import {
+  keychainCheckName,
+  KEYCHAIN_CHECK_SWITCH,
+  safeStorageBox,
+  usesSecureStorage,
+} from "./secret-box.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -132,6 +139,14 @@ const STARTUP = desktopStartup(SETUP, {
   privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
 });
 if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
+/** A packaged launch check's own app name, set before safeStorage reads it for its Keychain item. */
+const KEYCHAIN_CHECK = keychainCheckName(
+  SETUP,
+  app.isPackaged,
+  process.platform,
+  switchValue(KEYCHAIN_CHECK_SWITCH),
+);
+if (KEYCHAIN_CHECK) app.setName(KEYCHAIN_CHECK);
 
 /**
  * The checkout whose run records prove a sandbox's run: this development
@@ -361,6 +376,10 @@ async function main(): Promise<void> {
     kind: "desktop",
     displayName: "Clawtrate Desktop",
     dataDir: privateDataDir(),
+    // This device's credentials in the Keychain: a person's app on macOS, or a launch check's.
+    ...(usesSecureStorage(SETUP, process.platform, KEYCHAIN_CHECK)
+      ? { secretBox: safeStorageBox(safeStorage, process.platform) }
+      : {}),
     // A sandboxed or refused start (every development build and automated run) has no
     // development gateway, doesn't auto-connect and never resumes a saved gateway.
     devGateway: STARTUP.devGateway,

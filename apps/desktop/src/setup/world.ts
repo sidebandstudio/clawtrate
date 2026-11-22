@@ -152,6 +152,8 @@ export const SANDBOX_SWITCHES = [
   "inspect",
   "inspect-brk",
   "clawtrate-setup-sandbox",
+  // A packaged launch check's own Keychain name (`keychainCheckName`).
+  "clawtrate-keychain-check",
 ] as const;
 
 /**

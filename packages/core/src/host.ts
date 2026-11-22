@@ -57,6 +57,12 @@ export type ClawtrateHost = {
   randomId?: () => string;
   log?: (level: "debug" | "info" | "warn" | "error", message: string) => void;
   /**
+   * Resolves true only while the host keeps this device's credentials (its device
+   * tokens, a saved gateway token and its key) in the system's secure storage.
+   * Full access (`ClientOptions.fullAccess`) needs it; without it, a host has none.
+   */
+  secureCredentials?: () => Promise<boolean>;
+  /**
    * How to approve a pairing request on this gateway. The host knows whether the
    * gateway is the local development one; core falls back to the generic command.
    */

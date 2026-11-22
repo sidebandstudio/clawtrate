@@ -9,7 +9,7 @@ import {
   type BridgePolicy,
   type HostInfo,
 } from "@clawtrate/core";
-import { createNodeHost } from "@clawtrate/core/node";
+import { createNodeHost, type SecretBox } from "@clawtrate/core/node";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -129,6 +129,11 @@ export async function startHostRuntime(options: {
    */
   readOnly?: boolean;
   /**
+   * The system's secure storage for this device's credentials. Without it they stay
+   * in the data folder's files, as before, and the host has no full access.
+   */
+  secretBox?: SecretBox;
+  /**
    * Reopen the gateway the data folder remembers (the default). A development
    * build, an automated run and the web host's setup look pass false: they
    * never resume a saved gateway, whatever its address.
@@ -158,6 +163,7 @@ export async function startHostRuntime(options: {
         platform: process.platform,
       },
       approvalInstructions: approvalInstructionsFor(options.devGateway),
+      ...(options.secretBox ? { secretBox: options.secretBox } : {}),
       log: (level, message) => {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },
