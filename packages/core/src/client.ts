@@ -768,6 +768,9 @@ const namedSetupCode = (code: string) =>
 const setupVersion = (value: unknown): string | null =>
   typeof value === "string" && /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(value) ? value : null;
 
+/** A Connect waiting to be applied (`waitingConnects`). */
+type WaitingConnect = { url: string | null; cancelled: boolean; older: WaitingConnect | null };
+
 /** Reads of the saved grant an approved rotation tries before it uses the connection's own. */
 const GRANT_READS = 3;
 
@@ -1082,12 +1085,13 @@ export class ClawtrateClient {
    */
   private eligibilityEnds = 0;
   /**
-   * The latest Connect still waiting to be applied: its number, its address, and whether an end
-   * for that address came since it began. Only such an end cancels it; ends for other gateways
-   * don't. A Connect a newer one replaced before it applied is cancelled by any end.
+   * Each Connect still waiting to be applied, newest first, linked to the one before it: its
+   * address, and whether an end for that address came since it began. Only such an end cancels
+   * it; ends for other gateways don't, and nor does another Connect, whether or not that one
+   * takes effect. Each leaves the chain when its Connect settles, so the chain is never longer
+   * than the Connects queued.
    */
-  private waitingConnect: { selection: number; url: string | null; cancelled: boolean } | null =
-    null;
+  private waitingConnects: WaitingConnect | null = null;
   /**
    * The grant of the token record this connection runs on, as its plan read it or this client
    * last wrote it: whether it is a full pairing's, and its held scopes as one bit per scope of
@@ -1495,8 +1499,13 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
-    this.waitingConnect = { selection, url: gatewayUrlOrNull(options.url), cancelled: false };
-    return this.settleConnect(selection, async () => {
+    const waiting: WaitingConnect = {
+      url: gatewayUrlOrNull(options.url),
+      cancelled: false,
+      older: this.waitingConnects,
+    };
+    this.waitingConnects = waiting;
+    return this.settleConnect(waiting, async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       const token = options.token?.trim() || null;
@@ -1508,7 +1517,7 @@ export class ClawtrateClient {
       this.typedAttempt = token ? { url, token, selection } : null;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibleSince(endsAtStart, selection);
+      this.fullEligible = this.eligibleSince(endsAtStart, waiting);
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
@@ -1535,15 +1544,20 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
-    this.waitingConnect = { selection, url: gatewayUrlOrNull(options.url), cancelled: false };
-    return this.settleConnect(selection, async () => {
+    const waiting: WaitingConnect = {
+      url: gatewayUrlOrNull(options.url),
+      cancelled: false,
+      older: this.waitingConnects,
+    };
+    this.waitingConnects = waiting;
+    return this.settleConnect(waiting, async () => {
       const url = validateGatewayUrl(options.url);
       if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
       if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
       this.selectionApplied = selection;
       // The person chose to connect, and that choice is now the attempt: a new pairing may ask
       // for full access, unless a refusal or loss accepted since this Connect began says not.
-      this.fullEligible = this.eligibleSince(endsAtStart, selection);
+      this.fullEligible = this.eligibleSince(endsAtStart, waiting);
       this.planHadToken = false;
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
@@ -1746,29 +1760,37 @@ export class ClawtrateClient {
 
   /** Full-access eligibility ends now, and a Connect already under way doesn't grant it back. */
   private endEligibility(url: string | null = this.settings?.url ?? null): void {
-    if (this.waitingConnect && this.waitingConnect.url === url)
-      this.waitingConnect.cancelled = true;
+    for (let waiting = this.waitingConnects; waiting; waiting = waiting.older)
+      if (waiting.url === url) waiting.cancelled = true;
     this.fullEligible = false;
     this.eligibilityEnds += 1;
   }
 
   /** A Connect's change, queued; whatever it ends with, it no longer waits. */
-  private settleConnect(selection: number, change: () => Promise<void>): Promise<void> {
-    return this.changeConnection(change).finally(() => {
-      if (this.waitingConnect?.selection === selection) this.waitingConnect = null;
-    });
+  private settleConnect(waiting: WaitingConnect, change: () => Promise<void>): Promise<void> {
+    return this.changeConnection(change).finally(() => this.releaseConnect(waiting));
+  }
+
+  /** Takes a Connect out of `waitingConnects`, if it is still there. */
+  private releaseConnect(waiting: WaitingConnect): void {
+    let newer: WaitingConnect | null = null;
+    let link = this.waitingConnects;
+    while (link && link !== waiting) {
+      newer = link;
+      link = link.older;
+    }
+    if (!link) return;
+    if (newer) newer.older = link.older;
+    else this.waitingConnects = link.older;
   }
 
   /**
-   * Whether the Connect numbered `selection`, begun when `endsAtStart` ends had happened, may
-   * grant full access now that it applies: no end since it began, or, while it is the latest
-   * Connect, no end for its own address.
+   * Whether a Connect, begun when `endsAtStart` ends had happened, may grant full access now that
+   * it applies: no end since it began, or none for its own address.
    */
-  private eligibleSince(endsAtStart: number, selection: number): boolean {
-    const waiting = this.waitingConnect;
-    if (waiting?.selection === selection) this.waitingConnect = null;
-    if (this.eligibilityEnds === endsAtStart) return true;
-    return waiting?.selection === selection && !waiting.cancelled;
+  private eligibleSince(endsAtStart: number, waiting: WaitingConnect): boolean {
+    this.releaseConnect(waiting);
+    return this.eligibilityEnds === endsAtStart || !waiting.cancelled;
   }
 
   /** The attempt on this address ended: no full pairing by itself, and its typed token is done. */
