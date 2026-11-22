@@ -46,18 +46,32 @@ export function runTestShell(
   timeoutMs: number,
 ): Promise<{ status: number | null; stdout: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(shell, args, {
+    // Keep the group leader until Node sees EOF from every writer to stdout.
+    // The fixture gets its usual signals and arguments. Only the leader has fd 3.
+    const supervise = [
+      "trap ':' TERM",
+      '"$@" 3<&-',
+      "status=$?",
+      "trap '' TERM",
+      "exec 1>&-",
+      "read -r release <&3",
+      'exit "$status"',
+    ].join("\n");
+    const child = spawn("/bin/sh", ["-c", supervise, "fixture", shell, ...args], {
       env,
       cwd,
       detached: true,
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "ignore", "pipe"],
     });
+    const inputPipe = child.stdin!;
+    const outputPipe = child.stdout!;
+    const releasePipe = child.stdio[3]!;
     let stdout = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    outputPipe.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    inputPipe.on("error", (error: NodeJS.ErrnoException) => {
       if (error.code !== "EPIPE") reject(error);
     });
-    child.stdin.end(input);
+    inputPipe.end(input);
     const timer = setTimeout(() => {
       if (child.pid && child.exitCode === null && child.signalCode === null) {
         try {
@@ -66,10 +80,14 @@ export function runTestShell(
           if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
         }
       }
-      child.stdout.destroy();
-      child.stdin.destroy();
+      outputPipe.destroy();
+      inputPipe.destroy();
       reject(new Error(`SSH fixture shell timed out after ${timeoutMs} ms`));
     }, timeoutMs);
+    outputPipe.once("end", () => {
+      clearTimeout(timer);
+      releasePipe.destroy();
+    });
     child.once("error", reject);
     child.once("close", (status) => {
       clearTimeout(timer);

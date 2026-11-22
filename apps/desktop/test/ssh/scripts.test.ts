@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { lookScript, parseLookOutput } from "../../src/main/ssh/look.ts";
 import {
   maxScriptOutput,
@@ -16,7 +17,7 @@ import {
   SCRIPT_BODIES,
   type ScriptValues,
 } from "../../src/main/ssh/scripts.ts";
-import { runTestShell, tempDir } from "./harness.ts";
+import { runTestShell, tempDir, waitFor } from "./harness.ts";
 
 describe.skipIf(process.platform === "win32")("the CODE and START scripts", () => {
   let home: string;
@@ -69,6 +70,23 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
       return [];
     }
   };
+
+  it("stops a worker holding stdout after its fixture shell exits", async () => {
+    const workerFile = join(home, "worker.pid");
+    await expect(
+      runTestShell(
+        "/bin/sh",
+        ["-s"],
+        'sleep 10 & echo "$!" > "$WORKER_FILE"\nexit 0\n',
+        { PATH: "/usr/bin:/bin", WORKER_FILE: workerFile },
+        home,
+        1000,
+      ),
+    ).rejects.toThrow("SSH fixture shell timed out");
+    const pid = Number(readFileSync(workerFile, "utf8").trim());
+    expect(pid).toBeGreaterThan(0);
+    await waitFor(() => processIdentity(pid).state === "exited", 1500, "fixture worker to exit");
+  });
 
   it("F-496: CODE runs the one fixed command for the profile and port it was given, and its answer comes back whole", async () => {
     rmSync(join(home, "calls"), { force: true });
