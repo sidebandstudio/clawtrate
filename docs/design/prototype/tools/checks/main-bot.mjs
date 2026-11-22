@@ -335,14 +335,28 @@ await check("MB-15 creating by chat: every value shown, the follow-ons gated, Ne
   await dialog.waitFor();
   assert.equal(await page.locator("#ed-0").inputValue(), "Stride");
   assert.equal(await page.locator("#ed-2").inputValue(), "Hands-off");
+  // A refused draft is kept as the person left it, with focus on the name.
+  await page.locator("#ed-3").fill("Plans my tempo runs.");
+  await page.locator("#ed-2").selectOption("Ask before acting");
   await page.locator("#ed-0").fill(" ");
   await dialog.getByRole("button", { name: "Create" }).click();
   await has(page, '[data-testid="editor-problem"]', "Give the new bot a name first.");
+  assert.equal(await page.locator("#ed-3").inputValue(), "Plans my tempo runs.");
+  assert.equal(await page.locator("#ed-2").inputValue(), "Ask before acting");
+  assert.equal(await page.locator("#ed-0").inputValue(), " ");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "ed-0");
   if (width !== "phone") assert.equal(await page.getByTestId("rail-name-stride").count(), 0);
-  // What's created is what the person left in New bot.
+  // An existing id is refused (R28): Pip's row stays, and the draft comes back.
+  await page.locator("#ed-0").fill("Pip");
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await has(page, '[data-testid="editor-problem"]', "There's already a bot with the id pip, so nothing was created.");
+  assert.equal(await page.locator("#ed-0").inputValue(), "Pip");
+  assert.equal(await page.locator("#ed-3").inputValue(), "Plans my tempo runs.");
+  assert.equal(await page.locator("#ed-2").inputValue(), "Ask before acting");
+  assert.equal(await page.getByTestId("card-saved").count(), 0);
+  if (width !== "phone") assert.equal(await page.getByTestId("rail-name-pip").count(), 1);
+  // A fresh name succeeds, with what the person left in New bot.
   await page.locator("#ed-0").fill("Tempo");
-  await page.locator("#ed-2").selectOption("Ask before acting");
-  await page.locator("#ed-3").fill("Plans my tempo runs.");
   await dialog.getByRole("button", { name: "Create" }).click();
   await page.getByTestId("card-saved").waitFor();
   await has(page, '[data-testid="card-saved"]', "Created by you in New bot.");
@@ -366,6 +380,11 @@ await check("MB-16 other origins: unconfirmed origin, a name only the person cha
   assert.equal(await page.locator('[data-id="otto-instructions"] .mb-diff [data-sign="+"]').count(), 2);
   await has(page, '[data-id="pip-freedom"]', "More freedom");
   if (width !== "phone") assert.equal(await page.getByTestId("proposals-count").innerText(), "3");
+  // A select-only editor still takes focus, so Escape works at once.
+  await page.locator('[data-id="pip-freedom"]').getByRole("button", { name: "Review and save" }).click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "ed-0");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByTestId("editor").count(), 0);
   await page.locator('[data-id="pip-freedom"]').getByRole("button", { name: "Review and save" }).click();
   await has(page, '[data-testid="editor"]', "This gives Pip more freedom.");
   await page.locator("#ed-0").selectOption("Ask before acting");
@@ -385,6 +404,19 @@ await check("MB-16 other origins: unconfirmed origin, a name only the person cha
   await page.clock.runFor(800);
   await has(page, '[data-testid="card-renamed"]', "Renamed Juniper to Junebug");
   assert.equal((await page.getByTestId("title-name").innerText()).trim(), "Junebug");
+
+  // Another card finishing behind an open editor keeps its draft and focus.
+  await open("view=proposal", "full");
+  await rename.getByRole("button", { name: "Rename Juniper to Junebug" }).click();
+  await page.locator('[data-id="otto-instructions"]').getByRole("button", { name: "Review and save" }).click();
+  await page.locator("#ed-0").evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
+  await page.keyboard.type("\nAsk before restoring anything.");
+  await page.clock.runFor(800);
+  await page.getByTestId("own-rename-line").waitFor({ state: "attached" });
+  assert.match(await page.locator("#ed-0").inputValue(), /Tell Juniper when one fails\.\nAsk before restoring anything\.$/);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "ed-0");
+  await page.keyboard.type(" Twice.");
+  assert.match(await page.locator("#ed-0").inputValue(), /Ask before restoring anything\. Twice\.$/);
 });
 
 await check("MB-17 agents with access: See by default, no direct changes, the limit, the config", async ({ page, open }) => {
@@ -392,6 +424,11 @@ await check("MB-17 agents with access: See by default, no direct changes, the li
   assert.equal(await page.getByRole("heading", { level: 1 }).innerText(), "Agents with access");
   await has(page, '[data-testid="grants"]', "Suggest changes · All bots, including later ones");
   await has(page, '[data-testid="grants"]', "Expires in 28 days");
+  await open("view=agents&step=add");
+  // Direct entry focuses the dialog, so Escape works before any click.
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "ag-name");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByTestId("add-agent").count(), 0);
   await open("view=agents&step=add");
   const dialog = page.getByRole("dialog", { name: "Add an agent" });
   assert.deepEqual(await dialog.locator('input[name="scope"]').evaluateAll((r) => r.map((x) => [x.value, x.checked])), [

@@ -266,7 +266,12 @@
       `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
       `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
       `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`;
-    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}"${editor ? " inert" : ""}>${phone() ? "" : rail(chat.bot)}${pane}</div>${editorHtml()}`;
+    const shell = `<div class="mb-shell" data-phone="${phone()}"${editor ? " inert" : ""}>${phone() ? "" : rail(chat.bot)}${pane}</div>`;
+    // An open editor is left as it is, so another card finishing behind it
+    // keeps the person's draft and focus; only the chat is drawn again.
+    const open = editor && root.querySelector(`[data-testid="editor"][data-for="${editor.prop.id}"]`);
+    if (open) root.querySelector(".mb-shell").outerHTML = shell;
+    else root.innerHTML = shell + editorHtml();
     const t = root.querySelector(".mb-transcript");
     t.scrollTop = t.scrollHeight;
     if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
@@ -449,16 +454,18 @@
     if (!editor) return "";
     const { prop } = editor;
     const named = (text) => withName(prop.card, text);
+    // A draft the gateway sent back comes back as the person left it.
+    const draft = (i, value) => (editor.values ? editor.values[i] : value);
     // A changed bot starts from what it says now, with the proposal added.
     const fields = ((editor.stale && prop.card.editor.staleFields) || prop.card.editor.fields)
       .map(
         ([label, value, kind], i) =>
           `<label class="mb-field"><span>${esc(label)}</span>` +
           (kind === true
-            ? `<textarea id="ed-${i}" rows="3">${esc(value)}</textarea>`
+            ? `<textarea id="ed-${i}" rows="3">${esc(draft(i, value))}</textarea>`
             : Array.isArray(kind)
-              ? `<select id="ed-${i}">${kind.map((o) => `<option${o === value ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`
-              : `<input id="ed-${i}" value="${esc(value)}"/>`) +
+              ? `<select id="ed-${i}">${kind.map((o) => `<option${o === draft(i, value) ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`
+              : `<input id="ed-${i}" value="${esc(draft(i, value))}"/>`) +
           `</label>`,
       )
       .join("");
@@ -466,10 +473,10 @@
       ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-stale">${esc(named(prop.card.editor.stale))}</p>`
       : "";
     return (
-      `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-ed-title" data-testid="editor">` +
+      `<div class="mb-scrim"></div><div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="mb-ed-title" data-testid="editor" data-for="${prop.id}">` +
       `<h2 id="mb-ed-title">${esc(named(prop.card.editor.title))}</h2>` +
       `<p class="mb-hint">${esc(named(prop.card.editor.lede))}</p>${stale}${fields}` +
-      (editor.problem ? `<p class="mb-card-note" data-tone="warn" data-testid="editor-problem">${esc(editor.problem)}</p>` : "") +
+      `<p class="mb-card-note" data-tone="warn" data-testid="editor-problem"${editor.problem ? "" : " hidden"}>${esc(editor.problem || "")}</p>` +
       `<div class="mb-dialog-actions"><button type="button" class="mb-btn" data-variant="quiet" data-act="editor-cancel">Cancel</button>` +
       `<button type="button" class="mb-btn" data-variant="primary" data-act="editor-save">${esc(prop.card.editor.save)}</button></div></div>`
     );
@@ -480,12 +487,18 @@
     if (!prop || prop.state !== "open") return;
     editor = { prop, stale: state.card === "stale" && prop.card.staleable };
     renderChat();
-    root.querySelector('[data-testid="editor"] input, [data-testid="editor"] textarea')?.focus();
+    focusFirst(root.querySelector('[data-testid="editor"]'));
   }
 
   // "{bot}" in a card's words is the bot's name when they're drawn, so a bot
   // renamed after it asked is called by its current name.
   const withName = (card, text) => (card.bot ? text.replaceAll("{bot}", botById(card.bot).name) : text);
+
+  // A modal's controls in Tab order, one stop per radio group; opening one
+  // focuses the first, so Escape works before any click inside.
+  const focusables = (modal) =>
+    [...modal.querySelectorAll("button, input, textarea, select")].filter((el) => !el.disabled && (el.type !== "radio" || el.checked));
+  const focusFirst = (modal) => modal && focusables(modal)[0]?.focus();
 
   // The editor is modal: the chat behind it is inert, and closing it gives
   // focus back to its Review and save, or to the card once it's saved.
@@ -508,16 +521,19 @@
   // Saves what the editor holds, not the proposal it was filled from. The
   // stand-in stores the values and returns them; the saved card shows that.
   async function editorSave() {
-    const { prop } = editor;
+    const { prop, stale } = editor;
     const c = prop.card;
     const values = [...root.querySelectorAll('[data-testid="editor"] [id^="ed-"]')].map((f) => f.value);
     const problem = c.check ? c.check(values) : "";
     if (problem) {
-      editor.problem = problem;
-      renderChat();
+      // Shown in place: the draft and the editor stay as the person left them.
+      const note = root.querySelector('[data-testid="editor-problem"]');
+      note.textContent = problem;
+      note.hidden = false;
       root.querySelector("#ed-0")?.focus();
       return;
     }
+    const before = { actions: c.actions, cardKind: c.cardKind };
     editor = null;
     prop.state = "saving";
     c.actions = [];
@@ -526,6 +542,16 @@
     renderChat();
     focusCard(prop.id);
     const record = await gateway.answer(1000, () => c.effect(values));
+    if (record.refused) {
+      // The gateway refused the write and nothing changed: the editor comes
+      // back with the draft and why, for another try.
+      prop.state = "open";
+      Object.assign(c, { stateText: "", ...before });
+      editor = { prop, stale, values, problem: record.refused };
+      renderChat();
+      root.querySelector("#ed-0")?.focus();
+      return;
+    }
     const done = c.done(record);
     prop.state = "saved";
     Object.assign(c, {
@@ -661,6 +687,8 @@
       check: ([name]) => (norm(name) ? "" : "Give the new bot a name first."),
       effect: ([name, model, autonomy, role, routine]) => {
         const id = norm(name).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "bot";
+        // agents.create refuses an id that already exists (R28).
+        if (botById(id)) return { refused: `There's already a bot with the id ${id}, so nothing was created. Choose another name.` };
         const bot = { id, name: norm(name), preview: "New bot", fresh: true, model, autonomy, role: role.trim(), routine: norm(routine) };
         gateway.bots.splice(1, 0, bot);
         return bot;
@@ -764,6 +792,7 @@
   const botsLine = (g) => (g.bots === "all" ? (g.later ? "All bots, including later ones" : "All bots") : "Pip and Otto");
 
   function renderAgents() {
+    const focus = document.activeElement?.id;
     const nav = ["General", "Bots", "Accounts", "Permissions", "Agents with access", "Gateway"]
       .map((n) => `<li><a href="#" ${n === "Agents with access" ? 'aria-current="page"' : ""}>${n}</a></li>`)
       .join("");
@@ -784,6 +813,7 @@
       (agents.added ? addedNote(agents.added) : "") +
       `</section></div>` +
       (agents.adding ? addDialog() : "");
+    if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
   }
 
   function addDialog() {
@@ -941,7 +971,7 @@
     } else if (act === "add") {
       agents.adding = true;
       renderAgents();
-      root.querySelector("#ag-name").focus();
+      focusFirst(root.querySelector('[data-testid="add-agent"]'));
     } else if (act === "add-cancel") {
       closeAdd();
     } else if (act === "added") {
@@ -1030,9 +1060,7 @@
     if (event.key === "Tab" && modal) {
       // What's behind the open sheet, editor or dialog is inert; Tab and
       // Shift+Tab cycle through its controls (one stop per radio group).
-      const all = [...modal.querySelectorAll("button, input, textarea, select")].filter(
-        (el) => !el.disabled && (el.type !== "radio" || el.checked),
-      );
+      const all = focusables(modal);
       const at = all.indexOf(document.activeElement);
       all[(at + (event.shiftKey ? all.length - 1 : 1)) % all.length].focus();
       event.preventDefault();
@@ -1058,7 +1086,8 @@
     if (state.view === "setup") return renderSetup();
     if (state.view === "agents") {
       seedAgents();
-      return renderAgents();
+      renderAgents();
+      return focusFirst(root.querySelector('[data-testid="add-agent"]'));
     }
     if (state.view === "first") return playFirst();
     if (state.view === "rename") return playRename();
