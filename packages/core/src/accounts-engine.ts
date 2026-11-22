@@ -154,6 +154,8 @@ export class AccountsEngine {
   private creating: WriteMark | null = null;
   /** The gateway the state's creation was asked of: it is kept, and finished, only there. */
   private creationGateway: string | null = null;
+  /** The partial creation a Finish has claimed while its gateway may still be identifying itself. */
+  private finishing: AccountsState["creation"] = null;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
@@ -1492,11 +1494,17 @@ export class AccountsEngine {
     const creation = ctx.get().creation;
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
+    if (this.finishing === creation) throw new Error("That bot is already being finished.");
+    this.finishing = creation;
     this.creating = mark;
-    ctx.update((a) =>
-      a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
-    );
-    return this.complete(ctx, creation.name, botId, creation.missing);
+    try {
+      ctx.update((a) =>
+        a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
+      );
+      return await this.complete(ctx, creation.name, botId, creation.missing);
+    } finally {
+      if (this.finishing === creation) this.finishing = null;
+    }
   }
 
   /**
@@ -1507,6 +1515,7 @@ export class AccountsEngine {
     if (this.creationGateway === null || this.creationGateway === gatewayId) return;
     this.creationGateway = null;
     this.creating = null;
+    this.finishing = null;
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     this.ctx.update((a) => (a.creation ? { ...a, creation: null } : a));
@@ -1727,6 +1736,7 @@ export class AccountsEngine {
     this.resets += 1;
     this.creating = null;
     this.creationGateway = null;
+    this.finishing = null;
     this.onClose();
     this.kinds.clear();
     this.intents.clear();

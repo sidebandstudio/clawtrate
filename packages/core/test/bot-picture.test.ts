@@ -558,6 +558,35 @@ describe("a bot write is bound to its gateway to the end", () => {
     client.stop();
   });
 
+  it("two windows finish the same first task only once while the returning gateway is being identified", async () => {
+    const { client, fake } = await accountsClient();
+    const identity = deferred<unknown>();
+    try {
+      const { created } = await heldAtTask(client, fake);
+      fake.identityReply = identity.promise;
+      await reconnected(client, fake);
+      await created;
+      expect(client.state.connection.gatewayId).toBeNull();
+      expect(client.state.accounts.creation).toMatchObject({
+        status: "partial",
+        missing: ["task"],
+      });
+      const before = fake.gateway.calls("sessions.create").length;
+      const command = { type: "finishBot", botId: "viral" } as const;
+      const one = createBridgeSession(client).apply(command);
+      const two = createBridgeSession(client).apply(command);
+      const results = Promise.allSettled([one, two]);
+      identity.resolve({ deviceId: "gateway-a" });
+      const outcomes = await results;
+      expect(fake.gateway.calls("sessions.create").length - before).toBe(1);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "rejected"]);
+      expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    } finally {
+      identity.resolve({ deviceId: "gateway-a" });
+      client.stop();
+    }
+  });
+
   it("keeps A's partial across a reconnect to A itself, and its Finish completes it", async () => {
     const { client, fake } = await accountsClient();
     const { created } = await heldAtTask(client, fake);
