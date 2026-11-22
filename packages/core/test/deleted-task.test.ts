@@ -140,6 +140,33 @@ describe("a task deleted elsewhere (F-278)", () => {
     expect(sends()).toHaveLength(1);
     client.stop();
   });
+
+  it("after a reconnect, a message to a run shown active waits for the task's history; the task deleted meanwhile, it is a checked send, refused, and no steer recreates the task", async () => {
+    const { client, gateway, history, transcript, sends } = await shown({ session: null });
+    gateway.emit("agent", agentEvent("run-away", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.state === "running"));
+    // While the connection is down the task is deleted, and its run ends unseen. A steer to the
+    // deleted key would start a new task under it; a send that names the session is refused.
+    history.sessionId = undefined;
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as Send).sessionId) throw new GatewayError(MOVED);
+      return { runId: "run-new", status: "started" };
+    };
+    await sleep(5);
+    gateway.dropAll();
+    client.sendMessage(KEY, "Still there?");
+    expect(transcript().outbox[0]?.mode).toBe("steer");
+    await until(() => sends().length > 0);
+    expect(sends()[0]).toMatchObject({
+      queueMode: "followup",
+      sessionId: "s-1",
+      expectedLeafEntryId: null,
+    });
+    await until(() => transcript().outbox[0]?.status === "failed");
+    expect(transcript().outbox[0]?.error).toBe(TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(1);
+    client.stop();
+  });
 });
 
 describe("a task archived elsewhere (F-277)", () => {

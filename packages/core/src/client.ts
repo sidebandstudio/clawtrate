@@ -3073,6 +3073,23 @@ export class ClawtrateClient {
     }
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
+    // The gateway does not check a steer's task. After a reconnect the run shown active may have
+    // ended unseen, its task deleted with it, so this connection's first read of the task comes
+    // first: a run it settles makes the steer a checked send below.
+    const loadedAt = this.state.transcripts[key]?.loadedAt ?? null;
+    const connectedAt = this.state.connection.connectedAt;
+    if (
+      message.mode === "steer" &&
+      loadedAt !== null &&
+      connectedAt !== null &&
+      loadedAt < connectedAt
+    ) {
+      await this.loadTranscript(key, false, null);
+      message = this.outgoing(key, messageId);
+      if (!message || (message.status !== "sending" && message.status !== "awaiting-access"))
+        return;
+    }
+
     // A pending question holds every send, whatever run it was meant for and whether or not
     // a run is still shown as active: the question's own state is the guard.
     {
