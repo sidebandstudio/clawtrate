@@ -19,6 +19,7 @@
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
+//   finish=release|release-failed   New bot's Finish answers, or is refused, on releaseFinish()
 //   admin=grant               a request for admin access is approved after a moment, or on
 //                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
@@ -59,6 +60,8 @@ export type AccountParams = {
    * answered when the page calls `releasePictureSave()`.
    */
   picturesave: "hold" | "refused" | "unconfirmed" | "release" | null;
+  /** New bot's Finish answered, or refused, when the page calls `releaseFinish()`. */
+  finish: "release" | "release-failed" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -85,6 +88,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
       params.get("picturesave") === "release"
         ? (params.get("picturesave") as "hold" | "refused" | "unconfirmed" | "release")
         : null,
+    finish:
+      params.get("finish") === "release" || params.get("finish") === "release-failed"
+        ? (params.get("finish") as "release" | "release-failed")
+        : null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -107,6 +114,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   keyfails: false,
   keyread: false,
   picturesave: null,
+  finish: null,
 };
 
 const MINUTE = 60_000;
@@ -1103,13 +1111,38 @@ export function accountCommand(
         }),
       );
     }
-    case "finishBot":
-      put((a) =>
-        a.creation
-          ? { ...a, creation: { ...a.creation, status: "created", missing: [], error: null } }
-          : a,
-      );
-      return Promise.resolve({ botId: command.botId, missing: [] });
+    case "finishBot": {
+      // As the host does: nothing is sent for a gateway other than the one connected.
+      if (command.gatewayId !== get().connection.gatewayId)
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
+      const asked = get().connection.gatewayId;
+      const done = () => {
+        // What a gateway answers after another has replaced it changes nothing kept.
+        if (get().connection.gatewayId !== asked) return;
+        put((a) =>
+          a.creation
+            ? { ...a, creation: { ...a.creation, status: "created", missing: [], error: null } }
+            : a,
+        );
+      };
+      if (params.finish === null) {
+        done();
+        return Promise.resolve({ botId: command.botId, missing: [] });
+      }
+      // finish=release: the answer comes when the page calls `releaseFinish()`.
+      return new Promise((resolve, reject) => {
+        (globalThis as unknown as { releaseFinish: () => void }).releaseFinish = () => {
+          if (params.finish === "release-failed") {
+            reject(new Error("Could not finish the bot."));
+            return;
+          }
+          done();
+          resolve({ botId: command.botId, missing: [] });
+        };
+      });
+    }
     case "dismissBotCreation":
       put((a) => ({ ...a, creation: null }));
       return Promise.resolve();

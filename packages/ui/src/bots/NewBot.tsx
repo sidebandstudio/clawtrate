@@ -243,15 +243,22 @@ export function NewBot({
   };
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
-    if (!partial?.botId) return;
+    // Bound as Create is: this opening, on the gateway it was opened on.
+    if (!partial?.botId || !onItsConnection()) return;
     try {
-      const { botId, missing } = await bridge.invoke({ type: "finishBot", botId: partial.botId });
-      if (missing.length > 0) return;
+      const { botId, missing } = await bridge.invoke({
+        type: "finishBot",
+        botId: partial.botId,
+        // The host refuses it unless this is still the gateway it names.
+        gatewayId: now$.current.gatewayId,
+      });
+      // An answer for an opening that has gone, or from a gateway since replaced, changes nothing.
+      if (!onItsConnection() || missing.length > 0) return;
       announce(`Created ${partial.name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      announce(`Could not finish ${partial.name}`);
+      if (onItsConnection()) announce(`Could not finish ${partial.name}`);
     }
   };
 

@@ -1478,9 +1478,9 @@ export class AccountsEngine {
    * (the record of its account, its model with the empty fallback list and
    * effort, the bot list showing it, the first task), never create it again.
    */
-  async finishBot(botId: string): Promise<CreatedBot> {
-    // Bound to the gateway the creation was asked of: never finished on another.
-    return this.boundTo(this.creationGateway ?? undefined, (ctx, mark) =>
+  async finishBot(botId: string, gatewayId?: string): Promise<CreatedBot> {
+    // Bound to the gateway it was asked of, or else the creation's: never finished on another.
+    return this.boundTo(gatewayId ?? this.creationGateway ?? undefined, (ctx, mark) =>
       this.finish(ctx, botId, mark),
     );
   }

@@ -850,3 +850,51 @@ for (const [then, landsOn] of [
       await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^First/);
     }
   });
+
+/** New bot with a partial creation, its Finish clicked and its answer held. */
+async function heldFinish(page: Page, outcome: "release" | "release-failed") {
+  await openFixture(page, `${ADMIN}&create=partial&finish=${outcome}`, "dark");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByTestId("create").click();
+  await page.getByTestId("create-partial").getByRole("button", { name: "Finish Viral" }).click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "finishBot").length)
+    .toBe(1);
+}
+const releaseFinish = (page: Page) =>
+  page.evaluate(() => (window as unknown as { releaseFinish: () => void }).releaseFinish());
+
+test("F-034: a Finish answered after its dialog closed doesn't close, clear or select for the one opened since", async ({
+  page,
+}) => {
+  await heldFinish(page, "release");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  await releaseFinish(page);
+  await settled(page);
+  await expect(page.getByTestId("new-bot")).toBeVisible();
+  expect((await sent(page)).map((each) => each.type)).not.toContain("dismissBotCreation");
+  await expect(page.getByTestId("b-announcer")).not.toHaveText(/^Created Viral$|Could not finish/);
+  await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
+});
+
+for (const outcome of ["release", "release-failed"] as const)
+  test(`F-034: a Finish ${outcome === "release" ? "success" : "refusal"} from a gateway since replaced at the same address changes nothing visible`, async ({
+    page,
+  }) => {
+    await heldFinish(page, outcome);
+    await identify(page, "gateway-b", true);
+    await releaseFinish(page);
+    await settled(page);
+    await expect(page.getByTestId("new-bot")).toBeVisible();
+    expect((await sent(page)).map((each) => each.type)).not.toContain("dismissBotCreation");
+    await expect(page.getByTestId("b-announcer")).not.toHaveText(
+      /^Created Viral$|Could not finish/,
+    );
+    await expect(page.locator(".title-pill").first()).toHaveAttribute("aria-label", /^Otto/);
+  });

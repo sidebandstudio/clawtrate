@@ -530,7 +530,11 @@ describe("a bot write is bound to its gateway to the end", () => {
     await until(() => client.state.connection.gatewayId === "gateway-b");
     await created;
     await expect(
-      createBridgeSession(client).apply({ type: "finishBot", botId: "viral" }),
+      createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
     ).rejects.toThrow();
     expect(sentSince(fake, from)).toEqual([]);
     client.stop();
@@ -545,12 +549,11 @@ describe("a bot write is bound to its gateway to the end", () => {
     const from = requested(fake);
     await reconnected(client, fake);
     await created;
-    const finished = createBridgeSession(client)
-      .apply({ type: "finishBot", botId: "viral" })
-      .then(
-        () => "finished",
-        (error: Error) => error.message,
-      );
+    // Asked without naming a gateway, as a caller inside the host may: the creation's is used.
+    const finished = client.finishBot("viral").then(
+      () => "finished",
+      (error: Error) => error.message,
+    );
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     identity.resolve({ deviceId: "gateway-b" });
     expect(await finished).toMatch("gateway changed");
@@ -594,11 +597,54 @@ describe("a bot write is bound to its gateway to the end", () => {
     await until(() => client.state.connection.gatewayId === "gateway-a");
     expect(await created).toEqual({ botId: "viral", missing: ["task"] });
     expect(client.state.accounts.creation).toMatchObject({ status: "partial", botId: "viral" });
-    expect(await createBridgeSession(client).apply({ type: "finishBot", botId: "viral" })).toEqual({
-      botId: "viral",
-      missing: [],
-    });
+    expect(
+      await createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
     expect(client.state.accounts.creation).toMatchObject({ status: "created", botId: "viral" });
+    client.stop();
+  });
+
+  it("never runs A's Finish, delivered late, on B's own unfinished bot of the same id", async () => {
+    const { client, fake } = await accountsClient();
+    fake.identity = "gateway-b";
+    await reconnected(client, fake);
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    // On B, a bot of the same id is left unfinished: its first task was not made.
+    const original = fake.gateway.handlers["sessions.create"]!;
+    fake.gateway.handlers["sessions.create"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+    };
+    expect(
+      await createBridgeSession(client).apply({
+        type: "createBot",
+        ...input,
+        gatewayId: "gateway-b",
+      }),
+    ).toEqual({ botId: "viral", missing: ["task"] });
+    fake.gateway.handlers["sessions.create"] = original;
+    const from = requested(fake);
+    // A Finish from a New bot opened on A, delivered only now.
+    await expect(
+      createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-a",
+      }),
+    ).rejects.toThrow("made for another gateway");
+    expect(sentSince(fake, from)).toEqual([]);
+    expect(client.state.accounts.creation).toMatchObject({ status: "partial", botId: "viral" });
+    // B's own Finish finishes it.
+    expect(
+      await createBridgeSession(client).apply({
+        type: "finishBot",
+        botId: "viral",
+        gatewayId: "gateway-b",
+      }),
+    ).toEqual({ botId: "viral", missing: [] });
     client.stop();
   });
 

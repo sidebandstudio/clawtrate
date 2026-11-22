@@ -4868,9 +4868,14 @@ export class ClawtrateClient {
     return this.accounts.createBot(input, gatewayId as string);
   }
 
-  /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
-  finishBot(botId: string): Promise<CreatedBot> {
-    return this.accounts.finishBot(botId);
+  /**
+   * Finish a bot whose creation is partial, by its id: what is missing, never a second bot. With
+   * `gatewayId`, as for `createBot`, nothing is sent unless it is still the gateway connected.
+   */
+  async finishBot(botId: string, gatewayId?: string | null): Promise<CreatedBot> {
+    if (gatewayId === undefined) return this.accounts.finishBot(botId);
+    await this.requireSameGateway(gatewayId);
+    return this.accounts.finishBot(botId, gatewayId as string);
   }
 
   dismissBotCreation(): void {

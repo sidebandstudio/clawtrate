@@ -289,8 +289,8 @@ export type BridgeCommand =
       gatewayId: string | null;
     }
   | { type: "dismissBotCreation" }
-  /** Finish a bot whose creation is partial, by its id. */
-  | { type: "finishBot"; botId: string }
+  /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
+  | { type: "finishBot"; botId: string; gatewayId: string | null }
   | {
       type: "changeBotAccount";
       botId: string;
@@ -1077,9 +1077,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "dismissBotCreation":
       return { type: command.type };
     case "checkLock":
-    case "finishBot":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
+    case "finishBot":
+      return {
+        type: "finishBot",
+        botId: botId(command.botId),
+        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+      };
     case "startSignIn":
       return {
         type: "startSignIn",
@@ -1832,7 +1837,7 @@ class ViewerSession implements BridgeSession {
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
-        return client.finishBot(command.botId);
+        return client.finishBot(command.botId, command.gatewayId);
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,
