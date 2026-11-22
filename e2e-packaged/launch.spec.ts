@@ -535,12 +535,15 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
       stdio: "ignore",
     });
     copy = gated.child;
-    const found = processIdentity(copy.pid!);
-    if (found.state !== "alive") {
+    // Until the record names it, a failure aborts the gate, so the copy never starts.
+    try {
+      const found = processIdentity(copy.pid!);
+      if (found.state !== "alive") throw new Error("could not record the copy's process");
+      recordSuccessor(RECORD, { pid: copy.pid!, identity: found.identity });
+    } catch (error) {
       gated.abort();
-      throw new Error("could not record the copy's process");
+      throw error;
     }
-    recordSuccessor(RECORD, { pid: copy.pid!, identity: found.identity });
     gated.release();
   }
   // A copy that cannot start emits `error` and may never emit `exit`: either ends the wait.
@@ -574,10 +577,11 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     // Closed too soon, the copy could quit before it asks for the dictionary,
     // so wait until the log on disk shows the request. Chromium writes events
     // only once 15 are waiting, and an idle app logs none, so a request can
-    // sit unwritten until the app quits. Each picture the page asks for logs
-    // more than 15, and events are written in order, so asking for pictures
-    // until one shows brings every earlier event to disk. On macOS, which asks
-    // for no dictionary, that a picture shows checks this wait works.
+    // sit unwritten until the app quits. Each picture the page asks for adds
+    // events, and events are written in the order they happen, so asking for
+    // one more picture until one shows brings every earlier event to disk. On
+    // macOS, which asks for no dictionary, that a picture shows checks this
+    // wait works.
     let picture = 0;
     await expect
       .poll(
