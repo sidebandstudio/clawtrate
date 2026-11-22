@@ -152,6 +152,10 @@ export const SANDBOX_SWITCHES = [
   "inspect",
   "inspect-brk",
   "clawtrate-setup-sandbox",
+  // A packaged launch check's own Keychain name (`keychainCheckName`).
+  "clawtrate-keychain-check",
+  // Chromium's in-memory stand-in for the Keychain: anything sealed under it is gone at exit.
+  "use-mock-keychain",
 ] as const;
 
 /**

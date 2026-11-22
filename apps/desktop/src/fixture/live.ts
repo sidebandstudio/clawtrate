@@ -855,11 +855,17 @@ export function liveCommand(
                   ? { ...each, state: "cancelled" }
                   : each,
             ),
-            // As the engine does: nothing starts by itself after a confirmed Stop.
+            // As the engine does: nothing starts by itself after a confirmed Stop, and a steer
+            // the gateway still held is withdrawn.
             outbox: transcript.outbox.map((each) =>
               each.status === "queued" || each.status === "held"
                 ? { ...each, status: "not-sent", runId: null }
-                : each,
+                : each.mode === "steer" &&
+                    each.status === "sent" &&
+                    each.runId === command.runId &&
+                    each.steer === undefined
+                  ? { ...each, status: "not-sent", steer: "withdrawn", runId: null }
+                  : each,
             ),
           })),
         400,

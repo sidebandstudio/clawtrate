@@ -19,14 +19,13 @@ function gatewayWithWaitingRun() {
     expiresAtMs: Date.now() + 600_000,
   };
   let pending = true;
-  let steers = 0;
   gateway.handlers["exec.approval.list"] = () => (pending ? [approval] : []);
   gateway.handlers["plugin.approval.list"] = () => [];
   gateway.handlers["openclaw.approval.list"] = () => [];
   gateway.handlers["question.list"] = () => ({ questions: [] });
-  gateway.handlers["chat.send"] = () => {
-    // Each steer is held as a queued turn of its own.
-    const id = `steer-${(steers += 1)}`;
+  gateway.handlers["chat.send"] = (params) => {
+    // Each steer is held as a queued turn of its own, under its send's key, as the gateway does.
+    const id = (params as { idempotencyKey: string }).idempotencyKey;
     queued.push(id);
     return { runId: id, status: "started", messageSeq: 5 };
   };
@@ -57,7 +56,13 @@ function gatewayWithWaitingRun() {
   });
   gateway.handlers["chat.abort"] = (params) => {
     const { runId } = params as { runId: string };
-    if (runId !== RUN) return { ok: true, aborted: true, runIds: [runId] };
+    if (runId !== RUN) {
+      // A steer it still holds is withdrawn, and no longer held; any other id stops nothing.
+      const held = queued.indexOf(runId);
+      if (held < 0) return { ok: true, aborted: false, runIds: [] };
+      queued.splice(held, 1);
+      return { ok: true, aborted: true, runIds: [runId] };
+    }
     // The waiting run is aborted: the gateway settles its approval and ends the run.
     pending = false;
     setTimeout(() => {
@@ -101,10 +106,16 @@ async function stopNewest(task: Task) {
   await task.client.stopRun(KEY, active.at(-1)!.id);
 }
 
-async function stoppedRightly(task: Task) {
+async function stoppedRightly(task: Task, withdrawn = 0) {
   await until(() => run(task)?.state === "stopped");
-  // The abort named the waiting run itself, and the gateway's end is that same run's.
-  expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: RUN }]);
+  // Each steer the gateway took is withdrawn first, by its own id (its idempotency key); then
+  // the abort names the waiting run itself, and the gateway's end is that same run's.
+  const steers = task.transcript().outbox.filter((message) => message.steer === "withdrawn");
+  expect(steers).toHaveLength(withdrawn);
+  expect(task.gateway.calls("chat.abort")).toEqual([
+    ...steers.map((message) => ({ sessionKey: KEY, runId: message.id })),
+    { sessionKey: KEY, runId: RUN },
+  ]);
   expect(run(task)).toMatchObject({ state: "stopped", outcomeKnown: true });
   // Its approval was settled by the gateway's own record, not only hidden here.
   await until(() => task.transcript().approvals[0]?.status !== "pending");
@@ -116,11 +127,11 @@ async function stoppedRightly(task: Task) {
 describe("Stop after a steer (F-097, F-169)", () => {
   it("F-097 F-169: Stop after a steer into a run waiting on an approval aborts that run, which the gateway ends and whose approval it settles", async () => {
     const task = await waiting();
-    task.client.sendMessage(KEY, "Only the notes folder.");
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
     await until(() => task.gateway.calls("chat.history").length >= 2);
-    await until(() => run(task, "steer-1") !== undefined);
+    await until(() => run(task, sent) !== undefined);
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 1);
     task.client.stop();
   });
 
@@ -131,7 +142,7 @@ describe("Stop after a steer (F-097, F-169)", () => {
     await until(() => task.gateway.calls("chat.send").length === 2);
     await sleep(100);
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 2);
     task.client.stop();
   });
 
@@ -146,12 +157,12 @@ describe("Stop after a steer (F-097, F-169)", () => {
       task.gateway.emit("session.message", { sessionKey: KEY });
       return answer.promise.then(() => reply);
     };
-    task.client.sendMessage(KEY, "Only the notes folder.");
-    await until(() => run(task, "steer-1") !== undefined);
+    const sent = task.client.sendMessage(KEY, "Only the notes folder.");
+    await until(() => run(task, sent) !== undefined);
     answer.resolve(undefined);
     await until(() => task.transcript().outbox[0]?.status === "sent");
     await stopNewest(task);
-    await stoppedRightly(task);
+    await stoppedRightly(task, 1);
     task.client.stop();
   });
 

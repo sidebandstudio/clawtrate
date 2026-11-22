@@ -15,6 +15,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  safeStorage,
   session,
   shell,
   type WebContents,
@@ -24,11 +25,23 @@ import { tmpdir } from "node:os";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { STATE_FILE } from "@clawtrate/core/node";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
+import {
+  keychainCheckName,
+  keepAside,
+  KEYCHAIN_CHECK_SWITCH,
+  MOCK_KEYCHAIN_SWITCH,
+  RECOVERY_BUTTONS,
+  safeStorageBox,
+  SESSION_ONLY,
+  startupFailure,
+  usesSecureStorage,
+} from "./secret-box.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -132,6 +145,15 @@ const STARTUP = desktopStartup(SETUP, {
   privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
 });
 if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
+/** A packaged launch check's own app name, set before safeStorage reads it for its Keychain item. */
+const KEYCHAIN_CHECK = keychainCheckName(
+  SETUP,
+  app.isPackaged,
+  process.platform,
+  switchValue(KEYCHAIN_CHECK_SWITCH),
+  hasSwitch(MOCK_KEYCHAIN_SWITCH),
+);
+if (KEYCHAIN_CHECK) app.setName(KEYCHAIN_CHECK);
 
 /**
  * The checkout whose run records prove a sandbox's run: this development
@@ -357,17 +379,65 @@ async function main(): Promise<void> {
   }
 
   const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
-  runtime = await startHostRuntime({
-    kind: "desktop",
-    displayName: "Clawtrate Desktop",
-    dataDir: privateDataDir(),
-    // A sandboxed or refused start (every development build and automated run) has no
-    // development gateway, doesn't auto-connect and never resumes a saved gateway.
-    devGateway: STARTUP.devGateway,
-    recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
-    autoConnectDev: STARTUP.autoConnectDev,
-    resume: STARTUP.resume,
-  });
+  try {
+    runtime = await startHostRuntime({
+      kind: "desktop",
+      displayName: "Clawtrate Desktop",
+      dataDir: privateDataDir(),
+      // This device's credentials in the Keychain: a person's app on macOS, or a launch check's.
+      ...(usesSecureStorage(
+        SETUP,
+        process.platform,
+        KEYCHAIN_CHECK,
+        hasSwitch(MOCK_KEYCHAIN_SWITCH),
+      )
+        ? { secretBox: safeStorageBox(safeStorage, process.platform) }
+        : {}),
+      // A sandboxed or refused start (every development build and automated run) has no
+      // development gateway, doesn't auto-connect and never resumes a saved gateway.
+      devGateway: STARTUP.devGateway,
+      recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
+      autoConnectDev: STARTUP.autoConnectDev,
+      resume: STARTUP.resume,
+    });
+  } catch (error) {
+    // Nothing has connected and no window is open: say so in fixed words, and leave.
+    const { title, message, recover } = startupFailure(error);
+    if (!recover) {
+      dialog.showErrorBox(title, message);
+      app.exit(1);
+      return;
+    }
+    // A damaged record or unreadable settings: start fresh, keeping those files, or quit.
+    const choice = dialog.showMessageBoxSync({
+      type: "error",
+      title,
+      message: title,
+      detail: message,
+      buttons: [...RECOVERY_BUTTONS],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (choice === 0) {
+      try {
+        const dir = privateDataDir();
+        await keepAside(recover === "settings" ? join(dir, STATE_FILE) : dir, new Date());
+        app.relaunch();
+        app.exit(0);
+      } catch {
+        dialog.showErrorBox(
+          title,
+          "Clawtrate couldn't set the old files aside. Nothing was changed.",
+        );
+        app.exit(1);
+      }
+      return;
+    }
+    app.exit(1);
+    return;
+  }
+  if ((await runtime.credentialStatus?.()) === "session")
+    void dialog.showMessageBox({ type: "warning", ...SESSION_ONLY });
   const { client, info, policy } = runtime;
   const userDir = app.getPath("userData");
   const updates = await startDesktopUpdates({

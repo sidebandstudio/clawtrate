@@ -3,7 +3,7 @@
 // and attachments (docs/design/conversation.md). The fixture answers the
 // engine's commands closely enough for the interface; what depends on the
 // gateway is proven in e2e/. Each title starts with the rows it covers.
-import type { Run } from "../packages/core/src/runs.ts";
+import type { OutgoingMessage, Run } from "../packages/core/src/runs.ts";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
@@ -52,6 +52,29 @@ async function setRun(page: Page, change: Record<string, unknown>) {
       };
     });
   }, change);
+}
+
+/** Change every outgoing message of the task, as the host's next snapshot would. */
+async function setOutbox(page: Page, change: (message: OutgoingMessage) => OutgoingMessage) {
+  await page.evaluate((source) => {
+    const map = new Function(`return ${source}`)() as (m: OutgoingMessage) => OutgoingMessage;
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: { ...transcript, outbox: transcript.outbox.map(map) },
+        },
+      };
+    });
+  }, change.toString());
 }
 
 test.describe("sending", () => {
@@ -1019,6 +1042,119 @@ test.describe("steering, queueing and holding", () => {
     await page.keyboard.press("Enter");
     const steer = page.getByTestId("outgoing").filter({ hasText: "Skip the photos folder" });
     await expect(steer.locator(".msg-caption")).toHaveText("Steer requested");
+    // Captioned Steer once the gateway's record says the run took it in.
+    await setOutbox(page, (message) =>
+      message.text === "Skip the photos folder" ? { ...message, steer: "joined" } : message,
+    );
+    await expect(steer.locator(".msg-caption")).toHaveText("Steer");
+    // A row history places inside a run that began before it is captioned Steer there too.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const last = transcript.items.findLast((item) => item.role === "user")!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              items: transcript.items.map((item) =>
+                item === last ? { ...item, steered: true } : item,
+              ),
+            },
+          },
+        };
+      });
+    });
+    await expect(
+      page
+        .getByTestId("transcript-turn")
+        .locator(".msg-caption")
+        .filter({ hasText: /^Steer$/ }),
+    ).toHaveCount(1);
+  });
+
+  test("F-097 F-468: Stop withdraws a steer the gateway still holds: it is Not sent, Send sends it again, and the note says nothing may still run", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Skip the photos folder");
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Stop Otto" }).click();
+    const note = page.getByTestId("stop-note");
+    await expect(note).toContainText("Completed actions are not undone.");
+    await expect(note).not.toContainText("may still run");
+    const row = page.getByTestId("shelf-row");
+    await expect(row).toContainText("Not sent");
+    await expect(row).toContainText("Skip the photos folder");
+    const steer = page.getByTestId("outgoing").filter({ hasText: "Skip the photos" });
+    await expect(steer).toHaveCount(0);
+    // A steer whose withdrawal the gateway did not confirm: the note says it may still run.
+    await setOutbox(page, (message) => {
+      if (message.steer !== "withdrawn") return message;
+      const sent = { ...message, status: "sent" as const, runId: "run-live", leftAt: Date.now() };
+      delete sent.steer;
+      return sent;
+    });
+    await expect(note).toContainText("The gateway may still run messages it already accepted.");
+    // One the gateway's record shows the run took in is part of the stopped turn.
+    await setOutbox(page, (message) =>
+      message.text === "Skip the photos folder" ? { ...message, steer: "joined" } : message,
+    );
+    await expect(note).not.toContainText("may still run");
+    await setOutbox(page, (message) =>
+      message.text === "Skip the photos folder"
+        ? { ...message, status: "not-sent", runId: null, steer: "withdrawn" }
+        : message,
+    );
+    await row.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+    await expect(steer).toHaveCount(1);
+  });
+
+  test("F-097: a steer whose send timed out and that the gateway did not withdraw keeps the Stop note's warning", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Skip the photos folder");
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Stop Otto" }).click();
+    const note = page.getByTestId("stop-note");
+    await expect(note).toContainText("Completed actions are not undone.");
+    // Its send's answer never came (no run named), its withdrawal was declined: only the alias
+    // its key got as it left names the stopped run.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const steer = transcript.outbox.find((each) => each.text === "Skip the photos folder")!;
+        const unknown = { ...steer, status: "unknown" as const, runId: null, leftAt: Date.now() };
+        delete unknown.steer;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              outbox: transcript.outbox.map((each) => (each === steer ? unknown : each)),
+              steerAliases: { ...transcript.steerAliases, [steer.id]: "run-live" },
+            },
+          },
+        };
+      });
+    });
+    await expect(note).toContainText("The gateway may still run messages it already accepted.");
   });
 
   test("F-101: a run stopped after three tool calls in a row timed out says so, in the stop note's form", async ({

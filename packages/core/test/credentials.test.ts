@@ -635,7 +635,9 @@ describe("a refused device token never removes a newer one", () => {
       return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
     };
     // The other client's hello save waits, and so does this client's reconnect after the
-    // approval, before it opens a socket: the other client's socket still owns the key.
+    // approval, before it opens a socket: the other client's socket still owns the key. The
+    // reconnect's is the first read once the rotated token is saved (the approval's own write
+    // reads the record before it).
     const otherHeld = deferred<void>();
     const reconnectHeld = deferred<void>();
     let holdReconnect = false;
@@ -647,7 +649,11 @@ describe("a refused device token never removes a newer one", () => {
         holdOther = false;
         otherWaiting = true;
         await otherHeld.promise;
-      } else if (holdReconnect && key === tokenKey(URL_A)) {
+      } else if (
+        holdReconnect &&
+        key === tokenKey(URL_A) &&
+        JSON.parse(storage.data.get(key) ?? "{}").token === "token-R"
+      ) {
         holdReconnect = false;
         reconnectWaiting = true;
         await reconnectHeld.promise;
