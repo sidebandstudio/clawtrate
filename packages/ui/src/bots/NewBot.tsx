@@ -69,8 +69,10 @@ export function NewBot({
   // This opening of the dialog: whether it still stands, the gateway it was opened on, the draft
   // as it is now, and whether a Create is being prepared or sent.
   const open = useRef(true);
-  const [gateway] = useState(() => connection.gatewayId ?? connection.gatewayUrl);
-  const [gatewayId] = useState(() => connection.gatewayId);
+  // The connection it was opened on: its address and when it connected. The gateway's identity
+  // may arrive after the dialog opens, on the same connection, and is sent as it is then.
+  const [gateway] = useState(() => connection.gatewayUrl);
+  const [connectedAt] = useState(() => connection.connectedAt);
   const now$ = useRef(connection);
   const latest = useRef(draft);
   const pending = useRef(false);
@@ -89,7 +91,8 @@ export function NewBot({
   const stands = () =>
     open.current &&
     now$.current.status === "connected" &&
-    (now$.current.gatewayId ?? now$.current.gatewayUrl) === gateway &&
+    now$.current.gatewayUrl === gateway &&
+    now$.current.connectedAt === connectedAt &&
     latest.current === draft;
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
@@ -203,7 +206,8 @@ export function NewBot({
         provider,
         model: sent.model,
         effort: sent.effort,
-        gatewayId,
+        // The host refuses it unless this is still the gateway, and the connection, it names.
+        gatewayId: now$.current.gatewayId,
       });
       // An answer for an opening that has gone, or a draft changed since, closes and clears nothing.
       if (!open.current || latest.current !== sent) return;
@@ -507,13 +511,24 @@ export function NewBot({
           data-variant="primary"
           data-size="lg"
           disabled={
-            busy || preparing || partial !== null || !draft.account || !listedChoice || !draft.model
+            busy ||
+            preparing ||
+            partial !== null ||
+            !draft.account ||
+            !listedChoice ||
+            !draft.model ||
+            connection.gatewayId === null
           }
           onClick={() => void create()}
           data-testid="create"
         >
           {busy || preparing ? "Creating…" : "Create"}
         </button>
+        {connection.gatewayId === null && (
+          <p className="b-hint" role="status" style={{ textAlign: "center", margin: 0 }}>
+            Waiting for the gateway to say which gateway it is.
+          </p>
+        )}
         {!draft.account && !busy && (
           <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
             Choose an account, or let the gateway choose.

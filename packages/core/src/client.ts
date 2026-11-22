@@ -4901,9 +4901,25 @@ export class ClawtrateClient {
     return this.accounts.setBotPicture(botId, avatar);
   }
 
-  /** Refuse a change made while another gateway was connected, before anything is sent. */
+  /**
+   * Refuse a change unless it was made for the gateway connected now, as a check-in save does:
+   * both identities known and equal, and the same connection before and after reading this
+   * one's. A missing identity on either side is a refusal, never a match.
+   */
   private async requireSameGateway(gatewayId: string | null): Promise<void> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.state.connection.status === "connected";
+    if (!alive()) throw new Error("Not connected to the gateway.");
+    if (gatewayId === null)
+      throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
     const here = await this.readGatewayIdentity();
+    if (!alive()) throw new Error("The connection changed before the change was sent.");
+    // `gatewayId` is known here, so a gateway that names none (null) never matches it.
     if (here !== gatewayId)
       throw new Error("This change was made for another gateway, so nothing was sent.");
   }

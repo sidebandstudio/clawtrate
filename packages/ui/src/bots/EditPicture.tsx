@@ -52,6 +52,11 @@ export function EditPicture({
   // Layout effects, so the guard changes as the dialog is committed, before a save can resume.
   const live = useRef(true);
   const allowed = useRef(canSave);
+  // The gateway's identity as the pane has it now, sent with the picture for the host to check.
+  const gateway = useRef(gatewayId);
+  useLayoutEffect(() => {
+    gateway.current = gatewayId;
+  }, [gatewayId]);
   useLayoutEffect(() => {
     allowed.current = canSave;
   }, [canSave]);
@@ -75,7 +80,7 @@ export function EditPicture({
         type: "setBotPicture",
         botId: bot.id,
         avatar,
-        gatewayId,
+        gatewayId: gateway.current,
       });
       if (!stands()) return;
       if (!confirmed) {

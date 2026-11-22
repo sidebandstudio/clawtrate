@@ -26,7 +26,6 @@ type PictureSession = {
   token: number;
   botId: string;
   gateway: string | null;
-  gatewayId: string | null;
   connectedAt: number | null;
 };
 
@@ -119,7 +118,7 @@ export function WorkPanel({
   const tokens = useRef(0);
   const current = useRef<number | null>(null);
   const canEditPicture = connection.canAdmin && online;
-  const gatewayKey = connection.gatewayId ?? connection.gatewayUrl;
+  const gatewayKey = connection.gatewayUrl;
   const editing =
     pictureSession !== null &&
     canEditPicture &&
@@ -171,7 +170,6 @@ export function WorkPanel({
                   token: ++tokens.current,
                   botId: bot.id,
                   gateway: gatewayKey,
-                  gatewayId: connection.gatewayId,
                   connectedAt,
                 })
               }
@@ -185,7 +183,7 @@ export function WorkPanel({
             <EditPicture
               key={pictureSession.token}
               bot={bot}
-              gatewayId={pictureSession.gatewayId}
+              gatewayId={connection.gatewayId}
               canSave={canEditPicture}
               onClose={() => {
                 const token = pictureSession.token;

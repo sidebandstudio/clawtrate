@@ -117,8 +117,10 @@ export class AccountsGateway {
   failPatch: string | null = null;
   /** Answer `agents.update` but list the bot without the picture, as a gateway that dropped it. */
   keepNoPicture = false;
-  /** The gateway's identity (`gateway.identity.get`). */
+  /** The gateway's identity (`gateway.identity.get`); empty for a gateway that names none. */
   identity = "gateway-a";
+  /** An answer to `gateway.identity.get` the test settles when it chooses. */
+  identityReply: Promise<unknown> | null = null;
   /** Fail `agents.list` once an `agents.update` has been taken. */
   failListAfterUpdate = false;
   private updated = false;
@@ -141,7 +143,8 @@ export class AccountsGateway {
     g.handlers["question.list"] = () => ({ questions: [] });
     for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"])
       g.handlers[method] = () => [];
-    g.handlers["gateway.identity.get"] = () => ({ deviceId: this.identity });
+    g.handlers["gateway.identity.get"] = () =>
+      this.identityReply ?? (this.identity ? { deviceId: this.identity } : {});
     g.handlers["agents.list"] = () => {
       if (this.failListAfterUpdate && this.updated)
         throw new GatewayError({ code: "UNAVAILABLE", message: "list unavailable" });

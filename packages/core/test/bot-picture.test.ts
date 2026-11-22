@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { avatarFor, pictureWithChoice } from "../src/avatar.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { accountsClient } from "./accounts-fake.ts";
+import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
+import { deferred, until } from "./fake-gateway.ts";
 
 /** A 2×2 PNG carrying a creature choice, as New bot and Edit picture send it. */
 const PICTURE = pictureWithChoice(
@@ -50,6 +51,72 @@ describe("F-037: changing a bot's picture", () => {
       }),
     ).rejects.toThrow("made for another gateway");
     expect(fake.gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
+  it("refuses a missing gateway identity on either side, never matching two missing ones", async () => {
+    // The dialog was opened before the gateway said which gateway it is.
+    const named = await accountsClient();
+    await expect(named.client.setBotPicture("otto", PICTURE, null)).rejects.toThrow(
+      "hasn't said which gateway it is",
+    );
+    named.client.stop();
+    // A gateway that names none, with a dialog that has no identity either.
+    const fake = new AccountsGateway();
+    fake.identity = "";
+    const unnamed = await accountsClient({ gateway: fake });
+    await expect(unnamed.client.setBotPicture("otto", PICTURE, null)).rejects.toThrow(
+      "hasn't said which gateway it is",
+    );
+    await expect(unnamed.client.setBotPicture("otto", PICTURE, "gateway-a")).rejects.toThrow(
+      "made for another gateway",
+    );
+    expect(fake.gateway.calls("agents.update")).toEqual([]);
+    unnamed.client.stop();
+  });
+
+  it("refuses when the connection is replaced while the gateway's identity is being read", async () => {
+    const { client, fake } = await accountsClient();
+    const replaced = async () => {
+      const was = client.state.connection.connectedAt;
+      fake.gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was,
+      );
+    };
+    // A new connection whose identity is slow to come.
+    const reply = deferred<unknown>();
+    fake.identityReply = reply.promise;
+    await replaced();
+    // Each outcome is caught at once, so neither refusal goes unhandled while the other is awaited.
+    const outcome = (pending: Promise<unknown>) =>
+      pending.then(
+        () => "sent",
+        (error: Error) => error.message,
+      );
+    const picture = outcome(client.setBotPicture("otto", PICTURE, "gateway-a"));
+    const created = outcome(
+      client.createBot(
+        {
+          name: "Viral",
+          avatar: null,
+          account: "acme:home",
+          provider: "acme",
+          model: "dev-1",
+          effort: null,
+        },
+        "gateway-a",
+      ),
+    );
+    // Replaced again before the identity arrives: the answer belongs to a connection now gone.
+    await replaced();
+    reply.resolve({ deviceId: "gateway-a" });
+    expect(await picture).toMatch("connection changed");
+    expect(await created).toMatch("connection changed");
+    expect(fake.gateway.calls("agents.update")).toEqual([]);
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
     client.stop();
   });
 
