@@ -122,8 +122,8 @@ static BOOL readAt(int fd, unsigned char *buf, size_t size, off_t at) {
 static BOOL preflight(int fd) {
     unsigned char end[22], record[46], local[30];
     struct stat info;
-    if (fstat(fd, &info) != 0 || info.st_size < 22) return NO;
-    const off_t endAt = info.st_size - 22;
+    if (fstat(fd, &info) != 0) return NO;
+    const off_t endAt = info.st_size - 22; // pread refuses it below zero.
     // A 32-bit end record at EOF with no comment, on one disk.
     if (!readAt(fd, end, 22, endAt) || le32(end) != 0x06054b50 || le16(end + 20)) return NO;
     if (le16(end + 4) || le16(end + 6) || le16(end + 8) != le16(end + 10)) return NO;

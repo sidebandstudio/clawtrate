@@ -201,6 +201,10 @@ const refused: [string, (dir: string) => Buffer][] = [
       zipTool(dir, "comment", "/usr/bin/zip", ["-qrz", "out.zip", "Clawtrate.app"], "note\n"),
   ],
   [
+    "an end record without its signature",
+    () => edited((bytes) => bytes.writeUInt32LE(0, endAt(bytes))),
+  ],
+  [
     "a comment length in the end record",
     () => edited((bytes) => bytes.writeUInt16LE(1, endAt(bytes) + 20)),
   ],
