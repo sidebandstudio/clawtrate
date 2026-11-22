@@ -802,6 +802,8 @@ async function deviceIdUnderKeychainCheck(
   }
   gated.release();
   let cdp: Browser | undefined;
+  let shown = "";
+  let failure: unknown = null;
   try {
     cdp = await chromium.connectOverCDP(`http://127.0.0.1:${await debuggingPort(userData, child)}`);
     await expect.poll(() => cdp!.contexts().flatMap((context) => context.pages()).length).toBe(1);
@@ -813,10 +815,22 @@ async function deviceIdUnderKeychainCheck(
         const { state } = (await host.hello()) as { state: { connection: { deviceId: string } } };
         return state.connection.deviceId ?? null;
       });
-    await expect.poll(read, { timeout: 30_000 }).not.toBe(null);
-    const deviceId = await read();
-    await act(view);
-    return deviceId;
+    try {
+      await expect.poll(read, { timeout: 30_000 }).not.toBe(null);
+      const deviceId = await read();
+      await act(view);
+      return deviceId;
+    } catch (error) {
+      failure = error;
+      shown = await view
+        .locator("body")
+        .innerText({ timeout: 2_000 })
+        .catch(() => "");
+      throw error;
+    }
+  } catch (error) {
+    failure ??= error;
+    throw error;
   } finally {
     const quit = await quitWithin(
       () => child.kill("SIGTERM"),
@@ -830,6 +844,17 @@ async function deviceIdUnderKeychainCheck(
     }
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
     closeSync(logFd);
+    // What the run saw, for a failure: the app's own lines and the page's words, which hold no
+    // credential (the test checks the log for them), and the first error.
+    if (failure || !quit)
+      console.log(
+        [
+          `--- ${dir}: ${failure ? String(failure).slice(0, 600) : "no error before the quit"}`,
+          `--- page: ${shown.slice(0, 600)}`,
+          `--- app log:`,
+          readFileSync(join(dir, "app.log"), "utf8").slice(-4_000),
+        ].join("\n"),
+      );
     expect(quit, "the app quits within 15 seconds").toBe(true);
     expect(processesUsing(userData), "the app's helpers end with it").toEqual([]);
   }
