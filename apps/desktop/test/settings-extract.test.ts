@@ -278,6 +278,43 @@ describe("what is taken from the settings", () => {
     },
   );
 
+  /** A file whose `env` or `env.vars` sets the login-shell switch to this value, with the auth mode absent or token. */
+  const withSwitch = (where: "env" | "vars", value: unknown, mode = "") => {
+    const declared = `OPENCLAW_LOAD_SHELL_ENV: ${JSON.stringify(value)}`;
+    const env = where === "env" ? `{ ${declared} }` : `{ vars: { ${declared} } }`;
+    return `{ env: ${env}, ${withGateway(`{ auth: { ${mode}token: "${TOKEN}" } }`).slice(1)}`;
+  };
+
+  // OpenClaw reads the switch with `isTruthyEnvValue`: on for true, 1, yes and on, in any case
+  // and trimmed; anything else off. It applies only string values.
+  describe.each(["env", "vars"] as const)("the login-shell switch in %s", (where) => {
+    it.each(["0", "false", "off", "no", " OFF ", "", "maybe"])(
+      "takes an implicit mode when it is %j",
+      (value) => {
+        expect(extract(withSwitch(where, value))).toEqual({
+          kind: "found",
+          token: TOKEN,
+          port: 18789,
+        });
+      },
+    );
+
+    it.each([true, 1])("takes an implicit mode when it isn't text (%j)", (value) => {
+      expect(extract(withSwitch(where, value))).toMatchObject({ kind: "found" });
+    });
+
+    it.each(["1", "true", "yes", "on", " On ", "TRUE", "${LOAD_SHELL}"])(
+      "refuses an implicit mode when it is %j",
+      (value) => {
+        expect(extract(withSwitch(where, value))).toEqual(refused("credential", "password"));
+      },
+    );
+
+    it("takes an explicit token when it is on", () => {
+      expect(extract(withSwitch(where, "1", 'mode: "token", '))).toMatchObject({ kind: "found" });
+    });
+  });
+
   it("takes an implicit mode when the login-shell import is plainly off", () => {
     const off = `{ env: { shellEnv: { enabled: false, timeoutMs: 1000 } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`;
     expect(extract(off)).toEqual({ kind: "found", token: TOKEN, port: 18789 });

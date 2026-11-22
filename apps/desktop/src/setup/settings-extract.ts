@@ -122,27 +122,43 @@ const own = (object: Plain, key: string): unknown =>
  * value, by its key as OpenClaw normalizes it: trimmed (`normalizeEnvVarKey`,
  * `<openclaw>/dist/host-env-security-*.mjs`), in any case.
  */
-function declaresEnv(root: Plain, name: string): boolean {
+function envDeclarations(root: Plain, name: string): unknown[] {
   const env = own(root, "env");
-  if (!isPlain(env)) return false;
+  if (!isPlain(env)) return [];
   const vars = own(env, "vars");
-  const keys = [...Object.keys(env), ...(isPlain(vars) ? Object.keys(vars) : [])];
-  return keys.some((key) => key.trim().toUpperCase() === name);
+  const entries = [...Object.entries(env), ...(isPlain(vars) ? Object.entries(vars) : [])];
+  return entries.filter(([key]) => key.trim().toUpperCase() === name).map(([, value]) => value);
 }
+const declaresEnv = (root: Plain, name: string) => envDeclarations(root, name).length > 0;
+
+/**
+ * The values OpenClaw reads as a switch turned on (`isTruthyEnvValue`,
+ * `<openclaw>/dist/env-CIlPDP83.mjs` lines 44-46, by `parseBooleanValue`,
+ * `boolean-CFfzB3ix.mjs`): trimmed and lowercased. Anything else is off.
+ */
+const SWITCH_ON = new Set(["true", "1", "yes", "on"]);
 
 /**
  * Whether the file turns on OpenClaw's login-shell import, which then fills
- * a missing `OPENCLAW_GATEWAY_PASSWORD` from the shell: `env.shellEnv.enabled`
- * (`<openclaw>/dist/io.factory-B2b2ehlc.mjs` line 625), or an
- * `OPENCLAW_LOAD_SHELL_ENV` the file's own env sets for that check
- * (`run-CZZ9dIV4.mjs` lines 2532-2533). Counted unless it is plainly off.
+ * a missing `OPENCLAW_GATEWAY_PASSWORD` from the shell:
+ * - `env.shellEnv.enabled` (`<openclaw>/dist/io.factory-B2b2ehlc.mjs` line
+ *   625), counted unless it is absent or `false`;
+ * - an `OPENCLAW_LOAD_SHELL_ENV` that the file's `env` or `env.vars` sets for
+ *   that check (`run-CZZ9dIV4.mjs` lines 2532-2533,
+ *   `shell-env-BMzNsAbc.mjs` line 259), counted when any declaration is a
+ *   string OpenClaw reads as on, or one with a `$` whose value the file alone
+ *   can't settle. OpenClaw applies only string values
+ *   (`config-env-vars-97Jxmxag.mjs` line 56).
  */
 function loadsShellEnv(root: Plain): boolean {
   const env = own(root, "env");
   const shellEnv = isPlain(env) ? own(env, "shellEnv") : undefined;
   const enabled = isPlain(shellEnv) ? own(shellEnv, "enabled") : undefined;
-  return (
-    (enabled !== undefined && enabled !== false) || declaresEnv(root, "OPENCLAW_LOAD_SHELL_ENV")
+  if (enabled !== undefined && enabled !== false) return true;
+  return envDeclarations(root, "OPENCLAW_LOAD_SHELL_ENV").some(
+    (value) =>
+      typeof value === "string" &&
+      (value.includes("$") || SWITCH_ON.has(value.trim().toLowerCase())),
   );
 }
 

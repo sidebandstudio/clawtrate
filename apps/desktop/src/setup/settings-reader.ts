@@ -125,7 +125,14 @@ const component = (name: string) =>
   name.length > 0 && name.length <= 255 && !/[/\0]/.test(name) && name !== "." && name !== "..";
 
 /** The checked home folder, by device and inode, so that the one opened is the one checked. */
-export type HomeIdentity = { dev: number; ino: number };
+export type HomeIdentity = { dev: bigint; ino: bigint };
+
+/**
+ * The same folder, by its exact device and inode. Both are read as bigints
+ * (`{ bigint: true }`, as `private-update-directory.ts` does): a 64-bit inode
+ * can't always be held exactly by a JavaScript number.
+ */
+export const sameFolder = (a: HomeIdentity, b: HomeIdentity) => a.dev === b.dev && a.ino === b.ino;
 
 /**
  * Which home may be read, decided before anything in it is opened. A
@@ -157,7 +164,7 @@ export function guardHome(
     }
   };
   const canonical = orNull(() => realpathSync(home));
-  const entry = orNull(() => lstatSync(home));
+  const entry = orNull(() => lstatSync(home, { bigint: true }));
   const realHome = real === null ? null : orNull(() => realpathSync(real));
   const root = systemTempRoots(process.platform).find(
     (temp) =>
@@ -177,7 +184,16 @@ export function guardHome(
         uid,
       ),
     ) ||
-    !privateFolder(entry, uid)
+    !privateFolder(
+      entry && {
+        isDirectory: () => entry.isDirectory(),
+        isFile: () => entry.isFile(),
+        uid: Number(entry.uid),
+        mode: Number(entry.mode),
+        nlink: Number(entry.nlink),
+      },
+      uid,
+    )
   )
     throw new SetupRefusedError("home");
   return { dev: entry!.dev, ino: entry!.ino };
@@ -278,16 +294,17 @@ export async function holdHome(
     return await openFailure(error, home);
   }
   try {
-    const stat = await handle.stat();
+    const stat = await handle.stat({ bigint: true });
+    const mode = Number(stat.mode);
     const why = !stat.isDirectory()
       ? "type"
-      : stat.uid !== process.geteuid?.()
+      : Number(stat.uid) !== process.geteuid?.()
         ? "owner"
-        : (stat.mode & 0o022) !== 0
+        : (mode & 0o022) !== 0
           ? "mode"
-          : checked && (stat.dev !== checked.dev || stat.ino !== checked.ino)
+          : checked && !sameFolder(checked, stat)
             ? "changed"
-            : checked && (stat.mode & 0o077) !== 0
+            : checked && (mode & 0o077) !== 0
               ? "mode"
               : null;
     if (why === null) return { handle };

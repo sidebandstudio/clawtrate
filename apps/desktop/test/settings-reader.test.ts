@@ -44,6 +44,7 @@ import {
   preflight,
   readBounded,
   readLocalSettings,
+  sameFolder,
   SETTINGS_LIMIT,
 } from "../src/setup/settings-reader.ts";
 import { accountHome, SetupRefusedError } from "../src/setup/world.ts";
@@ -346,10 +347,26 @@ describe.skipIf(!posix)("the home folder", () => {
     if ("handle" in held) await held.handle.close();
   });
 
+  /** A folder's exact device and inode. */
+  const exact = (path: string) => {
+    const stat = statSync(path, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino };
+  };
+
+  it("hands back the checked folder, exactly, in a sandboxed run, and nothing in a production one", () => {
+    const { path } = home();
+    // Another temporary home stands in for the account's.
+    const account = home().path;
+    expect(guardHome(path, true, {}, () => account)).toEqual(exact(path));
+    // A marker makes the run sandboxed whatever the caller says; only both together are production.
+    expect(guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => account)).toEqual(exact(path));
+    expect(guardHome(path, false, {}, () => path)).toBe(null);
+  });
+
   it("holds a sandboxed home to the folder the guard checked, still private", async () => {
     const { path } = home();
     const checked = guardHome(path, true);
-    expect(checked).toEqual({ dev: statSync(path).dev, ino: statSync(path).ino });
+    expect(checked).toEqual(exact(path));
     const held = await holdHome(path, checked);
     expect(held).toHaveProperty("handle");
     if ("handle" in held) await held.handle.close();
@@ -875,6 +892,15 @@ describe.skipIf(!posix)("two profiles", () => {
   });
 });
 
+it("compares folders by their exact device and inode, beyond a number's precision", () => {
+  const large = 2n ** 60n;
+  const folder = { dev: 1n, ino: large };
+  expect(sameFolder(folder, { dev: 1n, ino: large })).toBe(true);
+  // Each pair differs by one, which a JavaScript number would round away.
+  expect(sameFolder(folder, { dev: 1n, ino: large + 1n })).toBe(false);
+  expect(sameFolder({ dev: large, ino: 1n }, { dev: large + 1n, ino: 1n })).toBe(false);
+});
+
 describe("the token is held, not shown", () => {
   it("never prints, inspects or serializes its value, and is gone once dropped", () => {
     const token = new HeldToken(TOKEN);
@@ -933,17 +959,6 @@ describe("the account's real home", () => {
         SetupRefusedError,
       );
     }
-  });
-
-  it("hands back the checked folder in a sandboxed run, and nothing in a production one", () => {
-    const { path } = home();
-    // Another temporary home stands in for the account's.
-    const account = home().path;
-    const identity = { dev: statSync(path).dev, ino: statSync(path).ino };
-    expect(guardHome(path, true, {}, () => account)).toEqual(identity);
-    // A marker makes the run sandboxed whatever the caller says; only both together are production.
-    expect(guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => account)).toEqual(identity);
-    expect(guardHome(path, false, {}, () => path)).toBe(null);
   });
 
   it("in a production run, is only the home the system reports for this account", () => {
