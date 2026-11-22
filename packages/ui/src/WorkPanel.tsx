@@ -6,7 +6,7 @@ import type {
   Task,
   Transcript,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { EditPicture } from "./bots/EditPicture.tsx";
 import { useBridge } from "./bridge.tsx";
@@ -102,9 +102,8 @@ export function WorkPanel({
   const [editingPicture, setEditingPicture] = useState<string | null>(null);
   const canEditPicture = connection.canAdmin && online;
   const editing = editingPicture !== null && editingPicture === bot?.id && canEditPicture;
-  useEffect(() => {
-    if (editingPicture !== null && !editing) setEditingPicture(null);
-  }, [editingPicture, editing]);
+  // Settled while rendering, so a closed editor's id is gone before anything can reopen it.
+  if (editingPicture !== null && !editing) setEditingPicture(null);
   const announce = useCallback((text: string) => {
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));

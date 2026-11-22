@@ -302,7 +302,9 @@ export function AvatarPicker({
   // chosen meanwhile, or the picker going away makes an earlier one's result count for nothing.
   const attempt = useRef(0);
   const busyRef = useRef(onBusy);
-  busyRef.current = onBusy;
+  useEffect(() => {
+    busyRef.current = onBusy;
+  });
   useEffect(
     () => () => {
       attempt.current += 1;
@@ -330,7 +332,9 @@ export function AvatarPicker({
         className="b-families"
         role="radiogroup"
         aria-labelledby="b-family-label"
-        onKeyDown={onRadioKeys(AVATAR_FAMILIES, choice.family, (next) => set(family(next)))}
+        onKeyDown={(event) =>
+          onRadioKeys(AVATAR_FAMILIES, choice.family, (next) => set(family(next)))(event)
+        }
       >
         {AVATAR_FAMILIES.map((each) => (
           <button
@@ -357,7 +361,9 @@ export function AvatarPicker({
             role="radiogroup"
             aria-labelledby={`b-part-${key}`}
             data-part={key}
-            onKeyDown={onRadioKeys(values, current[key]!, (value) => set(withPart(key, value)))}
+            onKeyDown={(event) =>
+              onRadioKeys(values, current[key]!, (value) => set(withPart(key, value)))(event)
+            }
           >
             {values.map((value) => (
               <button
@@ -384,9 +390,9 @@ export function AvatarPicker({
         className="b-colors"
         role="radiogroup"
         aria-labelledby="b-color-label"
-        onKeyDown={onRadioKeys(AVATAR_COLOR_NAMES, choice.color, (color) =>
-          set({ ...choice, color }),
-        )}
+        onKeyDown={(event) =>
+          onRadioKeys(AVATAR_COLOR_NAMES, choice.color, (color) => set({ ...choice, color }))(event)
+        }
       >
         {AVATAR_COLOR_NAMES.map((color) => (
           <button

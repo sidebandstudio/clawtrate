@@ -407,73 +407,73 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                   : C extends { type: "setBotPicture" }
                                                     ? { confirmed: boolean }
                                                     : C extends { type: "saveApiKey" }
-                                                    ? { profileId: string | null }
-                                                    : C extends {
-                                                          type: "createBot" | "finishBot";
-                                                        }
-                                                      ? { botId: string; missing: MissingStep[] }
+                                                      ? { profileId: string | null }
                                                       : C extends {
-                                                            type: "newTask" | "newMainTask";
+                                                            type: "createBot" | "finishBot";
                                                           }
-                                                        ? { key: string }
-                                                        : C extends { type: "archiveTask" }
-                                                          ? ArchiveResult
-                                                          : C extends { type: "listArchived" }
-                                                            ? ArchivedList
-                                                            : C extends {
-                                                                  type: "readComposerMenu";
-                                                                }
-                                                              ? MenuRow[]
-                                                              : C extends { type: "readUsage" }
-                                                                ? UsageReport | UsageBusy
-                                                                : C extends {
-                                                                      type: "listRoutines";
-                                                                    }
-                                                                  ? BudgetRoutine[]
+                                                        ? { botId: string; missing: MissingStep[] }
+                                                        : C extends {
+                                                              type: "newTask" | "newMainTask";
+                                                            }
+                                                          ? { key: string }
+                                                          : C extends { type: "archiveTask" }
+                                                            ? ArchiveResult
+                                                            : C extends { type: "listArchived" }
+                                                              ? ArchivedList
+                                                              : C extends {
+                                                                    type: "readComposerMenu";
+                                                                  }
+                                                                ? MenuRow[]
+                                                                : C extends { type: "readUsage" }
+                                                                  ? UsageReport | UsageBusy
                                                                   : C extends {
-                                                                        type: "readPlacement";
+                                                                        type: "listRoutines";
                                                                       }
-                                                                    ? BotPlacement
+                                                                    ? BudgetRoutine[]
                                                                     : C extends {
-                                                                          type: "readMachines";
+                                                                          type: "readPlacement";
                                                                         }
-                                                                      ? MachinesView
+                                                                      ? BotPlacement
                                                                       : C extends {
-                                                                            type: "setCommandMachine";
+                                                                            type: "readMachines";
                                                                           }
-                                                                        ? ConfigSave
+                                                                        ? MachinesView
                                                                         : C extends {
-                                                                              type: "setBotWorkspace";
+                                                                              type: "setCommandMachine";
                                                                             }
-                                                                          ? {
-                                                                              workspace:
-                                                                                string | null;
-                                                                              asTyped: boolean;
-                                                                            }
+                                                                          ? ConfigSave
                                                                           : C extends {
-                                                                                type: "setMachineDefaults";
+                                                                                type: "setBotWorkspace";
                                                                               }
-                                                                            ? ApprovalsFile
+                                                                            ? {
+                                                                                workspace:
+                                                                                  string | null;
+                                                                                asTyped: boolean;
+                                                                              }
                                                                             : C extends {
-                                                                                  type: "refreshCheckIns";
-                                                                                  botId: string;
+                                                                                  type: "setMachineDefaults";
                                                                                 }
-                                                                              ? CheckInRead | null
+                                                                              ? ApprovalsFile
                                                                               : C extends {
-                                                                                    type: "listMemory";
+                                                                                    type: "refreshCheckIns";
+                                                                                    botId: string;
                                                                                   }
-                                                                                ? MemoryList
+                                                                                ? CheckInRead | null
                                                                                 : C extends {
-                                                                                      type: "readMemory";
+                                                                                      type: "listMemory";
                                                                                     }
-                                                                                  ? MemoryDocument
+                                                                                  ? MemoryList
                                                                                   : C extends {
-                                                                                        type:
-                                                                                          | "checkRoutineCreate"
-                                                                                          | "checkRoutineUpdate";
+                                                                                        type: "readMemory";
                                                                                       }
-                                                                                    ? RoutineSaveCheck
-                                                                                    : void;
+                                                                                    ? MemoryDocument
+                                                                                    : C extends {
+                                                                                          type:
+                                                                                            | "checkRoutineCreate"
+                                                                                            | "checkRoutineUpdate";
+                                                                                        }
+                                                                                      ? RoutineSaveCheck
+                                                                                      : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
