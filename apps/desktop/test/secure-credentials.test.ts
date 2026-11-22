@@ -359,7 +359,6 @@ describe("this device's credentials in secure storage", () => {
     expect(JSON.parse(state(dir).connection!)).toEqual({
       url: "ws://127.0.0.1:19002",
       token: null,
-      earlierRetired: true,
     });
     expect(await credentials.storage.get("connection")).toBe(a);
   });
@@ -809,7 +808,7 @@ describe("this device's credentials in secure storage", () => {
       JSON.stringify({ url: "ws://127.0.0.1:19002", token: null }),
     );
     expect(state(dir).connection).toBe(
-      JSON.stringify({ url: "ws://127.0.0.1:19002", token: null, earlierRetired: true }),
+      JSON.stringify({ url: "ws://127.0.0.1:19002", token: null }),
     );
 
     // Once paired, the settings drop the token, and the earlier build's copy goes with it.

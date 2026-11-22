@@ -130,17 +130,15 @@ const record = (text: string): Record<string, unknown> | null => {
   }
 };
 
+type Settings = { url: string; token: string | null; suspended?: boolean };
+
 /**
- * Gateway settings. `earlierRetired`, kept only in `state.json`, records in the settings commit
- * itself that an earlier build's sealed token for this address was replaced: it is never used
- * again, even if removing it failed or the process stopped before it was removed.
+ * A setting in `state.json`, the store's own: set by the settings commit that retires an earlier
+ * build's sealed gateway token (a switch away, a same-address replacement, forgetting the
+ * gateway). That token was moved in once; once retired it is never used again, whatever is
+ * selected later, even if removing it failed or the process stopped first.
  */
-type Settings = {
-  url: string;
-  token: string | null;
-  suspended?: boolean;
-  earlierRetired?: boolean;
-};
+const EARLIER_RETIRED_KEY = "earlier-gateway-token-retired";
 
 function parseSettings(text: string): Settings | null {
   const parsed = record(text);
@@ -148,7 +146,6 @@ function parseSettings(text: string): Settings | null {
   const token = parsed.token ?? null;
   if (token !== null && typeof token !== "string") return null;
   if (parsed.suspended !== undefined && typeof parsed.suspended !== "boolean") return null;
-  if (parsed.earlierRetired !== undefined && parsed.earlierRetired !== true) return null;
   return { ...(parsed as Settings), token };
 }
 
@@ -325,13 +322,17 @@ function hasOwnToken(credentials: Credentials, url: string): boolean {
  * same address, and no device token of this device's own for it yet. A copy left behind after
  * settings that replaced it were kept is never used, and the next start removes it.
  */
-function earlierToken(credentials: Credentials, saved: Settings | null): string | null {
+function earlierToken(
+  credentials: Credentials,
+  saved: Settings | null,
+  retired: boolean,
+): string | null {
   const kept = credentials.values[SETTINGS_KEY];
   const earlier = kept === undefined ? null : parseSettings(kept);
   if (
     !earlier ||
     !saved ||
-    saved.earlierRetired === true ||
+    retired ||
     earlier.url !== saved.url ||
     hasOwnToken(credentials, earlier.url)
   )
@@ -472,7 +473,8 @@ export function createSecureCredentials(options: {
       // stop between the two writes) is removed now; if that fails it stays unused.
       if (
         sealed.credentials.values[SETTINGS_KEY] !== undefined &&
-        earlierToken(sealed.credentials, savedSettings) === null
+        earlierToken(sealed.credentials, savedSettings, entries[EARLIER_RETIRED_KEY] === "true") ===
+          null
       ) {
         const { [SETTINGS_KEY]: _stale, ...values } = sealed.credentials.values;
         const reconciled = { ...sealed, credentials: { ...sealed.credentials, values } };
@@ -632,10 +634,13 @@ export function createSecureCredentials(options: {
         if (!saved) return null;
         let token = typed?.url === saved.url ? typed.token : null;
         if (token === null && (await mode()).kind !== "locked")
-          token = earlierToken(await credentials(), saved);
+          token = earlierToken(
+            await credentials(),
+            saved,
+            settings[EARLIER_RETIRED_KEY] === "true",
+          );
         // The retirement mark is the store's own: never handed out.
-        const { earlierRetired: _retired, ...shown } = saved;
-        return JSON.stringify({ ...shown, token });
+        return JSON.stringify({ ...saved, token });
       },
       set: async (key, value) => {
         if (isCredentialKey(key)) {
@@ -667,22 +672,15 @@ export function createSecureCredentials(options: {
           (earlier.url !== next.url ||
             (next.token !== null && earlier.token !== next.token) ||
             hasOwnToken(await credentials(), earlier.url));
-        // The retirement is part of the settings commit, and stays while the address does.
-        const before =
-          settings[SETTINGS_KEY] === undefined ? null : parseSettings(settings[SETTINGS_KEY]);
-        const retired = replaced || (before?.earlierRetired === true && before.url === next.url);
-        const { earlierRetired: _asked, ...wanted } = next;
+        // The retirement is part of the settings commit, and stays whatever is selected later.
         await queued(async () => {
           await mode();
           // A typed token stays in this process, for its address only, published with its settings.
           await keepSettings(
             {
               ...settings,
-              [SETTINGS_KEY]: JSON.stringify({
-                ...wanted,
-                token: null,
-                ...(retired ? { earlierRetired: true } : {}),
-              }),
+              [SETTINGS_KEY]: JSON.stringify({ ...next, token: null }),
+              ...(replaced ? { [EARLIER_RETIRED_KEY]: "true" } : {}),
             },
             next.token === null ? null : { url: next.url, token: next.token },
           );
@@ -705,7 +703,11 @@ export function createSecureCredentials(options: {
         await queued(async () => {
           await mode();
           const { [SETTINGS_KEY]: _removed, ...rest } = settings;
-          await keepSettings(rest, null);
+          // Forgetting the gateway retires an earlier build's token for it, in the same write.
+          const earlierKept =
+            (await mode()).kind !== "locked" &&
+            (await credentials()).values[SETTINGS_KEY] !== undefined;
+          await keepSettings(earlierKept ? { ...rest, [EARLIER_RETIRED_KEY]: "true" } : rest, null);
         });
         await retireEarlier();
       },
