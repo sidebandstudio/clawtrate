@@ -802,6 +802,10 @@ test("the gateway menu opens from the keyboard and keeps the theme", async ({ pa
   expect(await scheme()).toBe("dark");
   await page.emulateMedia({ colorScheme: "light" });
   await expect.poll(scheme).toBe("light");
+  // And it is still kept after a reload on the light system.
+  await reload();
+  await expect(html).toHaveAttribute("data-theme", "system");
+  expect(await scheme()).toBe("light");
 });
 
 test("the drawer is modal, and focus follows it across the docking width", async ({ page }) => {
