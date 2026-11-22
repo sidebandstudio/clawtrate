@@ -1125,10 +1125,25 @@ export class RemoteSetup {
   private watchConnect(attempt: number, key: string, url: string, selection: number): void {
     this.stopWatching();
     const client = this.options.client;
+    let seen = false;
     const check = (state: ClawtrateState) => {
+      if (attempt !== this.attempt) return;
+      // Let go from elsewhere after it was this attempt's (Disconnect during a first Pair, or
+      // "Use another gateway"): nothing selected now. The attempt is over, keeps nothing, and the
+      // card offers Pair again.
+      if (
+        seen &&
+        client.route === null &&
+        state.connection.status === "idle" &&
+        state.connection.gatewayUrl === null
+      ) {
+        void this.letGoFromElsewhere(attempt);
+        return;
+      }
       // This attempt's own route and selection only: another choice since, even of this route,
       // says nothing about it, and nothing is kept for it.
-      if (attempt !== this.attempt || client.route !== key || !client.isSelected(selection)) return;
+      if (client.route !== key || !client.isSelected(selection)) return;
+      seen = true;
       // Disconnect during the attempt: it ends, keeping the route chosen and disconnected.
       if (client.suspended) {
         const record = this.pending?.record;
@@ -1897,6 +1912,27 @@ export class RemoteSetup {
     // Disconnect queued before the connect, which then opened nothing: the same.
     if (attempt === this.attempt && this.disconnected(record))
       await this.endForDisconnect(record, attempt);
+  }
+
+  /** The attempt's connection was let go elsewhere: it ends, and its card offers a fresh Pair. */
+  private async letGoFromElsewhere(attempt: number): Promise<void> {
+    if (attempt !== this.attempt) return;
+    const mine = (this.attempt += 1);
+    this.stopWatching();
+    const key = this.pending?.record.key ?? null;
+    await this.letGoPending(true);
+    // Paired still only if a pairing to reuse is kept for that route.
+    const access = key !== null && (await this.reusable(key)) ? "paired" : "new";
+    if (mine !== this.attempt || this.currentPending()) return;
+    const look = this.state.look;
+    this.publish(
+      look && this.found
+        ? { ...this.state, phase: "found", failure: null, look: { ...look, access } }
+        : {
+            ...initialSetupState,
+            there: this.state.there ? emptyThere(this.state.there.destination) : null,
+          },
+    );
   }
 
   /** Whether the person chose Disconnect for `record`'s route. */

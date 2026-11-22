@@ -1667,6 +1667,16 @@ export class ClawtrateClient {
         this.setConnection({ status: "disconnected", gatewayUrl: saved.url, retryAt: null });
         return;
       }
+      // A route still pairing is selected in memory alone, never saved: Disconnect cancels it,
+      // and the connection saved before it stays as it was. Its host offers Pair again.
+      if (
+        this.settings.route &&
+        this.isSetup(this.settings.url) &&
+        !this.namesSelection(await this.savedSettings())
+      ) {
+        await this.disconnectNow(++this.selectionAsked, { keepSaved: true });
+        return;
+      }
       // Saved, so a restart does not reconnect by itself.
       await this.saveSettings({ ...this.settings, suspended: true });
       // The connection stops: writes waiting for access fail, as on any lost connection.

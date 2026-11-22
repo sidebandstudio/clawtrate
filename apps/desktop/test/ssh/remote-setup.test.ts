@@ -2110,6 +2110,42 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         await g.remote.closeAll();
       });
 
+    for (const before of ["nothing saved", "another route saved"] as const)
+      it(`Disconnect during a first Pair, with ${before}, cancels that pairing: the saved connection stays as it was, nothing of it is kept, and Pair works again`, async () => {
+        const h = host();
+        let first: string | null = null;
+        if (before === "another route saved") {
+          await connected(h);
+          first = h.client.route;
+          await h.remote.there("devbox-local");
+          if (h.setup().phase === "key") await h.remote.trustKey();
+        } else await lookOnDevbox(h);
+        expect(h.setup().look?.access).toBe("new");
+        const saved = h.storage.data.get("connection") ?? null;
+        const routes = h.routes.list();
+        const identity = h.fake.handlers["gateway.identity.get"]!;
+        h.fake.handlers["gateway.identity.get"] = () => new Promise(() => {});
+        await h.remote.connect();
+        await until(
+          () => h.fake.requests.some((request) => request.method === "gateway.identity.get"),
+          30_000,
+        );
+        const pairing = h.client.route;
+        expect(pairing).not.toBe(first);
+        await h.client.suspend();
+        await until(() => h.setup().phase === "found", 10_000);
+        h.fake.handlers["gateway.identity.get"] = identity;
+        expect(h.storage.data.get("connection") ?? null).toBe(saved);
+        expect(h.routes.list()).toEqual(routes);
+        expect(h.routes.hasToken(pairing!)).toBe(false);
+        expect(h.setup().look?.access).toBe("new");
+        // A fresh Pair works from the card.
+        await h.remote.connect();
+        await until(() => h.setup().phase === "done", 30_000);
+        expect(h.client.route).toBe(pairing);
+        await h.remote.closeAll();
+      });
+
     it("a Pair that fails gives back the oldest saved route its first write let go at the limit, with its token and pin", async () => {
       const h = host();
       await connected(h);
