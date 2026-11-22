@@ -194,6 +194,7 @@ import {
   throughRunAliases,
   removeMessage,
   requestStop,
+  retireStopIntent,
   revertStop,
   runsFromHistory,
   settleMissingQuestions,
@@ -1074,10 +1075,11 @@ export class ClawtrateClient {
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /**
-   * Computer Stops of runs the gateway has not named yet (`task\0run`), by who asked: their first
-   * abort goes once the send's answer or history names the run, unless the owner is withdrawn first.
+   * Computer Stops whose first abort has not gone (`task\0run`), and who asked: it goes once the
+   * send's answer or history names the run, unless the owner is withdrawn first. Removed when it
+   * goes, when the run settles, or with its owner.
    */
-  private readonly unsentStops = new WeakMap<object, Set<string>>();
+  private readonly unsentStops = new Map<string, object>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1904,16 +1906,16 @@ export class ClawtrateClient {
     this.withdrawnOwners.add(owner);
     this.fileTransfers.release(owner);
     for (const readers of this.approvalReads.values()) readers.delete(owner);
-    // A Computer Stop whose abort has not gone yet goes with it; one already sent is left as it is.
-    for (const id of this.unsentStops.get(owner) ?? []) {
+    // A Computer Stop whose first abort has not gone goes with it; one already sent is left as it is.
+    for (const [id, asker] of [...this.unsentStops]) {
+      if (asker !== owner) continue;
+      this.unsentStops.delete(id);
       const [key, runId] = id.split("\u0000") as [string, string];
-      const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
-      if (run?.state === "stopping" && !run.bound)
+      if (this.state.transcripts[key])
         this.updateActivity(key, (activity) =>
-          revertStop(activity, runId, new WithdrawnError().message),
+          retireStopIntent(activity, runId, new WithdrawnError().message),
         );
     }
-    this.unsentStops.delete(owner);
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
@@ -2830,7 +2832,10 @@ export class ClawtrateClient {
     // Stop was pressed before the gateway had taken the send: abort the run it named now.
     if (runId && !command && message.mode !== "steer") {
       const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
-      if (run?.state === "stopping") void this.abortRun(key, runId);
+      if (run?.state === "stopping") {
+        this.unsentStops.delete(`${key}\u0000${runId}`);
+        void this.abortRun(key, runId);
+      }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     if (command) this.dropAttachments(messageId);
@@ -2911,11 +2916,8 @@ export class ClawtrateClient {
       // in full. So a run the gateway has not named yet is aborted once the send's answer
       // names it (`deliver`); an answer that says it is over already needs no abort.
       if (!current.bound) {
-        if (options.taskOnly && options.owner) {
-          const unsent = this.unsentStops.get(options.owner) ?? new Set<string>();
-          unsent.add(`${key}\u0000${runId}`);
-          this.unsentStops.set(options.owner, unsent);
-        }
+        if (options.taskOnly && options.owner)
+          this.unsentStops.set(`${key}\u0000${runId}`, options.owner);
         return;
       }
       await this.abortRun(key, current.id);
@@ -5172,6 +5174,17 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     void this.settleEndedRuns(key);
+    // A Computer Stop's first abort is pending only while its run waits to be named.
+    for (const id of this.unsentStops.keys()) {
+      const [task, runId] = id.split("\u0000") as [string, string];
+      if (task !== key) continue;
+      const run = findRun(transcript, runId);
+      const waiting =
+        run?.stopRequestedAt != null &&
+        ((run.state === "stopping" && !run.bound) ||
+          (run.state === "stopped" && !run.outcomeKnown));
+      if (!waiting) this.unsentStops.delete(id);
+    }
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
@@ -6845,7 +6858,10 @@ export class ClawtrateClient {
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
-      for (const run of toStop) void this.abortRun(key, run.id);
+      for (const run of toStop) {
+        this.unsentStops.delete(`${key}\u0000${run.id}`);
+        void this.abortRun(key, run.id);
+      }
       void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);

@@ -137,6 +137,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // A task's `agent.wait` check in flight, and the ids of the active runs it last checked.
   endChecking: { max: T, each: ID, row: "bookkeeping" },
   endChecked: { max: T, each: ID + MAX_RUN_LIST * (ID + 1), row: "bookkeeping" },
+  // Computer Stops whose first abort waits for the gateway to name the run: task and run ids, and
+  // the task's opening that asked (an empty object); gone once sent, settled or withdrawn.
+  unsentStops: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
@@ -251,8 +254,6 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
-  // Computer Stops not yet sent, by who asked; an entry lives only as long as that owner.
-  unsentStops: { max: 0, each: 0, row: null, weak: true },
   // Each failed request's log policy; an entry lives only as long as that error object.
   dispatchedQuiet: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
