@@ -38,6 +38,9 @@ const fsHooks = vi.hoisted(() => ({
   failFolderSyncs: 0,
   /** Removals to refuse. */
   failRm: null as null | ((path: string) => boolean),
+  /** A rename to hold until its gate opens, and folder syncs to refuse right after a rename. */
+  holdRename: null as null | { match: (to: string) => boolean; gate: Promise<void> },
+  failSyncsAfterRename: null as null | ((to: string) => number),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -69,16 +72,42 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     });
     return actual.writeFile(...args);
   }) as typeof actual.writeFile;
-  const rename = ((from: string, to: string) =>
-    fsHooks.failRename?.(String(to))
-      ? Promise.reject(Object.assign(new Error("rename refused"), { code: "EIO" }))
-      : actual.rename(from, to)) as typeof actual.rename;
+  const rename = (async (from: string, to: string) => {
+    if (fsHooks.failRename?.(String(to)))
+      throw Object.assign(new Error("rename refused"), { code: "EIO" });
+    const hold = fsHooks.holdRename;
+    if (hold?.match(String(to))) {
+      fsHooks.holdRename = null;
+      await hold.gate;
+    }
+    await actual.rename(from, to);
+    const fails = fsHooks.failSyncsAfterRename?.(String(to)) ?? 0;
+    if (fails > 0) {
+      fsHooks.failSyncsAfterRename = null;
+      fsHooks.failFolderSyncs = fails;
+    }
+  }) as typeof actual.rename;
   const rm = ((path: string, options?: Parameters<typeof actual.rm>[1]) =>
     fsHooks.failRm?.(String(path))
       ? Promise.reject(Object.assign(new Error("removal refused"), { code: "EPERM" }))
       : actual.rm(path, options)) as typeof actual.rm;
   return { ...actual, open, writeFile, rename, rm };
 });
+
+/** A promise and the function that settles it. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => (resolve = settle));
+  return { promise, resolve };
+}
+
+/** Waits until `check` passes, for up to four seconds. */
+async function until(check: () => boolean): Promise<void> {
+  for (const end = Date.now() + 4_000; !check();) {
+    if (Date.now() > end) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 const SHARED = "shared-token-5f1c";
 const DEVICE = "device-token-9a2e";
@@ -99,6 +128,8 @@ afterEach(() => {
   fsHooks.failRename = null;
   fsHooks.failFolderSyncs = 0;
   fsHooks.failRm = null;
+  fsHooks.holdRename = null;
+  fsHooks.failSyncsAfterRename = null;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -475,6 +506,57 @@ describe("this device's credentials in secure storage", () => {
     expect(await paired.storage.get("connection")).toBe(NO_TOKEN);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
   });
+
+  it("a reader during a gateway switch sees the whole old gateway or the whole new one, never a mix", async () => {
+    const { dir } = legacyFolder();
+    const credentials = open(dir, fakeBox().box);
+    expect(await credentials.storage.get("connection")).toBe(CONNECTION);
+    const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+    // Held at the settings write: the old gateway, with its token.
+    const settingsGate = deferred<void>();
+    fsHooks.holdRename = { match: (to) => to.endsWith(STATE_FILE), gate: settingsGate.promise };
+    const switching = credentials.storage.set("connection", b);
+    await until(() => fsHooks.holdRename === null);
+    expect(await credentials.storage.get("connection")).toBe(CONNECTION);
+    // Held at the earlier token's removal, after the settings committed: the new gateway.
+    const removalGate = deferred<void>();
+    fsHooks.holdRename = {
+      match: (to) => to.endsWith(CREDENTIALS_FILE),
+      gate: removalGate.promise,
+    };
+    settingsGate.resolve();
+    await until(() => fsHooks.holdRename === null);
+    expect(await credentials.storage.get("connection")).toBe(b);
+    removalGate.resolve();
+    await switching;
+    expect(await credentials.storage.get("connection")).toBe(b);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(
+      JSON.stringify({ url: "ws://127.0.0.1:19003", token: null }),
+    );
+  });
+
+  // Windows has no folder sync (`syncFolder`), so there is none to fail.
+  it.skipIf(process.platform === "win32")(
+    "an earlier token's removal whose rename lands but whose folder syncs both fail is indeterminate, after the switch committed",
+    async () => {
+      const { dir } = legacyFolder();
+      const credentials = open(dir, fakeBox().box);
+      expect(await credentials.storage.get("connection")).toBe(CONNECTION);
+      const b = JSON.stringify({ url: "ws://127.0.0.1:19003", token: "typed-B" });
+      fsHooks.failSyncsAfterRename = (to) => (to.endsWith(CREDENTIALS_FILE) ? 2 : 0);
+      // Committed at its settings write: the call succeeds, and the store reads the disk again.
+      await credentials.storage.set("connection", b);
+      expect(fsHooks.failFolderSyncs).toBe(0);
+      // Live: the new gateway, with the token typed for this attempt.
+      expect(await credentials.storage.get("connection")).toBe(b);
+      expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(
+        JSON.stringify({ url: "ws://127.0.0.1:19003", token: null }),
+      );
+      // The old address's token is gone, or unused: never offered again.
+      writeFileSync(join(dir, STATE_FILE), JSON.stringify({ connection: NO_TOKEN }));
+      expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+    },
+  );
 
   it("an earlier build run again after the move can't replace the sealed identity or token, and its files are removed unread", async () => {
     const { dir, pem } = legacyFolder();
