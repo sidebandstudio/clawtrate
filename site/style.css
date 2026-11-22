@@ -301,7 +301,8 @@ code {
   align-items: start;
   max-width: calc(var(--max) + 2 * var(--edge));
   margin: 0 auto;
-  padding: clamp(28px, 4.5vh, 56px) var(--edge) 0;
+  /* Room above the demo window for the Clawling that sits on its edge. */
+  padding: clamp(60px, 7vh, 80px) var(--edge) 0;
 }
 .hero h1 {
   font-size: var(--t-xl);
@@ -324,6 +325,7 @@ code {
 }
 .get-note a {
   color: var(--text);
+  white-space: nowrap;
 }
 .cmd {
   margin-top: 24px;
@@ -334,20 +336,86 @@ code {
   color: var(--text-muted);
   margin-bottom: 8px;
 }
+/* Homebrew or curl: one line each. Without script both show, each named.
+   With it, the label and the tabs share a row above the command. */
+.cmd-tabs {
+  display: none;
+}
+.js .cmd,
+.js .close-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+}
+.js .cmd-switch {
+  display: contents;
+}
+.js .cmd-box,
+.js .close-side .oss {
+  grid-column: 1 / -1;
+}
+.js .cmd-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-bubble);
+}
+.cmd-tabs button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 140ms var(--ease),
+    color 140ms var(--ease);
+}
+.cmd-tabs button:hover {
+  color: var(--text);
+}
+.cmd-tabs button[aria-selected="true"] {
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(
+    --shadow-raised
+  ); /* taste-skill-ignore: the chosen tab, raised like the app's pills */
+}
 .cmd-box {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 10px 6px 10px 16px;
+  padding: 6px 6px 6px 16px;
   border-radius: 18px;
   background: var(--bg-bubble);
+}
+.cmd-box + .cmd-box {
+  margin-top: 8px;
+}
+.cmd-box[hidden] {
+  display: none;
+}
+.cmd-tool {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.js .cmd-tool {
+  display: none;
 }
 .cmd-box pre {
   flex: 1;
   min-width: 0;
-  padding-top: 7px;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
+  padding: 8px 0;
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .cmd-box code {
   font-size: 13px;
@@ -375,14 +443,14 @@ code {
 .copy:active {
   transform: scale(0.95);
 }
-.cmd-note {
-  margin-top: 10px;
-  font-size: var(--t-s);
-  line-height: 1.5;
-  color: var(--text-muted);
+/* In dark, the raised surface is darker than the track it sits on: lift the
+   chosen tab and Copy with a light veil instead. */
+:root:not([data-theme="light"]) .hero .cmd-tabs button[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
-.cmd-note a {
-  color: var(--text);
+:root:not([data-theme="light"]) .hero .copy:not(:hover) {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* The live approval, drawn the way the app draws its conversation. */
@@ -415,6 +483,11 @@ code {
 }
 .pill span {
   color: var(--text-muted);
+}
+.pill .claw-art {
+  flex: none;
+  width: 22px;
+  height: 22px;
 }
 .pill-task {
   overflow: hidden;
@@ -794,10 +867,6 @@ h3 {
 .beta {
   padding-top: var(--gap-section);
 }
-.beta-intro {
-  margin-top: 16px;
-  max-width: 36em;
-}
 .lists {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -988,6 +1057,23 @@ h3 {
 .cmd-close {
   background: color-mix(in srgb, var(--close-ink) 12%, transparent);
 }
+.close .cmd-tabs {
+  background: color-mix(in srgb, var(--close-ink) 12%, transparent);
+}
+.close .cmd-tabs button {
+  color: color-mix(in srgb, var(--close-ink) 78%, transparent);
+}
+.close .cmd-tabs button:hover {
+  color: var(--close-ink);
+}
+.close .cmd-tabs button[aria-selected="true"] {
+  background: var(--close-btn);
+  color: var(--close-btn-ink);
+  box-shadow: none; /* taste-skill-ignore: flat on the green band */
+}
+.close .cmd-tool {
+  color: inherit;
+}
 .cmd-close .copy {
   background: var(--close-btn);
   color: var(--close-btn-ink);
@@ -1012,33 +1098,125 @@ h3 {
   overflow: hidden;
   pointer-events: none;
 }
-.cast img {
+/* The parade: Claws from the avatar spec peek over the band's lower edge, each
+   with its own habit (parade.js). Their eyes follow the pointer while it is
+   near the page's end. */
+.pc {
+  --sink: 16%;
+  flex: none;
   width: clamp(52px, 7vw, 104px);
-  height: auto;
-  transform: translateY(var(--sink, 34%));
+  transform: translateY(var(--sink));
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.cast img:nth-child(even) {
-  width: clamp(44px, 5.6vw, 84px);
-  --sink: 24%;
+.pc:nth-child(odd) {
+  --sink: 11%;
+  width: clamp(46px, 5.8vw, 88px);
 }
-.js .cast img {
-  animation: bob 5.6s ease-in-out infinite;
+.pc .claw-art {
+  display: block;
 }
-.js .cast img:nth-child(2n) {
-  animation-delay: -1.4s;
+/* The eyes: the pupils move toward the pointer, set by parade.js in grid units. */
+.pc [data-part="pupil"] {
+  translate: var(--look-x, 0px) var(--look-y, 0px);
+  transition: translate 260ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
-.js .cast img:nth-child(3n) {
-  animation-delay: -2.8s;
-  animation-duration: 6.4s;
+.pc .claw-art:not([data-state="idle"]) [data-part="pupil"] {
+  translate: none;
 }
-@keyframes bob {
+/* Noticing the pointer: a small hop. */
+.pc.noticed {
+  animation: pc-notice 520ms cubic-bezier(0.3, 0, 0.2, 1);
+}
+@keyframes pc-notice {
   0%,
   100% {
-    transform: translateY(var(--sink, 34%));
+    translate: 0 0;
   }
-  50% {
-    transform: translateY(calc(var(--sink, 34%) - 8px));
+  35% {
+    translate: 0 -10%;
   }
+  60% {
+    translate: 0 0;
+  }
+  78% {
+    translate: 0 -3%;
+  }
+}
+/* Ducking into a shell, or out of it. */
+.pc.swap .claw-art {
+  animation: pc-squash 300ms cubic-bezier(0.3, 0, 0.2, 1);
+  transform-origin: 50% 88%;
+}
+@keyframes pc-squash {
+  0% {
+    scale: 1.06 0.9;
+  }
+  100% {
+    scale: 1 1;
+  }
+}
+/* A thinker's dots rise one after another. */
+.pc-dots circle {
+  opacity: 0;
+  animation: pc-dot 1500ms ease-in-out infinite;
+}
+.pc-dots circle:nth-child(2) {
+  animation-delay: 200ms;
+}
+.pc-dots circle:nth-child(3) {
+  animation-delay: 400ms;
+}
+@keyframes pc-dot {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  30%,
+  70% {
+    opacity: 1;
+  }
+}
+/* A doze: lids down, a slow breath and drifting Zs, until the pointer comes near. */
+.pc-zs {
+  display: none;
+}
+.pc [data-doze] .pc-zs {
+  display: inline;
+}
+.pc [data-doze] .pc-zs path {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: pc-z 2600ms ease-out infinite;
+}
+.pc [data-doze] .pc-zs path:nth-child(2) {
+  animation-delay: 1300ms;
+}
+@keyframes pc-z {
+  0% {
+    opacity: 0;
+    translate: 0 1px;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    translate: 1.5px -3px;
+  }
+}
+.pc [data-doze] [data-part="lid"] {
+  animation: none !important;
+  translate: 0 5.4px;
+}
+.pc [data-doze] [data-s="idle"] > [data-part="creature"] {
+  animation: av-lean 4200ms cubic-bezier(0.45, 0, 0.55, 1) infinite !important;
+}
+/* Off screen or in a hidden tab, nothing moves. */
+.cast[data-paused] *,
+.cast[data-paused] {
+  animation-play-state: paused !important;
 }
 
 /* The footer: one quiet line. */
@@ -1092,9 +1270,6 @@ h3 {
     transform: none;
     transition: none;
   }
-  .js .cast img {
-    animation: none;
-  }
   *,
   *::before,
   *::after {
@@ -1110,12 +1285,15 @@ h3 {
   }
   .hero {
     grid-template-columns: minmax(0, 1fr);
+    padding-top: clamp(28px, 4.5vh, 56px);
   }
   .hero h1 {
     max-width: 12ch;
   }
+  /* Stacked, the space above the window is the Clawling's height and a little more. */
   .demo {
     max-width: 640px;
+    margin-top: calc(66px - clamp(32px, 5vw, 88px));
   }
   .row-split,
   .row-split:has(.stage-tall),
@@ -1138,7 +1316,7 @@ h3 {
   .win {
     padding: 16px 14px 20px;
   }
-  .cast img:nth-child(n + 6) {
+  .pc[data-wide] {
     display: none;
   }
   .faq-q {
@@ -1191,6 +1369,11 @@ h3 {
   .bar .btn-small {
     padding: 0 14px;
   }
+  /* A phone shows the whole command, wrapped at its spaces. */
+  .cmd-box pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* The download page: one choice per processor. */
@@ -1231,4 +1414,730 @@ h3 {
 }
 .download-note a {
   color: var(--text);
+}
+
+/* The download page's tracks: Beta, out now, and Stable, not released yet.
+   Each has its own Claw. Beta's card is the deep sea at night in both themes. */
+.download-lede {
+  margin-top: 14px;
+  max-width: 40em;
+  color: var(--text-muted);
+}
+.tracks {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 16px;
+  margin-top: 40px;
+}
+.track {
+  display: flex;
+  flex-direction: column;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+.track-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: clamp(240px, 22vw, 300px);
+  overflow: hidden;
+}
+.track-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  padding: clamp(24px, 3vw, 40px);
+}
+.track-body h2 {
+  margin-top: 12px;
+}
+.track-tag {
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--t-s);
+  font-weight: 500;
+}
+.track .download-version,
+.track-text {
+  margin-top: 12px;
+  max-width: 34em;
+}
+.track .download-choices {
+  margin-top: 24px;
+}
+.claw-name {
+  position: absolute;
+  left: 22px;
+  bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.track-beta {
+  --text: #eef5f8;
+  --text-muted: #b6c7d1;
+  --bg-inverse: #f3f3f2;
+  --text-inverse: #111213;
+  --bg-bubble: rgba(255, 255, 255, 0.1);
+  --bg-raised: rgba(255, 255, 255, 0.16);
+  --accent: #3ee6c1;
+  --accent-line: #3ee6c1;
+  --accent-ink: #04261f;
+  --accent-soft: rgba(62, 230, 193, 0.14);
+  background: #081723;
+  color: var(--text);
+}
+/* In light, only the stage stays the deep sea; the card is a light one, like Stable's. */
+:root[data-theme="light"] .track-beta {
+  --text: #111213;
+  --text-muted: #55575b;
+  --bg-inverse: #111213;
+  --text-inverse: #ffffff;
+  --bg-bubble: rgba(17, 18, 19, 0.06);
+  --bg-raised: #ffffff;
+  --accent: #0a6e5c;
+  --accent-line: #0d8f77;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(10, 110, 92, 0.1);
+  background: #edf2f5;
+}
+/* The water's glow fades out above the stage's floor instead of meeting it in a line. */
+.track-beta .track-stage {
+  background:
+    radial-gradient(58% 60% at 50% 60%, rgba(69, 189, 245, 0.2), transparent 70%),
+    linear-gradient(180deg, #0b2030, #081723);
+}
+.claw-lantern {
+  width: clamp(150px, 14vw, 196px);
+  margin-top: 8px;
+}
+.js .claw-lantern {
+  animation: drift 7s ease-in-out infinite;
+}
+@keyframes drift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -8px;
+  }
+}
+/* Marine snow, falling up past the Lantern. */
+.snow i,
+.fizz i {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+}
+.snow i {
+  bottom: -8px;
+  width: 3px;
+  height: 3px;
+  background: rgba(214, 238, 250, 0.4);
+  animation: snow 12s linear infinite;
+}
+.snow i:nth-child(1) {
+  left: 12%;
+}
+.snow i:nth-child(2) {
+  left: 27%;
+  animation-delay: -4s;
+  animation-duration: 15s;
+}
+.snow i:nth-child(3) {
+  left: 41%;
+  animation-delay: -9s;
+  width: 2px;
+  height: 2px;
+}
+.snow i:nth-child(4) {
+  left: 63%;
+  animation-delay: -2s;
+  animation-duration: 14s;
+}
+.snow i:nth-child(5) {
+  left: 78%;
+  animation-delay: -7s;
+  width: 2px;
+  height: 2px;
+}
+.snow i:nth-child(6) {
+  left: 90%;
+  animation-delay: -11s;
+  animation-duration: 16s;
+}
+@keyframes snow {
+  from {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  15%,
+  80% {
+    opacity: 1;
+  }
+  to {
+    transform: translate(14px, -320px);
+    opacity: 0;
+  }
+}
+/* A press sends up a few bubbles. */
+.fizz i {
+  left: calc(50% + var(--x));
+  top: 46%;
+  width: var(--d);
+  height: var(--d);
+  border: 1.5px solid rgba(191, 233, 255, 0.75);
+  background: rgba(191, 233, 255, 0.16);
+  opacity: 0;
+}
+.fizz i:nth-child(1) {
+  --x: -38px;
+  --d: 12px;
+}
+.fizz i:nth-child(2) {
+  --x: 30px;
+  --d: 9px;
+  --fizz-delay: 120ms;
+}
+.fizz i:nth-child(3) {
+  --x: -12px;
+  --d: 8px;
+  --fizz-delay: 240ms;
+}
+.fizz i:nth-child(4) {
+  --x: 46px;
+  --d: 15px;
+  --fizz-delay: 360ms;
+}
+.fizz i:nth-child(5) {
+  --x: -56px;
+  --d: 8px;
+  --fizz-delay: 480ms;
+}
+[data-burst] .fizz i {
+  animation: fizz 1.6s cubic-bezier(0.2, 0.6, 0.3, 1) var(--fizz-delay, 0ms) both;
+}
+@keyframes fizz {
+  from {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-150px) scale(1);
+    opacity: 0;
+  }
+}
+
+/* Stable: daybreak on the shore, the sun not quite up. */
+.track-stable .track-stage {
+  background:
+    radial-gradient(65% 46% at 50% 72%, rgba(246, 189, 59, 0.28), transparent 72%),
+    linear-gradient(180deg, #101924 0%, #1c2630 56%, #392e24 100%);
+}
+:root[data-theme="light"] .track-stable .track-stage {
+  background:
+    radial-gradient(65% 46% at 50% 72%, rgba(246, 189, 59, 0.28), transparent 72%),
+    linear-gradient(180deg, #dcecf7 0%, #f3efe4 68%, #fae3be 100%);
+}
+:root[data-theme="light"] .shore {
+  background: #d6d4ce;
+}
+/* The white ball, on the hill and raised against the sky, keeps a darker rim here. */
+.track-stable .ball,
+.track-stable [data-part="ball"] {
+  stroke: #8c9199;
+  stroke-width: 1;
+}
+.shore {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -64%;
+  height: 100%;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 7%, var(--bg-bubble));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+.claw-clawling {
+  position: relative;
+  width: clamp(140px, 13vw, 180px);
+  align-self: end;
+  margin-bottom: 4%;
+}
+.track-stable .track-tag {
+  background: var(--bg-code);
+  color: var(--text-muted);
+}
+
+/* The Claws: Clawtrate's creatures, from the app's avatar spec on the 40-unit
+   grid. Each pose is a data-s group, shown while the drawing's data-state
+   names it; each moving part carries its motion inline, as the app draws it. */
+.claw-defs {
+  position: absolute;
+  overflow: hidden;
+}
+.claw {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 20px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.claw:focus-visible {
+  outline-offset: 4px;
+}
+.claw-art {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.claw-art [data-s] {
+  display: none;
+}
+.claw-art[data-state="idle"] [data-s~="idle"],
+.claw-art[data-state="thinking"] [data-s~="thinking"],
+.claw-art[data-state="working"] [data-s~="working"],
+.claw-art[data-state="waiting"] [data-s~="waiting"],
+.claw-art[data-state="blocked"] [data-s~="blocked"],
+.claw-art[data-state="done"] [data-s~="done"] {
+  display: inline;
+}
+/* Blocked: the creature loses its colour a little. */
+.claw-art [data-muted] {
+  filter: saturate(0.4) brightness(0.85);
+}
+/* The Lantern's light: low while it thinks, bright once it looks at you. */
+.lantern .halo {
+  opacity: 1;
+}
+.lantern [data-s="thinking"] .halo {
+  animation: halo-low 2600ms cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  opacity: 0.35;
+}
+/* At rest the light stays low, so it visibly comes up when the Lantern wakes. */
+@keyframes halo-low {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.16;
+  }
+}
+
+/* The spec's motions (avatar.ts, AVATAR_MOTIONS), in grid units. */
+@keyframes av-blink {
+  0% {
+    translate: 0px 0px;
+  }
+  91% {
+    translate: 0px 0px;
+  }
+  93.5% {
+    translate: 0px 6.7px;
+  }
+  96% {
+    translate: 0px 0px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-blink-large {
+  0% {
+    translate: 0px 0px;
+  }
+  91% {
+    translate: 0px 0px;
+  }
+  93.5% {
+    translate: 0px 7.3px;
+  }
+  96% {
+    translate: 0px 0px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-sway {
+  0% {
+    rotate: -4deg;
+  }
+  50% {
+    rotate: 4deg;
+  }
+  100% {
+    rotate: -4deg;
+  }
+}
+@keyframes av-bob {
+  0% {
+    translate: 0px 0px;
+  }
+  50% {
+    translate: 0px -1.4px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-lean {
+  0% {
+    scale: 1;
+  }
+  45% {
+    scale: 1.07;
+  }
+  60% {
+    scale: 1.07;
+  }
+  100% {
+    scale: 1;
+  }
+}
+@keyframes av-hop {
+  0% {
+    translate: 0px 0px;
+  }
+  4% {
+    translate: 0px 0px;
+  }
+  10% {
+    translate: 0px -2.8px;
+  }
+  16% {
+    translate: 0px 0px;
+  }
+  20% {
+    translate: 0px -0.9px;
+  }
+  24% {
+    translate: 0px 0px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-snap {
+  0% {
+    stroke-dasharray: 78 22;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 97 3;
+    stroke-dashoffset: 9.5;
+  }
+  100% {
+    stroke-dasharray: 78 22;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes av-wave {
+  0% {
+    rotate: -30deg;
+  }
+  50% {
+    rotate: -78deg;
+  }
+  100% {
+    rotate: -30deg;
+  }
+}
+@keyframes av-crawl {
+  0% {
+    translate: 0px 0px;
+  }
+  50% {
+    translate: -1px -0.6px;
+  }
+  100% {
+    translate: 0px 0px;
+  }
+}
+@keyframes av-tilt {
+  0% {
+    rotate: -7deg;
+  }
+  50% {
+    rotate: 5deg;
+  }
+  100% {
+    rotate: -7deg;
+  }
+}
+@keyframes av-lure-sway {
+  0% {
+    rotate: -9deg;
+  }
+  50% {
+    rotate: 9deg;
+  }
+  100% {
+    rotate: -9deg;
+  }
+}
+@keyframes av-conduct {
+  0% {
+    rotate: -16deg;
+  }
+  50% {
+    rotate: 14deg;
+  }
+  100% {
+    rotate: -16deg;
+  }
+}
+@keyframes av-ping {
+  0% {
+    scale: 1;
+    opacity: 0.85;
+  }
+  60% {
+    scale: 3;
+    opacity: 0;
+  }
+  100% {
+    scale: 3;
+    opacity: 0;
+  }
+}
+@keyframes av-glow {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* The home page's Clawling sits on the demo window's ledge. The window's top
+   edge cuts it off: the button shows only the part above, in front of the
+   window's shadow. The window lines up with the headline. */
+.demo {
+  position: relative;
+}
+.demo .win {
+  position: relative;
+  z-index: 1;
+}
+.claw-perch {
+  position: absolute;
+  z-index: 2;
+  right: clamp(24px, 8%, 64px);
+  top: -58px;
+  width: 80px;
+  height: 58px;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+}
+.claw-perch .claw-art {
+  width: 80px;
+  height: 80px;
+}
+
+/* Under reduced motion every Claw holds a still pose; a press still changes it. */
+@media (prefers-reduced-motion: reduce) {
+  .claw-art,
+  .claw-art *,
+  .js .claw-lantern,
+  .snow i,
+  .fizz i {
+    animation: none !important;
+  }
+  /* A part whose motion is the point holds a still pose, such as a claw raised to wave. */
+  .claw-art .av-still {
+    rotate: var(--av-still) !important;
+  }
+  .pc,
+  .pc.swap .claw-art {
+    animation: none !important;
+  }
+  .pc [data-part="pupil"] {
+    translate: none !important;
+  }
+  .lantern [data-part="ping"],
+  .snow {
+    display: none !important;
+  }
+}
+
+/* Built by engineers from: the logos in one colour, each at its own height. */
+.pedigree {
+  --s: 1;
+  padding-top: clamp(48px, 6vw, 72px);
+}
+.download .pedigree {
+  padding: clamp(48px, 6vw, 80px) 0 0;
+}
+.pedigree-title {
+  color: var(--text-muted);
+  font-size: var(--t-s);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.pedigree-logos {
+  list-style: none;
+  padding: 0;
+  margin-top: clamp(28px, 3vw, 40px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+}
+.pedigree-logos li {
+  display: flex;
+  justify-content: center;
+}
+.pedigree-logos img {
+  display: block;
+  width: auto;
+  height: calc(var(--h) * var(--s));
+  filter: brightness(0) invert(1);
+  opacity: 0.55;
+}
+:root[data-theme="light"] .pedigree-logos img {
+  filter: brightness(0);
+  opacity: 0.58;
+}
+/* Heights and nudges by eye: the AWS and Amazon smiles sit below their words. */
+.logo-aws {
+  --h: 40px;
+  transform: translateY(3px);
+}
+.logo-amazon {
+  --h: 35px;
+  transform: translateY(4px);
+}
+.logo-sonos {
+  --h: 21px;
+}
+.logo-mit-lincoln-laboratory {
+  --h: 28px;
+}
+.logo-summit-partners {
+  --h: 28px;
+}
+.logo-philips {
+  --h: 23px;
+}
+/* The logos come in one after another, once. */
+.js .pedigree[data-reveal] li {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 600ms var(--ease),
+    transform 700ms var(--ease);
+}
+.js .pedigree.in li {
+  opacity: 1;
+  transform: none;
+}
+.pedigree li:nth-child(2) {
+  transition-delay: 70ms;
+}
+.pedigree li:nth-child(3) {
+  transition-delay: 140ms;
+}
+.pedigree li:nth-child(4) {
+  transition-delay: 210ms;
+}
+.pedigree li:nth-child(5) {
+  transition-delay: 280ms;
+}
+.pedigree li:nth-child(6) {
+  transition-delay: 350ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .js .pedigree[data-reveal] li {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Below 1160px the row no longer fits: two rows, AWS, Amazon and Sonos, then
+   MIT Lincoln Laboratory, Summit Partners and Philips. The ::before is the
+   line break (flex has none), its height the gap between rows. */
+@media (max-width: 1160px) {
+  .pedigree {
+    --s: 0.9;
+  }
+  .pedigree-logos {
+    flex-wrap: wrap;
+    gap: 0 24px;
+  }
+  .pedigree-logos::before {
+    content: "";
+    order: 1;
+    flex: 0 0 100%;
+    height: 40px;
+  }
+  .pedigree-logos li:nth-child(n + 4) {
+    order: 2;
+  }
+}
+@media (max-width: 900px) {
+  .tracks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Phones and small tablets: two columns from the left, MIT Lincoln Laboratory
+   on a row of its own. */
+@media (max-width: 720px) {
+  .pedigree {
+    --s: 0.72;
+  }
+  .pedigree-logos {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-auto-flow: row dense;
+    justify-content: start;
+    align-items: center;
+    gap: 24px 36px;
+  }
+  .pedigree-logos::before {
+    content: none;
+  }
+  .pedigree-logos li {
+    justify-content: flex-start;
+  }
+  .pedigree-logos li:nth-child(n + 4) {
+    order: 0;
+  }
+  .pedigree-logos li:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+  .pedigree-logos .logo-mit-lincoln-laboratory {
+    width: min(100%, 280px);
+    height: auto;
+  }
+  .track {
+    border-radius: 22px;
+  }
+  .track-stage {
+    height: 220px;
+  }
+  .track .download-choices .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+@media (max-width: 360px) {
+  .pedigree {
+    --s: 0.72;
+  }
 }
