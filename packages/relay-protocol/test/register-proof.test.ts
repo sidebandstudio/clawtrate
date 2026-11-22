@@ -1059,7 +1059,7 @@ describe("one control socket's registration", () => {
     expect(registration.state).toBe("failed");
   });
 
-  it.each(["success", "failure"])(
+  it.each(["success", "failure", "abort"])(
     "waits for the verifying write before replay or key claims (%s)",
     async (outcome) => {
       const saved = recording();
@@ -1082,6 +1082,12 @@ describe("one control socket's registration", () => {
         hold.release();
         expect((await pending).ok).toBe(true);
         expect(saved.seen).toEqual(["verifying", "replay", "claim", "commit", "committed"]);
+      } else if (outcome === "abort") {
+        registration.abort();
+        hold.release();
+        expect(await pending).toEqual({ ok: false, code: "aborted" });
+        expect(saved.seen).toEqual(["verifying", "failed"]);
+        expect(saved.latest().state).toBe("failed");
       } else {
         hold.reject(new Error("down"));
         expect(await pending).toEqual({ ok: false, code: "store_failed" });
