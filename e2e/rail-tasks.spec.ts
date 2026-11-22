@@ -564,32 +564,47 @@ test("F-278: Delete, confirmed, stops the task's active run first, then removes 
   await expect(taskRow(second, task.title)).toHaveCount(0, { timeout: 20_000 });
 });
 
-test("F-278: a message sent in a task just deleted elsewhere does not start a new task: it stays with its words, says the task was deleted, and the task stays on screen", async () => {
-  const task = await ownTask("pip", "Pip", "Deleted elsewhere");
-  const words = "Are you still there?";
-  // What the host tells this page can be held back: the page goes on showing what it last heard.
-  let holding = false;
-  let held: HeldState | null = null;
+/**
+ * What the host tells the page, held back on demand: the page goes on showing what it last heard.
+ * Every state the host's snapshots gave the message with these words in this task is recorded.
+ */
+async function holdBridge(on: Page, key: string, words: string) {
+  const bridge: {
+    holding: boolean;
+    held: HeldState | null;
+    states: Set<string>;
+    /** The page hears the last state held back, and everything after it. */
+    release: () => void;
+  } = { holding: false, held: null, states: new Set(), release: () => undefined };
   let heldFrame = "";
   let toPage: ((message: string) => void) | null = null;
-  /** Every state the message was in, as the host's snapshots said. */
-  const states = new Set<string>();
-  await page.routeWebSocket(/\/bridge$/, (ws) => {
+  await on.routeWebSocket(/\/bridge$/, (ws) => {
     const server = ws.connectToServer();
     toPage = (message) => ws.send(message);
     ws.onMessage((message) => server.send(message));
     server.onMessage((message) => {
       const frame = JSON.parse(String(message)) as { type?: string; state?: HeldState };
       if (frame.type === "state" && frame.state) {
-        held = frame.state;
+        bridge.held = frame.state;
         heldFrame = String(message);
-        const state = held.transcripts[task.key]?.outbox.find((each) => each.text === words);
-        if (state) states.add(state.status);
+        const state = bridge.held.transcripts[key]?.outbox.find((each) => each.text === words);
+        if (state) bridge.states.add(state.status);
       }
-      if (!holding || frame.type !== "state") ws.send(message);
+      if (!bridge.holding || frame.type !== "state") ws.send(message);
     });
   });
-  await reload(page);
+  bridge.release = () => {
+    bridge.holding = false;
+    toPage!(heldFrame);
+  };
+  await reload(on);
+  return bridge;
+}
+
+test("F-278: a message sent in a task just deleted elsewhere does not start a new task: it stays with its words, says the task was deleted, and the task stays on screen until the person starts a new task with it", async () => {
+  const task = await ownTask("pip", "Pip", "Deleted elsewhere");
+  const words = `Are you still there? ${STAMP}`;
+  const bridge = await holdBridge(page, task.key, words);
   await unfold(page, "Pip");
   await sendInTask(page, task.title, "Hello");
   await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
@@ -597,36 +612,122 @@ test("F-278: a message sent in a task just deleted elsewhere does not start a ne
   await expect(
     page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
   ).toBeVisible();
+  const before = new Set((await listed("pip", "all")).map((row) => row.key));
   // The task is deleted from outside the app, with the gateway's own command line, and the
   // person sends before this page has heard of it.
-  holding = true;
+  bridge.holding = true;
   await gatewayCall("sessions.delete", { key: task.key, deleteTranscript: true });
   await gateway.poll(async () => await describe(task.key)).toBeNull();
   await page.getByTestId("composer-input").fill(words);
   await page.getByTestId("composer-input").press("Enter");
   // The gateway answered it, and made nothing under the deleted task's key: it refused it.
-  await gateway.poll(() => states.has("sent") || states.has("failed")).toBe(true);
+  await gateway.poll(() => bridge.states.has("sent") || bridge.states.has("failed")).toBe(true);
   expect(await describe(task.key)).toBeNull();
-  expect([...states]).not.toContain("sent");
+  expect([...bridge.states]).not.toContain("sent");
   // The page then hears both at once: the task gone from the list, and the refusal.
   await gateway
-    .poll(() => held?.tasksByBot.pip?.some((row) => row.key === task.key) ?? true)
+    .poll(() => bridge.held?.tasksByBot.pip?.some((row) => row.key === task.key) ?? true)
     .toBe(false);
-  holding = false;
-  toPage!(heldFrame);
+  bridge.release();
   const sent = page.getByTestId("outgoing").filter({ hasText: words });
   await expect(sent).toContainText("Not sent. This task was deleted elsewhere.");
   await expect(sent.getByRole("button", { name: "Resend" })).toHaveCount(0);
   await expect(page.locator(".conversation-header")).toContainText(task.title);
   await shot(page, "deleted-elsewhere");
-  // Nothing is sent there later.
+  // Nothing is sent there, or anywhere else, until the person chooses.
   await page.waitForTimeout(2_000);
   expect(await describe(task.key)).toBeNull();
-  expect((await listed("pip", "all")).some((row) => row.key === task.key)).toBe(false);
-  // Deleting the message leaves the task, which the gateway no longer has.
+  expect(
+    (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key)),
+  ).toEqual([]);
+  // What the conversation's live region says from here: the new task's own run speaks after it.
+  await page.evaluate(() => {
+    const heard: string[] = [];
+    (window as unknown as { __heard: string[] }).__heard = heard;
+    const region = document.querySelector("[data-testid=announcer]")!;
+    new MutationObserver(() => heard.push(region.textContent ?? "")).observe(region, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  });
+  // "Start a new task with this message": one new task under the same bot, with the words.
+  await sent.getByRole("button", { name: "Start a new task with this message" }).click();
+  let fresh: string[] = [];
+  await gateway
+    .poll(async () => {
+      fresh = (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key));
+      return fresh.length;
+    })
+    .toBe(1);
+  made.add(fresh[0]!);
+  await gateway
+    .poll(async () =>
+      JSON.stringify(await gatewayCall("chat.history", { sessionKey: fresh[0], limit: 50 })),
+    )
+    .toContain(words);
+  // It opens, and the message has left the deleted task, which the gateway still doesn't have.
+  await expect(page.locator(".conversation-header")).not.toContainText(task.title);
+  await expect(page.getByTestId("transcript").first()).toContainText(words);
+  await expect(page.getByTestId("outgoing").filter({ hasText: "Not sent." })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __heard: string[] }).__heard))
+    .toContain("Started as a new task");
+  await shot(page, "deleted-elsewhere-new-task");
+  expect(await describe(task.key)).toBeNull();
+});
+
+test("F-277: a message sent in a task just archived elsewhere says the task was archived, keeps its words and the task on screen, and offers a new task", async () => {
+  const task = await ownTask("pip", "Pip", "Archived elsewhere");
+  const words = `One more thing ${STAMP}`;
+  const bridge = await holdBridge(page, task.key, words);
+  await unfold(page, "Pip");
+  await sendInTask(page, task.title, "Hello");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  await expect(
+    page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
+  ).toBeVisible();
+  const before = new Set((await listed("pip", "all")).map((row) => row.key));
+  const sessionId = (await describe(task.key))!.sessionId;
+  // Archived from outside the app, and the person sends before this page has heard of it.
+  bridge.holding = true;
+  await gatewayCall("sessions.patch", {
+    key: task.key,
+    archived: true,
+    expectedSessionId: sessionId,
+  });
+  await gateway.poll(async () => (await describe(task.key))?.archived ?? false).toBe(true);
+  await page.getByTestId("composer-input").fill(words);
+  await page.getByTestId("composer-input").press("Enter");
+  await gateway.poll(() => bridge.states.has("sent") || bridge.states.has("failed")).toBe(true);
+  expect([...bridge.states]).not.toContain("sent");
+  await gateway
+    .poll(() => bridge.held?.tasksByBot.pip?.some((row) => row.key === task.key) ?? true)
+    .toBe(false);
+  bridge.release();
+  const sent = page.getByTestId("outgoing").filter({ hasText: words });
+  await expect(sent).toContainText("Not sent. This task was archived elsewhere.");
+  await expect(sent.getByRole("button", { name: "Resend" })).toHaveCount(0);
+  await expect(
+    sent.getByRole("button", { name: "Start a new task with this message" }),
+  ).toBeVisible();
+  // The task stays on screen with its history and the message.
+  await expect(page.locator(".conversation-header")).toContainText(task.title);
+  await expect(
+    page.getByTestId("transcript").first().getByRole("blockquote").getByText("Hello"),
+  ).toBeVisible();
+  await shot(page, "archived-elsewhere");
+  // Nothing is sent there, or anywhere else, until the person chooses.
+  await page.waitForTimeout(2_000);
+  expect(await describe(task.key)).toMatchObject({ archived: true, sessionId });
+  expect(
+    (await listed("pip", "all")).map((row) => row.key).filter((key) => !before.has(key)),
+  ).toEqual([]);
+  // Deleting the message leaves the task, which stays archived.
   await sent.getByRole("button", { name: "Delete" }).click();
   await expect(sent).toHaveCount(0);
   await expect(page.locator(".conversation-header")).not.toContainText(task.title);
+  expect(await describe(task.key)).toMatchObject({ archived: true, sessionId });
 });
 
 test("F-277: Stop and archive stops a working task's run and archives it; restored, its history is as it was", async () => {
