@@ -128,6 +128,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/runs.ts:applyQuestionRequested>card.settledBy":
     "the new question card's settling records, empty; kept only in the card, under its bound",
   // Weak: an entry lives only as long as the object it is keyed by.
+  "packages/core/src/client.ts:connectionWrites":
+    "weak, keyed by the host storage shared by its clients",
   "packages/core/src/bounds.ts:bounded": "weak, keyed by retained objects",
   "packages/core/src/bounds.ts:draws": "weak, keyed by bounds, which are static",
   "packages/core/src/runs.ts:sizes": "weak, keyed by retained objects",
