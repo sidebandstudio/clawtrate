@@ -1106,6 +1106,8 @@ describe("what publishing accepts as the prepared release", () => {
   });
 });
 
+const siteRuns = "repos/sidebandstudio/clawtrate/actions/workflows/site.yml/runs?per_page=100";
+
 /** GitHub and the site as the publishing and withdrawing steps see them. */
 function github(
   dir: string,
@@ -1120,6 +1122,7 @@ function github(
     const line = [command, ...args].join(" ");
     for (const [start, answer] of Object.entries(answers))
       if (line.startsWith(start)) return answer;
+    if (command === "gh" && args.includes(siteRuns)) return ok();
     if (line === "gh auth status") return ok();
     if (line.startsWith(`gh api repos/sidebandstudio/clawtrate/compare/${COMMIT}...main`))
       return ok("ahead\n");
@@ -1177,8 +1180,8 @@ function site(
       return page ? page() : new Response("", { status: 404 });
     },
     requestMs: 1_000,
-    waitMs: 0,
-    pollMs: 0,
+    waitMs: 1_000,
+    pollMs: 2_000,
   };
 }
 
@@ -1502,6 +1505,83 @@ describe("withdrawing", () => {
   };
   const serving = (answer: () => Promise<Response> | Response) => site({ [BETA_FEED_URL]: answer });
 
+  it("waits for Site runs on main before accepting the public feed", async () => {
+    const made = hub(false);
+    const events: string[] = [];
+    const runner: Run = (command, args, options) => {
+      if (args.includes(siteRuns)) {
+        events.push("list");
+        return ok(events.length === 1 ? "123" : "");
+      }
+      return made.runner(command, args, options);
+    };
+    const net = serving(() => {
+      events.push("read");
+      return new Response("", { status: 404 });
+    });
+    await withdraw(runner, VERSION, { ...net, pollMs: 1 });
+    expect(events).toEqual(["list", "list", "read"]);
+  });
+
+  it("stops before reading the feed if the final Site run list arrives late", async () => {
+    const made = hub(false);
+    const read = vi.fn(() => new Response("", { status: 404 }));
+    let now = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const budgets: Array<number | undefined> = [];
+    const runner: Run = (command, args, options) => {
+      if (!args.includes(siteRuns)) return made.runner(command, args, options);
+      expect(args).toContain("--paginate");
+      budgets.push(options?.timeout);
+      now += budgets.length === 1 ? 400 : 601;
+      return ok(budgets.length === 1 ? "123" : "");
+    };
+    expect(
+      await stopped(() => withdraw(runner, VERSION, { ...serving(read), pollMs: 1 })),
+    ).toContain("Could not confirm in time whether the Site workflow's runs on main finished");
+    expect(budgets).toEqual([1_000, 600]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("expects the beta GitHub lists once the Site runs have finished", async () => {
+    const newer = "0.1.1-beta.20261121.1";
+    const made = hub(true);
+    let lists = 0;
+    const runner: Run = (command, args, options) => {
+      if (!args.includes(siteRuns)) return made.runner(command, args, options);
+      // A newer beta is published while a Site run is still going.
+      if (lists++ > 0) return ok("");
+      made.releases.push(row(newer, false));
+      return ok("123");
+    };
+    const net = serving(() => new Response(feed(newer)));
+    await withdraw(runner, VERSION, { ...net, pollMs: 1 });
+    expect(output.at(-1)).toBe(`The Beta feed offers ${newer}.`);
+  });
+
+  it("stops without judging the feed while a Site run on main stays unfinished", async () => {
+    const made = hub(false);
+    const runner: Run = (command, args, options) =>
+      args.includes(siteRuns) ? ok("123") : made.runner(command, args, options);
+    const read = vi.fn(() => new Response("", { status: 404 }));
+    expect(await stopped(() => withdraw(runner, VERSION, serving(read)))).toContain(
+      "have not finished",
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("rejects a matching response completed after the deadline", async () => {
+    let now = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const net = serving(() => {
+      now += 1_001;
+      return new Response("", { status: 404 });
+    });
+    expect(await stopped(() => withdraw(hub(false).runner, VERSION, net))).toContain(
+      "no answer in time",
+    );
+  });
+
   it("reports the draft GitHub lists and the older beta the site now offers", async () => {
     await withdraw(
       hub(true).runner,
@@ -1585,8 +1665,8 @@ describe("withdrawing", () => {
           signal.addEventListener("abort", () => reject(signal.reason)),
         ),
       requestMs: 20,
-      waitMs: 0,
-      pollMs: 0,
+      waitMs: 1_000,
+      pollMs: 2_000,
     };
     expect(await stopped(() => withdraw(hub(false).runner, VERSION, hanging))).toBe(
       `Could not tell what the site serves (no answer in time). Check ${BETA_FEED_URL} yourself.`,
