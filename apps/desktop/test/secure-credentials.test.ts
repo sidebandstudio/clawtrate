@@ -293,7 +293,7 @@ describe("this device's credentials in secure storage", () => {
       return bytes.toString("base64");
     };
     const flipLast = (text: string) => flip(text);
-    const cases: Array<[string, Record<string, string>, typeof Error]> = [
+    const cases: Array<[string, Record<string, string>, new () => Error]> = [
       ["data", { ...outer, data: flipLast(outer.data!) }, CredentialRecordInvalidError],
       ["tag", { ...outer, tag: flipLast(outer.tag!) }, CredentialRecordInvalidError],
       ["wrapped key", { ...outer, key: flip(outer.key!, "first") }, SecureStorageUnavailableError],
