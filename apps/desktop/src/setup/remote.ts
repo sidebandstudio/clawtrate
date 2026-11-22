@@ -1624,13 +1624,17 @@ export class RemoteSetup {
     if (!answer.confirmed) return;
     const live = this.live;
     if (live ? live.record.id !== target.id : this.saved?.id !== target.id) return;
-    this.attempt += 1;
+    const mine = (this.attempt += 1);
     this.stopWatching();
     await this.letGoPending();
     // The forward closes whatever else fails; a step that fails keeps the route, for a retry that
     // carries on from where this one stopped.
     const closed = live ? await this.closeLive(live, { forget: false }) : true;
-    if (!closed || !(await this.forgetRecord(target))) {
+    const forgot = closed ? await this.forgetRecord(target) : "failed";
+    // A Pair that took this route's id meanwhile owns it now, and the screen: this Remove ends
+    // with its own target, and says nothing over it.
+    if (forgot === "replaced" || mine !== this.attempt) return;
+    if (forgot === "failed") {
       // Something of the route is still kept (its pinned key, its saved connection, its record):
       // Remove didn't finish, and says so.
       this.saved = target;
@@ -1675,21 +1679,35 @@ export class RemoteSetup {
    * first, then its record, token and the saved connection that names it.
    * A pin that couldn't be deleted is a failed Remove, and the rest stays.
    */
-  private async forgetRecord(record: SshRouteRecord): Promise<boolean> {
+  private async forgetRecord(record: SshRouteRecord): Promise<"forgotten" | "failed" | "replaced"> {
+    // Only while the id is still this record's: a Pair that wrote it since, or holds it, owns it.
+    const ours = () => {
+      if (this.live?.record.id === record.id || this.currentPending()?.record.id === record.id)
+        return false;
+      const now = this.options.routes.get(record.id);
+      return (
+        now === null ||
+        (now.key === record.key &&
+          now.lastUsed === record.lastUsed &&
+          now.destination === record.destination)
+      );
+    };
+    if (!ours()) return "replaced";
     const transport = this.transport();
     // The pin's deletion can't be verified without a transport: nothing is forgotten, and Remove
     // says it didn't finish. A pin already gone (an earlier Remove got that far) is no failure.
-    if ("refused" in transport || !transport.forgetId(record.id).ok) return false;
+    if ("refused" in transport || !transport.forgetId(record.id).ok) return "failed";
     const client = this.options.client;
     try {
       await client.forgetRoute(record.key);
+      if (!ours()) return "replaced";
       this.options.routes.remove(record.id);
     } catch {
-      return false;
+      return "failed";
     }
     await client.dropRouteToken(record.key).catch(() => undefined);
-    this.options.publishRoute(null);
-    return true;
+    if (!this.live && !this.currentPending()) this.options.publishRoute(null);
+    return "forgotten";
   }
 
   /** A record the store let go (too many, or its key taken): its pin and files go too. */

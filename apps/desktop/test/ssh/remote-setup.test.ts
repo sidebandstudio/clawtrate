@@ -2163,6 +2163,50 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
         await h.remote.closeAll();
       });
 
+    it("a Pair that takes the route's id while Remove waits on the client keeps its route, token and pin, and its screen", async () => {
+      const h = host();
+      await connected(h);
+      const [saved] = h.routes.list();
+      const pin = `clawtrate-route-${saved!.id}-`;
+      // The same computer's gateway, now on another port: the same route id, another key.
+      const second = await httpGateway();
+      const code = (port: number) =>
+        JSON.parse(qrJson(`ws://127.0.0.1:${port}`, BOOTSTRAP, Date.now() + 590_000));
+      const forgetRoute = h.client.forgetRoute.bind(h.client);
+      let replacing = false;
+      h.client.forgetRoute = async (route: string) => {
+        if (!replacing) {
+          replacing = true;
+          // Remove waits on the client: a Look and a Pair go through meanwhile.
+          stub.setStatus("default", statusJson({ port: second.port, home: t.home }));
+          stub.setCode("default", code(second.port));
+          await lookOnDevbox(h);
+          await h.remote.connect();
+          await until(() => h.setup().phase === "done", 30_000);
+        }
+        return forgetRoute(route);
+      };
+      try {
+        await h.remote.removeRoute();
+      } finally {
+        h.client.forgetRoute = forgetRoute;
+        stub.setStatus("default", running());
+        stub.setCode("default", code(gateway.port));
+      }
+      expect(replacing).toBe(true);
+      const now = h.routes.get(saved!.id);
+      expect(now).not.toBeNull();
+      expect(now!.key).not.toBe(saved!.key);
+      expect(now!.gatewayPort).toBe(second.port);
+      expect(h.routes.hasToken(now!.key)).toBe(true);
+      expect(h.knownHosts()).toContain(pin);
+      expect(h.setup().phase).toBe("done");
+      await until(() => h.setup().route?.phase === "up", 10_000);
+      expect(h.client.route).toBe(now!.key);
+      await h.remote.closeAll();
+      await second.close();
+    });
+
     it("a Pair that fails gives back the oldest saved route its first write let go at the limit, with its token and pin", async () => {
       const h = host();
       await connected(h);
