@@ -128,13 +128,13 @@ jobs:
       - if: runner.environment == 'github-hosted'
         run: |
           fixture=$(realpath "$(mktemp -d)")
-          mkdir -m 700 "$fixture/home" "$fixture/home/.openclaw"
-          file="$fixture/home/.openclaw/openclaw.json"
+          mkdir -m 700 "$fixture/fixture-home" "$fixture/fixture-home/.openclaw"
+          file="$fixture/fixture-home/.openclaw/openclaw.json"
           printf '{}' > "$file"
           chmod 600 "$file"
           sudo -n chown root "$file"
           sudo -n chmod +a "$(id -un) allow read" "$file"
-          echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/home" >> "$GITHUB_ENV"
+          echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/fixture-home" >> "$GITHUB_ENV"
       # The settings reader's macOS helper, built with packaging's flags.
       - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
       - run: pnpm exec playwright install chromium
