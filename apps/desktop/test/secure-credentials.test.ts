@@ -30,6 +30,7 @@ import type * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { keepAside } from "../src/main/secret-box.ts";
 
 // Every byte written to a temporary file, and a rename a test makes fail.
 const fsHooks = vi.hoisted(() => ({
@@ -639,6 +640,27 @@ describe("this device's credentials in secure storage", () => {
     await credentials.storage.set("connection", NO_TOKEN);
     expect(await credentials.storage.get("connection")).toBe(NO_TOKEN);
     expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+  });
+
+  it("starting fresh with the settings set aside keeps the earlier token retired while its removal fails, and keeps the device pairing", async () => {
+    const { dir, pem } = legacyFolder();
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(CONNECTION);
+    // The recovery for unreadable settings: `state.json` set aside, the sealed record kept.
+    await keepAside(join(dir, STATE_FILE), new Date("2026-11-22T10:20:30Z"));
+    fsHooks.failRename = (to) => to.endsWith(CREDENTIALS_FILE);
+    const fresh = open(dir, fakeBox().box);
+    expect(await fresh.storage.get("connection")).toBe(null);
+    // The person chooses the same gateway again, with no token typed.
+    await fresh.storage.set("connection", NO_TOKEN);
+    expect(await fresh.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await open(dir, fakeBox().box).storage.get("connection")).toBe(NO_TOKEN);
+    // Once the removal works, the copy goes; the device pairing and identity stay.
+    fsHooks.failRename = null;
+    const relaunched = open(dir, fakeBox().box);
+    expect(await relaunched.storage.get("connection")).toBe(NO_TOKEN);
+    expect(await relaunched.storage.get(TOKEN_KEY)).toBe(RECORD);
+    expect((await relaunched.signer.loadIdentity()).deviceId).toBe(await deviceIdOf(pem));
+    expect(await sealedValues(dir)).not.toHaveProperty("connection");
   });
 
   it("removing this device's own token never revives the earlier build's token, live or after relaunch", async () => {

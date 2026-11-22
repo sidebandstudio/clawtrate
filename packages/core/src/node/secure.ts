@@ -482,7 +482,10 @@ export function createSecureCredentials(options: {
           await commit(reconciled);
           sealed = reconciled;
         } catch {
-          // Kept unused: reads never take a token from it.
+          // Kept unused: reads never take a token from it, and the next settings write records
+          // its retirement, so settings that name its address again (after a recovery set
+          // `state.json` aside, say) can't revive it.
+          settings[EARLIER_RETIRED_KEY] = "true";
         }
       }
       const mode: Mode = { kind: "secure", sealed, swept: !earlier };
