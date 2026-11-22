@@ -1,5 +1,0 @@
-{
-  "plugin": "clawtrate-bots-probe",
-  "settings": {},
-  "tools": [{ "name": "clawtrate_probe_self", "kind": "plugin-tool" }]
-}

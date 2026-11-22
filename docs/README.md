@@ -51,7 +51,7 @@ Every document in the repository, by what you want to do.
 - [Search](research/search.md): what the gateway's message search matches, its order and limits, what a narrower search finds, its cost, and the file and routine lists, from OpenClaw's source and a development instance.
 - `research/search/`: the probe behind the search note.
 - [Bots that manage themselves](research/bot-self-management.md): what an OpenClaw plugin can do to change bots, with whose authority, with no tools, and over MCP, from OpenClaw's source and a development instance.
-- `research/bot-self-management/`: the probe behind that note.
+- `research/bot-self-management/`: a defensive stand-in for the contract that note leads to.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 

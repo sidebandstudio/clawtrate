@@ -5,11 +5,11 @@ Issue #292. A fresh start opens on a chat with the Main Bot. It greets you, and 
 It builds on:
 
 - **Effortless setup** (the setup work's effortless-setup design, not yet on `main`). That design covers everything up to step 3 of its §7. This one is the autonomy step and the Main Bot's chat. Its PR 6 owns the measurement from pairing to the composer and to the first reply; section 3 adds one more.
-- **The avatar studio** (#302's design, not yet on `main`). The Main Bot's first picture is the name's Claw of its §2. Its Describe route (§7) and its proposal records and commit (§9) are part of this plugin's contract (section 9).
+- **The avatar studio** (#302's design, not yet on `main`). The Main Bot can take the name's Claw of its §2 as its first picture, as an explicit edit. Its Describe route (§7) and its proposal records and commit (§9) are part of this plugin's contract (section 9).
 - **External channel chats** (#314). A Main Bot whose main conversation also carries direct messages from other apps is handled in section 4.
 - **#257 and #246** (the Approvals step and the Create sequence), and **#147** (the primary bot and a bot's identity). Section 16 says what is taken from each.
 
-The evidence is [`docs/research/bot-self-management.md`](../research/bot-self-management.md), from a probe plugin run on a development gateway and from the OpenClaw 2026.10.6 package CI installs. Its findings are cited as R1 to R31.
+The evidence is [`docs/research/bot-self-management.md`](../research/bot-self-management.md), from checks on a development gateway and from the OpenClaw 2026.10.6 package CI installs. Its findings are cited as R1 to R32.
 
 The prototype is to follow, as `prototype/main-bot.html`: the autonomy step, the first run with its guided card, a bot asking to rename itself, creating a bot by chat, proposals, and external agents in Settings, in dark (the default) and light, at desktop and phone width, with a check, `prototype/tools/checks/main-bot.mjs`. The prototype is a fixture: it shows what each state looks like and cannot show that a gateway effect happened. Section 17 lists the contract tests that do.
 
@@ -114,7 +114,11 @@ The first run's state is one gateway-owned record of the plugin, keyed by gatewa
 {
   bot: { id: string; createdAt: number };
   task: { key: string; state: "unclaimed" | "created" | "unknown" };
-  opening: { state: "unsent" | "sending" | "delivered" | "unknown"; messageId?: string };
+  opening: {
+    state: "unsent" | "sending" | "delivered" | "unknown";
+    attempt: number;                         // 1 for the first send, +1 per explicit resend
+    resend?: { device: string; at: number }; // who claimed the current explicit resend
+  };
   identity: "unsaved" | "saved";
   claim: { device: string; at: number };   // the gateway's clock; the device hashed
 }
@@ -122,23 +126,24 @@ The first run's state is one gateway-owned record of the plugin, keyed by gatewa
 
 - **The task key is chosen before anything is sent**: `agent:<id>:clawtrate-getting-started-<record id>`, and `sessions.create` is called with that `key`. The record is claimed atomically (`registerIfAbsent`, R22) before the call, so a second device, or the same one after a restart, finds the record and the key.
 - **An existing key is adopted, not reset**, and a message sent with it would be sent again (R29). So Clawtrate calls `sessions.create {key, message}` only for a key it has just confirmed doesn't exist; otherwise it reads the task and decides from its history.
-- **Before any retry**, after a restart, a device change or a lost reply, Clawtrate reconciles from the gateway, not from memory: it reads the task by its key (`sessions.list`) and its history (`chat.history`). A task that exists with the fixed opening in its history is `created` and `delivered`; one that exists without it is `created` and `unsent`; one that doesn't exist is `unclaimed`. `sessions.create`'s `idempotencyKey` deduplicates only in the gateway's memory, per caller, for five minutes after success (R21, R29), so it is a convenience, never the reason not to resend.
-- **When delivery is ambiguous** (the call's answer was lost, or it said `runStarted: false`, and the history can't confirm the opening), the record is `unknown` and Clawtrate stops: "Clawtrate couldn't confirm the first message reached Maple." with **Send it again** and **Leave it**. Nothing is resent by itself.
+- **`sending` is written before the call.** The record moves from `unsent` to `sending` (attempt 1) with `compareAndApply` (R22), and only then is `sessions.create` sent. A record that was ever `sending` never goes back to `unsent` by itself.
+- **After a lost reply, a restart or a device change**, Clawtrate reads the task by its key (`sessions.list`) and its history (`chat.history`). The fixed opening in the history makes the record `delivered`. Anything else after a `sending` (no task, an empty or incomplete history, an answer with `runStarted: false`) makes it `unknown`, and it stays `unknown` across recoveries until a person resends. `sessions.create`'s `idempotencyKey` deduplicates only in the gateway's memory, per caller, for five minutes after success (R21, R29), so it is a convenience, never a reason to resend or not.
+- **An unknown opening waits for a person**: "Clawtrate couldn't confirm the first message reached Maple." with **Send it again** and **Leave it**. Send it again claims the resend with `compareAndApply` from `unknown` to `sending` (attempt + 1, `resend` set to that device). When two devices press it, one claim wins; the other shows "Another device is sending it again" and sends nothing. Nothing is resent by itself.
 - The record resumes only on the gateway that holds it. Without the plugin there is no gateway record, so Clawtrate sends the opening only from the device that ran setup, once, and says on any other device that the first run wasn't finished there.
 
 ### The steps, timed
 
 On a Mac with OpenClaw at its defaults and a model account. Estimates; the instrumented builds report each separately.
 
-| Step | What happens                                                                                                                              | The person does     | Time                  | Total |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------- | ----- |
-| 1-3  | Effortless setup: settings read, Connect, paired with six scopes, bots loaded, channel chats hidden (#314). `clawtrate-bots.status` read. | Clicks Connect      | 5-10 s                | 10 s  |
-| 4    | "How should bots run commands?"                                                                                                           | Chooses             | 3-8 s                 | 18 s  |
-| 5    | The Main Bot's chat opens with an empty composer. For a Main Bot never set up, the record is claimed and "Getting started" starts.        | Nothing             | under 1 s             | 19 s  |
-| 6    | The greeting, and under it the guided card: "Name" and "How should it help?"                                                              | Reads               | 3-8 s on a real model | 27 s  |
-| 7    | The person fills the card and presses Save.                                                                                               | Types, presses Save | 10-20 s               | 47 s  |
-| 8    | The name, the role and the name's Claw are written; the rail, the title pill and the hero change when `agents.list` returns them.         | Nothing             | 1-3 s                 | 50 s  |
-| 9    | The card's answer is posted as the person's message, and the bot replies under its new name.                                              | Reads               | 3-8 s                 | 58 s  |
+| Step | What happens                                                                                                                                    | The person does     | Time                  | Total |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------- | ----- |
+| 1-3  | Effortless setup: settings read, Connect, paired with six scopes, bots loaded, channel chats hidden (#314). `clawtrate-bots.status` read.       | Clicks Connect      | 5-10 s                | 10 s  |
+| 4    | "How should bots run commands?"                                                                                                                 | Chooses             | 3-8 s                 | 18 s  |
+| 5    | The Main Bot's chat opens with an empty composer. For a Main Bot never set up, the record is claimed and "Getting started" starts.              | Nothing             | under 1 s             | 19 s  |
+| 6    | The greeting, and under it the guided card: "Name" and "How should it help?"                                                                    | Reads               | 3-8 s on a real model | 27 s  |
+| 7    | The person fills the card and presses Save.                                                                                                     | Types, presses Save | 10-20 s               | 47 s  |
+| 8    | The name and the role are written; the rail, the title pill and the hero change when `agents.list` returns them. "Use Maple's Claw" is offered. | Nothing             | 1-3 s                 | 50 s  |
+| 9    | The card's answer is posted as the person's message, and the bot replies under its new name.                                                    | Reads               | 3-8 s                 | 58 s  |
 
 Measured separately, with real provider latency, a cold plugin install and an owner's approval of a remote device each reported apart:
 
@@ -152,11 +157,11 @@ The 60 seconds are a target for the ready case: OpenClaw running, a model accoun
 
 - **The opening message** is fixed and shown as the person's: "Hi! I just set up Clawtrate. What should I call you, and how can you help me?" with the caption "Sent for you when setup finished." (F-006). It asks for the name and role itself, so the first run doesn't depend on a model choosing a tool.
 - **The greeting is the bot's own**, written by its model. OpenClaw's `BOOTSTRAP.md` in a new workspace asks the same questions (R13). Clawtrate doesn't edit that file.
-- **The guided card is Clawtrate's**, drawn under the greeting from the record, not from anything the model wrote: "Name" (1-64 characters) and "How should it help?" (up to 500 characters, a short role section in `AGENTS.md`), and **Save**. Under Save: "Saves this name and role, and gives it a Claw from its name. Clawtrate shows them once the gateway confirms." Before Save, the name is shown as the gateway will store it (whitespace collapsed and trimmed, R26).
+- **The guided card is Clawtrate's**, drawn under the greeting from the record, not from anything the model wrote: "Name" (1-64 characters) and "How should it help?" (up to 500 characters, a short role section in `AGENTS.md`), and **Save**. Under Save: "Saves this name and role. Clawtrate shows them once the gateway confirms." Before Save, the name is shown as the gateway will store it (whitespace collapsed and trimmed, R26).
 - **If the person answers in the composer instead**, the bot may propose the values with `clawtrate_bot_update`; they fill the same card for the person to change. Nothing is written until Save.
-- **What Save writes on OpenClaw 2026.10.6.** The role goes through `agents.files.set AGENTS.md` with `expectedHash`, or `expectedMissing` for a new file (R23): a conditional write. The name and the first picture have no conditional write on this gateway (`agents.update` takes no precondition, R24). So they are saved as **the person's own fresh edit**, exactly as a rename in Settings is (#147 §5): typed on this card a moment ago, never a stored value, sent with `agents.update` on the person's admin connection, read back, and carrying #302 §9's race caveat (a change made at the same moment elsewhere is detected afterwards, not prevented). The plugin-authorized conditional Save for the name and picture is gated (section 17, "Gated on missing gateway primitives").
-- **The picture.** The name's Claw is frozen at Save with #302's shared name function and PNG writer, written only while the bot has no picture and only for the confirmed name. A picture chosen elsewhere is kept. This needs #302's shared contract in core; until it lands, Save writes the name and role only.
-- **Each result** is shown as read back: "Name: Maple, read back", "Role: saved, read back", "Picture: Maple's Claw, read back", or partly saved with the field that didn't land.
+- **What Save writes on OpenClaw 2026.10.6.** The role goes through `agents.files.set AGENTS.md` with `expectedHash`, or `expectedMissing` for a new file (R23): a conditional write. The name has no conditional write on this gateway (`agents.update` takes no precondition, R24). So it is saved as **the person's own fresh edit**, exactly as a rename in Settings is (#147 §5): typed on this card a moment ago, never a stored value, sent with `agents.update` on the person's admin connection, read back, and carrying #302 §9's race caveat in its exact form: a change made elsewhere at the same moment can be overwritten without anyone being told, and the read-back confirms the value now stored but can't show that an edit was overwritten. The plugin-authorized conditional Save for the name is gated (section 17, "Gated on missing gateway primitives").
+- **The picture is a separate, explicit edit.** Save doesn't change the picture: with no conditional write, Clawtrate can't promise to keep a picture chosen elsewhere at the same moment. When the read-back shows the bot still has no picture, a line under the card offers **"Use Maple's Claw"**, drawn with #302's shared name function and PNG writer for the confirmed name, with the words "Sets Maple's picture to this Claw. If someone sets a picture elsewhere at the same moment, this replaces it." Pressing it is the person's own edit (`agents.update {avatar}`), read back. Without #302's shared contract in core, the line isn't shown.
+- **Each result** is shown as read back: "Name: Maple, read back", "Role: saved, read back", or partly saved with the field that didn't land.
 - **Its own task.** "Getting started" is a new task, so direct messages that share the bot's main conversation (#314) never land in it.
 
 ### When the plugin is missing
@@ -308,7 +313,7 @@ Each field is applied on accept with a write whose precondition the gateway chec
 
 A `baseHash` is the hash of the whole config, so an unrelated change makes it stale. The plugin then reads the config again and, only if every bound field still has its base value, sends the patch with the new hash; the gateway refuses it if anything changed in between. The manager list lives in the same config, so a manager grant removed before the write makes a config-backed write fail as well (section 7).
 
-**The name, gated.** The name's semantics include `IDENTITY.md`, which only `agents.update` writes, and that write takes no precondition. Writing the config identity alone with `config.patch` would leave the bot's own identity file saying the old name. So a proposed name is shown on the card with **"Rename Pip to Scout"**, which opens the person's own rename (#147 §5) filled with the proposed value: a fresh edit the person makes, read back, with #302 §9's race caveat. The proposal's other fields still apply with Apply.
+**The name, gated.** The name's semantics include `IDENTITY.md`, which only `agents.update` writes, and that write takes no precondition. Writing the config identity alone with `config.patch` would leave the bot's own identity file saying the old name. So a proposed name is shown on the card with **"Rename Pip to Scout"**, which opens the person's own rename (#147 §5) filled with the proposed value: a fresh edit the person makes, read back, carrying #302 §9's race caveat in its exact form: a change made elsewhere at the same moment can be overwritten without anyone being told, and the read-back confirms the value now stored but can't show that an edit was overwritten. The proposal's other fields still apply with Apply.
 
 **`clawtrate_bot_create`** (managers only; the factory returns no tool to anyone else)
 
@@ -317,11 +322,13 @@ A `baseHash` is the hash of the whole config, so an unrelated change makes it st
   autonomy?: "hands-off" | "ask"; routines?: RoutineDraft[]; reason?: string }
 ```
 
-The proposal is drawn with **every resolved value**: the exact new id (derived from the name as the gateway derives it), the workspace path, the account and model, the effort, the autonomy, the managed tool policy, the role text, the name's Claw, and each routine. Accept binds all of them. On accept, the plugin runs #257's Create sequence with the accepting person's authority:
+The proposal is drawn with **every resolved value**: the exact new id (derived from the name as the gateway derives it), the workspace path, the account and model, the effort, the autonomy, the managed tool policy, the role text, the name's Claw, and each routine. Accept binds all of them. For the role, the card says: "If the gateway gives Stride starting instructions, you'll confirm the role against them next." On accept, the plugin runs #257's Create sequence with the accepting person's authority:
 
 1. `agents.create {name, workspace, model, avatar}` once. The gateway refuses an id that already exists, inside its own config transform (R28): that is the expected-absence check. The name's Claw goes in the same call, so the first picture needs no later write. If the answer names another id than the one shown, nothing more is written and the card shows what was created.
 2. The first `config.patch {baseHash}` with Never, the managed deny list (section 12) and the model with `fallbacks: []`; the second with the chosen mode.
-3. `agents.files.set AGENTS.md {expectedMissing}`.
+3. The role. `agents.create` seeds the workspace's starting files, `AGENTS.md` among them, unless `skipBootstrap` is set (R32). So the plugin reads `AGENTS.md` after the create:
+   - **missing** (an empty workspace): the role is written as the file with `expectedMissing`, the base the card showed for this case;
+   - **present** (seeded): the plugin writes nothing. A second card asks "Add Stride's role to its starting instructions?", showing the seeded file kept as it is and the role section added after it, bound to that file's hash. **Add** writes with `expectedHash`; a hash that changed asks again. The seeded instructions are never replaced.
 4. Each routine with `cron.add`, carrying a `declarationKey` derived from the proposal and the routine, so a resend converges on one routine (R27).
 
 Each step is read back. A step that doesn't read back leaves a held bot, as #257 says, and the card shows how far it got. The picture needs #302's shared name and PNG contract; until it lands, the create sends no `avatar` and the bot shows its id's Clawling.
@@ -393,7 +400,7 @@ These are always proposals and are marked on the card, in any mode and from any 
 
 ### The guided first-run card
 
-The guided card of section 3 saves exactly what it shows. Its role is a conditional write; its name and first picture are the person's own fresh edit on 2026.10.6 (section 3).
+The guided card of section 3 saves exactly what it shows. Its role is a conditional write; its name is the person's own fresh edit on 2026.10.6, and the first picture is a separate explicit edit (section 3).
 
 ### The cards
 
@@ -413,7 +420,12 @@ Proposals also collect in a **Proposals** list in the gateway menu, with a count
 
 ### Undo
 
-Undo is its own record (section 9), a person's action, and a new bound change: it references the journal entry it undoes, and restores the earlier value only under that field's precondition token as read now. A field with no conditional write has no Undo from a proposal; the person renames again instead. If the value changed again since: "Pip's instructions changed again since then, so Undo would overwrite that. Open instructions to compare."
+Undo is its own record (section 9), a person's action, and a new bound change. It references the journal entry it undoes, which holds the field's value or hash **as the write left it**. On Undo, the plugin reads the field once and compares it with that journaled result:
+
+- **The same**: it restores the earlier value with the precondition token from **that same read** (the config hash, the file hash, the routine revision), so an edit landing after the read is refused inside the gateway's write.
+- **Different** (edited before Undo was opened, or between opening and pressing): nothing is written, and the card shows the comparison: "Pip's instructions changed again since then, so Undo would overwrite that." with the journaled result and the current value side by side, and "Open instructions".
+
+A field with no conditional write has no Undo from a proposal; the person renames again instead.
 
 ## 9. For the avatar studio: Describe and proposal records
 
@@ -446,10 +458,11 @@ One retained store with `overflowPolicy: "reject-new"` (R22). A record:
 }
 ```
 
-- **One admission ledger.** Admission, supersession and expiry go through one ledger row, changed with `compareAndApply` (R22): it holds the open count (200), each source's open count (20), and the latest open proposal per target and field. Two submissions can't both take the last slot, and a proposal can't supersede one that is already `committing`.
+- **One authoritative order.** `compareAndApply` protects one key (R22), so every decision that must be ordered against another goes through **one ledger row per gateway**, and nothing else decides. A ledger transition is: admitting a proposal (with the open count of 200, each source's 20, and the latest open proposal per target and field); superseding one; expiring one; claiming one for accept, decline or Undo (`open` to `committing` or a terminal state); and changing a grant's generation (revocation or expiry), which withdraws that grant's `open` suggestions in the same transition. The ledger holds only what ordering needs: ids, states, claims, counts and grant generations, not payloads.
+- **Secondary records follow the ledger and can be rebuilt from it.** The proposal records, the Undo records and the grant records carry the payloads and details. Each is written after its ledger transition and is reconciled on every read: if a proposal record says `open` and the ledger says `committing` or `withdrawn`, the ledger wins and the record is repaired. A ledger transition whose secondary write was interrupted is completed on the next read.
+- **Races, decided by the ledger.** A revocation and an acceptance on two devices: whichever transition lands first decides. If the claim landed first, the commit goes on and the audit says "accepted before access was removed"; if the revocation landed first, the accept is refused as `withdrawn`. A helper still connected when access is removed from another device learns it from the plugin's event and from the next ledger check before its next call. Two submissions racing for the last slot, and a supersession racing a claim, are ordered the same way: a proposal already `committing` can't be superseded.
 - **Supersession**: a new proposal for the same bot and field supersedes the open one from any source; for a picture, #302 §9's rule (a newer one from the same proposing bot) applies, and a picture proposal from another source stays alongside it.
 - **Expiry** is a field on the gateway's clock; terminal records are kept 30 days, then removed.
-- **One claim**: accept, decline and Undo each take their record with `compareAndApply`, so two devices get one outcome. The event tells every device.
 - **Undo has its own record**: `{ undoes: <journal id>, field, restore, token, state, claim }`, idempotent by id, so a second Undo or a retry after a lost answer finds the first.
 - **Crash and lost answers.** A record left in `committing` is settled from the journal: each effect journaled before the crash is `applied`. An effect not journaled is `unknown`, even when a read shows the proposed value, because an independent admin could have written the same value or restored the base; there is no durable receipt for a particular commit on this gateway. What a read shows is kept as `observed` and shown as "Now reads: …", never as an outcome. Clawtrate never resends an uncertain write; the person can apply again only as a new decision on a card drawn from a fresh read.
 - **Several fields** are applied one by one, and each confirmed effect is journaled before the next, so a partly applied proposal says exactly what landed.
@@ -473,7 +486,7 @@ An external agent (Claude Code, Codex, Cursor) starts `clawtrate-mcp`, shipped i
 ### The principal, on both sides
 
 - **In the app**: a grant holds a high-entropy bearer secret, shown once; the app stores only its digest and compares in constant time. Its label is display text. Grants can be rotated and expire (30 days by default).
-- **On the gateway**: the plugin keeps the authoritative grant record, `{ grant, generation, scope, bots, includeInstructions, includeFuture, expiresAt, revoked }`, written by `clawtrate-bots.relay.grants.set` (admin). It never holds the bearer. Every suggestion records the grant id and generation, and `proposals.accept` on **any** device refuses a suggestion whose grant is revoked, expired or at another generation.
+- **On the gateway**: each grant's generation and revocation live in the plugin's ledger (section 9), which is what decides; its details (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`) are a secondary record written by `clawtrate-bots.relay.grants.set` (admin). The gateway never holds the bearer. Every suggestion records the grant id and generation, and a claim on **any** device is refused when the ledger shows the grant revoked, expired or at another generation.
 - **The limit, said plainly** on the Add screen: "Anything that can read this secret can do what this grant allows. Programs running as you on this Mac can read your agent's settings, so give agents the least they need."
 - **A new connection.** When the helper connects, and whenever the app reconnects to the gateway, the app checks the gateway's identity is the one the grant was made for and reads the grant's record from the plugin. A missing record, another generation, revocation or expiry refuses every call until the owner acts. A grant never moves to another gateway.
 - Every request is typed and checked before each dispatch. The actor is assigned by the app from the grant, never taken from the caller.
@@ -493,7 +506,7 @@ An agent never gets credentials, devices, pairing, gateway config, tool policy, 
 
 ### Revoking, and the audit
 
-- **Remove access**, or expiry, moves the grant to a new generation on the gateway and marks it revoked. Its open suggestions become `withdrawn` in the same ledger change, so no device can apply them. In the app, new and queued calls are refused ("This agent's access to Clawtrate was removed."), and the helper's sessions are closed.
+- **Remove access**, or expiry, is one ledger transition: the grant's generation moves on, it is marked revoked, and its open suggestions become `withdrawn`, so no device can apply them. A suggestion already claimed before that transition finishes and is audited as such. In the app, new and queued calls are refused ("This agent's access to Clawtrate was removed."), and the helper's sessions are closed.
 - **A call already sent to the gateway** finishes; the audit records what it did ("completed after access was removed", with its outcome), and its answer is not sent to the closed helper session. Nothing is rolled back.
 - **The audit** is the app's own, owner-only and bounded (5,000 records, 90 days), keyed by grant and gateway: each read, suggestion, refusal and removal, with no secret and no instruction text. It is kept after a grant is removed. "See its activity" shows it with the plugin's outcomes for its suggestions.
 
