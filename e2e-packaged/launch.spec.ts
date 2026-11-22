@@ -523,7 +523,13 @@ test("F-393: checking spelling asks no outside host for a dictionary", async () 
     join(data, "Preferences"),
     JSON.stringify({ spellcheck: { dictionaries: ["fo"] } }),
   );
-  const args = [`--user-data-dir=${data}`, "--remote-debugging-port=0", `--log-net-log=${netLog}`];
+  // Straight to the pictures' port: a proxy the system names could be asked for them.
+  const args = [
+    `--user-data-dir=${data}`,
+    "--remote-debugging-port=0",
+    `--log-net-log=${netLog}`,
+    "--no-proxy-server",
+  ];
   let copy: ChildProcess;
   if (WINDOWS) {
     // Windows keeps no run record. Node puts the copy in a job object that
