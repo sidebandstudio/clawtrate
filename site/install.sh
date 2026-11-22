@@ -50,7 +50,10 @@ stop() {
 finish() {
   status=$?
   trap '' INT TERM HUP
-  if [ -n "$CURSOR_HIDDEN" ]; then printf '\033[0m\033[?25h' || :; fi
+  if [ -n "$CURSOR_HIDDEN" ]; then
+    if [ -n "${ART_COLOR:-}" ]; then printf '\033[0m' || :; fi
+    printf '\033[?25h' || :
+  fi
   if [ "$PHASE" != installed ]; then
     if [ -n "$STAGED_ID" ] && [ -d "$TARGET" ] && [ ! -L "$TARGET" ] &&
       [ "$(stat -f '%d:%i' "$TARGET" 2>/dev/null)" = "$STAGED_ID" ]; then
@@ -556,7 +559,9 @@ art_frame() {
 # appears beside it, and the Clawling hops with the ball. It waits on nothing,
 # and a signal ends it early with the outcome unchanged: the install is done.
 # Skipped for CI, a dumb terminal, CLAWTRATE_NO_ANIMATION, a terminal that is
-# not UTF-8 or narrower than the art. NO_COLOR keeps the motion without colour.
+# not UTF-8, a terminal of unknown size or too small for the art, and a sleep
+# that takes no fractions. NO_COLOR keeps the motion without colour. The EXIT
+# trap shows the cursor again, after the art or a signal.
 celebrate() {
   [ -t 1 ] || return 0
   [ -z "${CI+set}" ] && [ -z "${CLAWTRATE_NO_ANIMATION+set}" ] || return 0
@@ -565,12 +570,22 @@ celebrate() {
     *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) ;;
     *) return 0 ;;
   esac
+  # The size of the terminal the output goes to, which may not be the input's.
+  # Nine lines of art and the cursor's row, and one spare column at the right.
   command -v sleep >/dev/null 2>&1 || return 0
-  art_size="$(stty size 2>/dev/null </dev/tty)" || art_size=""
-  case "${art_size##* }" in
-    '' | *[!0-9]* | 0) ;;
-    *) [ "${art_size##* }" -ge 64 ] || return 0 ;;
+  command -v stty >/dev/null 2>&1 || return 0
+  { art_size="$(stty size <&3 2>/dev/null)"; } 3>&1 || return 0
+  case "$art_size" in
+    *' '*) ;;
+    *) return 0 ;;
   esac
+  art_rows=${art_size%% *}
+  art_cols=${art_size##* }
+  case "$art_rows:$art_cols" in
+    :* | *: | *[!0-9:]*) return 0 ;;
+  esac
+  [ "$art_rows" -ge 10 ] && [ "$art_cols" -ge 65 ] || return 0
+  sleep 0.01 >/dev/null 2>&1 || return 0
   ART_COLOR=1 ART_RGB="" ART_DRAWN=""
   if [ -n "${NO_COLOR:-}" ]; then ART_COLOR=""; fi
   case "${COLORTERM:-}" in truecolor | 24bit) ART_RGB=1 ;; esac
@@ -598,8 +613,6 @@ celebrate() {
   art_frame "${ART_DONE#?....................} ...................." 41
   sleep 0.12
   art_frame "$ART_DONE" 41
-  printf '%s[?25h' "$ESC"
-  CURSOR_HIDDEN=""
 }
 
 main() {
@@ -607,7 +620,7 @@ main() {
   trap - EXIT
   set -eu
   PHASE="" WORK="" STAGE="" LOCKED="" KEEP_STAGE="" LEFT="" TARGET="" LOCK="" STAGED_ID="" VERSION=""
-  CURSOR_HIDDEN=""
+  CURSOR_HIDDEN="" ART_COLOR=""
   trap finish EXIT
   trap 'exit 1' INT TERM HUP
 
