@@ -17,7 +17,6 @@ import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
 import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
 const DESKTOP = join(import.meta.dirname, "../apps/desktop");
-const ELECTRON = createRequire(join(DESKTOP, "package.json"))("electron") as string;
 const WINDOWS = process.platform === "win32";
 const ADDED = "Link text added to your draft. Nothing was sent.";
 
@@ -40,21 +39,33 @@ async function stopElectron(child: ChildProcess) {
   }
 }
 
+/** Resolved in beforeAll: listing the checks must not look for, or fetch, Electron. */
+let electron: string;
 let dir: string;
 let profile: string;
 let served: Awaited<ReturnType<typeof linkGateway>>;
 let app: ChildProcess | undefined;
 let browser: Browser | undefined;
 let page: Page;
+/** Everything this file started and has not seen exit, stopped by PID at the end. */
+const started = new Set<ChildProcess>();
+const cleanup = new AsyncDisposableStack();
+
+function start(args: string[]): ChildProcess {
+  const child = spawn(electron, [dir, `--user-data-dir=${profile}`, ...args], {
+    cwd: dir,
+    env: appEnv(),
+    stdio: "ignore",
+  });
+  started.add(child);
+  child.once("exit", () => started.delete(child));
+  return child;
+}
 
 /** Start the app on the test's data folder, with `extra` arguments, and find its page. */
 async function launch(...extra: string[]): Promise<Page> {
   rmSync(join(profile, "DevToolsActivePort"), { force: true });
-  const child = spawn(
-    ELECTRON,
-    [dir, `--user-data-dir=${profile}`, "--remote-debugging-port=0", ...extra],
-    { cwd: dir, env: appEnv(), stdio: "ignore" },
-  );
+  const child = start(["--remote-debugging-port=0", ...extra]);
   app = child;
   await once(child, "spawn");
   const port = await debuggingPort(profile, child);
@@ -74,15 +85,15 @@ async function quit() {
 
 /** Open a link as Windows and Linux do while the app runs: a second launch that hands it over. */
 async function deliver(raw: string) {
-  const second = spawn(ELECTRON, [dir, `--user-data-dir=${profile}`, raw], {
-    cwd: dir,
-    env: appEnv(),
-    stdio: "ignore",
-  });
-  const [code] = (await once(second, "exit", { signal: AbortSignal.timeout(30_000) })) as [
-    number | null,
-  ];
-  expect(code, "the second launch hands over and exits").toBe(0);
+  const second = start([raw]);
+  try {
+    const [code] = (await once(second, "exit", { signal: AbortSignal.timeout(30_000) })) as [
+      number | null,
+    ];
+    expect(code, "the second launch hands over and exits").toBe(0);
+  } finally {
+    await stopElectron(second);
+  }
 }
 
 const field = () => page.getByTestId("composer-input");
@@ -111,7 +122,11 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   test.setTimeout(240_000);
+  electron = createRequire(join(DESKTOP, "package.json"))("electron") as string;
   dir = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-link-app-")));
+  cleanup.defer(() =>
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+  );
   profile = join(dir, "profile");
   execFileSync(
     process.execPath,
@@ -139,6 +154,12 @@ test.beforeAll(async () => {
     }),
   );
   served = await linkGateway();
+  cleanup.defer(() => served.close());
+  // First at the end: every app this file started, before the gateway and the folder go.
+  cleanup.defer(async () => {
+    await browser?.close().catch(() => {});
+    for (const child of [...started]) await stopElectron(child);
+  });
   page = await launch();
   await page.getByPlaceholder("Gateway address").fill(served.url);
   await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
@@ -146,9 +167,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await quit();
-  await served?.close();
-  if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  await cleanup.disposeAsync();
 });
 
 test("F-248: a link handed over by a second launch opens the bot's chat with its text, unsent", async () => {
