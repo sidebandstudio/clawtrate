@@ -1,15 +1,19 @@
 // The parade at the page's end: Claws from the avatar spec, each with its own
 // habit. Their eyes follow the pointer (on touch, the last tap); one coming
 // near is noticed; a press plays the Claw's "done" beat. It runs only while
-// the parade is on screen and the page is visible, and under reduced motion
-// the Claws hold still poses and only a press changes them.
+// the parade is on screen, the page is visible and motion is allowed; when it
+// stops, every timer and animation ends and each Claw is back at rest. Under
+// reduced motion the Claws hold still poses and only a press changes them.
 
 (function () {
   const cast = document.querySelector(".cast");
   if (!cast) return;
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  // A mouse or trackpad is followed as it moves; a touch screen by its taps.
+  const hover = window.matchMedia("(any-hover: hover) and (any-pointer: fine)");
   const NEAR = 150; // px from a Claw's middle that counts as near
   const random = (from, to) => from + Math.random() * (to - from);
+  const EASE = "cubic-bezier(0.3, 0, 0.2, 1)";
 
   const claws = [...cast.querySelectorAll(".pc")].map((el) => {
     const art = el.querySelector(".claw-art");
@@ -23,16 +27,20 @@
       near: false,
       timer: 0,
       beat: 0,
+      squash: null,
+      notice: null,
     };
   });
 
   function pose(claw, state) {
     if (claw.art.dataset.state === state) return;
     // A Shellfolk ducking in or peeking out squashes a little.
-    if (claw.act === "duck") {
-      claw.el.classList.remove("swap");
-      void claw.el.offsetWidth;
-      claw.el.classList.add("swap");
+    if (claw.act === "duck" && running) {
+      claw.squash?.cancel();
+      claw.squash = claw.art.animate([{ scale: "1.06 0.9" }, { scale: "1 1" }], {
+        duration: 300,
+        easing: EASE,
+      });
     }
     claw.art.dataset.state = state;
   }
@@ -40,9 +48,12 @@
     if (!claw.beat) pose(claw, claw.rest);
   }
 
-  // A press or tap: the done beat, then back to what it was doing.
+  // A press or tap: the done beat, then back to what it was doing. While the
+  // parade runs, the press also turns the eyes, so a tap works on any device.
   claws.forEach((claw) => {
-    claw.el.addEventListener("click", () => {
+    claw.el.addEventListener("click", (event) => {
+      if (!visible || document.hidden) return;
+      if (running) onPointer(event);
       clearTimeout(claw.beat);
       claw.art.removeAttribute("data-doze");
       pose(claw, "done");
@@ -52,8 +63,6 @@
       }, 1700);
     });
   });
-  if (reduce) return;
-  cast.setAttribute("data-paused", "");
 
   // Each habit, as a loop of timeouts that stops when the parade is paused.
   const habits = {
@@ -132,6 +141,7 @@
     }
     if (claw.act === "doze") {
       clearTimeout(claw.timer);
+      claw.timer = 0;
       if (near) claw.art.removeAttribute("data-doze");
       else claw.timer = setTimeout(() => claw.art.setAttribute("data-doze", ""), 4000);
     }
@@ -140,9 +150,18 @@
       settle(claw);
     }
     if (near && claw.art.dataset.state !== "done") {
-      claw.el.classList.remove("noticed");
-      void claw.el.offsetWidth;
-      claw.el.classList.add("noticed");
+      claw.notice?.cancel();
+      claw.notice = claw.el.animate(
+        // Ease each step, as the CSS keyframes did, so the hop peaks on time.
+        [
+          { offset: 0, translate: "0 0", easing: EASE },
+          { offset: 0.35, translate: "0 -10%", easing: EASE },
+          { offset: 0.6, translate: "0 0", easing: EASE },
+          { offset: 0.78, translate: "0 -3%", easing: EASE },
+          { offset: 1, translate: "0 0" },
+        ],
+        { duration: 520 },
+      );
     }
   }
 
@@ -176,38 +195,64 @@
   }
 
   let running = false;
+  let listening = "";
   function start() {
     if (running) return;
     running = true;
     cast.removeAttribute("data-paused");
-    window.addEventListener("pointermove", onPointer, { passive: true });
-    window.addEventListener("pointerdown", onPointer, { passive: true });
+    listening = hover.matches ? "pointermove" : "pointerdown";
+    window.addEventListener(listening, onPointer, { passive: true });
     claws.forEach((claw, i) => {
       // Staggered, so they never start together.
       claw.timer = setTimeout(() => habits[claw.act]?.(claw), i * 350);
     });
   }
+  // Every stop puts the parade back as it was: nothing waiting, nothing moving.
   function stop() {
-    if (!running) return;
     running = false;
     cast.setAttribute("data-paused", "");
-    window.removeEventListener("pointermove", onPointer);
-    window.removeEventListener("pointerdown", onPointer);
+    if (listening) window.removeEventListener(listening, onPointer);
+    listening = "";
     cancelAnimationFrame(frame);
     frame = 0;
-    claws.forEach((claw) => clearTimeout(claw.timer));
+    pointer = null;
+    lastMove = -Infinity;
+    claws.forEach((claw) => {
+      clearTimeout(claw.timer);
+      clearTimeout(claw.beat);
+      claw.timer = 0;
+      claw.beat = 0;
+      claw.squash?.cancel();
+      claw.notice?.cancel();
+      claw.squash = null;
+      claw.notice = null;
+      claw.near = false;
+      claw.rest = "idle";
+      claw.art.dataset.state = "idle";
+      claw.art.removeAttribute("data-doze");
+      claw.art.style.removeProperty("--look-x");
+      claw.art.style.removeProperty("--look-y");
+    });
   }
 
+  // Without IntersectionObserver the parade counts as off screen and stays still.
   let visible = false;
-  const update = () => (visible && !document.hidden ? start() : stop());
+  function update() {
+    if (visible && !document.hidden && !motion.matches) start();
+    else if (running || !visible || document.hidden) stop();
+  }
   document.addEventListener("visibilitychange", update);
+  motion.addEventListener("change", update);
+  hover.addEventListener("change", () => {
+    if (!running) return;
+    stop();
+    update();
+  });
+  stop();
   if ("IntersectionObserver" in window) {
     new IntersectionObserver((entries) => {
       visible = entries[entries.length - 1].isIntersecting;
       update();
     }).observe(cast);
-  } else {
-    visible = true;
-    update();
   }
 })();

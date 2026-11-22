@@ -1,6 +1,6 @@
 // The Claw moment at the end of install.sh: it plays only at a terminal, only
 // after a good install, and changes nothing else about the install.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInTerminal, runPiped, standIns, VERSION, type StandIns } from "./install-stand-ins.ts";
@@ -96,14 +96,66 @@ describe.skipIf(process.platform !== "darwin")("install.sh's Claw moment", () =>
     60_000,
   );
 
-  it("is skipped in a terminal narrower than the art", async () => {
+  // A folder of stand-ins put first on PATH.
+  function first(name: string, script: string): string {
+    const dir = join(s.root, `first-${name}`);
+    mkdirSync(dir);
+    writeFileSync(join(dir, name), script, { mode: 0o700 });
+    return `${dir}:${s.env.PATH}`;
+  }
+
+  // Every command in /usr/bin and /bin except stty.
+  function withoutStty(): string {
+    const dir = join(s.root, "no-stty");
+    mkdirSync(dir);
+    for (const from of ["/usr/bin", "/bin"])
+      for (const name of readdirSync(from))
+        if (name !== "stty" && !existsSync(join(dir, name)))
+          symlinkSync(join(from, name), join(dir, name));
+    const [bin] = s.env.PATH!.split(":");
+    return `${bin}:${dir}:/usr/sbin:/sbin`;
+  }
+
+  const TOO_SMALL = [
+    ["narrower than the art", { before: "stty cols 64" }, {}],
+    ["too short for the art", { before: "stty rows 9" }, {}],
+    ["of no size", { before: "stty rows 0 cols 0" }, {}],
+    ["whose size cannot be read", {}, { PATH: "unreadable" }],
+    ["without stty", {}, { PATH: "missing" }],
+    ["whose sleep takes no fractions", {}, { PATH: "whole-sleep" }],
+  ] as const;
+  it.each(
+    TOO_SMALL.flatMap(([why, options, env]) =>
+      SHELLS.map((shell) => [why, shell, options, env] as const),
+    ),
+  )(
+    "is skipped in a terminal %s (%s)",
+    async (_, shell, options, change) => {
+      const env: Record<string, string> = { ...s.env, ...TERMINAL };
+      if ("PATH" in change && change.PATH === "unreadable")
+        env.PATH = first("stty", "#!/bin/sh\nexit 1\n");
+      if ("PATH" in change && change.PATH === "missing") env.PATH = withoutStty();
+      if ("PATH" in change && change.PATH === "whole-sleep")
+        env.PATH = first(
+          "sleep",
+          '#!/bin/sh\ncase "$1" in *.*) echo "sleep: invalid time interval" >&2; exit 1 ;; esac\nexec /bin/sleep "$@"\n',
+        );
+      const run = await runInTerminal(shell, env, options);
+      expect(run.status).toBe(0);
+      expect(lines(run.stdout)).toBe(expected(s, archOf(run.stdout)));
+    },
+    60_000,
+  );
+
+  it("plays in a terminal just big enough for the art", async () => {
     const run = await runInTerminal(
       "/bin/sh",
       { ...s.env, ...TERMINAL },
-      { before: "stty cols 40 rows 24" },
+      { before: "stty rows 10 cols 65" },
     );
     expect(run.status).toBe(0);
-    expect(lines(run.stdout)).toBe(expected(s, archOf(run.stdout)));
+    expect(run.stdout).toContain(HIDE);
+    expect(run.stdout.split("\u001b[9A")).toHaveLength(10);
   }, 60_000);
 
   it("keeps the motion and drops every colour under NO_COLOR", async () => {
@@ -121,16 +173,25 @@ describe.skipIf(process.platform !== "darwin")("install.sh's Claw moment", () =>
     expect(run.stdout).not.toMatch(new RegExp(`${"\u001b"}\\[[0-9;]*m`));
   }, 60_000);
 
-  it.each(SHELLS)(
-    "restores the cursor when Ctrl-C ends it early, and the install stands (%s)",
-    async (shell) => {
-      const run = await runInTerminal(shell, { ...s.env, ...TERMINAL }, { interrupt: HIDE });
+  it.each([
+    ["/bin/sh", {}],
+    ["/bin/dash", { NO_COLOR: "1" }],
+  ] as const)(
+    "restores the cursor when Ctrl-C ends it early, and the install stands (%s %o)",
+    async (shell, change) => {
+      const run = await runInTerminal(
+        shell,
+        { ...s.env, ...TERMINAL, ...change },
+        { interrupt: HIDE },
+      );
       const out = run.stdout;
       const art = out.slice(out.indexOf(HIDE));
       // Stopped part of the way through, and the cursor shown again on the way out.
       expect(art.split("\u001b[9A").length).toBeLessThan(10);
       expect(art.lastIndexOf(SHOW)).toBeGreaterThan(0);
       expect(art.slice(art.lastIndexOf(SHOW))).not.toContain(HIDE);
+      // Under NO_COLOR, not even the reset on the way out.
+      if ("NO_COLOR" in change) expect(art).not.toMatch(new RegExp(`${"\u001b"}\\[[0-9;]*m`));
       expect(run.status).toBe(0);
       expect(existsSync(join(s.applications, "Clawtrate.app"))).toBe(true);
     },
