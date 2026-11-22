@@ -725,6 +725,114 @@ const AVATAR_MOTIONS                                         = {
 
 
 
+
+
+
+
+
+
+
+
+
+/** A creature's parts without its colour, which its fit depends on: `clawling/dome/pair/even`. */
+function avatarFitKey(choice              )         {
+  if (choice.family === "clawling") return `clawling/${choice.body}/${choice.eyes}/${choice.claws}`;
+  if (choice.family === "shellfolk") return `shellfolk/${choice.shell}`;
+  return `lantern/${choice.body}/${choice.lure}/${choice.eyes}`;
+}
+
+/**
+ * Each creature's fit and shift (`AvatarScene`): the same in every state, so a
+ * creature keeps its size and place while it acts, as "scale dx dy". Written
+ * by `node packages/core/test/make-avatar-fit.ts`.
+ */
+const AVATAR_FIT                         = {
+  "clawling/dome/pair/even": "0.858 -1.114 -2.327",
+  "clawling/dome/pair/fiddler": "0.808 -3.284 -2.467",
+  "clawling/dome/pair/big": "0.821 -0.866 -3.216",
+  "clawling/dome/splayed/even": "0.856 -1.16 -1.96",
+  "clawling/dome/splayed/fiddler": "0.8 -3.34 -1.98",
+  "clawling/dome/splayed/big": "0.817 -0.979 -2.809",
+  "clawling/dome/short/even": "0.882 -0.305 -5.738",
+  "clawling/dome/short/fiddler": "0.827 -2.352 -5.885",
+  "clawling/dome/short/big": "0.833 -0.261 -5.498",
+  "clawling/dome/single/even": "0.857 -1.155 -2.011",
+  "clawling/dome/single/fiddler": "0.81 -3.235 -2.651",
+  "clawling/dome/single/big": "0.816 -0.985 -2.755",
+  "clawling/tall/pair/even": "1 -1.573 -0.457",
+  "clawling/tall/pair/fiddler": "0.927 -4.259 -0.576",
+  "clawling/tall/pair/big": "0.956 -1.42 -1.378",
+  "clawling/tall/splayed/even": "0.987 -1.59 -0.045",
+  "clawling/tall/splayed/fiddler": "0.912 -4.305 0.002",
+  "clawling/tall/splayed/big": "0.951 -1.453 -0.999",
+  "clawling/tall/short/even": "1 -1.043 -3.454",
+  "clawling/tall/short/fiddler": "0.982 -3.598 -3.856",
+  "clawling/tall/short/big": "1 -0.586 -4.688",
+  "clawling/tall/single/even": "0.987 -1.589 -0.059",
+  "clawling/tall/single/fiddler": "0.93 -4.246 -0.709",
+  "clawling/tall/single/big": "0.949 -1.457 -0.918",
+  "clawling/wide/pair/even": "0.844 -1.031 -2.655",
+  "clawling/wide/pair/fiddler": "0.794 -2.903 -2.75",
+  "clawling/wide/pair/big": "0.809 -0.737 -3.551",
+  "clawling/wide/splayed/even": "0.833 -1.09 -2.178",
+  "clawling/wide/splayed/fiddler": "0.787 -3.046 -2.128",
+  "clawling/wide/splayed/big": "0.805 -0.862 -3.077",
+  "clawling/wide/short/even": "0.864 -0.217 -6.151",
+  "clawling/wide/short/fiddler": "0.815 -2.094 -6.17",
+  "clawling/wide/short/big": "0.812 -0.169 -5.921",
+  "clawling/wide/single/even": "0.844 -1.033 -2.646",
+  "clawling/wide/single/fiddler": "0.796 -2.755 -3.293",
+  "clawling/wide/single/big": "0.804 -0.776 -3.371",
+  "clawling/round/pair/even": "0.864 -1.119 -2.272",
+  "clawling/round/pair/fiddler": "0.808 -3.157 -2.521",
+  "clawling/round/pair/big": "0.823 -0.747 -3.273",
+  "clawling/round/splayed/even": "0.858 -1.159 -1.899",
+  "clawling/round/splayed/fiddler": "0.806 -3.326 -1.962",
+  "clawling/round/splayed/big": "0.824 -0.869 -2.883",
+  "clawling/round/short/even": "0.88 -0.283 -5.451",
+  "clawling/round/short/fiddler": "0.83 -2.301 -5.799",
+  "clawling/round/short/big": "0.827 -0.281 -5.036",
+  "clawling/round/single/even": "0.858 -1.16 -1.891",
+  "clawling/round/single/fiddler": "0.809 -3.137 -2.597",
+  "clawling/round/single/big": "0.823 -0.917 -2.72",
+  "shellfolk/spiral": "0.832 0.71 0.701",
+  "shellfolk/turret": "0.832 0.71 0.701",
+  "shellfolk/dome": "0.832 0.71 0.701",
+  "shellfolk/spotted": "0.832 0.71 0.701",
+  "lantern/round/hook/two": "0.944 -4.641 2.315",
+  "lantern/round/hook/one": "0.944 -4.641 2.315",
+  "lantern/round/flick/two": "0.885 -0.975 4.65",
+  "lantern/round/flick/one": "0.885 -0.975 4.65",
+  "lantern/round/wave/two": "0.875 -0.281 4.769",
+  "lantern/round/wave/one": "0.875 -0.281 4.769",
+  "lantern/round/reach/two": "0.861 -5.155 3.31",
+  "lantern/round/reach/one": "0.861 -5.155 3.31",
+  "lantern/bell/hook/two": "0.862 -1.771 2.308",
+  "lantern/bell/hook/one": "0.862 -1.771 2.308",
+  "lantern/bell/flick/two": "0.846 -0.514 3.732",
+  "lantern/bell/flick/one": "0.846 -0.514 3.732",
+  "lantern/bell/wave/two": "0.841 -0.517 3.83",
+  "lantern/bell/wave/one": "0.841 -0.517 3.83",
+  "lantern/bell/reach/two": "0.796 -2.486 3.237",
+  "lantern/bell/reach/one": "0.796 -2.486 3.237",
+  "lantern/oval/hook/two": "0.966 -3.263 2.259",
+  "lantern/oval/hook/one": "0.966 -3.263 2.259",
+  "lantern/oval/flick/two": "0.957 0.046 4.664",
+  "lantern/oval/flick/one": "0.957 0.046 4.664",
+  "lantern/oval/wave/two": "0.903 0.042 5.434",
+  "lantern/oval/wave/one": "0.903 0.042 5.434",
+  "lantern/oval/reach/two": "0.86 -3.824 3.851",
+  "lantern/oval/reach/one": "0.86 -3.824 3.851",
+  "lantern/box/hook/two": "0.861 -2.228 0.507",
+  "lantern/box/hook/one": "0.861 -2.228 0.507",
+  "lantern/box/flick/two": "0.845 -0.387 2.459",
+  "lantern/box/flick/one": "0.845 -0.387 2.459",
+  "lantern/box/wave/two": "0.812 -0.41 3.132",
+  "lantern/box/wave/one": "0.812 -0.41 3.132",
+  "lantern/box/reach/two": "0.777 -2.757 2.195",
+  "lantern/box/reach/one": "0.777 -2.757 2.195",
+};
+
 /** Clip radii of the two eye sizes, for the renderer's clip paths. */
 const AVATAR_EYE_CLIP = { eye: 3.1, "eye-large": 3.7 }         ;
 
@@ -1386,6 +1494,15 @@ function lanternScene(
  * each moving part naming its motion. The pose without motion is the state's
  * still pose, which is what reduced motion shows.
  */
+function fitOf(choice              )                                           {
+  const [fit, dx, dy] = (AVATAR_FIT[avatarFitKey(choice)] ?? "1 0 0").split(" ").map(Number)
+
+
+
+   ;
+  return { fit, shift: [dx, dy] };
+}
+
 function avatarScene(
   choice              ,
   state             ,
@@ -1397,7 +1514,7 @@ function avatarScene(
       : choice.family === "shellfolk"
         ? shellfolkScene(choice, state, variation)
         : lanternScene(choice, state, variation);
-  return { choice, state, muted: state === "blocked", root };
+  return { choice, state, muted: state === "blocked", root, ...fitOf(choice) };
 }
-window.ClawtrateCreatures = { AVATAR_FAMILIES, AVATAR_COLORS, AVATAR_COLOR_NAMES, CLAWLING_BODIES, CLAWLING_EYES, CLAWLING_CLAWS, SHELLFOLK_SHELLS, LANTERN_BODIES, LANTERN_LURES, LANTERN_EYES, AVATAR_PARTS, firstChoice, AVATAR_INK, AVATAR_WHITE, AVATAR_BALL, AVATAR_BALL_RIM, AVATAR_BALL_DIM, SHELLFOLK_CREAM, AVATAR_FINE_MIN_PX, AVATAR_STATES, avatarPose, avatarHash, defaultAvatar, avatarVariation, encodeAvatarChoice, decodeAvatarChoice, parseAvatarChoice, AVATAR_PNG_KEYWORD, MAX_PICTURE_CHARS, readPicture, choiceFromPicture, isKeepablePicture, pictureWithChoice, avatarFor, isGuardedColor, shade, AVATAR_MOTIONS, AVATAR_EYE_CLIP, avatarScene };
+window.ClawtrateCreatures = { AVATAR_FAMILIES, AVATAR_COLORS, AVATAR_COLOR_NAMES, CLAWLING_BODIES, CLAWLING_EYES, CLAWLING_CLAWS, SHELLFOLK_SHELLS, LANTERN_BODIES, LANTERN_LURES, LANTERN_EYES, AVATAR_PARTS, firstChoice, AVATAR_INK, AVATAR_WHITE, AVATAR_BALL, AVATAR_BALL_RIM, AVATAR_BALL_DIM, SHELLFOLK_CREAM, AVATAR_FINE_MIN_PX, AVATAR_STATES, avatarPose, avatarHash, defaultAvatar, avatarVariation, encodeAvatarChoice, decodeAvatarChoice, parseAvatarChoice, AVATAR_PNG_KEYWORD, MAX_PICTURE_CHARS, readPicture, choiceFromPicture, isKeepablePicture, pictureWithChoice, avatarFor, isGuardedColor, shade, AVATAR_MOTIONS, avatarFitKey, AVATAR_EYE_CLIP, avatarScene };
 })();

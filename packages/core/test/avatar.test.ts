@@ -24,6 +24,7 @@ import {
   type AvatarChoice,
   type AvatarShape,
 } from "../src/avatar.ts";
+import { sceneReach } from "./avatar-bounds.ts";
 
 /** Every choice there is: each family with every combination of its parts, in every colour. */
 function everyChoice(): AvatarChoice[] {
@@ -251,6 +252,27 @@ describe("every family, part and state", () => {
     expect(avatarPose("failed")).toBe("blocked");
     expect(avatarPose("stopped")).toBe("idle");
     expect(avatarPose("anything")).toBe("idle");
+  });
+});
+
+describe("every creature stays inside the circle an avatar is cropped to", () => {
+  it("in every state and every pose its motions reach, fitted as the renderer fits it", () => {
+    // The grid is 40 units and the crop circle has radius 20 about (20, 20), the same at
+    // 18, 22, 32 and 56 px and in the saved picture; a stroke kept a fixed width on screen
+    // is measured at 18 px, where it is widest in grid units.
+    const outside: string[] = [];
+    let creatures = 0;
+    for (const choice of everyChoice()) {
+      if (choice.color !== "blue") continue;
+      creatures += 1;
+      for (const state of AVATAR_STATES) {
+        const reach = sceneReach(avatarScene(choice, state, avatarVariation("atlas")));
+        if (reach > 19.75)
+          outside.push(`${encodeAvatarChoice(choice)} ${state}: ${reach.toFixed(2)}`);
+      }
+    }
+    expect(creatures).toBe(84);
+    expect(outside).toEqual([]);
   });
 });
 
