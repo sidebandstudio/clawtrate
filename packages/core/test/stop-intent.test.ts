@@ -185,25 +185,59 @@ describe("a Computer Stop's first abort, while it waits for the run to be named"
     await viewer.apply({ type: "openSession", key: KEY });
     await viewer.apply({ type: "computerShow", key: KEY });
     await viewer.apply({ type: "computerStopTask" });
+    return viewer;
   }
 
-  it("F-145: is kept no longer once it is sent", async () => {
+  it("F-145: a run event before the send acknowledgment keeps its unsent Stop with the viewer", async () => {
     const gateway = grantingGateway();
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () => answer.promise;
-    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true });
-    const { client } = await openTask({ gateway });
+    const { client, transcript } = await openTask({ gateway });
     onTestFinished(() => {
-      answer.resolve({ runId: "never", status: "started" });
+      answer.resolve({ status: "accepted" });
       client.stop();
     });
     const id = client.sendMessage(KEY, "Take your time");
     await until(() => gateway.calls("chat.send").length === 1);
-    await computerStop(client);
+    const viewer = await computerStop(client);
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    await viewer.apply({ type: "closeSession", key: KEY });
+    await viewer.apply({ type: "openSession", key: KEY });
+    answer.resolve({ runId: id, status: "started" });
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "sent");
+    expect(gateway.calls("chat.abort")).toEqual([]);
+  });
+
+  it("F-145: closing the task after the first abort still allows a retry if its reply is lost", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    const firstAbort = deferred<unknown>();
+    gateway.handlers["chat.abort"] = () => firstAbort.promise;
+    const { client } = await openTask({ gateway });
+    onTestFinished(() => {
+      answer.resolve({ runId: "never", status: "started" });
+      firstAbort.resolve({ aborted: true });
+      client.stop();
+    });
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    const viewer = await computerStop(client);
     expect(pending(client)).toBe(1);
     answer.resolve({ runId: id, status: "started" });
     await until(() => gateway.calls("chat.abort").length === 1);
     expect(pending(client)).toBe(0);
+    await viewer.apply({ type: "closeSession", key: KEY });
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
+    gateway.handlers["chat.abort"] = () => ({ aborted: true });
+    gateway.dropAll();
+    await until(() => gateway.calls("chat.abort").length === 2);
+    expect(gateway.calls("chat.abort")).toEqual([
+      { sessionKey: KEY, runId: id },
+      { sessionKey: KEY, runId: id },
+    ]);
   });
 
   it("F-145: is kept no longer once its run settles without it", async () => {

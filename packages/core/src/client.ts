@@ -5174,15 +5174,14 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     void this.settleEndedRuns(key);
-    // A Computer Stop's first abort is pending only while its run waits to be named.
+    // A run event can name the run before the send reply dispatches its first abort.
     for (const id of this.unsentStops.keys()) {
       const [task, runId] = id.split("\u0000") as [string, string];
       if (task !== key) continue;
       const run = findRun(transcript, runId);
       const waiting =
         run?.stopRequestedAt != null &&
-        ((run.state === "stopping" && !run.bound) ||
-          (run.state === "stopped" && !run.outcomeKnown));
+        (run.state === "stopping" || (run.state === "stopped" && !run.outcomeKnown));
       if (!waiting) this.unsentStops.delete(id);
     }
     for (const run of transcript.runs) {
@@ -6003,6 +6002,7 @@ export class ClawtrateClient {
       for (const waiter of waiters) waiter.reject(new Error("Switched to another gateway."));
     }
     this.creationWaiters.clear();
+    this.unsentStops.clear();
     this.approvalOutcomes.clear();
     this.waiting.clear();
     this.unrouted.clear();
