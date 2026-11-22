@@ -2,7 +2,8 @@
 // WebSocket on 127.0.0.1 the app connects to: bots with a chat each, one with
 // none, and one with two, the newest marked unread. It grants what a connection
 // asks for, and approves an access request at once, so a new device that asks
-// may write. Nothing here reaches another host.
+// may write. A read clears a chat's unread state, as the gateway's does. Nothing
+// here reaches another host.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -10,6 +11,15 @@ import { FakeGateway, helloOk } from "../../../packages/core/test/fake-gateway.t
 
 /** The gateway's public identity, as `gateway.identity.get` gives it. */
 export const GATEWAY_ID = "5ca1ab1e".repeat(8);
+
+type Row = {
+  key: string;
+  agentId: string;
+  label: string;
+  updatedAt: number;
+  unread?: boolean;
+  markedUnreadAt?: number;
+};
 
 export async function linkGateway() {
   const gateway = new FakeGateway();
@@ -39,7 +49,7 @@ export async function linkGateway() {
     ],
   });
   const now = Date.now();
-  const sessions = [
+  const sessions: Row[] = [
     { key: "agent:marlow:main", agentId: "marlow", label: "Intro review", updatedAt: now },
     { key: "agent:otto:main", agentId: "otto", label: "Release notes", updatedAt: now - 1000 },
     { key: "agent:wren:main", agentId: "wren", label: "Older notes", updatedAt: now - 3000 },
@@ -57,6 +67,17 @@ export async function linkGateway() {
     list: { sessions, hasMore: false },
   });
   gateway.handlers["sessions.list"] = () => ({ sessions, hasMore: false });
+  const changed = (row: Row) => gateway.emit("sessions.changed", { sessionKey: row.key, ...row });
+  gateway.handlers["sessions.patch"] = (params) => {
+    const { key, unread } = params as { key: string; unread?: boolean };
+    const row = sessions.find((each) => each.key === key);
+    if (row && unread === false) {
+      row.unread = false;
+      delete row.markedUnreadAt;
+      changed(row);
+    }
+    return { ok: true, key };
+  };
 
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
@@ -77,6 +98,12 @@ export async function linkGateway() {
     refuse(on: boolean) {
       refusing = on;
       if (on) for (const peer of server.clients) peer.terminate();
+    },
+    /** Change a chat's row: a reply makes it unread with a later `updatedAt`. */
+    update(key: string, fields: Partial<Row>) {
+      const row = sessions.find((each) => each.key === key)!;
+      Object.assign(row, fields);
+      changed(row);
     },
     /** Delete a chat, as another device would. */
     remove(key: string) {

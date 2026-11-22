@@ -504,6 +504,12 @@ test("F-248: a link that starts the app says so when no gateway is connected", a
 });
 
 test("F-248: a link that comes while the bots load waits for them, then opens the chat", async () => {
+  // The chat the app showed last, Wren's, and the link's are unread. Neither is read: the
+  // first was never opened, and the link's opening reads nothing.
+  expect(await page.evaluate(() => localStorage.getItem("clawtrate.bot"))).toBe("wren");
+  served.update("agent:wren:main", { unread: true });
+  served.update("agent:otto:main", { unread: true });
+  const before = [reads("agent:wren:main").length, reads("agent:otto:main").length];
   await deliverWhileBotsLoad(
     link("otto", "Check the release notes."),
     page.getByRole("region", { name: "Loading conversation" }),
@@ -512,10 +518,32 @@ test("F-248: a link that comes while the bots load waits for them, then opens th
   await expect(field()).toHaveValue("Check the release notes.");
   await expect(note()).toHaveText(ADDED);
   await expect(field()).toBeFocused();
+  // A read made on opening either would have reached the gateway by now.
+  await page.waitForTimeout(500);
+  expect([reads("agent:wren:main").length, reads("agent:otto:main").length]).toEqual(before);
   // The other chat kept its draft.
   await botButton("Marlow").click();
   await expect(field()).toHaveValue("Start over.\nAlso this.");
   expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
+test("F-248: a link into the chat the app showed last does not read it either", async () => {
+  await quit();
+  page = await launch();
+  expect(await page.evaluate(() => localStorage.getItem("clawtrate.bot"))).toBe("marlow");
+  served.update("agent:marlow:main", { unread: true });
+  const before = reads("agent:marlow:main").length;
+  // Marlow's chat has a draft, so the link asks before anything goes in.
+  await deliverWhileBotsLoad(
+    link("marlow", "Hi"),
+    page.getByRole("region", { name: "Loading conversation" }),
+  );
+  await expect(choice()).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(choice()).toHaveCount(0);
+  await expect(field()).toHaveValue("Start over.\nAlso this.");
+  await page.waitForTimeout(500);
+  expect(reads("agent:marlow:main")).toHaveLength(before);
 });
 
 test("F-248: a link's card closes to the heading of the screen that replaced the one it opened over", async () => {

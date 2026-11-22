@@ -186,6 +186,7 @@ export function App({
           inert={settingsOpen}
           onCaughtUp={setCaughtUp}
           chatLink={opening}
+          linkPending={link !== null}
           onChatLinkDone={linkDone}
         />
       ) : (

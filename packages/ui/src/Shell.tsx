@@ -58,6 +58,7 @@ export function Shell({
   inert = false,
   onCaughtUp,
   chatLink = null,
+  linkPending = false,
   onChatLinkDone,
 }: {
   state: ClawtrateState;
@@ -75,6 +76,8 @@ export function Shell({
   onCaughtUp?: (caughtUp: boolean) => void;
   /** A Clawtrate link that opens a bot's chat, with the text for its composer. */
   chatLink?: { id: number; botId: string; text: string } | null;
+  /** A link waits for this connection or is opening its chat: until then no chat is opened, or read. */
+  linkPending?: boolean;
   /** The link's text went in, the person kept their draft, or it was dropped and why. */
   onChatLinkDone?: (id: number, refusal?: LinkRefusal) => void;
 }) {
@@ -311,6 +314,8 @@ export function Shell({
   });
   // A chat a Clawtrate link opened is read only once the person opens it again: a link
   // changes nothing on the gateway (links.md section 1). Its transcript loads as usual.
+  // The chat on screen while the link waits, at startup the one last open, is not opened
+  // yet, so it is read neither then nor on leaving it for the link's chat.
   const linkOpened = useRef<string | null>(null);
   // A read the gateway refused, or that failed, leaves the task unread here too, as the gateway has it.
   const forgetRead = selection.forgetReadHere;
@@ -337,12 +342,12 @@ export function Shell({
       openedKey.current = null;
       linkOpened.current = null;
     }
-    if (!taskKey || !connectedNow || !conversationVisible) return;
+    if (!taskKey || !connectedNow || !conversationVisible || linkPending) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;
       readTask(taskKey, true);
     } else if (taskUnread && marker === null) readTask(taskKey, false);
-  }, [taskKey, taskUnread, marker, connectedNow, readTask, conversationVisible]);
+  }, [taskKey, taskUnread, marker, connectedNow, readTask, conversationVisible, linkPending]);
   const visibleRef = useRef(conversationVisible);
   useEffect(() => {
     visibleRef.current = conversationVisible;
@@ -350,8 +355,9 @@ export function Shell({
   useEffect(() => {
     if (!taskKey) return;
     return () => {
+      const opened = openedKey.current === taskKey;
       openedKey.current = null;
-      if (visibleRef.current) readTask(taskKey, false);
+      if (visibleRef.current && opened) readTask(taskKey, false);
       if (linkOpened.current === taskKey) linkOpened.current = null;
     };
   }, [taskKey, readTask]);
@@ -479,7 +485,7 @@ export function Shell({
   const openedLink = useRef<number | null>(null);
   const { selectTask } = selection;
   const openLinkedChat = useEffectEvent((botId: string, key: string) => {
-    if (key !== taskKey || routines) linkOpened.current = key;
+    if (openedKey.current !== key) linkOpened.current = key;
     selectTask(botId, key);
     // Closed for now: the drawer's saved position stays as the person left it.
     if (panelOpen && overlay) {
