@@ -408,7 +408,11 @@ int main(int argc, char **argv) {
       (dir) =>
         zipTool(dir, "sequester", "/bin/sh", [
           "-c",
-          "xattr -w dev.clawtrate.test 1 Clawtrate.app/Contents/a.txt && ditto -c -k --sequesterRsrc --keepParent Clawtrate.app out.zip",
+          [
+            "xattr -w dev.clawtrate.test 1 Clawtrate.app/Contents/a.txt",
+            "ditto -c -k --sequesterRsrc --keepParent Clawtrate.app out.zip",
+            "/usr/bin/unzip -tqq out.zip __MACOSX/Clawtrate.app/Contents/._a.txt",
+          ].join(" && "),
         ]),
     ],
     [
