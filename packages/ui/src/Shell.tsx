@@ -4,6 +4,7 @@ import { OpenTaskContext } from "./cards/index.ts";
 import { cardDomId } from "./cards/placement.ts";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
+import type { LinkRefusal } from "./chat-link.ts";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
@@ -78,8 +79,8 @@ export function Shell({
   onCaughtUp?: (caughtUp: boolean) => void;
   /** A Clawtrate link that opens a bot's chat, with the text for its composer. */
   chatLink?: { id: number; botId: string; text: string } | null;
-  /** The link's text went in, or the person kept their draft. */
-  onChatLinkDone?: (id: number) => void;
+  /** The link's text went in, the person kept their draft, or it was dropped and why. */
+  onChatLinkDone?: (id: number, refusal?: LinkRefusal) => void;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -455,8 +456,29 @@ export function Shell({
 
   // A Clawtrate link opens the chat selecting its bot would: its last selected task,
   // or else its most recent. Routines and a Work drawer close, so the conversation can
-  // take focus, and only then does its composer get the text.
-  const linkTask = chatLink ? selection.taskFor(chatLink.botId) : null;
+  // take focus, and only then does its composer get the text. The link stays bound to
+  // that chat and to the connection it came on (links.md section 6): if either changes
+  // before its text goes in, the link is dropped and the card says why.
+  const [bound, setBound] = useState<{
+    id: number;
+    key: string;
+    connectedAt: number | null;
+  } | null>(null);
+  if (chatLink && bound?.id !== chatLink.id) {
+    const target = selection.taskFor(chatLink.botId);
+    if (target)
+      setBound({ id: chatLink.id, key: target.key, connectedAt: state.connection.connectedAt });
+  }
+  const binding = chatLink && bound?.id === chatLink.id ? bound : null;
+  const linkMoved =
+    chatLink !== null &&
+    binding !== null &&
+    (binding.connectedAt !== state.connection.connectedAt ||
+      !(state.tasksByBot[chatLink.botId] ?? []).some((each) => each.key === binding.key));
+  const movedId = linkMoved ? binding.id : null;
+  useEffect(() => {
+    if (movedId !== null) onChatLinkDone?.(movedId, "unavailable");
+  }, [movedId, onChatLinkDone]);
   const openedLink = useRef<number | null>(null);
   const { selectTask } = selection;
   const openLinkedChat = useEffectEvent((botId: string, key: string) => {
@@ -471,7 +493,7 @@ export function Shell({
   });
   const linkId = chatLink?.id ?? null;
   const linkBot = chatLink?.botId ?? null;
-  const linkKey = linkTask?.key ?? null;
+  const linkKey = binding && !linkMoved ? binding.key : null;
   useEffect(() => {
     if (linkId === null || linkBot === null || linkKey === null) return;
     if (openedLink.current === linkId) return;
@@ -479,7 +501,9 @@ export function Shell({
     openLinkedChat(linkBot, linkKey);
   }, [linkId, linkBot, linkKey]);
   const linkHere =
-    chatLink && linkTask?.key === taskKey && !drawerOpen && !routines && !inert ? chatLink : null;
+    chatLink && linkKey !== null && linkKey === taskKey && !drawerOpen && !routines && !inert
+      ? chatLink
+      : null;
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;

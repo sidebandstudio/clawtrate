@@ -246,8 +246,10 @@ export function Composer({
   // A Clawtrate link's text (links.md section 2) fills an empty draft. Any other draft,
   // whitespace too, stays until the person chooses to replace it. Nothing is sent. It is
   // applied a frame later, once focus moved by closing Settings or the Work drawer has landed.
+  // The choice is about one draft: if it changes meanwhile (a send that failed brings its
+  // words back), the person is asked again.
   const [linkText, setLinkText] = useState<string | null>(null);
-  const [choosing, setChoosing] = useState<number | null>(null);
+  const [choosing, setChoosing] = useState<{ id: number; draft: string } | null>(null);
   const handledLink = useRef<number | null>(null);
   const fillFromLink = useCallback(
     (link: { id: number; text: string }) => {
@@ -261,18 +263,21 @@ export function Composer({
   );
   const linkId = chatLink?.id ?? null;
   const linkWords = chatLink?.text ?? null;
+  const askedAbout = choosing?.draft ?? null;
   useEffect(() => {
-    if (linkId === null || linkWords === null || handledLink.current === linkId) return;
+    if (linkId === null || linkWords === null) return;
+    if (handledLink.current === linkId && (askedAbout === null || askedAbout === text)) return;
     const frame = requestAnimationFrame(() => {
       handledLink.current = linkId;
       if (text === "") return fillFromLink({ id: linkId, text: linkWords });
       // The draft is what the choice returns focus to.
       focusRef.current?.focus();
-      setChoosing(linkId);
+      setChoosing({ id: linkId, draft: text });
     });
     return () => cancelAnimationFrame(frame);
-  }, [linkId, linkWords, text, fillFromLink, focusRef]);
-  const choice = choosing !== null && chatLink?.id === choosing ? chatLink : null;
+  }, [linkId, linkWords, text, askedAbout, fillFromLink, focusRef]);
+  const choice =
+    choosing !== null && chatLink?.id === choosing.id && choosing.draft === text ? chatLink : null;
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
   /** Open a menu; focus returns to `from` when it closes (Send, for a long press). */

@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GATEWAY_ID, linkGateway } from "../apps/desktop/test/link-gateway.ts";
+import { GatewayError } from "../packages/core/test/fake-gateway.ts";
 import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
 import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
@@ -137,6 +138,9 @@ const reads = (key: string) =>
   served.gateway
     .calls("sessions.patch")
     .filter((params) => (params as { key?: string }).key === key);
+
+const UNAVAILABLE =
+  "Clawtrate couldn't verify the gateway or load its bots and chats. Open the link again when they're available.";
 
 test.describe.configure({ mode: "serial" });
 
@@ -296,6 +300,35 @@ test("F-248: a link that cannot open says why, and leaves the chat and its draft
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });
 
+test("F-248: a draft that changes while a link asks about it is asked about again", async () => {
+  const keep = choice().getByRole("button", { name: "Keep draft" });
+  const replace = choice().getByRole("button", { name: "Replace draft" });
+  const created = Promise.withResolvers<never>();
+  served.gateway.handlers["sessions.create"] = () => created.promise;
+  try {
+    // The draft goes out as a new task, and the field is free while it does.
+    await field().focus();
+    await page.keyboard.press("ControlOrMeta+Shift+Enter");
+    await expect(field()).toHaveValue("");
+    await page.keyboard.type("Also this.");
+    await deliver(link("marlow", "Linked words."));
+    await expect(choice()).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(replace).toBeFocused();
+    // The new task fails, and its words come back ahead of the draft the choice was about.
+    created.reject(new GatewayError({ code: "INVALID_REQUEST", message: "No new task." }));
+    await expect(field()).toHaveValue("Start over.\nAlso this.");
+    await expect(choice()).toBeVisible();
+    await expect(keep).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(choice()).toHaveCount(0);
+    await expect(field()).toHaveValue("Start over.\nAlso this.");
+  } finally {
+    delete served.gateway.handlers["sessions.create"];
+  }
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
 test("F-248: a link reads no chat on the gateway and saves no layout", async () => {
   await page.setViewportSize(DRAWER);
   const saved = () => page.evaluate(() => localStorage.getItem("clawtrate.panel"));
@@ -340,6 +373,21 @@ test("F-248: Escape on a link's card closes the card and leaves the Work drawer 
   await expect(shell()).toHaveAttribute("data-panel", "closed");
 });
 
+test("F-248: when a link's chat is deleted while it asks about the draft, the link is dropped", async () => {
+  await expect(field()).toHaveAttribute("aria-label", "Message Wren");
+  await expect(field()).toHaveValue("Look at the review.");
+  await deliver(link("wren", "Replace it."));
+  await expect(choice()).toBeVisible();
+  // Another device deletes the chat: the bot's other chat is shown, and gets nothing.
+  served.remove("agent:wren:review");
+  await expectCantOpen(UNAVAILABLE);
+  await expect(choice()).toHaveCount(0);
+  await expect(field()).toHaveAttribute("aria-label", "Message Wren");
+  await expect(field()).toHaveValue("");
+  await expect(note()).toHaveText("");
+  expect(served.gateway.calls("chat.send")).toEqual([]);
+});
+
 test("F-248: a link Windows split in two is invalid, and its second half is no switch", async () => {
   // Read as a switch, the second half would start a second app on another data folder.
   await deliver(link("marlow", "Hi"), `--user-data-dir=${join(dir, "other")}`);
@@ -356,6 +404,6 @@ test("F-248: a link that starts the app waits for its connection, then opens the
   await expect(field()).toBeFocused();
   // The other chat kept its draft.
   await botButton("Marlow").click();
-  await expect(field()).toHaveValue("Start over.");
+  await expect(field()).toHaveValue("Start over.\nAlso this.");
   expect(served.gateway.calls("chat.send")).toEqual([]);
 });

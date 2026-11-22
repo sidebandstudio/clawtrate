@@ -140,9 +140,15 @@ export function App({
       : null;
   // The chat opens in front of Settings, which would leave it unusable behind.
   if (opening && settingsOpen) setSettingsOpen(false);
+  // The link's text went in or the person kept their draft; or its chat or
+  // connection changed before then, and the card says so.
   const linkDone = useCallback(
-    (id: number) => setLink((current) => (current?.id === id ? null : current)),
-    [],
+    (id: number, refused?: Refusal) => {
+      if (link?.id !== id) return;
+      setLink(null);
+      if (refused) setRefusal({ id, refusal: refused });
+    },
+    [link],
   );
   // One flag for the whole window: while the connection is anything but
   // connected, and after a reconnect until the open task has caught up,

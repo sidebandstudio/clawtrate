@@ -66,6 +66,16 @@ export async function linkGateway() {
       refusing = on;
       if (on) for (const peer of server.clients) peer.terminate();
     },
+    /** Delete a chat, as another device would. */
+    remove(key: string) {
+      const index = sessions.findIndex((each) => each.key === key);
+      const [gone] = sessions.splice(index, 1);
+      gateway.emit("sessions.changed", {
+        sessionKey: key,
+        agentId: gone!.agentId,
+        reason: "deleted",
+      });
+    },
     async close() {
       for (const peer of server.clients) peer.terminate();
       const closed = once(server, "close");
