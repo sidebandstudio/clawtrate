@@ -811,6 +811,10 @@ describe("full access under interleavings", () => {
       const first = writes.find((write) => write.token === "token-U")!;
       expect(first.fullGrant).toBe(true);
       expect(first.heldScopes).not.toContain("operator.admin");
+      const reconnect = () =>
+        (a.gateway.connects as ConnectParams[]).find((p) => p.auth?.deviceToken === "token-U");
+      await until(() => reconnect() !== undefined);
+      expect(reconnect()?.scopes).toEqual(first.heldScopes);
     } finally {
       b.stop();
       a.client.stop();
