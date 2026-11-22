@@ -1034,12 +1034,20 @@ export function accountCommand(
       }
       // create=release: the answer comes when the page calls `releaseCreate()`.
       const answer = (run: () => void) =>
-        params.create === "release"
+        params.create === "release" || params.create === "release-failed"
           ? ((globalThis as unknown as { releaseCreate: () => void }).releaseCreate = run)
           : later(500, run);
+      // As the host does (`forgetGatewayState`): what a gateway answers after another has
+      // replaced it changes nothing kept; only the reply goes back.
+      const asked = get().connection.gatewayId;
       return new Promise((resolve, reject) =>
         answer(() => {
-          if (params.create === "failed") {
+          if (get().connection.gatewayId !== asked) {
+            if (params.create === "release-failed") reject(new Error("Could not create the bot."));
+            else resolve({ botId: "made-elsewhere", missing: [] });
+            return;
+          }
+          if (params.create === "failed" || params.create === "release-failed") {
             put((a) =>
               a.creation
                 ? { ...a, creation: { ...a.creation, status: "failed", error: "refused" } }

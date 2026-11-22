@@ -687,3 +687,48 @@ test("F-035: after a picture can't be drawn, Use the default picture creates the
   const create = (await sent(page)).find((each) => each.type === "createBot")!;
   expect(create).toMatchObject({ name: "Viral", avatar: null });
 });
+
+/** Connect to another gateway, as switching gateways does, while the page stays open. */
+const switchGateway = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...(state.connection as object),
+        gatewayUrl: "ws://127.0.0.1:19777",
+        gatewayId: "a-different-gateway",
+        connectedAt: Date.now() + 60_000,
+      },
+    })),
+  );
+
+for (const outcome of ["release", "release-failed"] as const)
+  test(`F-034: a Create ${outcome === "release" ? "success" : "refusal"} from a gateway since replaced changes nothing visible`, async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&create=${outcome}`, "dark");
+    await page.keyboard.press("ControlOrMeta+n");
+    await page.getByRole("textbox", { name: "Name" }).fill("First");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+    await page.getByTestId("create").click();
+    await expect
+      .poll(async () => (await sent(page)).filter((each) => each.type === "createBot").length)
+      .toBe(1);
+    // The bot open behind the dialog, by its title pill.
+    const pill = page.locator(".title-pill").first();
+    const selected = await pill.getAttribute("aria-label");
+    await switchGateway(page);
+    await page.evaluate(() => (window as unknown as { releaseCreate: () => void }).releaseCreate());
+    await settled(page);
+    // The draft is still there, nothing new is selected, and nothing is said about the old request.
+    await expect(page.getByTestId("new-bot")).toBeVisible();
+    await page.getByRole("button", { name: "Back to the picture" }).click();
+    await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("First");
+    expect(await pill.getAttribute("aria-label")).toBe(selected);
+    expect(selected).toMatch(/^Otto/);
+    await expect(page.getByTestId("create-failed")).toHaveCount(0);
+    await expect(page.getByTestId("new-bot").getByRole("status")).not.toHaveText(
+      /Could not create|Created/,
+    );
+  });

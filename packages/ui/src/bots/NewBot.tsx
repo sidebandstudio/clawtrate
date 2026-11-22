@@ -88,12 +88,13 @@ export function NewBot({
     now$.current = connection;
     latest.current = draft;
   });
-  const stands = () =>
+  /** Still this opening, on the gateway and the connection it was opened on. */
+  const onItsConnection = () =>
     open.current &&
     now$.current.status === "connected" &&
     now$.current.gatewayUrl === gateway &&
-    now$.current.connectedAt === connectedAt &&
-    latest.current === draft;
+    now$.current.connectedAt === connectedAt;
+  const stands = () => onItsConnection() && latest.current === draft;
   const shown = draft.picture ?? STARTER;
   const previewRef = useRef<HTMLSpanElement>(null);
   const granted = useGranted(connection);
@@ -209,8 +210,9 @@ export function NewBot({
         // The host refuses it unless this is still the gateway, and the connection, it names.
         gatewayId: now$.current.gatewayId,
       });
-      // An answer for an opening that has gone, or a draft changed since, closes and clears nothing.
-      if (!open.current || latest.current !== sent) return;
+      // An answer for an opening that has gone, from a gateway or connection since replaced, or for
+      // a draft changed since, closes, clears and selects nothing.
+      if (!onItsConnection() || latest.current !== sent) return;
       remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
@@ -221,7 +223,8 @@ export function NewBot({
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
-      if (open.current) announce("Could not create the bot");
+      // Nor does a refusal from a gateway or connection since replaced say anything here.
+      if (onItsConnection()) announce("Could not create the bot");
     }
   };
   const partial = creation?.status === "partial" ? creation : null;
