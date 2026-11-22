@@ -151,6 +151,18 @@ describe("what is taken from the settings", () => {
       "a lower-case key in env",
       `{ env: { openclaw_gateway_password: "" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
     ],
+    [
+      "a padded key in env",
+      `{ env: { " OPENCLAW_GATEWAY_PASSWORD": "pw" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a padded key in env.vars",
+      `{ env: { vars: { "OPENCLAW_GATEWAY_PASSWORD ": "pw" } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a tab-padded key in env",
+      `{ env: { "\tOPENCLAW_GATEWAY_PASSWORD": "pw" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
   ])("refuses an implicit mode beside %s", (_, text) => {
     expect(extract(text)).toEqual(refused("credential", "password"));
   });
@@ -167,6 +179,14 @@ describe("what is taken from the settings", () => {
     [
       "a password in env.vars",
       `{ env: { vars: { OPENCLAW_GATEWAY_PASSWORD: "pw" } }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a padded key in env",
+      `{ env: { " OPENCLAW_GATEWAY_PASSWORD": "pw" }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "a padded key in env.vars",
+      `{ env: { vars: { "OPENCLAW_GATEWAY_PASSWORD ": "pw" } }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
     ],
   ])("takes an explicit token beside an unused %s", (_, text) => {
     expect(extract(text)).toEqual({ kind: "found", token: TOKEN, port: 18789 });
@@ -267,6 +287,14 @@ describe("what is taken from the settings", () => {
     [
       "a lower-case key",
       `{ env: { openclaw_gateway_port: "19999" }, gateway: { auth: { token: "a" } } }`,
+    ],
+    [
+      "a padded key",
+      `{ env: { " OPENCLAW_GATEWAY_PORT": "19999" }, gateway: { auth: { token: "a" } } }`,
+    ],
+    [
+      "a tab-padded key in env.vars",
+      `{ env: { vars: { "OPENCLAW_GATEWAY_PORT\t": "19999" } }, gateway: { auth: { token: "a" } } }`,
     ],
   ])("refuses a port the file's %s could override", (_, text) => {
     expect(extract(text)).toEqual(refused("address", "port"));

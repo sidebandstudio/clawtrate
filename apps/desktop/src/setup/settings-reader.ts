@@ -102,6 +102,12 @@ export type ReaderOptions = {
   platform: NodeJS.Platform;
   /** The native helper on macOS; null where the host has none. */
   helper: string | null;
+  /**
+   * Whether this run must be sandboxed (`mustSandbox`). Only an explicit
+   * `false`, in a run with no sandbox marker, may read a home outside the
+   * system's temporary roots.
+   */
+  sandboxed: boolean;
   /** The parse worker's module (settings-parse.ts, or its bundled copy). */
   worker: URL;
   deadlineMs?: number;
@@ -118,14 +124,18 @@ const component = (name: string) =>
   name.length > 0 && name.length <= 255 && !/[/\0]/.test(name) && name !== "." && name !== "..";
 
 /**
- * In a run that must be sandboxed, the home folder must be a private folder
- * of this account's, by its canonical path, below one of the system's
- * temporary roots with no folder on the way that another account could
- * swap, and away from the account's real home. Checked before anything in it
- * is opened.
+ * Unless the caller says this is a production run and no sandbox marker is
+ * present, the home folder must be a private folder of this account's, by
+ * its canonical path, below one of this machine's temporary roots with no
+ * folder on the way that another account could swap, and away from the
+ * account's real home. Checked before anything in it is opened.
  */
-function guardHome(home: string, platform: NodeJS.Platform): void {
-  if (!SANDBOX_MARKERS.some((key) => Object.hasOwn(process.env, key))) return;
+export function guardHome(
+  home: string,
+  sandboxed: boolean | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) return;
   const uid = process.geteuid?.() ?? null;
   const orNull = <T>(read: () => T): T | null => {
     try {
@@ -137,7 +147,7 @@ function guardHome(home: string, platform: NodeJS.Platform): void {
   const real = accountHome();
   const canonical = orNull(() => realpathSync(home));
   const realHome = real === null ? null : orNull(() => realpathSync(real));
-  const root = systemTempRoots(platform).find(
+  const root = systemTempRoots(process.platform).find(
     (temp) =>
       orNull(() => realpathSync(temp.canonical)) === temp.canonical && within(home, temp.canonical),
   );
@@ -208,12 +218,13 @@ export async function openSettingsFile(options: {
   file: string;
   platform: NodeJS.Platform;
   helper: string | null;
+  sandboxed: boolean;
   deadlineMs?: number;
 }): Promise<Opened> {
   const { home, folder, file, platform } = options;
   if (!isAbsolute(home) || normalize(home) !== home || !component(folder) || !component(file))
     return refused("path");
-  guardHome(home, platform);
+  guardHome(home, options.sandboxed);
   if (platform !== "darwin" && platform !== "linux") return refused("helper");
   if (platform === "darwin" && !options.helper) return refused("helper");
   const held = await holdHome(home);

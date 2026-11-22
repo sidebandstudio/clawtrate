@@ -5,7 +5,7 @@
 // account's real home. Every home here is a temporary folder of the test's
 // own; on macOS the helper is built with packaging's own flags.
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -35,6 +35,7 @@ import {
 } from "../src/setup/openclaw-pins.ts";
 import {
   checkOpened,
+  guardHome,
   HeldToken,
   holdHome,
   openSettingsFile,
@@ -99,8 +100,9 @@ function home(options: { text?: string; folder?: string } = {}) {
 }
 
 const openIn = (path: string, folder = ".openclaw", file = "openclaw.json") =>
-  openSettingsFile({ home: path, folder, file, platform, helper });
-const read = (path: string) => readLocalSettings({ home: path, platform, helper, worker: WORKER });
+  openSettingsFile({ home: path, folder, file, platform, helper, sandboxed: true });
+const read = (path: string) =>
+  readLocalSettings({ home: path, platform, helper, sandboxed: true, worker: WORKER });
 
 describe.skipIf(!posix)("opening the settings file", () => {
   it("reads a private file in a private folder, and takes its token and port", async () => {
@@ -152,6 +154,27 @@ describe.skipIf(!posix)("opening the settings file", () => {
     const started = Date.now();
     expect(await openIn(path)).toEqual(unsafe("type"));
     expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it("refuses a FIFO with a waiting writer, and never opens it", async () => {
+    const { path, file } = home();
+    rmSync(file);
+    execFileSync("mkfifo", ["-m", "600", file]);
+    // The writer's open waits for a reader; it touches the marker only once something opened the
+    // FIFO to read. Opening without writing means no broken pipe can stop it first.
+    const marker = join(scratch, `fifo-opened-${homes}`);
+    const writer = spawn("/bin/sh", ["-c", ': > "$0"; touch "$1"', file, marker], {
+      stdio: "ignore",
+    });
+    try {
+      const started = Date.now();
+      expect(await openIn(path)).toEqual(unsafe("type"));
+      expect(Date.now() - started).toBeLessThan(1_500);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      writer.kill();
+    }
   });
 
   it("refuses a folder where the file should be, and a file where the folder should be", async () => {
@@ -260,6 +283,19 @@ describe.skipIf(!posix)("the home folder", () => {
     ],
   ])("refuses %s in a sandboxed run", async (_, path) => {
     await expect(openIn(path())).rejects.toBeInstanceOf(SetupRefusedError);
+  });
+
+  it("takes the temporary roots from this machine, whichever platform's reader is asked for", async () => {
+    const other = platform === "darwin" ? "linux" : "darwin";
+    const answer = openSettingsFile({
+      home: home().path,
+      folder: ".openclaw",
+      file: "openclaw.json",
+      platform: other,
+      helper: join(scratch, "unknown"),
+      sandboxed: true,
+    });
+    await expect(answer).resolves.toHaveProperty("kind", "refused");
   });
 
   it("holds the home without following a link, and checks what it opened", async () => {
@@ -452,6 +488,7 @@ describe.skipIf(!posix)("the helper's failures mean unverified", () => {
       file: "openclaw.json",
       platform: "darwin",
       helper: path,
+      sandboxed: true,
       ...(deadlineMs === undefined ? {} : { deadlineMs }),
     });
   const fake = (name: string) => join(scratch, name);
@@ -511,6 +548,7 @@ process.stdout.write("refused absent\\n");
         file: "openclaw.json",
         platform: "darwin",
         helper: seen,
+        sandboxed: true,
       });
     } finally {
       delete process.env.CLAWTRATE_TEST_SECRET;
@@ -722,13 +760,34 @@ describe("the account's real home", () => {
           file: "openclaw.json",
           platform: "darwin",
           helper: spy,
+          sandboxed: true,
         }),
       ).rejects.toBeInstanceOf(SetupRefusedError);
       await expect(
-        readLocalSettings({ home: path, platform: "darwin", helper: spy, worker: WORKER }),
+        readLocalSettings({
+          home: path,
+          platform: "darwin",
+          helper: spy,
+          sandboxed: true,
+          worker: WORKER,
+        }),
       ).rejects.toBeInstanceOf(SetupRefusedError);
     }
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("is refused unless the caller says the run is a production one, and no marker says otherwise", () => {
+    // A synthetic home outside the temporary roots, and a real system folder: never the account's.
+    for (const path of [join("/", "clawtrate-synthetic-home"), "/usr"]) {
+      for (const sandboxed of [true, undefined])
+        expect(() => guardHome(path, sandboxed, {}), `${path} ${sandboxed}`).toThrow(
+          SetupRefusedError,
+        );
+      // A marker makes a run sandboxed whatever the caller says.
+      expect(() => guardHome(path, false, { CLAWTRATE_AUTOMATED: "" })).toThrow(SetupRefusedError);
+      // Only an explicit production caller, with no marker, is let through.
+      expect(() => guardHome(path, false, {})).not.toThrow();
+    }
   });
 
   it("is never a default: every reader entry point takes the home from its caller", () => {

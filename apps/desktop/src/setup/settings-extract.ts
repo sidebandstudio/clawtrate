@@ -101,15 +101,16 @@ const own = (object: Plain, key: string): unknown =>
   Object.hasOwn(object, key) ? object[key] : undefined;
 
 /**
- * Whether the file's `env` or `env.vars` names this variable, by its key in
- * any case as OpenClaw normalizes it, whatever its value.
+ * Whether the file's `env` or `env.vars` names this variable, whatever its
+ * value, by its key as OpenClaw normalizes it: trimmed (`normalizeEnvVarKey`,
+ * `<openclaw>/dist/host-env-security-*.mjs`), in any case.
  */
 function declaresEnv(root: Plain, name: string): boolean {
   const env = own(root, "env");
   if (!isPlain(env)) return false;
   const vars = own(env, "vars");
   const keys = [...Object.keys(env), ...(isPlain(vars) ? Object.keys(vars) : [])];
-  return keys.some((key) => key.toUpperCase() === name);
+  return keys.some((key) => key.trim().toUpperCase() === name);
 }
 
 const refuse = <Reason extends keyof typeof REFUSALS>(
