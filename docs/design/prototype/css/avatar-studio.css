@@ -178,6 +178,10 @@
   margin: 4px 0 0;
 }
 
+.as-name-wrap[hidden] {
+  display: none;
+}
+
 .as-name {
   height: 52px;
   font-size: var(--text-lg);
@@ -569,16 +573,18 @@
   font-size: 0.95em;
 }
 
-/* new: the ideas' actions stay in reach at the panel's foot while it scrolls,
-   above the Save area, on a phone with the keyboard up as well. */
-.as-result-actions {
-  position: sticky;
-  bottom: calc(-1 * var(--space-5));
-  z-index: 1;
-  margin: 12px -14px -14px;
-  padding: 10px 14px calc(14px + var(--space-5));
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--bg-bubble);
+/* new: the ideas' actions, in their own row between the panel and the foot,
+   outside the panel's scrolling, so they stay whole and in reach on a phone,
+   with the keyboard up as well. */
+.as-actionbar {
+  flex: none;
+  margin: 0;
+  padding: 10px var(--space-6) 0;
+  border-top: 1px solid var(--border);
+}
+
+.as-actionbar[hidden] {
+  display: none;
 }
 
 /* The waiting dot of bots.md: the only thing here that pulses, and not when motion is reduced. */
@@ -761,9 +767,9 @@
     padding: 10px var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom));
   }
 
-  .as-result-actions {
-    margin-right: -14px;
-    margin-left: -14px;
+  .as-actionbar {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
   }
 
   /* Phone: 44 px targets for every control, with or without a pointer. */
@@ -995,6 +1001,14 @@ html[data-view="board"] .proto-frame {
 
 .as-board td .avatar {
   display: inline-grid;
+}
+
+/* The product's Presence for a creature: the creature's own motion, the ring
+   and the badge. The older characters' whole-SVG sway, bob, lean and slump are
+   not the product's for creatures, so the board leaves them out. */
+.as-board .presence > .avatar svg {
+  animation: none !important;
+  transform: none !important;
 }
 
 .as-fit {

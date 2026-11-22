@@ -51,10 +51,22 @@ const variants = await p.evaluate(() => {
   return [e("Yuno") === e("  yuno "), e("Yuno") === e("YUNO"), e("Ödön") === e("Ödön"), e("") === e("   "), e("Yuno") !== e("Yuna")];
 });
 check("AS-19 the name is trimmed, case-folded and NFC first", variants.every(Boolean), JSON.stringify(variants));
+const folded = await p.evaluate(() => {
+  const A = window.ClawtrateAccessories;
+  return {
+    dotless: A.nameKey("I") !== A.nameKey("ı"),
+    dotted: A.nameKey("İ") === "i\u0307",
+    sharp: A.nameKey("Straße") === A.nameKey("STRASSE"),
+    ligature: A.nameKey("ﬁn") === A.nameKey("FIN"),
+    sigma: A.nameKey("ΣΟΦΟΣ") === A.nameKey("σοφος"),
+    cherokee: A.nameKey("ꭰ") === A.nameKey("Ꭰ"),
+  };
+});
+check("AS-19 the fold is Unicode's full default case fold: I and ı stay apart; ß, ﬁ, final sigma and Cherokee fold", Object.values(folded).every(Boolean), JSON.stringify(folded));
 const salt = await p.evaluate(() => {
   const C = window.ClawtrateCreatures;
   const A = window.ClawtrateAccessories;
-  // The id's default is `<id>:<field>`; the name's key is salted apart with NUL bytes.
+  // The id's default hashes `<id>:<field>`; the name's hash inputs are distinct. A match by chance is possible.
   let same = 0;
   for (const n of ["atlas", "juniper", "wren", "otto", "pip", "sol", "yuno", "marlowe"]) {
     const d = C.defaultAvatar(n);
@@ -102,6 +114,70 @@ await p.click('[data-act="surprise"]');
 check("AS-21 Surprise me takes it off the name", await p.evaluate(() => window.CTStudio.S.source === "manual"));
 await p.click('[data-act="undo"]');
 check("AS-21 Undo surprise puts back the whole draft, following the name included", (await shown(p)) === (await nameOf(p, "Pippa")) && (await p.evaluate(() => window.CTStudio.S.source === "name")));
+// Races: a pick or Surprise inside the 250 ms window wins, and the late name timer does nothing.
+await p.click("#as-name");
+await p.keyboard.press("End");
+await p.keyboard.type("x");
+await p.clock.runFor(100);
+await p.click("#as-tab-colour");
+await p.click('[data-act="color"][data-value="lime"]');
+await p.clock.runFor(1500);
+const raced = await p.evaluate(() => ({ text: window.ClawtrateAccessories.encodeChoice(window.CTStudio.S.choice), source: window.CTStudio.S.source }));
+check("AS-21 a pick made within 250 ms of typing stays: the pending name doesn't overwrite it", /color=lime/.test(raced.text) && raced.source === "manual" && raced.text !== (await nameOf(p, "Pippax")), JSON.stringify(raced));
+await p.click('[data-act="match-name"]');
+await p.click("#as-name");
+await p.keyboard.type("y");
+await p.clock.runFor(100);
+await p.click('[data-act="surprise"]');
+const surprised = await shown(p);
+await p.clock.runFor(1500);
+check("AS-21 Surprise within 250 ms stays too", (await shown(p)) === surprised && surprised !== (await nameOf(p, "Pippaxy")));
+await p.click('[data-act="undo"]');
+await p.click("#as-tab-creature");
+await p.click("#as-name");
+await p.keyboard.type("z");
+await p.focus('[data-group="as-starters"] [role="radio"]');
+await p.evaluate(() => (document.activeElement.__mark = true));
+await p.clock.runFor(1200);
+check("AS-24 the name's redraw keeps focus on the control it was on", await p.evaluate(() => document.activeElement.dataset.act === "starter" && document.activeElement.dataset.value === "0"));
+await p.close();
+p = await open("theme=dark");
+await p.click("#as-name");
+await p.keyboard.type("Atlas");
+await p.clock.runFor(60);
+await p.click('[data-act="next"]');
+check("AS-22 Next within 250 ms of typing resolves the pending name first", (await shown(p)) === (await nameOf(p, "Atlas")) && (await p.evaluate(() => window.CTStudio.S.draft.shown === window.ClawtrateAccessories.encodeChoice(window.ClawtrateAccessories.nameChoice("Atlas")))));
+check("AS-22 Account shows the name as text: no field to reach by pointer or keyboard", await p.evaluate(() => {
+  const field = document.querySelector("#as-name");
+  return document.querySelector('[data-testid="account-name"]').textContent === "Atlas" && field.offsetParent === null && field.closest("[hidden]") !== null;
+}));
+const reachable = [];
+for (let i = 0; i < 30; i++) {
+  await p.keyboard.press("Tab");
+  reachable.push(await p.evaluate(() => document.activeElement.tagName + "#" + document.activeElement.id));
+}
+check("AS-22 Tab on Account never reaches the name field", !reachable.some((r) => /^INPUT#as-name$/.test(r)), [...new Set(reachable)].join(" "));
+// An edit forced into the hidden field right before Create, and Create pressed within 250 ms.
+await p.evaluate(() => {
+  const field = document.querySelector("#as-name");
+  field.value = "a";
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await p.click('[data-act="create"]');
+const during = await p.evaluate(() => document.querySelector("#as-preview").getAttribute("aria-label"));
+for (let i = 0; i < 10 && !(await p.$('[data-testid="done"]')); i++) await p.clock.runFor(200);
+const snap = await p.evaluate(() => {
+  const d = window.CTStudio.S.done;
+  const A = window.ClawtrateAccessories;
+  return { name: d.name, shown: d.shown, back: A.encodeChoice(d.read.choice), atlas: A.encodeChoice(A.nameChoice("Atlas")), atlasWords: window.CTStudio.describe(A.nameChoice("Atlas")) };
+});
+check("AS-22 an edit on Account right before Create changes nothing: one snapshot is drawn, written and confirmed", snap.name === "Atlas" && snap.shown === snap.atlas && snap.back === snap.atlas && during === snap.atlasWords, JSON.stringify(snap));
+await p.close();
+p = await open("theme=dark");
+await p.click("#as-name");
+await p.keyboard.type("Pippa");
+await p.clock.runFor(1200);
+
 // Next, Account, Create: what is shown is what is saved.
 const before = await shown(p);
 await p.click('[data-act="next"]');
@@ -206,6 +282,7 @@ const fit = await p.evaluate(() =>
 );
 check("AS-08 every accessory is drawn on every family's parts", fit.length === 8 * 14 && fit.every((f) => f.has), `${fit.filter((f) => f.has).length}/${fit.length}`);
 check("AS-08 the board uses the app's Presence ring and badge at 18, 22, 32, 56, 120 and 152 px", await p.evaluate(() => [18, 22, 32, 56, 120, 152].every((s) => document.querySelector(`td[data-size="${s}"] .presence`)) && !!document.querySelector('td[data-state="waiting"] .presence > .glyph') && getComputedStyle(document.querySelector('td[data-state="working"] .presence'), "::before").opacity === "1"));
+check("AS-08 the board's Presence has no legacy whole-SVG motion: only the creature's own", await p.evaluate(() => [...document.querySelectorAll("[data-board] .presence > .avatar svg")].every((svg) => getComputedStyle(svg).animationName === "none" && getComputedStyle(svg).transform === "none")));
 const fine = await p.evaluate(() => {
   const by = {};
   for (const td of document.querySelectorAll("[data-board] td[data-size][data-state]")) {
@@ -363,8 +440,70 @@ const geometry = await p.evaluate(() => {
   return { bad, worstStill: +worstStill.toFixed(2), worstLive: +worstLive.toFixed(2), n: bases.length };
 });
 const g = geometry.bad;
-check("AS-26 every hat stays inside the circle in every still pose (the saved picture's crop)", g.still.length === 0, `worst ${geometry.worstStill} of 20 units ${g.still.slice(0, 2).join(" | ")}`);
-check("AS-26 at every motion's peak, hat tip included, nothing reaches the 32 px Presence ring", g.live.length === 0, `worst ${geometry.worstLive} of 23.1 units ${g.live.slice(0, 2).join(" | ")}`);
+const fitTable = await p.evaluate(() => {
+  const fresh = window.ClawtrateFit.generate();
+  const shipped = window.ClawtrateAccessories.fitTable();
+  const keys = new Set([...Object.keys(fresh), ...Object.keys(shipped)]);
+  return { n: Object.keys(fresh).length, differ: [...keys].filter((k) => fresh[k] !== shipped[k]).slice(0, 3), ring: window.ClawtrateFit.ringLimit() };
+});
+check("AS-26 the inset table is generated from the whole drawn outline (body, claws, lure, accessories) and is current", fitTable.differ.length === 0 && fitTable.n > 0, `${fitTable.n} insets; ring ${fitTable.ring.toFixed(2)} units ${fitTable.differ.join(" | ")}`);
+const verified = await p.evaluate(() => window.ClawtrateFit.verify({ onlyInset: true }));
+check("AS-26 drawn with their insets, every inset outfit keeps accessories in the crop circle, inside the app's real Presence ring at working peaks, and no wider than the bare art", verified.n > 0 && verified.bad.length === 0, `${verified.n} outfits ${verified.bad.slice(0, 2).join(" | ")}`);
+const masks = await p.evaluate(async () => {
+  const A = window.ClawtrateAccessories;
+  const outside = (url) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = c.height = 128;
+        const g2 = c.getContext("2d");
+        g2.drawImage(img, 0, 0);
+        const d = g2.getImageData(0, 0, 128, 128).data;
+        let n = 0;
+        for (let y = 0; y < 128; y++) for (let x = 0; x < 128; x++) if (d[(y * 128 + x) * 4 + 3] > 24 && Math.hypot(x + 0.5 - 64, y + 0.5 - 64) > 64.5) n += 1;
+        resolve(n);
+      };
+      img.src = url;
+    });
+  const bad = [];
+  let n = 0;
+  let bareSpill = 0;
+  for (const base of window.ClawtrateFit.bases()) {
+    const bare = await outside(await window.CTStudio.savedPicture(base));
+    if (bare) bareSpill += 1;
+    for (const head of [null, ...A.AVATAR_HEADWEAR])
+      for (const face of [null, ...A.AVATAR_FACEWEAR]) {
+        const choice = A.tidy({ ...base, ...(head ? { head } : {}), ...(face ? { face } : {}), neck: "bowtie", trim: "yellow" });
+        const count = await outside(await window.CTStudio.savedPicture(choice));
+        n += 1;
+        if (count > bare) bad.push(`${A.encodeChoice(choice)} ${bare}→${count}`);
+      }
+  }
+  return { n, bad, bareSpill };
+});
+check("AS-26 the saved still's circular mask: no outfit has more pixels outside it than its bare creature", masks.bad.length === 0, `${masks.n} outfits; ${masks.bareSpill} of 84 bare creatures spill already (#293's art, fixed in #300) ${masks.bad.slice(0, 2).join(" | ")}`);
+const adapter = await p.evaluate(() => {
+  const C = window.ClawtrateCreatures;
+  const A = window.ClawtrateAccessories;
+  const F = window.ClawtrateFit;
+  const off = [];
+  for (const base of F.bases())
+    for (const state of C.AVATAR_STATES) {
+      const svg = F.draw(base, state, false);
+      // In the frame the eyes share, where their accessories are drawn: the root's slump and a Shellfolk's peek move that frame, not the eyes in it.
+      const drawn = [...svg.querySelectorAll('[data-part="eye"]')]
+        .map((g) => {
+          const m = g.parentNode.getCTM().inverse().multiply(g.getCTM());
+          return [m.e, m.f];
+        })
+        .sort((a, b) => a[0] - b[0]);
+      const sockets = A.sceneSockets(base, C.avatarScene(base, state, C.avatarVariation("fit"))).eyes;
+      if (drawn.length !== sockets.length || sockets.some((e, i) => Math.hypot(e.x - drawn[i][0], e.y - drawn[i][1]) > 0.01)) off.push(`${A.encodeChoice(base)} ${state}`);
+    }
+  return off;
+});
+check("AS-30 the prototype's eye sockets match where the builders drew each eye in the eyes' own frame, in every state", adapter.length === 0, adapter.slice(0, 2).join(" | "));
 check("AS-26 the bow tie clears the mouth in every state, the open waiting mouth and the blocked frown included", g.mouth.length === 0, g.mouth.slice(0, 2).join(" | "));
 check("AS-26 glasses rims never cross, the blocked Shellfolk's narrow peek included", g.rims.length === 0, g.rims.slice(0, 2).join(" | "));
 check("AS-26 a Lantern's hat stays clear of its lure ball, drooped in blocked included", g.lure.length === 0, g.lure.slice(0, 2).join(" | "));
@@ -471,6 +610,39 @@ check("AS-27 a bad CRC or bytes after IEND is invalid", tagged.corrupt === "inva
 check("AS-27 both keywords together, or the v2 tag twice, is invalid", tagged.both === "invalid" && tagged.twice === "invalid");
 check("AS-27 v2 text under the old keyword is invalid to both readers (why v2 has its own keyword)", tagged.v2UnderOldNew === "invalid" && tagged.v2UnderOldOld === "invalid");
 check("AS-27 writing after other metadata keeps it and leaves one tag, just after IHDR", tagged.rewritten && tagged.metaKept);
+const limits = await p.evaluate(async () => {
+  const A = window.ClawtrateAccessories;
+  const P = window.ClawtratePicture;
+  const choice = A.tidy({ family: "shellfolk", shell: "dome", color: "pink", head: "crown" });
+  const stripped = await new Promise((resolve) => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 16;
+    c.getContext("2d").fillRect(2, 2, 8, 8);
+    resolve(c.toDataURL("image/png"));
+  });
+  const base = P.chunkCount(stripped);
+  const fill = (total) => P.withChunks(stripped, Array.from({ length: total - base }, (_, i) => ["Comment", `note ${i}`]));
+  const at128 = fill(128);
+  const at127 = fill(127);
+  const written127 = P.pictureWithChoice(at127, choice);
+  const broken = P.withChunks(stripped, [[P.KEYWORD_V2, null]]);
+  const brokenText = P.withChunks(stripped, [[P.KEYWORD_V2 + "v=2&family=shellfolk", null]]);
+  const brokenOld = P.withChunks(stripped, [[P.KEYWORD_V1, null]]);
+  const withValid = P.withChunks(stripped, [[P.KEYWORD_V2, null], [P.KEYWORD_V2, A.encodeChoice(choice)]]);
+  return {
+    full: P.chunkCount(at128) === 128 && P.readPicture(at128).kind === "plain" && P.readPictureV1(at128).kind === "plain",
+    refused: P.pictureWithChoice(at128, choice) === null,
+    oneLess: written127 !== null && P.chunkCount(written127) === 128 && P.readPicture(written127).kind === "creature",
+    broken: P.readPicture(broken).kind === "invalid" && P.readPicture(brokenText).kind === "invalid",
+    brokenWithValid: P.readPicture(withValid).kind === "invalid",
+    v1Kept: P.readPictureV1(broken).kind === "plain" && P.readPictureV1(brokenOld).kind === "plain" && P.readPicture(brokenOld).kind === "plain",
+    rewritesBroken: P.readPicture(P.pictureWithChoice(broken, choice)).kind === "creature",
+  };
+});
+check("AS-27 a PNG already at 128 chunks reads as plain, but writing a tag into it is refused (it would be 129)", limits.full && limits.refused, JSON.stringify(limits));
+check("AS-27 at 127 chunks the tag is written, making 128", limits.oneLess);
+check("AS-27 the v2 keyword with no separator is a broken tag: invalid alone and beside a valid tag; writing replaces it", limits.broken && limits.brokenWithValid && limits.rewritesBroken);
+check("AS-27 #300's v1 reading is unchanged: the same chunks are plain to it", limits.v1Kept);
 const grammar = await p.evaluate(() => {
   const A = window.ClawtrateAccessories;
   const ok = "v=2&family=clawling&body=dome&eyes=pair&claws=even&color=blue&head=beret&face=glasses&neck=bowtie&trim=yellow";
@@ -538,12 +710,20 @@ const reply = await p.evaluate(() => {
     none: r(j({ ideas: [] })).ok === false,
     tooLong: r(j({ ideas: [{ ...idea, pad: "x".repeat(4100) }] })).reason === "too-long",
     allBad: r(j({ ideas: [{ family: "lobster", color: "red" }] })).ok === false,
+    proto: r('{"ideas":[{"family":"shellfolk","shell":"dome","color":"pink","__proto__":"x"}]}').ok === false,
+    nullTrim: r(j({ ideas: [{ ...idea, trim: null }] })).ok === false,
+    mixed: (() => {
+      const x = r('{"ideas":[{"family":"shellfolk","shell":"dome","color":"pink","__proto__":"x"},' + j({ ...idea, trim: null }) + "," + j(idea) + "]}");
+      return x.ok && x.ideas.length === 1 && x.ideas[0].head === "headphones" && Object.getPrototypeOf(x.ideas[0]) === Object.prototype;
+    })(),
   };
 });
 check("AS-28 a valid reply gives its ideas", reply.good);
 check("AS-28 null and none slots, a lone trim and a missing trim are normalized only at this boundary", reply.normalized);
 check("AS-28 repeats collapse; only the valid ideas of a well-formed reply are shown", reply.deduped && reply.partial);
 check("AS-28 prose, extra keys, duplicate keys, nesting, numbers, wrong counts, over 4 KiB and no valid idea are refused", ["prose", "extraKey", "duplicateKey", "nested", "number", "tooMany", "none", "tooLong", "allBad"].every((k) => reply[k]), JSON.stringify(reply));
+check("AS-28 an idea with a __proto__ key or a null trim is dropped before anything is copied", reply.proto && reply.nullTrim);
+check("AS-28 in a mixed reply the valid idea survives, as a plain fresh object", reply.mixed);
 await p.close();
 
 // Describe a Claw, simulated ----------------------------------------------------------------
@@ -552,13 +732,16 @@ check("AS-13 Edit picture shows the bot's name and a Save that waits for a chang
 check("AS-24 the Custom row has a tab stop before anything is chosen", await p.evaluate(() => document.querySelectorAll('.as-custom-items [tabindex="0"]').length === 1));
 await p.click('[data-act="describe-open"]');
 check("AS-13 Describe is labelled as simulated and names the route and its cost", (await p.isVisible('[data-testid="simulated"]')) && /anthropic\/claude-sonnet-5\.5.*model usage.*no tools/.test(await p.textContent('[data-testid="route"]')));
-await p.fill("#as-words", "A night owl who loves jazz records, prose");
+await p.fill("#as-words", "A slow night owl who loves jazz records, prose");
 await p.focus('[data-act="describe-go"]');
 await p.keyboard.press("Enter");
 check("AS-13 while it waits, focus moves to Cancel and the Claw thinks", await p.evaluate(() => document.activeElement.dataset.act === "describe-cancel" && /Juniper is imagining it/.test(document.querySelector('[data-testid="waiting"]')?.textContent || "") && document.querySelector("#as-preview").dataset.state === "thinking"));
 check("AS-13 Save is blocked while it waits", await p.evaluate(() => document.querySelector('[data-act="save"]').disabled));
-await p.clock.runFor(1900);
-check("AS-13 a reply wrapped in words gets the one retry", await p.evaluate(() => /Asking once more/.test(document.querySelector('[data-testid="waiting"]')?.textContent || "")));
+await p.evaluate(() => (document.activeElement.__mark = true));
+await p.clock.runFor(2400);
+check("AS-13 the slow notice appears in place: Cancel stays mounted and focused", await p.evaluate(() => !document.querySelector('[data-testid="slow"]').hidden && document.activeElement.__mark === true && document.activeElement.dataset.act === "describe-cancel"));
+await p.clock.runFor(2000);
+check("AS-13 a reply wrapped in words gets the one retry, and Cancel is still the same focused control", await p.evaluate(() => /Asking once more/.test(document.querySelector('[data-testid="waiting"]')?.textContent || "") && document.activeElement.__mark === true));
 await p.clock.runFor(1300);
 const ideas = await p.evaluate(() => document.querySelectorAll(".as-idea").length);
 check("AS-13 then ideas come back, the first in the preview and focused", ideas === 3 && (await p.evaluate(() => /^Idea: /.test(document.querySelector("#as-preview").getAttribute("aria-label")) && document.activeElement.classList.contains("as-idea"))));
@@ -635,32 +818,105 @@ for (const theme of ["dark", "light"])
       await p.close();
     }
   }
-for (const q of ["", "tab=colour", "tab=extras", "tab=custom&describe=result", "mode=edit&tab=custom&describe=typing"]) {
-  p = await open(`theme=dark&${q}`, { width: 390, height: 844 });
-  const small = await p.evaluate(() =>
-    [...document.querySelectorAll(".as-dialog button, .as-dialog [role='tab'], .as-dialog input")]
-      .filter((e) => e.offsetParent !== null)
-      .map((e) => ({ e, r: e.getBoundingClientRect() }))
-      .filter(({ r }) => r.width < 43.5 || r.height < 43.5)
-      .map(({ e, r }) => `${e.dataset.act || e.id || e.textContent.trim()} ${Math.round(r.width)}x${Math.round(r.height)}`),
-  );
-  check(`AS-29 at 390${q ? " " + q : ""}: every control is at least 44 px`, small.length === 0, small.slice(0, 4).join(", "));
+// Hit-tested: a 44 px round target on each control's centre lands on that control, at both
+// phone heights, with the panel at its top and at its bottom. Panel controls count
+// when their square is inside the panel's visible part.
+const hitTest = () =>
+  document.defaultView.eval(`(() => {
+    const panel = document.querySelector("#as-panel").getBoundingClientRect();
+    const misses = [];
+    for (const el of document.querySelectorAll(".as-dialog button, .as-dialog [role='tab'], .as-dialog input, .as-dialog textarea")) {
+      if (el.offsetParent === null) continue;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const inPanel = !!el.closest("#as-panel");
+      if (inPanel && (cy - 22 < panel.top || cy + 22 > panel.bottom)) continue;
+      for (const [dx, dy] of [[0, 0], ...Array.from({ length: 8 }, (_, i) => [21 * Math.cos((i * Math.PI) / 4), 21 * Math.sin((i * Math.PI) / 4)])]) {
+        const hit = document.elementFromPoint(cx + dx, cy + dy);
+        if (!hit || (hit !== el && !el.contains(hit))) {
+          misses.push((el.dataset.act || el.id || el.textContent.trim()) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+          break;
+        }
+      }
+    }
+    return misses;
+  })()`);
+for (const q of ["", "tab=colour", "tab=extras", "tab=custom&describe=result", "mode=edit&tab=custom&describe=typing"])
+  for (const h of [844, 520]) {
+    p = await open(`theme=dark&${q}`, { width: 390, height: h });
+    const misses = [];
+    for (const end of ["top", "bottom"]) {
+      await p.evaluate((e) => {
+        const panel = document.querySelector("#as-panel");
+        panel.scrollTop = e === "top" ? 0 : panel.scrollHeight;
+      }, end);
+      misses.push(...(await p.evaluate(hitTest)).map((m) => `${end}: ${m}`));
+    }
+    check(`AS-29 at 390 × ${h}${q ? " " + q : ""}: every control's 44 px target hits it, panel scrolled both ways`, misses.length === 0, misses.slice(0, 4).join(", "));
+    await p.close();
+  }
+for (const h of [844, 520]) {
+  p = await open("theme=dark&tab=custom&describe=result", { width: 390, height: h });
+  const whole = [];
+  for (const end of ["top", "bottom"]) {
+    await p.evaluate((e) => {
+      const panel = document.querySelector("#as-panel");
+      panel.scrollTop = e === "top" ? 0 : panel.scrollHeight;
+    }, end);
+    whole.push(
+      await p.evaluate(() => {
+        const bar = document.querySelector('[data-testid="result-actions"]');
+        const panel = document.querySelector("#as-panel").getBoundingClientRect();
+        const foot = document.querySelector("#as-foot").getBoundingClientRect();
+        return [...bar.querySelectorAll("button")].every((b) => {
+          const r = b.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return r.height >= 44 && r.top >= panel.bottom - 1 && r.bottom <= foot.top + 1 && (hit === b || b.contains(hit));
+        });
+      }),
+    );
+  }
+  check(`AS-29 at 390 × ${h} the ideas' actions sit whole between the panel and the foot, outside the scroll, panel at top and bottom`, whole.every(Boolean), JSON.stringify(whole));
   await p.close();
 }
-p = await open("theme=dark&tab=custom&describe=result", { width: 390, height: 844 });
-const reach = await p.evaluate(() => {
-  const actions = document.querySelector('[data-testid="result-actions"]').getBoundingClientRect();
-  const foot = document.querySelector("#as-foot").getBoundingClientRect();
-  return { actionsBottom: Math.round(actions.bottom), footTop: Math.round(foot.top), top: Math.round(actions.top) };
+
+// Uploads: #300's header check for all four formats, before anything is decoded.
+p = await open("theme=dark&tab=custom");
+const le16 = (n) => [n & 255, (n >> 8) & 255];
+const be16 = (n) => [(n >> 8) & 255, n & 255];
+const be32 = (n) => [(n >>> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255];
+const ascii = (t) => [...t].map((c) => c.charCodeAt(0));
+const files = {
+  png: [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, ...ascii("IHDR"), ...be32(4100), ...be32(4100), 8, 6, 0, 0, 0, 0, 0, 0, 0],
+  gif: [...ascii("GIF89a"), ...le16(8193), ...le16(10), 0, 0, 0, 0, 0, 0],
+  webp: [...ascii("RIFF"), 30, 0, 0, 0, ...ascii("WEBP"), ...ascii("VP8X"), 10, 0, 0, 0, 0, 0, 0, 0, ...[4999 & 255, (4999 >> 8) & 255, 0], ...[4999 & 255, (4999 >> 8) & 255, 0], 0, 0],
+  jpeg: [0xff, 0xd8, 0xff, 0xe0, ...be16(16), ...ascii("JFIF"), 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xc0, ...be16(17), 8, ...be16(9000), ...be16(9000), 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0, 0, 0, 0],
+  text: ascii("not an image at all, just words"),
+};
+await p.evaluate(() => {
+  window.__decoded = 0;
+  const original = window.createImageBitmap;
+  window.createImageBitmap = (...args) => {
+    window.__decoded += 1;
+    return original(...args);
+  };
 });
-check("AS-29 at 390 the ideas' actions sit in view, above the Save area", reach.actionsBottom <= reach.footTop + 1 && reach.top > 0, JSON.stringify(reach));
-await p.setViewportSize({ width: 390, height: 520 });
-const keyboard = await p.evaluate(() => {
-  const actions = document.querySelector('[data-testid="result-actions"]').getBoundingClientRect();
-  const foot = document.querySelector("#as-foot").getBoundingClientRect();
-  return actions.bottom <= foot.top + 1 && actions.top > 0;
+const refusals = {};
+for (const [kind, bytes] of Object.entries(files)) {
+  await p.setInputFiles("#as-file", { name: `big.${kind}`, mimeType: "application/octet-stream", buffer: Buffer.from(bytes) });
+  for (let i = 0; i < 5; i++) await p.clock.runFor(50);
+  refusals[kind] = await p.evaluate(() => document.querySelector("#as-upload-error")?.textContent || "");
+}
+const decoded = await p.evaluate(() => window.__decoded);
+check("AS-31 oversized PNG, GIF, WebP and JPEG headers are refused with #300's words before any decode", ["png", "gif", "webp", "jpeg"].every((k) => /under 16 million pixels/.test(refusals[k])) && decoded === 0, JSON.stringify({ ...refusals, decoded }));
+check("AS-31 a file that is none of the four is refused by its bytes", /PNG, JPEG, WebP or GIF/.test(refusals.text));
+const headers = await p.evaluate(() => {
+  const H = window.CTStudio.imageHeader;
+  const u = (a) => new Uint8Array(a);
+  return [H(u([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 100, 0, 200, 3, 1, 0x22, 0, 0, 0, 0])), H(u([0, 1, 2]))];
 });
-check("AS-29 and still in view with the keyboard up (a 520 px tall view)", keyboard);
+check("AS-31 the header reader is #300's: a JPEG frame's sides, and unknown bytes", headers[0]?.width === 200 && headers[0]?.height === 100 && headers[1] === "unknown", JSON.stringify(headers));
 await p.close();
 
 // The gallery links here.

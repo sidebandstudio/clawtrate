@@ -3,7 +3,8 @@
 //
 // Two readers live here. `readPictureV1` is a pinned copy of the strict
 // reader in draft PR #300 (packages/core/src/avatar.ts at 59aeea0a, types
-// stripped): what an older Clawtrate does with a picture. `readPicture` is
+// stripped; b4a65fe0 only rewrites the bit-depth table as a function, with
+// the same answers): what an older Clawtrate does with a picture. `readPicture` is
 // the proposed reader, which knows both keywords. The checks run real PNG
 // bytes through both.
 
@@ -126,6 +127,16 @@
     return chunk.type === "tEXt" && chunk.data.length > key.length && key.every((byte, i) => chunk.data[i] === byte) && chunk.data[key.length] === 0;
   }
 
+  /**
+   * A tEXt chunk that starts with the reserved version 2 keyword and has no
+   * separator at all: not a picture's own text, but a broken tag. Version 1's
+   * keyword keeps #300's reading (such a chunk is ignored there).
+   */
+  function isBrokenV2(chunk) {
+    const key = bytesOf(KEYWORD_V2);
+    return chunk.type === "tEXt" && chunk.data.length >= key.length && key.every((byte, i) => chunk.data[i] === byte) && chunk.data.indexOf(0) < 0;
+  }
+
   /** The text after the keyword: 1 to 200 printable ASCII bytes, or null. */
   function choiceText(chunk, keyword) {
     const value = chunk.data.subarray(keyword.length + 1);
@@ -188,6 +199,7 @@
     if (!png) return { kind: "invalid" };
     const v1 = png.chunks.filter((c) => isTagged(c, KEYWORD_V1));
     const v2 = png.chunks.filter((c) => isTagged(c, KEYWORD_V2));
+    if (png.chunks.some(isBrokenV2)) return { kind: "invalid" };
     if (v1.length + v2.length === 0) return { kind: "plain" };
     if (v1.length + v2.length > 1) return { kind: "invalid" };
     const keyword = v1.length ? KEYWORD_V1 : KEYWORD_V2;
@@ -227,12 +239,14 @@
    * The picture with the choice written into it: one tag, just after IHDR,
    * replacing any tag under either keyword. Version 1 bytes under the old
    * keyword when nothing is worn; version 2 under the new one when anything
-   * is. Null when the result would pass 32,768 characters.
+   * is. Null when the result would pass 128 chunks or 32,768 characters.
    */
   function pictureWithChoice(url, choice) {
     const png = readPng(url);
     if (!png) return null;
-    const kept = png.chunks.filter((c) => !isTagged(c, KEYWORD_V1) && !isTagged(c, KEYWORD_V2));
+    const kept = png.chunks.filter((c) => !isTagged(c, KEYWORD_V1) && !isTagged(c, KEYWORD_V2) && !isBrokenV2(c));
+    // The tag is one more chunk: the result must stay within #300's 128.
+    if (kept.length + 1 > MAX_PNG_CHUNKS) return null;
     const tag = A.wears(choice) ? textChunk(KEYWORD_V2, A.encodeChoice(choice)) : textChunk(KEYWORD_V1, C.encodeAvatarChoice(choice));
     const result = assemble(png.bytes, kept, [tag]);
     return result.length <= MAX_PICTURE_CHARS ? result : null;
@@ -242,8 +256,24 @@
   function withChunks(url, list) {
     const png = readPng(url);
     if (!png) return null;
-    return assemble(png.bytes, png.chunks, list.map(([keyword, text]) => textChunk(keyword, text)));
+    return assemble(png.bytes, png.chunks, list.map(([keyword, text]) => (text === null ? rawText(keyword) : textChunk(keyword, text))));
   }
+
+  /** A tEXt chunk of exactly these bytes, with no separator: for the checks' broken tags. */
+  function rawText(bytes) {
+    const body = new Uint8Array(4 + bytes.length);
+    body.set([0x74, 0x45, 0x58, 0x74], 0);
+    for (let i = 0; i < bytes.length; i++) body[4 + i] = bytes.charCodeAt(i);
+    const chunk = new Uint8Array(12 + bytes.length);
+    const view = new DataView(chunk.buffer);
+    view.setUint32(0, bytes.length);
+    chunk.set(body, 4);
+    view.setUint32(8 + bytes.length, crc32(body));
+    return chunk;
+  }
+
+  /** How many chunks a picture has, for the checks. */
+  const chunkCount = (url) => readPng(url)?.chunks.length ?? null;
 
   /** The tags a picture carries, as [keyword, text], for the checks and the board. */
   function tags(url) {
@@ -285,6 +315,7 @@
     readPicture,
     pictureWithChoice,
     withChunks,
+    chunkCount,
     tags,
     stillPicture,
   };

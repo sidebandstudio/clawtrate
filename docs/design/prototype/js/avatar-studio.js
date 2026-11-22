@@ -244,6 +244,8 @@
     saving: false,
     saveError: false,
     done: null, // after Create or Save: what was written and what reads back
+    // New bot's Account step: the name and Claw as they were at Next, frozen. Account draws it and Create writes it.
+    draft: null,
     describe: {
       phase: params.get("describe") ? "typing" : "idle",
       text: params.get("words") || "",
@@ -265,6 +267,8 @@
   let settleTimer = null;
   let swapTimer = null;
   let uploadToken = 0;
+  // Each keystroke's timers carry this; anything that ends following the name moves it on, so a late timer does nothing.
+  let nameGen = 0;
 
   // The announcer: one polite live region, outside everything that redraws.
 
@@ -280,14 +284,29 @@
   /** Everything Undo surprise puts back: the Claw, whether it followed the name, and a chosen picture. */
   const snapshot = () => ({ choice: S.choice, source: S.source, picture: S.picture, selectedCustom: S.selectedCustom });
 
+  /**
+   * The Claw stops following the name: the pending name and settle timers are
+   * cancelled, and any that already fired find their generation stale.
+   */
+  function leaveName() {
+    clearTimeout(nameTimer);
+    clearTimeout(settleTimer);
+    nameGen += 1;
+    if (S.typing) {
+      S.typing = false;
+      if (!S.playing) S.state = "idle";
+    }
+    if (S.mode === "new") S.source = "manual";
+  }
+
   /** A choice made by hand. In New bot it takes the Claw off the name. */
   function setChoice(next, words) {
     const parsed = A.tidy(next);
     if (!parsed) return;
+    leaveName();
     S.choice = parsed;
     S.picture = null;
     S.selectedCustom = null;
-    if (S.mode === "new") S.source = "manual";
     if (words) announce(words);
     beat();
     render();
@@ -338,6 +357,8 @@
 
   /** Typing: the Claw looks up at the name while it waits; after a pause it becomes the name's Claw. */
   function nameTyped(value) {
+    // The name is fixed once Account shows it, and while anything is written.
+    if (S.step !== "build" || S.saving) return;
     S.name = value;
     if (S.nameError && value.trim()) {
       S.nameError = false;
@@ -353,12 +374,15 @@
       S.state = "waiting";
       renderPreview();
     }
-    nameTimer = setTimeout(followName, NAME_DEBOUNCE_MS);
+    const gen = ++nameGen;
+    const current = () => gen === nameGen && S.source === "name" && S.step === "build";
+    nameTimer = setTimeout(() => current() && followName(), NAME_DEBOUNCE_MS);
     settleTimer = setTimeout(() => {
+      if (!current()) return;
       S.typing = false;
       if (!S.playing) S.state = "idle";
       renderPreview();
-      if (S.source === "name") announce(`${S.name.trim() ? "From the name" : "The starter"}: ${describe(S.choice)}`);
+      announce(`${S.name.trim() ? "From the name" : "The starter"}: ${describe(S.choice)}`);
     }, NAME_SETTLE_MS);
   }
 
@@ -388,8 +412,24 @@
     }, SWAP_MS);
   }
 
+  /** A name still pending becomes the Claw now, before anything reads it. */
+  function resolveName() {
+    clearTimeout(nameTimer);
+    clearTimeout(settleTimer);
+    nameGen += 1;
+    S.typing = false;
+    if (!S.playing) S.state = "idle";
+    if (S.source === "name") {
+      S.choice = A.nameChoice(S.name);
+      S.picture = null;
+    }
+  }
+
   /** "Match my name": the Claw goes back to following the name. */
   function matchName() {
+    clearTimeout(nameTimer);
+    clearTimeout(settleTimer);
+    nameGen += 1;
     S.source = "name";
     S.undo = null;
     const next = A.nameChoice(S.name);
@@ -517,8 +557,10 @@
     const slow = /slow|long/.test(text.toLowerCase());
     if (slow)
       slowTimer = setTimeout(() => {
+        // Shown in place: the waiting controls, Cancel included, stay mounted.
         S.describe.slow = true;
-        renderPanel();
+        const note = $('[data-testid="slow"]');
+        if (note) note.hidden = false;
       }, 2200);
     describeTimer = setTimeout(() => replied(text), slow ? 4200 : 1800);
   }
@@ -529,7 +571,8 @@
     if (S.describe.attempt === 0) {
       // One short retry, for a reply in the wrong shape.
       S.describe.attempt = 1;
-      renderPanel();
+      const line = $("#as-wait-text");
+      if (line) line.textContent = "Asking once more for a reply Clawtrate can read…";
       announce("Asking once more for a reply Clawtrate can read");
       describeTimer = setTimeout(() => replied(text), 1200);
       return;
@@ -590,33 +633,77 @@
 
   // Uploading ---------------------------------------------------------------------------
 
-  /**
-   * #300's limits before anything is decoded: the type from the file's own
-   * first bytes, under 25 MB, and the sides from its header within 8,192 px.
-   */
-  async function sniff(file) {
-    if (file.size >= 25 * 1024 * 1024) throw new Error("Choose an image under 25 MB.");
-    const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
-    const at = (i, ...b) => b.every((v, j) => head[i + j] === v);
-    const png = at(0, 137, 80, 78, 71, 13, 10, 26, 10);
-    const gif = at(0, 71, 73, 70, 56);
-    const jpeg = at(0, 255, 216, 255);
-    const webp = at(0, 82, 73, 70, 70) && at(8, 87, 69, 66, 80);
-    if (!png && !gif && !jpeg && !webp) throw new Error("Choose a PNG, JPEG, WebP or GIF image.");
-    const dv = new DataView(head.buffer);
-    const sides = png ? [dv.getUint32(16), dv.getUint32(20)] : gif ? [dv.getUint16(6, true), dv.getUint16(8, true)] : null;
-    if (sides && (sides[0] < 1 || sides[1] < 1 || sides[0] > 8192 || sides[1] > 8192)) throw new Error("Choose an image up to 8,192 pixels on each side.");
+  /** #300's fixed words for a refused upload (packages/ui/src/bots/AvatarPicker.tsx at b4a65fe0). */
+  const UPLOAD_PROBLEMS = {
+    type: "Choose a PNG, JPEG, WebP or GIF image.",
+    size: "Choose an image under 25 MB.",
+    pixels: "Choose an image no wider or taller than 8,192 pixels and under 16 million pixels.",
+    read: "That image couldn't be read.",
+    detail: "That image has too much detail to keep. Try a simpler one.",
+  };
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+  const MAX_UPLOAD_SIDE = 8192;
+  const MAX_UPLOAD_PIXELS = 16_000_000;
+  const HEADER_BYTES = 256 * 1024;
+
+  /** #300's `imageHeader`, types stripped: the real format and size from the first bytes, or null, or "unknown". */
+  function imageHeader(bytes) {
+    const at = (i) => bytes[i] ?? -1;
+    const be16 = (i) => (at(i) << 8) | at(i + 1);
+    const le16 = (i) => at(i) | (at(i + 1) << 8);
+    const be32 = (i) => ((be16(i) << 16) | be16(i + 2)) >>> 0;
+    const tag = (i, text) => [...text].every((c, k) => at(i + k) === c.charCodeAt(0));
+    if ([137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => at(i) === b) && tag(12, "IHDR")) return { width: be32(16), height: be32(20) };
+    if (tag(0, "GIF87a") || tag(0, "GIF89a")) return { width: le16(6), height: le16(8) };
+    if (tag(0, "RIFF") && tag(8, "WEBP")) {
+      if (tag(12, "VP8 ")) return { width: le16(26) & 0x3fff, height: le16(28) & 0x3fff };
+      if (tag(12, "VP8L") && at(20) === 0x2f) {
+        const bits = at(21) | (at(22) << 8) | (at(23) << 16) | (at(24) << 24);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+      }
+      if (tag(12, "VP8X"))
+        return { width: (at(24) | (at(25) << 8) | (at(26) << 16)) + 1, height: (at(27) | (at(28) << 8) | (at(29) << 16)) + 1 };
+      return null;
+    }
+    if (at(0) === 0xff && at(1) === 0xd8) {
+      let i = 2;
+      while (i + 9 < bytes.length) {
+        if (at(i) !== 0xff) return null;
+        const marker = at(i + 1);
+        if (marker === 0xff) {
+          i += 1;
+          continue;
+        }
+        const frame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+        if (frame) return { width: be16(i + 7), height: be16(i + 5) };
+        if (marker === 0xd9 || marker === 0xda) return null;
+        i += 2 + be16(i + 2);
+      }
+      return null;
+    }
+    return "unknown";
+  }
+
+  /** #300's checks before anything is decoded: size, then the header's format and pixels. */
+  async function preflight(file) {
+    if (file.size >= MAX_UPLOAD_BYTES) throw new Error(UPLOAD_PROBLEMS.size);
+    const header = imageHeader(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
+    if (header === "unknown") throw new Error(UPLOAD_PROBLEMS.type);
+    if (!header || header.width < 1 || header.height < 1) throw new Error(UPLOAD_PROBLEMS.read);
+    if (header.width > MAX_UPLOAD_SIDE || header.height > MAX_UPLOAD_SIDE || header.width * header.height > MAX_UPLOAD_PIXELS)
+      throw new Error(UPLOAD_PROBLEMS.pixels);
   }
 
   async function uploaded(file) {
-    await sniff(file);
+    await preflight(file);
     let bitmap;
     try {
       bitmap = await createImageBitmap(file);
     } catch {
-      throw new Error("That file couldn't be read as an image.");
+      throw new Error(UPLOAD_PROBLEMS.read);
     }
-    if (bitmap.width > 8192 || bitmap.height > 8192) throw new Error("Choose an image up to 8,192 pixels on each side.");
+    if (bitmap.width > MAX_UPLOAD_SIDE || bitmap.height > MAX_UPLOAD_SIDE || bitmap.width * bitmap.height > MAX_UPLOAD_PIXELS)
+      throw new Error(UPLOAD_PROBLEMS.pixels);
     const side = Math.min(bitmap.width, bitmap.height);
     // Redrawn: the file's own bytes and text chunks, a Clawtrate tag included, never go on.
     for (const px of [128, 96, 72, 56]) {
@@ -627,7 +714,7 @@
       const url = canvas.toDataURL("image/png");
       if (url.length <= P.MAX_PICTURE_CHARS) return url;
     }
-    throw new Error("That image has too much detail to keep. Try a simpler one.");
+    throw new Error(UPLOAD_PROBLEMS.detail);
   }
 
   // Saving --------------------------------------------------------------------------------
@@ -653,11 +740,17 @@
    */
   async function write() {
     if (S.saving) return;
+    // One frozen draft: what Account showed (New bot) or what the preview shows (Edit). It is drawn, written and confirmed.
+    const d =
+      S.mode === "new"
+        ? S.draft
+        : Object.freeze({ name: EDIT_BOT.name, choice: S.choice, picture: S.picture, shown: S.picture ? null : A.encodeChoice(S.choice) });
+    if (!d) return;
     S.saving = true;
     S.saveError = false;
     renderFoot();
-    announce(S.mode === "new" ? `Creating ${S.name.trim()}` : "Saving");
-    const url = S.picture ? S.picture.url : await savedPicture(S.choice);
+    announce(S.mode === "new" ? `Creating ${d.name}` : "Saving");
+    const url = d.picture ? d.picture.url : await savedPicture(d.choice);
     const read = url ? P.readPicture(url) : { kind: "invalid" };
     await new Promise((r) => setTimeout(r, 400));
     if (!url || read.kind === "invalid" || params.get("save") === "fail") {
@@ -668,17 +761,11 @@
       announce("Couldn't save the picture. Your changes are still here.");
       return;
     }
-    S.done = {
-      mode: S.mode,
-      name: S.mode === "new" ? S.name.trim() : EDIT_BOT.name,
-      url,
-      shown: S.picture ? null : A.encodeChoice(S.choice),
-      read,
-      tags: P.tags(url),
-    };
+    S.done = { mode: S.mode, name: d.name, url, shown: d.shown, read, tags: P.tags(url) };
     S.saving = false;
     // Create and Save clear the draft.
-    if (S.mode === "edit") S.saved = S.choice;
+    if (S.mode === "edit") S.saved = d.choice;
+    S.draft = null;
     close(S.mode === "new" ? `Created ${S.done.name}` : `Saved ${EDIT_BOT.name}'s picture`);
   }
 
@@ -839,9 +926,9 @@
       body = `<div class="as-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-act="describe-go">Make it</button><button type="button" class="button" data-variant="quiet" data-size="sm" data-act="describe-close">Cancel</button></div>`;
     else if (d.phase === "waiting")
       body =
-        `<div class="as-wait-row"><p class="as-wait" data-testid="waiting"><span class="as-dot" aria-hidden="true"></span><span>${d.attempt ? "Asking once more for a reply Clawtrate can read…" : `${esc(asker())} is imagining it…`}</span></p>` +
+        `<div class="as-wait-row"><p class="as-wait" data-testid="waiting"><span class="as-dot" aria-hidden="true"></span><span id="as-wait-text">${d.attempt ? "Asking once more for a reply Clawtrate can read…" : `${esc(asker())} is imagining it…`}</span></p>` +
         `<button type="button" class="button" data-variant="quiet" data-size="sm" data-act="describe-cancel">Cancel</button></div>` +
-        (d.slow ? `<p class="as-hint" data-testid="slow">Still imagining. It stops after 45 seconds.</p>` : "");
+        `<p class="as-hint" data-testid="slow"${d.slow ? "" : " hidden"}>Still imagining. It stops after 45 seconds.</p>`;
     else if (d.phase === "failed")
       body =
         `<div class="b-note" data-tone="danger" role="alert">${icon("warning")}<div><p><b>Couldn't make a Claw from that.</b> ${esc(asker())}'s reply didn't name parts the studio has, twice. Nothing changed.</p>` +
@@ -858,8 +945,7 @@
         `<div class="as-tiles as-ideas" role="radiogroup" aria-labelledby="as-ideas-label">${ideas}</div>` +
         // Clawtrate's own words for the idea, from its fields: nothing the model wrote is shown.
         `<p class="as-said" data-testid="idea-caption">${esc(`Idea ${d.pick + 1} of ${d.ideas.length}: ${describe(d.ideas[d.pick])}`)}</p>` +
-        (d.guard ? `<div class="b-note" data-testid="guard-note">${icon("warning")}<p>There's no red or orange: Claws keep clear of lobster and crab colours. Pink is the closest.</p></div>` : "") +
-        `<div class="as-actions as-result-actions" data-testid="result-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-act="idea-use">Use this</button><button type="button" class="button" data-size="sm" data-act="describe-go">Try again</button><button type="button" class="button" data-variant="quiet" data-size="sm" data-act="describe-edit">Change the words</button></div>`;
+        (d.guard ? `<div class="b-note" data-testid="guard-note">${icon("warning")}<p>There's no red or orange: Claws keep clear of lobster and crab colours. Pink is the closest.</p></div>` : "");
     }
     return `<section class="as-describe" id="as-describe" aria-label="Describe a Claw">${sim}${field}${body}</section>`;
   }
@@ -888,9 +974,11 @@
 
   /** What the preview shows: an idea being looked at, the person's picture, or the Claw being built. */
   function previewChoice() {
+    if (S.step === "account" && S.draft) return S.draft.choice;
     if (S.describe.phase === "result") return S.describe.ideas[S.describe.pick];
     return S.choice;
   }
+  const previewPicture = () => (S.step === "account" && S.draft ? S.draft.picture : S.picture);
 
   function renderPreview() {
     const box = $("#as-preview");
@@ -898,9 +986,10 @@
     const waiting = S.describe.phase === "waiting";
     const state = waiting ? "thinking" : S.state;
     const choice = previewChoice();
-    if (S.picture && S.describe.phase !== "result") {
-      box.innerHTML = `<img src="${S.picture.url}" alt="" />`;
-      box.setAttribute("aria-label", S.picture.label);
+    const picture = previewPicture();
+    if (picture && (S.step === "account" || S.describe.phase !== "result")) {
+      box.innerHTML = `<img src="${picture.url}" alt="" />`;
+      box.setAttribute("aria-label", picture.label);
       box.dataset.kind = "picture";
     } else {
       const swap = S.swap && !reduced() ? S.swap : null;
@@ -937,11 +1026,28 @@
   function renderPanel() {
     const panel = $("#as-panel");
     if (!panel) return;
+    const key = focusKey();
     const html =
       S.step === "account" ? panelAccount() : { creature: panelCreature, colour: panelColour, extras: panelExtras, custom: panelCustom }[S.tab]();
     panel.innerHTML = html;
     panel.setAttribute("aria-labelledby", S.step === "account" ? "as-title" : `as-tab-${S.tab}`);
     CT.hydrate(panel);
+    // A redraw, the name's included, puts focus back on the same control when it is still there.
+    if (key && (document.activeElement === document.body || !document.activeElement?.isConnected)) $(key)?.focus();
+    renderActionBar();
+  }
+
+  /** The ideas' actions: their own row between the panel and the foot, outside the panel's scrolling. */
+  function renderActionBar() {
+    const bar = $("#as-actionbar");
+    if (!bar) return;
+    const show = S.step === "build" && S.tab === "custom" && S.describe.phase === "result";
+    const key = show ? focusKey() : null;
+    bar.hidden = !show;
+    bar.innerHTML = show
+      ? `<button type="button" class="button" data-variant="primary" data-size="sm" data-act="idea-use">Use this</button><button type="button" class="button" data-size="sm" data-act="describe-go">Try again</button><button type="button" class="button" data-variant="quiet" data-size="sm" data-act="describe-edit">Change the words</button>`
+      : "";
+    if (key && (document.activeElement === document.body || !document.activeElement?.isConnected)) $(key)?.focus();
   }
 
   function renderFoot() {
@@ -991,6 +1097,14 @@
     }
     const title = $("#as-title");
     if (title) title.textContent = S.step === "account" ? "Account" : S.mode === "new" ? "New bot" : `${EDIT_BOT.name}'s picture`;
+    // Account shows the name as text: it can't be edited there, by pointer or keyboard.
+    const wrap = $(".as-name-wrap");
+    const fixed = $("#as-name-static");
+    if (wrap && fixed) {
+      wrap.hidden = S.step === "account";
+      fixed.hidden = S.step !== "account";
+      fixed.textContent = S.draft ? S.draft.name : "";
+    }
     renderNameNote();
     renderPanel();
     renderFoot();
@@ -1005,6 +1119,7 @@
     const name =
       S.mode === "new"
         ? `<label class="as-name-wrap"><span class="visually-hidden">Name</span><input class="input as-name" id="as-name" placeholder="Name" autocomplete="off" maxlength="64" aria-describedby="as-name-note" value="${esc(S.name)}" /></label>` +
+          `<p class="as-bot-name" id="as-name-static" data-testid="account-name" hidden></p>` +
           `<p class="as-name-note" id="as-name-note"></p>`
         : `<p class="as-bot-name">${esc(EDIT_BOT.name)}</p>`;
     return (
@@ -1024,6 +1139,7 @@
       `</div>` +
       `</div>` +
       `<div class="as-panel" id="as-panel" role="tabpanel" tabindex="0"></div>` +
+      `<div class="as-actions as-actionbar" id="as-actionbar" data-testid="result-actions" role="group" aria-label="The ideas" hidden></div>` +
       `<footer class="as-foot" id="as-foot"></footer>` +
       `</section>`
     );
@@ -1313,6 +1429,8 @@
   function act(el) {
     const what = el.dataset.act;
     const value = el.dataset.value;
+    // Nothing changes the draft while it is being written.
+    if (S.saving && !["close"].includes(what)) return;
     switch (what) {
       case "tab":
         S.tab = value;
@@ -1366,8 +1484,8 @@
         S.undo = null;
         if (item.kind === "claw") setChoice(item.choice, describe(item.choice));
         else {
+          leaveName();
           S.picture = { url: item.url, label: "Your picture", kind: "picture" };
-          if (S.mode === "new") S.source = "manual";
           announce("Your picture");
         }
         S.selectedCustom = item.id;
@@ -1429,11 +1547,13 @@
           announce("Give your bot a name first");
           return;
         }
-        clearTimeout(nameTimer);
-        clearTimeout(settleTimer);
-        if (S.source === "name") S.choice = A.nameChoice(S.name);
-        S.typing = false;
-        S.state = "idle";
+        resolveName();
+        S.draft = Object.freeze({
+          name: S.name.trim(),
+          choice: S.choice,
+          picture: S.picture,
+          shown: S.picture ? null : A.encodeChoice(S.choice),
+        });
         S.step = "account";
         render();
         $("#as-title")?.focus();
@@ -1441,6 +1561,7 @@
         return;
       case "back":
         S.step = "build";
+        S.draft = null;
         render();
         $("#as-title")?.focus();
         return;
@@ -1518,8 +1639,8 @@
             const item = { id: `u${Date.now()}`, kind: "picture", url };
             keepCustom(item);
             S.undo = null;
+            leaveName();
             S.picture = { url, label: "Your picture", kind: "upload" };
-            if (S.mode === "new") S.source = "manual";
             S.selectedCustom = item.id;
             render();
             announce("Your picture is in the preview");
@@ -1631,5 +1752,5 @@
     }
   });
 
-  window.CTStudio = { S, describe, creature, act, savedPicture, holdPeaks, simulatedReply, NAME_DEBOUNCE_MS, NAME_SETTLE_MS };
+  window.CTStudio = { S, imageHeader, describe, creature, act, savedPicture, holdPeaks, simulatedReply, NAME_DEBOUNCE_MS, NAME_SETTLE_MS };
 })();

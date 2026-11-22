@@ -49,16 +49,17 @@ From top to bottom:
 
 New bot starts on the starter Clawling (`firstChoice("clawling", "blue")`). As soon as a name is typed, the Claw comes from the name.
 
-- **One name, one Claw.** The name is trimmed, normalized to NFC and case-folded (Unicode default full case folding). Core carries one fold table, so every platform and engine gets the same key; the prototype approximates it with `toUpperCase().toLowerCase()`. The key is hashed with `avatarHash`, the id default's FNV-1a, once per field, as `clawtrate-name␀<key>␀<field>`. Bot ids hash as `<id>:<field>` and contain no NUL, so a name's Claw never matches an id's default by construction.
+- **One name, one Claw.** The name is trimmed, normalized to NFC and case-folded (Unicode default full case folding). Core carries the whole CaseFolding table (statuses C and F), so every platform and engine gets the same key; the prototype carries the 297 characters where that fold differs from a character's own `toLowerCase` (Unicode 17.0), so `I` and `ı` stay apart while `ß`, `ﬁ`, final sigma and Cherokee fold. The key is hashed with `avatarHash`, the id default's FNV-1a, once per field, as `clawtrate-name␀<key>␀<field>`. Bot ids hash as `<id>:<field>`, so the two hash inputs are always distinct. The set of Claws is finite, so a name and an id can still land on the same Claw by chance.
 - **What it chooses.** Any family, that family's parts and a body colour. For about half of names, one accessory from all eight, in a colour other than the body's (`nameChoice` in `accessories.js`). It draws only from accessories that pass the fit and legibility checks of section 4; today that is all eight. An empty name, or only spaces, gives the starter.
 - **"Default is a Clawling" still holds** for a bot with no picture: that rule is the id default of #293, used when `avatar` is absent. A name can choose any family because the name's Claw is saved as an explicit choice.
 - **While typing**, the Claw takes the waiting pose and looks up toward the name. About 250 ms after the last keystroke it becomes the name's Claw: a 300 ms pop when the family changes, and a cross-fade of the old Claw over the new one when the family stays and a part or colour changes, which reads as a morph. 900 ms after the last keystroke it settles at rest, and the live region says once "From the name: Violet Lantern: …". Nothing changes between keystrokes faster than the pause, so it never flickers, and each settle is announced at most once.
 - **Reduced motion**: no waiting look and no transition. After the same pause the new Claw is simply there, in its still pose.
 - **A manual choice wins.** Choosing a starter, family, part, colour, trim or accessory, Surprise me, a Custom item, an idea from Describe, or an upload takes the Claw off the name. The line under the name becomes a quiet "Match my name" button, which gives the name's Claw back, with the same transition, and follows typing again. Undo surprise puts back the whole draft as it was, including whether it followed the name.
 - **Edit picture** never takes a Claw from the bot's name, and neither does a proposal opened in the studio.
-- **Next** needs a name. Without one it says "Give your bot a name first." under the field and keeps focus there.
+- **Leaving the name cancels it.** The moment the draft stops following the name (any manual choice above), the pending name and settle timers are cancelled, and a timer that fires late finds itself stale and does nothing. A pick made inside the 250 ms window stays.
+- **Next** needs a name. Without one it says "Give your bot a name first." under the field and keeps focus there. Next first resolves a name still pending, then freezes one snapshot: the name and the Claw (or picture) shown. Account shows that name as text, not a field, so neither pointer nor keyboard can change it there; Back returns to the editable studio.
 
-**What Create saves.** In the studio there is no untouched state: the name always picks a Claw, and Create cannot run without a name. Create saves exactly the Claw shown, drawn at 128 px with its tag (section 5), so the bot looks the same after creation as in the dialog, on every device. This replaces, for the studio, #300's rule that an untouched New bot sends `avatar: null`. That rule belongs to #300's basic picker, which exists before the studio. When the studio ships, `NewBot` stops sending `null` for an untouched picker; a bot made by other means (the CLI, another client) still has no picture and still gets its id's Clawling.
+**What Create saves.** In the studio there is no untouched state: the name always picks a Claw, and Create cannot run without a name. Create saves exactly the Claw shown: the snapshot frozen at Next is what Account draws, what Create writes at 128 px with its tag (section 5), and what the read-back is confirmed against. Nothing changes the draft while it is written, so the bot looks the same after creation as in the dialog, on every device. This replaces, for the studio, #300's rule that an untouched New bot sends `avatar: null`. That rule belongs to #300's basic picker, which exists before the studio. When the studio ships, `NewBot` stops sending `null` for an untouched picker; a bot made by other means (the CLI, another client) still has no picture and still gets its id's Clawling.
 
 ### The live preview
 
@@ -97,7 +98,7 @@ Each tile draws the current Claw wearing that choice, with its word under it (72
 
 One row: **Describe** and **Upload** as tiles, then the Custom items. An item is a Claw from Describe or a picture uploaded earlier, kept on this device: at most 12, newest first, normalized (a Claw's fields, or the 128 px redrawn picture). The description and the original file are not kept. Items are not synced and not sent anywhere. Choosing a Claw item puts its fields in the build. Choosing a picture shows it in the preview. A chosen item offers "Remove from this device". A line under the row says "Kept on this device, at most 12: the Claws and pictures only, not your words or files. The picture you save is kept with the bot on your gateway."
 
-- **Upload** is "Use your own picture" from `bots.md` §3 with #300's limits, checked before anything is decoded: the type from the file's first bytes (PNG, JPEG, WebP or GIF), under 25 MB, and sides from the header within 8,192 px; then the decoded size again. It is cropped to its centre square and redrawn at 128 px, stepping down to 56 px to stay within 32,768 characters as a data URL. Only the latest upload may finish; a slower earlier one is dropped.
+- **Upload** is "Use your own picture" from `bots.md` §3 with #300's checks (`imageHeader` in `AvatarPicker.tsx`), all before anything is decoded: under 25 MB; the real format and size from the first 256 KiB for all four formats (PNG's IHDR, GIF's screen, WebP's VP8, VP8L or VP8X chunk, JPEG's first frame header); at most 8,192 px a side and under 16 million pixels; with #300's fixed words. Then the decoded size again. It is cropped to its centre square and redrawn at 128 px, stepping down to 56 px to stay within 32,768 characters as a data URL. Only the latest upload may finish; a slower earlier one is dropped.
 - **Describe** opens Describe a Claw inside the tab (section 7). It is disabled, with a line saying why, on a gateway without the route.
 - **Picture** (section 8) is a third tile, disabled with "Image generation isn't available on this gateway" until its gate opens. It isn't in the first build.
 
@@ -126,7 +127,7 @@ Surprise me picks a random family, parts and body colour. Four times in five it 
 
 The stage, the name and the tabs never scroll away, so the preview is always in view while choosing. The Account step keeps the preview and the name in view and hides the tabs.
 
-**The ideas' actions** ("Use this", "Try again", "Change the words") stick to the bottom of the scrolling panel, just above the foot, so they stay in reach on a phone, including with the keyboard up. The check measures them at 390 × 844 and 390 × 520.
+**The ideas' actions** ("Use this", "Try again", "Change the words") are their own row between the panel and the foot, outside the panel's scrolling, so they stay whole and in reach on a phone with the panel at any position, including with the keyboard up. The check hit-tests a 44 px target on every control at 390 × 844 and 390 × 520, with the panel scrolled to its top and its bottom.
 
 Screenshots: `studio-new-1440-dark.png`, `-1440-light.png`, `-390-dark.png`, `-390-light.png` and the rest in the review folder (the report lists them).
 
@@ -148,7 +149,7 @@ Each family's scene builder returns typed **sockets** with its scene, and draws 
 
 Layers: `after-body`, `before-opening` (a Shellfolk's hat, on the shell, before the opening it hides in), `on-top` (a one-eyed Clawling's hat), `before-eyes` (the headphone band passes behind a socket), `in-eye`, `after-mouth`, `in-neck`.
 
-_The prototype_: `creatures.js` is generated from the current spec and has no sockets, so one function, `sceneSockets`, stands in for the builders. It reads where each eye ended up once, and everything after it works from typed sockets.
+_The prototype_: `creatures.js` is generated from `avatar.ts`, and a test fails when it is edited by hand, so in this design round its builders can't return sockets. One function, `sceneSockets`, stands in for them: it reads each eye's placement once, and everything after it works from typed sockets. The check AS-30 compares those sockets with where every eye is drawn, in every state, so the stand-in can't drift. Returning sockets from the builders is part of build step 2.
 
 ### New names in the spec
 
@@ -163,7 +164,7 @@ _The prototype_: `creatures.js` is generated from the current spec and has no so
 | `AVATAR_TRIM_DEFAULT`                                | The accessories' colour when `trim` is absent, per body colour: green→violet, blue→yellow, orchid→sky, violet→lime, yellow→blue, pink→sky, sky→pink, lime→violet |
 | `AVATAR_GOLD`                                        | The crown's colour: the palette's yellow `#f6bd3b`, whatever the trim, with a rim of `shade(gold, 0.3)`                                                          |
 | `HEAD_SOCKETS`, `NECK_SOCKETS`, `LANTERN_HEADPHONES` | The socket tables below                                                                                                                                          |
-| `AVATAR_FIT_INSET`                                   | The equipped scene's inset per family, part and hat (below), generated from the builders and checked by a test                                                   |
+| `AVATAR_FIT_INSET`                                   | The equipped scene's inset per family, parts, hat and eyewear (below), generated from the builders' whole outline and checked by a test                          |
 | `"tip"` in `AvatarMotionName` and `AVATAR_MOTIONS`   | A hat's lift on the done hop                                                                                                                                     |
 | `AVATAR_PNG_KEYWORD_V2`                              | `"clawtrate-avatar-v2"` (section 5)                                                                                                                              |
 | `avatarNameChoice(name)`                             | The name's Claw (section 2)                                                                                                                                      |
@@ -216,12 +217,15 @@ The band is a cubic from cup to cup. Both handles sit at the height that puts it
 
 ### Fit
 
-The saved picture is cropped to a circle by other apps, and the Presence ring sits just outside the avatar (at 32 px, from 18.5 to 20 px from the centre). So:
+The saved picture is cropped to a circle by other apps, and the Presence ring sits just outside the avatar while working. The rules, measured on the whole drawn outline (body, claws, lure and accessories) of every base creature with every hat and eyewear and the bow tie:
 
-- **Still poses**: every accessory stays inside the 40-unit circle (radius 20 about 20, 20) in every state's still pose.
-- **Motion peaks**: at the peak of every motion (sway, bob, crawl, lean, hop, and the hat's tip), every accessory stays inside the ring's inner edge (23.1 units at 32 px, the tightest size).
-- **The inset.** Where a hat would pass either limit, the whole equipped scene is drawn smaller about its feet (20, 36), by the largest factor that fits, in 0.01 steps. It is one factor for the choice in every state, so the Claw doesn't change size between states. Today the smallest is 0.82 (a Shellfolk in headphones) and Lanterns need none. In the product `AVATAR_FIT_INSET` is generated from the builders and the outlines, and a test fails when a builder change makes it stale.
-- The bare creatures of #293 are not inset. 40 of the 84 bare creatures (Shellfolk shells, mostly) already reach a little past the circle in the saved still; that belongs to #293's art and is listed in the report. The check asserts that no accessory adds a single pixel outside the circle.
+- **Still poses**, every state: accessories stay within 19.6 units of the centre (the 40-unit circle less a pixel at 128 px), and the silhouette reaches no further than 20 units or the bare creature already does.
+- **Working, at its motions' peaks**: accessories stay inside the Presence ring's inner edge, and the silhouette no further than the ring or the bare creature. The ring is read from the app's own Presence CSS at the sizes it is drawn (18, 22, 32, 40, 44, 56 and 64 px); its tightest inner edge is 21.56 units, at 64 px.
+- **Other states, at their peaks** (sway, lean, hop and the hat's tip): accessories within 22.4 units. No ring is drawn then.
+- **The inset.** Where an outfit would break a rule, the whole equipped scene is drawn smaller about its feet (20, 36), by the largest factor that meets them all, in 0.01 steps. It is one factor for the outfit in every state, so the Claw doesn't change size between states. It depends on the family, the parts, the hat and the eyewear; colour and the bow tie don't change it. Today 294 outfits are inset, the smallest factor is 0.83 (a dome Shellfolk in headphones), and Lanterns need none. In the product `AVATAR_FIT_INSET` is generated from the builders the same way, and a test fails when a builder change makes it stale. In the prototype `tools/make-fit-inset.mjs` writes `js/fit-inset.js` from `js/fit-measure.js`, and the check regenerates it and fails on any difference.
+- **The saved still's mask.** No outfit's 128 px still has more pixels outside the circle than its bare creature has.
+- **Bare art.** 40 of the 84 bare creatures (Shellfolk shells, mostly) already reach a little past the circle in the saved still. That is #293's art and is being fixed in #300. The rules above compare against the bare creature, so an accessory adds no overflow either way.
+- **Presence motion.** In the product a creature's Presence moves only by the creature's own motion, with the ring and the badge. The older characters' whole-SVG sway, bob, lean and slump don't apply to creatures; the board leaves them out.
 
 The board shows every family wearing things in each state at 18, 22, 32, 56, 120 and 152 px inside the app's real Presence wrapper, with the working ring and the waiting and blocked badges, and the saved still beside each row. `?peak=1` holds every motion at its peak. Its rows include the extremes: the tallest Clawling (tall, splayed, big claws) in a party hat, sunglasses and bow tie; a one-eyed Clawling in a beanie; the turret Shellfolk in a party hat; a bell Lantern with the wave lure and a crown.
 
@@ -302,7 +306,7 @@ At least one of head, face and neck. The longest text is 123 bytes.
 
 ### Writing
 
-- One tag per PNG, just after IHDR. Writing removes any chunk under either keyword first, and keeps every other chunk.
+- One tag per PNG, just after IHDR. Writing removes any chunk under either keyword (and any broken version 2 tag, below) first, and keeps every other chunk. The result must stay within #300's 128 chunks: a picture that already has 128 can't take the tag, and writing is refused rather than producing a file both readers reject.
 - Unequipped: the old keyword and unchanged version 1 bytes. Equipped: the new keyword and version 2, always with an explicit `trim`.
 - The 128 px still is drawn from the same scene, sockets and fit as the live Claw. A result over 32,768 characters steps down to 96 px, as uploads do; none comes close today (the longest saved still in the check is 11,982 characters).
 
@@ -311,6 +315,7 @@ At least one of head, face and neck. The longest text is 123 bytes.
 - **No recognized tag**: a plain picture, shown as it is.
 - **Exactly one recognized tag**: `clawtrate-avatar` is read by #300's strict version 1 rules, unchanged; `clawtrate-avatar-v2` must match the grammar exactly. Only the grammar's own keys are projected into a fresh choice.
 - **Duplicate recognized tags, both keywords together, or a tag that doesn't parse**: the strict invalid-picture path, as #300 does (the bot's id Clawling).
+- **A broken version 2 tag**: a `tEXt` chunk that starts with `clawtrate-avatar-v2` and has no separator at all is malformed, so the picture is invalid, alone or beside a valid tag. The version 1 keyword keeps #300's reading, where such a chunk is ignored.
 - Refused in version 2: duplicate or extra keys, empty values, `none`, `null`, whitespace, escapes, other case, non-ASCII bytes, out-of-order fields, a missing `trim`, and nothing worn.
 - Kept from #300: canonical base64, the 200-byte text limit, 128 chunks, 32,768 characters, CRCs, the header rules, IEND last with nothing after it.
 
@@ -388,7 +393,7 @@ One request, in this shape (the builder owns the exact words). The schema and th
 2. Exactly one JSON object, with surrounding whitespace only: no prose before or after it.
 3. A duplicate-aware parse, capped at three levels: the envelope, its array, flat idea objects. Any duplicate key, deeper nesting, number or boolean refuses the reply.
 4. The envelope has one own key, `ideas`, holding one to three objects.
-5. Each idea, at this boundary only: an absent, `null` or `"none"` slot is nothing worn; a `null` trim is no trim; a palette-valid lone trim is dropped; an equipped idea without a trim takes the default. Then section 5's strict parse. An idea with an unknown or wrong-family key, a value outside its list, or a non-string value is dropped.
+5. Each idea, at this boundary only: its own keys must be its family's fields, `head`, `face`, `neck` and `trim`, checked before anything is copied (a `"__proto__"` key included), and the copy goes into a null-prototype object. A `null` or `"none"` head, face or neck is nothing worn; `trim` may not be `null`; a palette-valid lone trim is dropped; an equipped idea without a trim takes the default. Then section 5's strict parse. An idea with an unknown or wrong-family key, a value outside its list, a null trim or another non-string value is dropped; the rest of the reply is still read.
 6. Ideas are deduplicated by their canonical text. The valid ones are shown.
 7. A reply refused at steps 1–4, or with no valid idea, gets the single bounded retry ("That wasn't one JSON object with the listed values. Reply again with JSON only."). A second refusal is the failure note.
 
@@ -489,13 +494,13 @@ Then (c), once #292's proposal records and commit exist. (b) stays behind its ga
 
 - **The dialog** is modal: what's behind it is inert, Tab and Shift+Tab stay inside, Escape stops the states first, then cancels a waiting Describe, then closes. Focus returns to what opened it.
 - **Initial focus**: the name field in New bot; the title in Edit picture and in the Account step.
-- **Redraws**: when a panel redraws, focus returns to the same control (the same act, value, slot or part), or in a radio group to its chosen tile.
+- **Redraws**: when a panel redraws, including when the name's Claw arrives, focus returns to the same control (the same act, value, slot or part), or in a radio group to its chosen tile.
 - **Tabs**: Left and Right move and choose, Home and End go to the ends, and the panel is focusable so it can be scrolled.
 - **Every group** is a radio group with one tab stop: the chosen tile, or the first when none is chosen, the Custom row included. Arrows move and choose, Home and End go to the ends. Each tile's name is plain words: "Beret", "Round glasses", "None", "Sky".
 - **The preview** is `role="img"` and named in words: "Blue Clawling: dome, two eyes, even claws, wearing a beret and round glasses in yellow". An idea is named "Idea: …". The round buttons are "Play the states" (pressed while playing), "Stop playing the states" and "Surprise me".
 - **The name's line** is the field's description. "Match my name" is a button.
 - **Announcements**: section 2's list, through one polite live region outside everything that redraws.
-- **Describe**: the field is labelled. When the pressed control disappears into waiting, focus moves once to Cancel. When ideas arrive, focus moves to the first idea; on failure, to "Try again". The waiting line and Cancel are separate. The failure is an `alert`, and the ideas are a radio group named "<Bot>'s ideas".
+- **Describe**: the field is labelled. When the pressed control disappears into waiting, focus moves once to Cancel. When ideas arrive, focus moves to the first idea; on failure, to "Try again". The waiting line and Cancel are separate, and stay mounted while waiting: the slow notice and the retry line change in place, so focus on Cancel is never lost. The failure is an `alert`, and the ideas are a radio group named "<Bot>'s ideas".
 - **The proposal card** is an `article` labelled by its title. Its outcome line is a `status`.
 - **Reduced motion** (the system's setting or the app's): nothing moves. Each state holds its still pose, hats stay seated, there's no happy beat, no waiting look or transition while typing a name, and the waiting dot holds still. Play the states steps through still poses only when pressed. The check tests both settings.
 - **Contrast**: the studio's text uses the existing text tokens. The accessories' colours are creature colours and follow `visual-language.md` §5, not the text rules.
@@ -512,6 +517,8 @@ The app consumes the same spec through `react-native-svg`, so nothing here is dr
 - `apps/mobile` doesn't exist in this tree yet; it belongs to its own coordinator thread. Phone parity is claimed only when the release criteria below pass on the phone.
 
 ## 14. For builders
+
+**When.** Implementation starts after Beta 1, once Ali has signed off this design. The development-gateway probes below are part of the schedule, not extra to it.
 
 ### Order
 

@@ -60,19 +60,6 @@
       ],
     },
   };
-  const TIP_PEAK = { translate: [0, -1.6], rotate: -12 };
-
-  /** Each state's whole-body motion at its extremes (creatures.js `rootFor`), about the feet. */
-  const ROOT_ORIGIN = [20, 35];
-  function rootPeaks(family, state) {
-    const still = state === "blocked" ? [{ rotate: 6 }] : [{}];
-    if (state === "thinking" && family === "clawling") return [...still, { rotate: -4 }, { rotate: 4 }];
-    if (state === "working") return [...still, family === "shellfolk" ? { translate: [-1, -0.6] } : { translate: [0, -1.4] }];
-    if (state === "waiting") return [...still, { scale: 1.07 }];
-    if (state === "done") return [...still, { translate: [0, -2.8] }];
-    return still;
-  }
-
   // Sockets, on the 40-unit grid ------------------------------------------------------
 
   /**
@@ -142,18 +129,13 @@
   };
 
   /**
-   * Where a hat reaches in its own frame: the points of its outline, used to
-   * fit the equipped Claw inside the circle (`fitInset`).
+   * Fitting the equipped Claw: accessories stay inside the saved picture's
+   * circle in still poses (`still`, grid units from the centre) and within
+   * `other` at motion peaks outside working; working is held to the app's
+   * Presence ring, measured from its CSS. The inset scales about the feet
+   * (`pivot`), never below `min`.
    */
-  const HAT_OUTLINE = {
-    beanie: [[-5.8, -1.7], [5.8, -1.7], [-5.8, 1.7], [5.8, 1.7], [-4.7, -3.8], [4.7, -3.8], [0, -7.95], [-1.7, -6.3], [1.7, -6.3]],
-    beret: [[-6.7, -1.1], [6.6, -0.2], [-3.6, -4.6], [1.2, -4.7], [5, -3.4], [1.5, -6.4], [-5.8, 0.8], [6.3, 0.8]],
-    party: [[-4.3, 0.5], [4.3, 0.5], [0, -10.2], [-1.6, -8.7], [1.6, -8.7], [-2.2, -4.6], [2.2, -4.6]],
-    crown: [[-5.1, 0.6], [5.1, 0.6], [-5.1, -5.5], [5.1, -5.5], [0, -6.8]],
-  };
-
-  /** The circle a still Claw must stay inside (the saved picture is cropped to it), and the live limit inside the ring. */
-  const FIT = { centre: [20, 20], still: 19.6, live: 22.4, pivot: [20, 36], min: 0.7 };
+  const FIT = { centre: [20, 20], still: 19.6, other: 22.4, pivot: [20, 36], min: 0.7 };
 
   // Shapes, in each accessory's own frame ---------------------------------------------
 
@@ -433,75 +415,19 @@
 
   // Fitting the equipped Claw in its circle ----------------------------------------------
 
-  const rotateAbout = ([x, y], [ox, oy], deg) => {
-    const a = (deg * Math.PI) / 180;
-    const dx = x - ox;
-    const dy = y - oy;
-    return [ox + dx * Math.cos(a) - dy * Math.sin(a), oy + dx * Math.sin(a) + dy * Math.cos(a)];
-  };
-  const applyRoot = (p, m) => {
-    let q = p;
-    if (m.scale) q = [ROOT_ORIGIN[0] + (q[0] - ROOT_ORIGIN[0]) * m.scale, ROOT_ORIGIN[1] + (q[1] - ROOT_ORIGIN[1]) * m.scale];
-    if (m.rotate) q = rotateAbout(q, ROOT_ORIGIN, m.rotate);
-    if (m.translate) q = [q[0] + m.translate[0], q[1] + m.translate[1]];
-    return q;
-  };
-
-  /** The head accessory's outline in the scene, seated and (in done) at the tip's peak. */
-  function headOutline(choice, sockets, state) {
-    if (choice.head === "headphones") {
-      const b = sockets.band;
-      if (!b) return { seated: [], peak: [] };
-      const pts = [b.left, b.right].flatMap(([x, y]) => [[x - 2.1, y - 3.1], [x + 2.1, y - 3.1], [x - 2.1, y + 3.1], [x + 2.1, y + 3.1]]);
-      pts.push([(b.left[0] + b.right[0]) / 2, b.apex - 0.75]);
-      return { seated: pts, peak: [] };
-    }
-    const s = sockets.head;
-    const local = HAT_OUTLINE[choice.head].map(([x, y]) => [x * s.scale, y * s.scale]);
-    const out = (pts) => pts.map((q) => rotateAbout([s.x + q[0], s.y + q[1]], [s.x, s.y], s.tilt));
-    const seated = out(local);
-    if (state !== "done") return { seated, peak: [] };
-    const tipped = local.map((q) => {
-      const r = rotateAbout(q, [0, 0], TIP_PEAK.rotate);
-      return [r[0] + TIP_PEAK.translate[0], r[1] + TIP_PEAK.translate[1]];
-    });
-    return { seated, peak: out(tipped) };
-  }
-
-  const fitCache = new Map();
+  /** The inset's key: the family, its parts, the hat and what is over the eyes. Colour and the bow tie don't change it. */
+  const fitKey = (choice) =>
+    [choice.family, ...Object.keys(C.AVATAR_PARTS[choice.family]).map((k) => choice[k]), choice.head || "-", choice.face || "-"].join(":");
+  let fitTableNow = (window.ClawtrateFitInset && window.ClawtrateFitInset.table) || {};
 
   /**
-   * How much the equipped Claw is drawn smaller, about its feet, so its head
-   * accessory stays inside the circle in every still pose (the saved picture
-   * is cropped to it) and inside the Presence ring at every motion's peak.
-   * 1 when it already fits. The same in every state, so the Claw doesn't
-   * change size between states. In the product: a table generated from the
-   * builders and checked by a test.
+   * How much the equipped Claw is drawn smaller, about its feet, so it fits
+   * (`FIT`). 1 when it already fits. One factor for the choice in every state,
+   * so the Claw doesn't change size between states. From the generated table
+   * (js/fit-inset.js, made by tools/make-fit-inset.mjs from the whole drawn
+   * outline: body, claws, lure and accessories); the check fails when it is stale.
    */
-  function fitInset(choice) {
-    if (!choice.head) return 1;
-    const key = [choice.family, ...Object.keys(C.AVATAR_PARTS[choice.family]).map((k) => choice[k]), choice.head].join(":");
-    if (fitCache.has(key)) return fitCache.get(key);
-    const stillPts = [];
-    const livePts = [];
-    for (const state of C.AVATAR_STATES) {
-      if (choice.family === "shellfolk" && state === "blocked" && choice.head === "headphones") continue;
-      const scene = C.avatarScene(choice, state, { gaze: [0, 0.25], blink: 0 });
-      const sockets = sceneSockets(choice, scene);
-      const { seated, peak } = headOutline(choice, sockets, state);
-      const peaks = rootPeaks(choice.family, state);
-      for (const p of seated) stillPts.push(applyRoot(p, peaks[0]));
-      for (const m of peaks) for (const p of [...seated, ...peak]) livePts.push(applyRoot(p, m));
-    }
-    const dist = (p, k) => {
-      const q = [FIT.pivot[0] + (p[0] - FIT.pivot[0]) * k, FIT.pivot[1] + (p[1] - FIT.pivot[1]) * k];
-      return Math.hypot(q[0] - FIT.centre[0], q[1] - FIT.centre[1]);
-    };
-    let k = 1;
-    while (k > FIT.min && (stillPts.some((p) => dist(p, k) > FIT.still) || livePts.some((p) => dist(p, k) > FIT.live))) k = r2(k - 0.01);
-    fitCache.set(key, k);
-    return k;
-  }
+  const fitInset = (choice) => (choice.head || choice.face ? fitTableNow[fitKey(choice)] || 1 : 1);
 
   // Dressing a scene ---------------------------------------------------------------------
 
@@ -745,21 +671,24 @@
   }
 
   /**
-   * One idea from the model, normalized at this boundary only: an absent, null
-   * or "none" slot is nothing worn, a null trim is no trim, a lone trim goes,
-   * and an equipped idea without a trim takes the default. Then the strict
-   * parse. Null when the idea isn't one.
+   * One idea from the model, normalized at this boundary only. Its own keys
+   * must be its family's fields, head, face, neck and trim, or the idea is
+   * dropped before anything is copied. A null or "none" head, face or neck is
+   * nothing worn; a lone trim goes; an equipped idea without a trim takes the
+   * default. Trim may not be null. Then the strict parse. Null when the idea
+   * isn't one.
    */
   function normalizeIdea(idea) {
-    const out = {};
-    for (const key of Object.keys(idea)) {
+    const family = own(idea, "family") ? idea.family : undefined;
+    if (!oneOf(C.AVATAR_FAMILIES, family)) return null;
+    const allowed = ["family", "color", ...Object.keys(C.AVATAR_PARTS[family]), ...SLOTS, "trim"];
+    const keys = Object.keys(idea);
+    if (keys.some((key) => !allowed.includes(key))) return null;
+    const out = Object.create(null);
+    for (const key of keys) {
       const value = idea[key];
-      if (SLOTS.includes(key)) {
-        if (value === null || value === "none") continue;
-      } else if (key === "trim") {
-        if (value === null) continue;
-        if (!oneOf(C.AVATAR_COLOR_NAMES, value)) return null;
-      } else if (typeof value !== "string") return null;
+      if (SLOTS.includes(key) && (value === null || value === "none")) continue;
+      if (typeof value !== "string") return null;
       out[key] = value;
     }
     if (!wears(out)) delete out.trim;
@@ -800,15 +729,61 @@
 
   // A Claw from a bot's name ----------------------------------------------------------------
 
-  /** Kept apart from the id's default (`<id>:<field>`) by the NUL bytes no id has. */
+  /**
+   * Hash inputs distinct from the id default's (`<id>:<field>`): a prefix and
+   * NUL separators no id has. That keeps the inputs apart; with a finite set of
+   * Claws, a name and an id can still land on the same one by chance.
+   */
   const NAME_SALT = "clawtrate-name";
 
   /**
-   * The name a Claw is drawn from: trimmed, NFC, case-folded. The prototype
-   * folds with toUpperCase then toLowerCase; core carries one fold table so
-   * every device gets the same key.
+   * Unicode default full case folding (CaseFolding.txt, statuses C and F),
+   * as the characters where it differs from a character's own toLowerCase:
+   * base-36 code point, then its fold as base-36 code points joined by dots.
+   * Made from Unicode 17.0 (Python's str.casefold against V8's toLowerCase).
+   * Core carries the whole table, so every platform and engine folds alike.
    */
-  const nameKey = (name) => String(name ?? "").trim().normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
+  const FOLD_EXCEPTIONS = new Map(
+    (
+    "51:qk 67:37.37 95:jg.32 an:37 ds:2y.lo n9:qh pc:qh.lk.ld q8:qt.lk.ld qq:qr r4:qa r5:qg r9:qu ra:" +
+    "qo s0:qi s1:qp s5:qd 13b:12d.136 3vk:3vk 3vl:3vl 3vm:3vm 3vn:3vn 3vo:3vo 3vp:3vp 3vq:3vq 3vr:3vr" +
+    " 3vs:3vs 3vt:3vt 3vu:3vu 3vv:3vv 3vw:3vw 3vx:3vx 3vy:3vy 3vz:3vz 3w0:3w0 3w1:3w1 3w2:3w2 3w3:3w3" +
+    " 3w4:3w4 3w5:3w5 3w6:3w6 3w7:3w7 3w8:3w8 3w9:3w9 3wa:3wa 3wb:3wb 3wc:3wc 3wd:3wd 3we:3we 3wf:3wf" +
+    " 3wg:3wg 3wh:3wh 3wi:3wi 3wj:3wj 3wk:3wk 3wl:3wl 3wm:3wm 3wn:3wn 3wo:3wo 3wp:3wp 3wq:3wq 3wr:3wr" +
+    " 3ws:3ws 3wt:3wt 3wu:3wu 3wv:3wv 3ww:3ww 3wx:3wx 3wy:3wy 3wz:3wz 3x0:3x0 3x1:3x1 3x2:3x2 3x3:3x3" +
+    " 3x4:3x4 3x5:3x5 3x6:3x6 3x7:3x7 3x8:3x8 3x9:3x9 3xa:3xa 3xb:3xb 3xc:3xc 3xd:3xd 3xe:3xe 3xf:3xf" +
+    " 3xg:3xg 3xh:3xh 3xi:3xi 3xj:3xj 3xk:3xk 3xl:3xl 3xm:3xm 3xn:3xn 3xo:3xo 3xp:3xp 3xq:3xq 3xr:3xr" +
+    " 3xs:3xs 3xt:3xt 3xu:3xu 3xv:3xv 3xw:3xw 3xx:3xx 3y0:3xs 3y1:3xt 3y2:3xu 3y3:3xv 3y4:3xw 3y5:3xx" +
+    " 5mo:tu 5mp:tw 5mq:u6 5mr:u9 5ms:ua 5mt:ua 5mu:ui 5mv:v7 5mw:wuj 61i:2w.mp 61j:38.lk 61k:3b.lm 6" +
+    "1l:3d.lm 61m:2p.ji 61n:601 61q:37.37 66o:qt.lv 66q:qt.lv.lc 66s:qt.lv.ld 66u:qt.lv.n6 680:64g.qh" +
+    " 681:64h.qh 682:64i.qh 683:64j.qh 684:64k.qh 685:64l.qh 686:64m.qh 687:64n.qh 688:64g.qh 689:64h" +
+    ".qh 68a:64i.qh 68b:64j.qh 68c:64k.qh 68d:64l.qh 68e:64m.qh 68f:64n.qh 68g:65c.qh 68h:65d.qh 68i:" +
+    "65e.qh 68j:65f.qh 68k:65g.qh 68l:65h.qh 68m:65i.qh 68n:65j.qh 68o:65c.qh 68p:65d.qh 68q:65e.qh 6" +
+    "8r:65f.qh 68s:65g.qh 68t:65h.qh 68u:65i.qh 68v:65j.qh 68w:674.qh 68x:675.qh 68y:676.qh 68z:677.q" +
+    "h 690:678.qh 691:679.qh 692:67a.qh 693:67b.qh 694:674.qh 695:675.qh 696:676.qh 697:677.qh 698:67" +
+    "8.qh 699:679.qh 69a:67a.qh 69b:67b.qh 69e:67k.qh 69f:q9.qh 69g:q4.qh 69i:q9.n6 69j:q9.n6.qh 69o:" +
+    "q9.qh 69q:qh 69u:67o.qh 69v:qf.qh 69w:q6.qh 69y:qf.n6 69z:qf.n6.qh 6a4:qf.qh 6aa:qh.lk.lc 6ab:qh" +
+    ".lk.ld 6ae:qh.n6 6af:qh.lk.n6 6aq:qt.lk.lc 6ar:qt.lk.ld 6as:qp.lv 6au:qt.n6 6av:qt.lk.n6 6b6:67w" +
+    ".qh 6b7:qx.qh 6b8:r2.qh 6ba:qx.n6 6bb:qx.n6.qh 6bg:qx.qh xv4:3vk xv5:3vl xv6:3vm xv7:3vn xv8:3vo" +
+    " xv9:3vp xva:3vq xvb:3vr xvc:3vs xvd:3vt xve:3vu xvf:3vv xvg:3vw xvh:3vx xvi:3vy xvj:3vz xvk:3w0" +
+    " xvl:3w1 xvm:3w2 xvn:3w3 xvo:3w4 xvp:3w5 xvq:3w6 xvr:3w7 xvs:3w8 xvt:3w9 xvu:3wa xvv:3wb xvw:3wc" +
+    " xvx:3wd xvy:3we xvz:3wf xw0:3wg xw1:3wh xw2:3wi xw3:3wj xw4:3wk xw5:3wl xw6:3wm xw7:3wn xw8:3wo" +
+    " xw9:3wp xwa:3wq xwb:3wr xwc:3ws xwd:3wt xwe:3wu xwf:3wv xwg:3ww xwh:3wx xwi:3wy xwj:3wz xwk:3x0" +
+    " xwl:3x1 xwm:3x2 xwn:3x3 xwo:3x4 xwp:3x5 xwq:3x6 xwr:3x7 xws:3x8 xwt:3x9 xwu:3xa xwv:3xb xww:3xc" +
+    " xwx:3xd xwy:3xe xwz:3xf xx0:3xg xx1:3xh xx2:3xi xx3:3xj xx4:3xk xx5:3xl xx6:3xm xx7:3xn xx8:3xo" +
+    " xx9:3xp xxa:3xq xxb:3xr 1dkw:2u.2u 1dkx:2u.2x 1dky:2u.30 1dkz:2u.2u.2x 1dl0:2u.2u.30 1dl1:37.38" +
+    " 1dl2:37.38 1dlf:12s.12u 1dlg:12s.12d 1dlh:12s.12j 1dli:132.12u 1dlj:12s.12l"
+    )
+      .split(" ")
+      .map((entry) => {
+        const [from, to] = entry.split(":");
+        return [parseInt(from, 36), String.fromCodePoint(...to.split(".").map((d) => parseInt(d, 36)))];
+      }),
+  );
+  const fold = (text) => [...text].map((ch) => FOLD_EXCEPTIONS.get(ch.codePointAt(0)) ?? ch.toLowerCase()).join("");
+
+  /** The name a Claw is drawn from: trimmed, NFC, case-folded, NFC again. */
+  const nameKey = (name) => fold(String(name ?? "").trim().normalize("NFC")).normalize("NFC");
 
   /** The starter: what New bot shows before a name is typed. */
   const STARTER = () => C.firstChoice("clawling", "blue");
@@ -844,13 +819,11 @@
     AVATAR_TRIM_DEFAULT,
     AVATAR_GOLD,
     ACCESSORY_MOTIONS,
-    TIP_PEAK,
     LAYERS,
     HEAD_SOCKETS,
     NECK_SOCKETS,
     LANTERN_HEADPHONES,
     LANTERN_BLOCKED_SLIP,
-    HAT_OUTLINE,
     FIT,
     SLOTS,
     V2_GRAMMAR,
@@ -862,7 +835,12 @@
     onlyCrown,
     sceneSockets,
     fitInset,
-    rootPeaks,
+    fitKey,
+    fitTable: () => fitTableNow,
+    setFitTable: (table) => {
+      fitTableNow = table;
+    },
+    fold,
     accessorize,
     encodeChoice,
     decodeV2,
