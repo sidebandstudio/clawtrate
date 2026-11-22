@@ -21,7 +21,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -587,7 +587,8 @@ describe.skipIf(!availability.ok)(title, { timeout: 120_000 }, () => {
     const spec = forward.args[forward.args.indexOf("-L") + 1]!;
     const local = spec.slice(0, spec.indexOf(":"));
     expect(spec).toBe(`${local}:127.0.0.1:${gateway.port}`);
-    expect(local).toMatch(new RegExp(`^${h.world.appDir}/f[0-9a-f]{12}\\.s$`));
+    expect(dirname(local)).toBe(h.world.appDir);
+    expect(basename(local)).toMatch(/^f[0-9a-f]{12}\.s$/);
     expect(forward.args).toContain("StreamLocalBindMask=0177");
     expect(forward.args).toContain("StreamLocalBindUnlink=no");
     expect(forward.args.some((arg) => /^127\.0\.0\.1:\d+:/.test(arg))).toBe(false);

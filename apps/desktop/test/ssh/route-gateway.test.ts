@@ -13,13 +13,14 @@
 // and resets its instance itself, recorded before it starts so that a killed
 // run is cleaned up by the next end-to-end run in this checkout.
 
-import { ClawtrateClient } from "@clawtrate/core";
+import { ClawtrateClient, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { constants, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { until } from "../../../../packages/core/test/fake-gateway.ts";
@@ -31,6 +32,7 @@ import { newRunId, processIdentity } from "../../../../tools/dev-gateway/src/sta
 import { defaultSpawn, type Spawn } from "../../src/main/ssh/run.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { SetupSlice } from "../../src/setup/host.ts";
+import { readOnlyProgram } from "../../src/setup/look.ts";
 import { isChannelUrl, RemoteSetup } from "../../src/setup/remote.ts";
 import { RouteStore, routedStorage } from "../../src/setup/routes.ts";
 import {
@@ -53,18 +55,42 @@ const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 const RUN = randomBytes(4).toString("hex");
 const INSTANCE = `e2e-${RUN}-ssh`;
 
-function openclawHere(): string | null {
-  const found = spawnSync("/bin/sh", ["-c", "command -v openclaw"], { encoding: "utf8" });
-  const path = found.stdout.trim();
-  if (found.status !== 0 || !path) return null;
-  const version = spawnSync(path, ["--version"], { encoding: "utf8" });
-  return version.status === 0 && /^OpenClaw 2026\.10\.6\b/.test(version.stdout.trim())
-    ? path
-    : null;
+/** Check the installed package metadata without invoking OpenClaw during collection. */
+async function openclawHere(): Promise<string | null> {
+  const command = process.env.OPENCLAW_BIN ?? "openclaw";
+  const path = isAbsolute(command)
+    ? command
+    : spawnSync("/bin/sh", ["-c", 'command -v "$1"', "sh", command], {
+        encoding: "utf8",
+      }).stdout?.trim();
+  if (!path || !isAbsolute(path)) return null;
+  try {
+    let launcher = await realpath(path);
+    if (basename(launcher) !== "openclaw.mjs") {
+      // Some installers put a shell wrapper on PATH that names the package's dist/entry.js.
+      const file = await open(launcher, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        if (!(await file.stat()).isFile()) return null;
+        const header = Buffer.alloc(4096);
+        const { bytesRead } = await file.read(header, 0, header.length, 0);
+        const entry = /"(\/[^"\r\n]+)\/dist\/entry\.js"/.exec(
+          header.toString("utf8", 0, bytesRead),
+        );
+        if (!entry) return null;
+        launcher = join(entry[1]!, "openclaw.mjs");
+      } finally {
+        await file.close();
+      }
+    }
+    const { version } = await readOnlyProgram(launcher);
+    return version === TESTED_OPENCLAW_VERSION ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 const sshd = sshdAvailability();
-const OPENCLAW = sshd.ok ? openclawHere() : null;
+const OPENCLAW = sshd.ok ? await openclawHere() : null;
 const skip = !sshd.ok
   ? sshd.reason
   : OPENCLAW === null
@@ -248,9 +274,12 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     // The client's address is the channel's, and the forward listens on a socket, no TCP port.
     expect(isChannelUrl(client.state.connection.gatewayUrl!)).toBe(true);
     const spec = started.find((run) => run.args.includes("-L"))!.args;
-    expect(spec[spec.indexOf("-L") + 1]).toMatch(
-      new RegExp(`^${join(dataDir, "ssh")}/f[0-9a-f]{12}\\.s:127\\.0\\.0\\.1:${gatewayPort}$`),
-    );
+    const target = spec[spec.indexOf("-L") + 1]!;
+    const suffix = `:127.0.0.1:${gatewayPort}`;
+    expect(target.endsWith(suffix)).toBe(true);
+    const socket = target.slice(0, -suffix.length);
+    expect(dirname(socket)).toBe(join(dataDir, "ssh"));
+    expect(basename(socket)).toMatch(/^f[0-9a-f]{12}\.s$/);
     expect(client.state.connection.gatewayId).toBeTruthy();
     // Exactly read, approved by the gateway without anyone approving it.
     expect(client.state.connection).toMatchObject({

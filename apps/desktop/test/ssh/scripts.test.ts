@@ -3,12 +3,10 @@
 // own with a stand-in `openclaw` in the first fixed place, and their output
 // parsed as the host parses it. No `ssh` and no OpenClaw program run.
 
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { execFileSync } from "node:child_process";
 
 import { lookScript, parseLookOutput } from "../../src/main/ssh/look.ts";
 import {
@@ -18,7 +16,7 @@ import {
   SCRIPT_BODIES,
   type ScriptValues,
 } from "../../src/main/ssh/scripts.ts";
-import { tempDir } from "./harness.ts";
+import { runTestShell, tempDir } from "./harness.ts";
 
 describe.skipIf(process.platform === "win32")("the CODE and START scripts", () => {
   let home: string;
@@ -56,12 +54,14 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
   afterAll(() => rmSync(home, { recursive: true, force: true }));
 
   const run = (text: string, env: Record<string, string> = {}) =>
-    spawnSync("/bin/sh", ["-s"], {
-      input: `echo 'a login file says hello'\n${text}`,
-      env: { HOME: home, PATH: "/usr/bin:/bin", ...env },
-      encoding: "utf8",
-      timeout: 20_000,
-    });
+    runTestShell(
+      "/bin/sh",
+      ["-s"],
+      `echo 'a login file says hello'\n${text}`,
+      { HOME: home, PATH: "/usr/bin:/bin", ...env },
+      home,
+      20_000,
+    );
   const calls = () => {
     try {
       return readFileSync(join(home, "calls"), "utf8").split("\n").filter(Boolean);
@@ -70,10 +70,10 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     }
   };
 
-  it("F-496: CODE runs the one fixed command for the profile and port it was given, and its answer comes back whole", () => {
+  it("F-496: CODE runs the one fixed command for the profile and port it was given, and its answer comes back whole", async () => {
     rmSync(join(home, "calls"), { force: true });
     const script = remoteScript("code", values());
-    const out = run(script.text);
+    const out = await run(script.text);
     expect(out.status).toBe(0);
     expect(parseScriptOutput("code", out.stdout, script.requestId)).toEqual({
       ok: true,
@@ -82,32 +82,32 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     });
     expect(calls()).toEqual(["qr --json --voice-node --url ws://127.0.0.1:19420"]);
     const own = remoteScript("code", values({ profile: "clawtrate", port: 19421 }));
-    expect(run(own.text).status).toBe(0);
+    expect((await run(own.text)).status).toBe(0);
     expect(calls().at(-1)).toBe(
       "--profile clawtrate qr --json --voice-node --url ws://127.0.0.1:19421",
     );
   });
 
-  it("F-497: START runs its one command, and the exit status comes back; there is no STOP", () => {
+  it("F-497: START runs its one command, and the exit status comes back; there is no STOP", async () => {
     rmSync(join(home, "calls"), { force: true });
     const start = remoteScript("start", values());
-    const started = parseScriptOutput("start", run(start.text).stdout, start.requestId);
+    const started = parseScriptOutput("start", (await run(start.text)).stdout, start.requestId);
     expect(started).toMatchObject({ ok: true, answer: { exit: 3 } });
     expect(calls()).toEqual(["gateway start"]);
     expect(Object.keys(SCRIPT_BODIES)).toEqual(["code", "start"]);
   });
 
-  it("runs only the program file the LOOK found, by its place and checksum: a file changed since, or another place, runs nothing", () => {
+  it("runs only the program file the LOOK found, by its place and checksum: a file changed since, or another place, runs nothing", async () => {
     // The LOOK reports the place and the checksum the host then hands to the scripts.
     const look = lookScript(undefined, true);
-    const looked = parseLookOutput(run(look.text).stdout, look.requestId);
+    const looked = parseLookOutput((await run(look.text)).stdout, look.requestId);
     if (!looked.ok) throw new Error(looked.reason);
     expect(looked.facts.program).toBe("~/.openclaw/bin/openclaw");
     expect(looked.facts.programSum).toBe(sum);
     rmSync(join(home, "calls"), { force: true });
     // Another checksum: the file isn't the one the dialog named, so nothing runs.
     const other = remoteScript("code", values({ programSum: "1 2" }));
-    expect(parseScriptOutput("code", run(other.text).stdout, other.requestId)).toEqual({
+    expect(parseScriptOutput("code", (await run(other.text)).stdout, other.requestId)).toEqual({
       ok: true,
       program: null,
       answer: null,
@@ -115,15 +115,15 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     // Another place, where no program is: nothing runs either.
     const elsewhere = remoteScript("code", values({ program: "/usr/local/bin/openclaw" }));
     expect(
-      parseScriptOutput("code", run(elsewhere.text).stdout, elsewhere.requestId),
+      parseScriptOutput("code", (await run(elsewhere.text)).stdout, elsewhere.requestId),
     ).toMatchObject({ ok: true, program: null });
     expect(calls()).toEqual([]);
   });
 
-  it("the read-only rule: a LOOK not allowed to run the launcher finds the program and its checksum and runs nothing of it, and a value no host writes ends it first", () => {
+  it("the read-only rule: a LOOK not allowed to run the launcher finds the program and its checksum and runs nothing of it, and a value no host writes ends it first", async () => {
     rmSync(join(home, "calls"), { force: true });
     const look = lookScript();
-    const out = run(look.text);
+    const out = await run(look.text);
     expect(out.status).toBe(0);
     const held = parseLookOutput(out.stdout, look.requestId, false);
     if (!held.ok) throw new Error(held.reason);
@@ -143,23 +143,23 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     });
     // An answer of the program in a LOOK that wasn't allowed to run it isn't read.
     const ran = lookScript(undefined, true);
-    expect(parseLookOutput(run(ran.text).stdout, ran.requestId, false)).toEqual({
+    expect(parseLookOutput((await run(ran.text)).stdout, ran.requestId, false)).toEqual({
       ok: false,
       reason: "malformed",
     });
     rmSync(join(home, "calls"), { force: true });
     for (const value of ["", "2", "1;id", "$(id)"]) {
       const text = look.text.replace("run_launcher='0'", `run_launcher='${value}'`);
-      expect(run(text).status).toBe(64);
+      expect((await run(text)).status).toBe(64);
     }
     expect(calls()).toEqual([]);
   });
 
-  it("clears every OPENCLAW_ variable the login left before OpenClaw runs, so no inherited profile, state, config or port applies", () => {
+  it("clears every OPENCLAW_ variable the login left before OpenClaw runs, so no inherited profile, state, config or port applies", async () => {
     rmSync(join(home, "env"), { force: true });
     rmSync(join(home, "calls"), { force: true });
     const script = remoteScript("code", values());
-    const out = run(script.text, {
+    const out = await run(script.text, {
       OPENCLAW_PROFILE: "work",
       OPENCLAW_STATE_DIR: "/elsewhere",
       OPENCLAW_CONFIG_PATH: "/elsewhere/openclaw.json",
@@ -175,12 +175,12 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     rmSync(join(home, "env"), { force: true });
     rmSync(join(home, "calls"), { force: true });
     const look = lookScript(undefined, true);
-    expect(run(look.text, { OPENCLAW_PROFILE: "work" }).status).toBe(0);
+    expect((await run(look.text, { OPENCLAW_PROFILE: "work" })).status).toBe(0);
     expect(calls().length).toBeGreaterThan(0);
     expect(seen()).toBe("");
   });
 
-  it("the host writes only a validated profile and port; the script refuses anything else before it runs a program", () => {
+  it("the host writes only a validated profile and port; the script refuses anything else before it runs a program", async () => {
     expect(() => remoteScript("code", values({ profile: "work" as "default" }))).toThrow();
     expect(() => remoteScript("code", values({ port: 80 }))).toThrow();
     expect(() => remoteScript("code", values({ port: 19420.5 }))).toThrow();
@@ -196,7 +196,7 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
       `profile='default'\nport='19420'\nprog_i='9'\nprog_sum='${sum}'\n`,
       `profile='default'\nport='19420'\nprog_i='0'\nprog_sum='1;id'\n`,
     ]) {
-      const out = run(
+      const out = await run(
         `request_id='00000000-0000-4000-8000-000000000000'\n${assigned}${SCRIPT_BODIES.code}`,
       );
       expect(out.status).toBe(64);
@@ -208,10 +208,10 @@ describe.skipIf(process.platform === "win32")("the CODE and START scripts", () =
     }
   });
 
-  it("what a login file prints before the begin line is dropped, a fake answer included, and a cut or tampered answer isn't read", () => {
+  it("what a login file prints before the begin line is dropped, a fake answer included, and a cut or tampered answer isn't read", async () => {
     const script = remoteScript("code", values());
     const fake = '{"k":"answer","v":"e30=","exit":0}\n';
-    const out = run(script.text);
+    const out = await run(script.text);
     expect(parseScriptOutput("code", fake + out.stdout, script.requestId)).toMatchObject({
       ok: true,
       answer: { text: '{"setupCode":"abc"}' },

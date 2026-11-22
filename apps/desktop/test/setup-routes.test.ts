@@ -3,7 +3,7 @@
 // point, what the found card says from the LOOK's facts, and the approve
 // command for a route's account, SSH port and profile.
 
-import { approvalForPlace, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import { approvalForPlace } from "@clawtrate/core";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { memoryStorage } from "../../../packages/core/test/fake-gateway.ts";
@@ -51,47 +51,6 @@ import {
 } from "../src/setup/routes.ts";
 import { sshLook } from "../src/setup/ssh-look.ts";
 import { tempDir, testSeal } from "./ssh/harness.ts";
-
-/**
- * The installed OpenClaw CLI's own choice of where `gateway status` probes
- * for a bind mode (`pickProbeHostForBind`): that one self-contained function's
- * source, read from its package and evaluated alone, so none of the package's
- * module code runs. Null where no OpenClaw is installed, or another version than the one
- * `docs/decisions.md` names.
- */
-const probeHostOfInstalledCli:
-  ((bind: string, tailnet: string | null, custom?: string) => string) | null = (() => {
-  try {
-    const bin = execFileSync("/bin/sh", ["-c", "command -v openclaw"], { encoding: "utf8" }).trim();
-    // A wrapper script names its package's entry; an npm link resolves into the package.
-    const entry = /"([^"]+)\/dist\/entry\.js"/.exec(readFileSync(bin, "utf8").slice(0, 4096));
-    const dist = entry ? `${entry[1]}/dist` : join(dirname(realpathSync(bin)), "dist");
-    // Only the version the decisions name: another one's probe says nothing about it.
-    const version = (
-      JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")) as {
-        version?: unknown;
-      }
-    ).version;
-    if (version !== TESTED_OPENCLAW_VERSION) return null;
-    for (const name of readdirSync(dist)) {
-      if (!name.endsWith(".mjs")) continue;
-      const text = readFileSync(join(dist, name), "utf8");
-      const match =
-        /function pickProbeHostForBind\(bindMode, tailnetIPv4, customBindHost\) \{[^}]*\}/.exec(
-          text,
-        );
-      if (!match) continue;
-      return new Function(`${match[0]}\nreturn pickProbeHostForBind;`)() as (
-        bind: string,
-        tailnet: string | null,
-        custom?: string,
-      ) => string;
-    }
-  } catch {
-    // Not installed here.
-  }
-  return null;
-})();
 
 const dirs: string[] = [];
 const fresh = (prefix: string) => {
@@ -160,7 +119,7 @@ function holding(dir: string, secret: string): string[] {
 const TOKEN = '{"token":"plain-device-token-1"}';
 const tokenKey = (key: string) => `deviceToken:route:${key}:device-1:operator`;
 
-describe("the route store", () => {
+describe.skipIf(process.platform === "win32")("the route store", () => {
   it("reads its file only when the file's own access control list is owner-only, and proves its folder again before any token, cached or not", async () => {
     const dir = fresh("clawtrate-routes-acl-");
     const writer = new RouteStore(dir, { seal: testSeal });
@@ -846,41 +805,48 @@ describe("one stopped verdict, and the loopback endpoint the status proves", () 
     expect(serviceOnPort(old, 18789)).toMatchObject({ ok: false, reason: "cant-tell" });
   });
 
-  it.skipIf(probeHostOfInstalledCli === null)(
-    "the installed OpenClaw's status probes loopback for loopback and LAN binds, and elsewhere for tailnet and custom ones, which aren't offered",
-    async () => {
-      const pick = probeHostOfInstalledCli!;
-      const port = 18789;
-      const cases: Array<[string, string | undefined, "running" | "endpoint"]> = [
-        ["loopback", undefined, "running"],
-        ["lan", undefined, "running"],
-        ["tailnet", undefined, "endpoint"],
-        ["custom", "198.51.100.20", "endpoint"],
-      ];
-      for (const [bind, custom, expected] of cases) {
-        const host = pick(bind, "203.0.113.9", custom);
-        const text = statusJsonRecorded({
-          port,
-          bind,
-          service: "running",
-          targetRole: "gateway",
-          probeUrl: `ws://${host}:${port}`,
-          rpcUrl: `ws://${host}:${port}`,
-        });
-        // The recorded shape writes a placeholder where the real CLI prints its config's absolute path.
-        const status = parseGatewayStatus(
-          "default",
-          0,
-          text.replaceAll("<state>", "/srv/openclaw/state"),
-        )!;
-        const f = facts({ gateways: [status] });
-        const look = sshLook(f);
-        if (expected === "running") expect(look.look.outcome, bind).toBe("running");
-        else expect(look.look, bind).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
-        expect(look.found !== null, bind).toBe(expected === "running");
-      }
-    },
-  );
+  it("only accepts a verified loopback probe for the selected profile", () => {
+    const statuses = facts({
+      gateways: [
+        { profile: "default", exit: 1, unreadable: true },
+        gateway({ profile: "clawtrate" }),
+      ],
+    });
+    expect(serviceOnPort(statuses, 18789, "clawtrate").ok).toBe(true);
+    expect(serviceOnPort(statuses, 18789, "default")).toEqual({ ok: false, reason: "cant-tell" });
+    expect(serviceOnPort(statuses, 18789)).toEqual({ ok: false, reason: "cant-tell" });
+  });
+
+  it("checks the reported RPC endpoint for loopback, LAN, tailnet and custom binds", () => {
+    const port = 18789;
+    const cases = [
+      ["loopback", "127.0.0.1", "running"],
+      ["lan", "127.0.0.1", "running"],
+      ["tailnet", "203.0.113.9", "endpoint"],
+      ["custom", "198.51.100.20", "endpoint"],
+    ] as const;
+    for (const [bind, host, expected] of cases) {
+      const text = statusJsonRecorded({
+        port,
+        bind,
+        service: "running",
+        targetRole: "gateway",
+        probeUrl: `ws://${host}:${port}`,
+        rpcUrl: `ws://${host}:${port}`,
+      });
+      // The recorded shape writes a placeholder where the real CLI prints its config's absolute path.
+      const status = parseGatewayStatus(
+        "default",
+        0,
+        text.replaceAll("<state>", "/srv/openclaw/state"),
+      )!;
+      const f = facts({ gateways: [status] });
+      const look = sshLook(f);
+      if (expected === "running") expect(look.look.outcome, bind).toBe("running");
+      else expect(look.look, bind).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+      expect(look.found !== null, bind).toBe(expected === "running");
+    }
+  });
 });
 
 describe("the approve command for a route's account, SSH port and profile", () => {

@@ -491,8 +491,8 @@ export function serviceOnPort(
   profile?: "default" | "clawtrate",
 ): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" | "endpoint" } {
   for (const gateway of facts.gateways) {
-    if ("unreadable" in gateway) return { ok: false, reason: "cant-tell" };
     if (profile !== undefined && gateway.profile !== profile) continue;
+    if ("unreadable" in gateway) return { ok: false, reason: "cant-tell" };
     if (gateway.port !== port) continue;
     const service = gateway.service;
     if (gateway.exit !== 0 || !service || !gateway.configPath || service.label === "other") {

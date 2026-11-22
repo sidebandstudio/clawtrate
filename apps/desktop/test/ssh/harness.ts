@@ -36,6 +36,48 @@ export function testEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return env;
 }
 
+/** Run a fixture script in its own process group, as it would run under sshd. */
+export function runTestShell(
+  shell: string,
+  args: string[],
+  input: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(shell, args, {
+      env,
+      cwd,
+      detached: true,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.stdin.end(input);
+    const timer = setTimeout(() => {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
+        }
+      }
+      child.stdout.destroy();
+      child.stdin.destroy();
+      reject(new Error(`SSH fixture shell timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+    child.once("error", reject);
+    child.once("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout });
+    });
+  });
+}
+
 /**
  * A fresh folder of the test's own. On macOS it is made in /tmp, not the
  * per-user temporary folder, whose long path leaves no room for a forward's

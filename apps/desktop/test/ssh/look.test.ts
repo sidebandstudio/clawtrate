@@ -2,7 +2,6 @@
 // script itself run under each shell this machine has as the outer login
 // shell, with start-up files that print, in a home of the test's own.
 
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -21,6 +20,7 @@ import {
 import {
   absolutePlacesHere,
   installStubOpenclaw,
+  runTestShell,
   statusJson,
   tempDir,
   testEnv,
@@ -472,33 +472,24 @@ describe("the LOOK script", () => {
    * Runs the script as sshd would: `<login shell> -c '/bin/sh -s'`, in a process
    * group of its own, as sshd's session is, so its 30-second stop reaches only it.
    */
-  const runUnder = (shell: string, homeDir: string) =>
-    new Promise<{ status: number | null; parsed: ReturnType<typeof parseLookOutput> }>(
-      (resolve) => {
-        const script = lookScript(undefined, true);
-        const env = testEnv({
-          HOME: homeDir,
-          ZDOTDIR: homeDir,
-          ENV: join(homeDir, ".kshrc"),
-          BASH_ENV: join(homeDir, ".bashrc"),
-        });
-        const child = spawn(shell, ["-c", "/bin/sh -s"], {
-          env,
-          cwd: homeDir,
-          detached: true,
-          stdio: ["pipe", "pipe", "ignore"],
-        });
-        let stdout = "";
-        child.stdout.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => (stdout += chunk));
-        child.stdin.end(script.text);
-        const timer = setTimeout(() => child.pid && process.kill(-child.pid, "SIGKILL"), 40000);
-        child.once("close", (status) => {
-          clearTimeout(timer);
-          resolve({ status, parsed: parseLookOutput(stdout, script.requestId) });
-        });
-      },
+  const runUnder = async (shell: string, homeDir: string) => {
+    const script = lookScript(undefined, true);
+    const env = testEnv({
+      HOME: homeDir,
+      ZDOTDIR: homeDir,
+      ENV: join(homeDir, ".kshrc"),
+      BASH_ENV: join(homeDir, ".bashrc"),
+    });
+    const { status, stdout } = await runTestShell(
+      shell,
+      ["-c", "/bin/sh -s"],
+      script.text,
+      env,
+      homeDir,
+      40_000,
     );
+    return { status, parsed: parseLookOutput(stdout, script.requestId) };
+  };
 
   it.each(present)(
     "runs the same with %s as the login shell, start-up files and all",
