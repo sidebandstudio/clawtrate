@@ -256,7 +256,7 @@ export default async function globalSetup() {
     const first = cleaned === null;
     const problems = cleanUpOnce();
     // Said only when nothing cleaned up before, and written at once: the process ends next.
-    if (first && problems.length > 0) writeSync(2, `${problems.join("\n")}\n`);
+    if (first && problems.length > 0) sayNow(`${problems.join("\n")}\n`);
   });
 
   /** A dev-gateway command, run so that signals are handled while it runs. */
@@ -400,4 +400,17 @@ export default async function globalSetup() {
     throw error;
   }
   return teardown;
+}
+
+/**
+ * Writes to standard error before the process ends. A short write is finished;
+ * a closed or full standard error loses the text, never the run's exit code.
+ */
+function sayNow(text: string): void {
+  const bytes = Buffer.from(text);
+  try {
+    for (let at = 0; at < bytes.length;) at += writeSync(2, bytes, at);
+  } catch {
+    // Nobody is reading what is left.
+  }
 }
