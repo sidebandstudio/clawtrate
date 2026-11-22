@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
@@ -836,6 +836,19 @@ async function deviceIdUnderKeychainCheck(
     failure ??= error;
     throw error;
   } finally {
+    // On a discarded CI runner only: the screen and the app's stacks, to show what holds a
+    // launch that never opened its window.
+    if (failure && process.env.CI) {
+      const out = test.info().outputPath();
+      mkdirSync(out, { recursive: true });
+      spawnSync("screencapture", ["-x", join(out, `${basename(dir)}-screen.png`)]);
+      spawnSync("sample", [
+        String(child.pid),
+        "3",
+        "-file",
+        join(out, `${basename(dir)}-sample.txt`),
+      ]);
+    }
     const quit = await quitWithin(
       () => child.kill("SIGTERM"),
       () => exited,
