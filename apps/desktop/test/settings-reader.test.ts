@@ -331,17 +331,38 @@ describe.skipIf(!posix)("the home folder", () => {
     const { path } = home();
     const link = join(scratch, `held-link-${++homes}`);
     symlinkSync(path, link);
-    expect(await holdHome(link)).toEqual(unsafe("link"));
+    expect(await holdHome(link, null)).toEqual(unsafe("link"));
+    // A trailing separator would have the open follow a link before it.
+    expect(await holdHome(`${link}/`, null)).toEqual(unsafe("path"));
     const shared = join(scratch, `shared-${++homes}`);
     mkdirSync(shared, { mode: 0o700 });
     chmodSync(shared, 0o770);
-    expect(await holdHome(shared)).toEqual(unsafe("mode"));
-    expect(await holdHome(join(path, ".openclaw", "openclaw.json"))).toEqual(unsafe("type"));
+    expect(await holdHome(shared, null)).toEqual(unsafe("mode"));
+    expect(await holdHome(join(path, ".openclaw", "openclaw.json"), null)).toEqual(unsafe("type"));
     // A system folder of root's, which no test can make.
-    expect(await holdHome("/usr")).toEqual(unsafe("owner"));
-    const held = await holdHome(path);
+    expect(await holdHome("/usr", null)).toEqual(unsafe("owner"));
+    const held = await holdHome(path, null);
     expect(held).toHaveProperty("handle");
     if ("handle" in held) await held.handle.close();
+  });
+
+  it("holds a sandboxed home to the folder the guard checked, still private", async () => {
+    const { path } = home();
+    const checked = guardHome(path, true);
+    expect(checked).toEqual({ dev: statSync(path).dev, ino: statSync(path).ino });
+    const held = await holdHome(path, checked);
+    expect(held).toHaveProperty("handle");
+    if ("handle" in held) await held.handle.close();
+    // Another folder in its place since the check, private or not, is refused.
+    const other = home().path;
+    expect(await holdHome(other, checked)).toEqual(unsafe("changed"));
+    // The same folder, opened up to others after the check, is refused too.
+    chmodSync(path, 0o755);
+    expect(await holdHome(path, checked)).toEqual(unsafe("mode"));
+    // A production read keeps the ordinary home rule: no write for group or others.
+    const production = await holdHome(path, null);
+    expect(production).toHaveProperty("handle");
+    if ("handle" in production) await production.handle.close();
   });
 
   it("checks an opened folder's owner before its mode", async () => {
@@ -388,24 +409,49 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     expect(await openIn(path)).toEqual(unsafe("acl"));
   });
 
+  /** The helper's answer for a home it is handed, by command: production's or a sandbox's. */
+  const handed = (command: "read" | "read-private", home: string) =>
+    spawnSync(
+      "/bin/sh",
+      ["-c", 'exec "$0" "$1" .openclaw openclaw.json 3<"$2"', helper!, command, home],
+      { encoding: "utf8" },
+    ).stdout;
+
   it.each(["add_file", "add_subdirectory", "delete_child", "writesecurity", "chown"])(
-    "refuses a home whose ACL lets another account %s",
+    "refuses a home whose ACL lets another account %s, in either mode",
     async (perm) => {
       const { path } = home();
       acl(path, `staff allow ${perm}`);
+      expect(handed("read", path)).toBe("refused acl\n");
+      expect(handed("read-private", path)).toBe("refused acl\n");
       expect(await openIn(path)).toEqual(unsafe("acl"));
     },
   );
 
-  it("keeps a home's ordinary ACLs: macOS's delete denial, read-only grants and this account's own", async () => {
+  it("keeps a production home's ordinary ACLs, and refuses them in a sandboxed run", async () => {
     const { path } = home();
     try {
       acl(path, "group:everyone deny delete");
       acl(path, "everyone allow list,search,readattr,readextattr,readsecurity");
       acl(path, `${userInfo().username} allow add_file,delete_child`);
-      expect(await openIn(path)).toMatchObject({ kind: "read" });
+      expect(handed("read", path)).toBe(`ok\n${SETTINGS}`);
+      expect(handed("read-private", path)).toBe("refused acl\n");
+      // This run is sandboxed, so the reader asks for the private rule.
+      expect(await openIn(path)).toEqual(unsafe("acl"));
     } finally {
       // The delete denial would otherwise keep the scratch folder from being removed.
+      execFileSync("/bin/chmod", ["-N", path]);
+    }
+  });
+
+  it("keeps a sandboxed home whose ACL only denies, or grants only this account", async () => {
+    const { path } = home();
+    try {
+      acl(path, "group:everyone deny delete");
+      acl(path, `${userInfo().username} allow add_file,delete_child`);
+      expect(handed("read-private", path)).toBe(`ok\n${SETTINGS}`);
+      expect(await openIn(path)).toMatchObject({ kind: "read" });
+    } finally {
       execFileSync("/bin/chmod", ["-N", path]);
     }
   });
@@ -414,13 +460,14 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     const shared = join(scratch, `helper-shared-${++homes}`);
     mkdirSync(shared, { mode: 0o700 });
     chmodSync(shared, 0o770);
-    const handed = (home: string) =>
-      spawnSync("/bin/sh", ["-c", 'exec "$0" read .openclaw openclaw.json 3<"$1"', helper!, home], {
-        encoding: "utf8",
-      }).stdout;
-    expect(handed("/usr")).toBe("refused owner\n");
-    expect(handed(shared)).toBe("refused mode\n");
-    expect(handed(home().path)).toBe(`ok\n${SETTINGS}`);
+    expect(handed("read", "/usr")).toBe("refused owner\n");
+    expect(handed("read", shared)).toBe("refused mode\n");
+    expect(handed("read", home().path)).toBe(`ok\n${SETTINGS}`);
+    // A home others may enter but not write to: production's rule takes it, a sandbox's doesn't.
+    const open = home().path;
+    chmodSync(open, 0o755);
+    expect(handed("read", open)).toBe(`ok\n${SETTINGS}`);
+    expect(handed("read-private", open)).toBe("refused mode\n");
   });
 
   it("allows an ACL that grants only this account, or only denies", async () => {
@@ -619,7 +666,8 @@ process.stdout.write("refused absent\\n");
     }
     // The fixture ran (its marker first), then its one refusal line was taken as it is.
     expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({
-      argv: ["read", ".openclaw", "openclaw.json"],
+      // This run is sandboxed, so its home is read by the private rule.
+      argv: ["read-private", ".openclaw", "openclaw.json"],
       env: ["PATH"],
       home: statSync(path).ino,
     });
@@ -885,6 +933,17 @@ describe("the account's real home", () => {
         SetupRefusedError,
       );
     }
+  });
+
+  it("hands back the checked folder in a sandboxed run, and nothing in a production one", () => {
+    const { path } = home();
+    // Another temporary home stands in for the account's.
+    const account = home().path;
+    const identity = { dev: statSync(path).dev, ino: statSync(path).ino };
+    expect(guardHome(path, true, {}, () => account)).toEqual(identity);
+    // A marker makes the run sandboxed whatever the caller says; only both together are production.
+    expect(guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => account)).toEqual(identity);
+    expect(guardHome(path, false, {}, () => path)).toBe(null);
   });
 
   it("in a production run, is only the home the system reports for this account", () => {

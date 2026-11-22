@@ -58,6 +58,7 @@ const UNSAFE_WHY = [
   "failed",
   "helper",
   "path",
+  "changed",
 ] as const;
 
 /** Why the file wasn't read: each a fixed word, safe for a log. */
@@ -123,6 +124,9 @@ const refused = (why: (typeof UNSAFE_WHY)[number]): Opened => ({
 const component = (name: string) =>
   name.length > 0 && name.length <= 255 && !/[/\0]/.test(name) && name !== "." && name !== "..";
 
+/** The checked home folder, by device and inode, so that the one opened is the one checked. */
+export type HomeIdentity = { dev: number; ino: number };
+
 /**
  * Which home may be read, decided before anything in it is opened. A
  * production run (the caller says so, and no sandbox marker is present)
@@ -130,18 +134,19 @@ const component = (name: string) =>
  * nothing when that can't be determined. Any other run reads only a private
  * folder of this account's, by its canonical path, below one of this
  * machine's temporary roots with no folder on the way that another account
- * could swap, and away from the account's real home.
+ * could swap, and away from the account's real home; its identity is
+ * returned so the folder opened can be held to it.
  */
 export function guardHome(
   home: string,
   sandboxed: boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
   accountHomeOf: () => string | null = accountHome,
-): void {
+): HomeIdentity | null {
   const real = accountHomeOf();
   if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
     if (real === null || home !== resolve(real)) throw new SetupRefusedError("home");
-    return;
+    return null;
   }
   const uid = process.geteuid?.() ?? null;
   const orNull = <T>(read: () => T): T | null => {
@@ -152,6 +157,7 @@ export function guardHome(
     }
   };
   const canonical = orNull(() => realpathSync(home));
+  const entry = orNull(() => lstatSync(home));
   const realHome = real === null ? null : orNull(() => realpathSync(real));
   const root = systemTempRoots(process.platform).find(
     (temp) =>
@@ -171,12 +177,10 @@ export function guardHome(
         uid,
       ),
     ) ||
-    !privateFolder(
-      orNull(() => lstatSync(home)),
-      uid,
-    )
+    !privateFolder(entry, uid)
   )
     throw new SetupRefusedError("home");
+  return { dev: entry!.dev, ino: entry!.ino };
 }
 
 /** Each canonical profile's outcome: the default always, `clawtrate` only when its folder exists. */
@@ -232,13 +236,20 @@ export async function openSettingsFile(options: {
   if (platform !== "darwin" && platform !== "linux") return refused("helper");
   if (!isAbsolute(home) || normalize(home) !== home || !component(folder) || !component(file))
     return refused("path");
-  guardHome(home, options.sandboxed);
+  const checked = guardHome(home, options.sandboxed);
   if (platform === "darwin" && !options.helper) return refused("helper");
-  const held = await holdHome(home);
+  const held = await holdHome(home, checked);
   if (!("handle" in held)) return held;
   try {
     return platform === "darwin"
-      ? await readWithHelper(options.helper!, held.handle, [folder, file], options.deadlineMs)
+      ? await readWithHelper(
+          options.helper!,
+          held.handle,
+          // A sandboxed run's home must be private, ACL included; a production one keeps the
+          // ordinary home rule.
+          [checked ? "read-private" : "read", folder, file],
+          options.deadlineMs,
+        )
       : await readThroughProc(held.handle, folder, file);
   } finally {
     await held.handle.close();
@@ -248,11 +259,18 @@ export async function openSettingsFile(options: {
 /**
  * The home folder, opened without following a link and checked on what was
  * opened: a folder of this account's that neither its group nor others may
- * write to.
+ * write to. When the guard checked a sandboxed home, the folder opened must
+ * be that same folder, by device and inode, and still private: a folder put
+ * in its place between the check and the open is refused. A path ending in a
+ * separator is refused, since an open would follow a link before it.
  */
-export async function holdHome(home: string): Promise<{ handle: FileHandle } | Opened> {
+export async function holdHome(
+  home: string,
+  checked: HomeIdentity | null,
+): Promise<{ handle: FileHandle } | Opened> {
   const flags = openFlags();
   if (!flags) return refused("failed");
+  if (home.length > 1 && home.endsWith("/")) return refused("path");
   let handle: FileHandle;
   try {
     handle = await open(home, flags.folder);
@@ -267,7 +285,11 @@ export async function holdHome(home: string): Promise<{ handle: FileHandle } | O
         ? "owner"
         : (stat.mode & 0o022) !== 0
           ? "mode"
-          : null;
+          : checked && (stat.dev !== checked.dev || stat.ino !== checked.ino)
+            ? "changed"
+            : checked && (stat.mode & 0o077) !== 0
+              ? "mode"
+              : null;
     if (why === null) return { handle };
     await handle.close();
     return refused(why);
@@ -305,7 +327,7 @@ function readWithHelper(
     // Its own deadline: a descendant holding the pipe open can't delay the answer.
     const timer = setTimeout(() => settle(failed), deadlineMs);
     try {
-      child = spawn(helper, ["read", ...args], {
+      child = spawn(helper, args, {
         env: { PATH: "/usr/bin:/bin" },
         stdio: ["ignore", "pipe", "ignore", home.fd],
       });
@@ -339,7 +361,9 @@ function helperAnswer(output: Buffer): Opened {
   const why = output.length <= 32 ? HELPER_REFUSAL.exec(output.toString("latin1"))?.[1] : null;
   if (why === "absent") return { kind: "refused", reason: "absent" };
   if (why === "large") return { kind: "refused", reason: "unreadable", why };
-  const unsafe = UNSAFE_WHY.find((word) => word === why && word !== "helper" && word !== "path");
+  const unsafe = UNSAFE_WHY.find(
+    (word) => word === why && word !== "helper" && word !== "path" && word !== "changed",
+  );
   return refused(unsafe ?? "helper");
 }
 

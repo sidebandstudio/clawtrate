@@ -163,6 +163,14 @@ describe("what is taken from the settings", () => {
       "a tab-padded key in env",
       `{ env: { "\tOPENCLAW_GATEWAY_PASSWORD": "pw" }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
     ],
+    [
+      "the login-shell import turned on",
+      `{ env: { shellEnv: { enabled: true } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "the login-shell import turned on by the file's env",
+      `{ env: { vars: { OPENCLAW_LOAD_SHELL_ENV: "1" } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`,
+    ],
   ])("refuses an implicit mode beside %s", (_, text) => {
     expect(extract(text)).toEqual(refused("credential", "password"));
   });
@@ -187,6 +195,10 @@ describe("what is taken from the settings", () => {
     [
       "a padded key in env.vars",
       `{ env: { vars: { "OPENCLAW_GATEWAY_PASSWORD ": "pw" } }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
+    ],
+    [
+      "login-shell import",
+      `{ env: { shellEnv: { enabled: true } }, ${withGateway(`{ auth: { mode: "token", token: "${TOKEN}" } }`).slice(1)}`,
     ],
   ])("takes an explicit token beside an unused %s", (_, text) => {
     expect(extract(text)).toEqual({ kind: "found", token: TOKEN, port: 18789 });
@@ -265,6 +277,11 @@ describe("what is taken from the settings", () => {
       );
     },
   );
+
+  it("takes an implicit mode when the login-shell import is plainly off", () => {
+    const off = `{ env: { shellEnv: { enabled: false, timeoutMs: 1000 } }, ${withGateway(`{ auth: { token: "${TOKEN}" } }`).slice(1)}`;
+    expect(extract(off)).toEqual({ kind: "found", token: TOKEN, port: 18789 });
+  });
 
   it("takes each profile's own default port when the file names none", () => {
     const text = withGateway(`{ auth: { token: "${TOKEN}" } }`);

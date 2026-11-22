@@ -130,6 +130,22 @@ function declaresEnv(root: Plain, name: string): boolean {
   return keys.some((key) => key.trim().toUpperCase() === name);
 }
 
+/**
+ * Whether the file turns on OpenClaw's login-shell import, which then fills
+ * a missing `OPENCLAW_GATEWAY_PASSWORD` from the shell: `env.shellEnv.enabled`
+ * (`<openclaw>/dist/io.factory-B2b2ehlc.mjs` line 625), or an
+ * `OPENCLAW_LOAD_SHELL_ENV` the file's own env sets for that check
+ * (`run-CZZ9dIV4.mjs` lines 2532-2533). Counted unless it is plainly off.
+ */
+function loadsShellEnv(root: Plain): boolean {
+  const env = own(root, "env");
+  const shellEnv = isPlain(env) ? own(env, "shellEnv") : undefined;
+  const enabled = isPlain(shellEnv) ? own(shellEnv, "enabled") : undefined;
+  return (
+    (enabled !== undefined && enabled !== false) || declaresEnv(root, "OPENCLAW_LOAD_SHELL_ENV")
+  );
+}
+
 const refuse = <Reason extends keyof typeof REFUSALS>(
   reason: Reason,
   why: (typeof REFUSALS)[Reason][number],
@@ -163,13 +179,15 @@ export function extractSettings(text: string, profile: SettingsProfile): Extract
   const authMode = own(auth, "mode");
   if (authMode !== undefined && authMode !== "token") return refuse("credential", "auth-mode");
   // A local password refuses in either mode. With the mode absent, any password OpenClaw
-  // could resolve makes it password mode: the remote one, or the file's own environment's.
+  // could resolve makes it password mode: the remote one, the file's own environment's, or
+  // one the login shell supplies when the file turns that import on.
   if (Object.hasOwn(auth, "password")) return refuse("credential", "password");
   if (authMode === undefined) {
     const remote = own(gateway, "remote");
     if (
       (isPlain(remote) && Object.hasOwn(remote, "password")) ||
-      declaresEnv(root, "OPENCLAW_GATEWAY_PASSWORD")
+      declaresEnv(root, "OPENCLAW_GATEWAY_PASSWORD") ||
+      loadsShellEnv(root)
     )
       return refuse("credential", "password");
   }

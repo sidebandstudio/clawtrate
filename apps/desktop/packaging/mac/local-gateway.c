@@ -4,7 +4,8 @@
 // checks what it opened, and writes the file's bytes to stdout. It never
 // writes, repairs or runs anything.
 //
-//   ClawtrateLocalGateway read <profile folder> <file>   (fd 3: the home folder)
+//   ClawtrateLocalGateway read <profile folder> <file>          (fd 3: the home folder)
+//   ClawtrateLocalGateway read-private <profile folder> <file>  (a sandboxed run's home)
 //
 // stdout is "ok\n" followed by the file's bytes, or one line "refused <why>\n".
 #define __STDC_WANT_LIB_EXT1__ 1
@@ -95,15 +96,17 @@ static const char *checkOpened(int fd, int folder) {
 /**
  * The home folder the host held and passed as fd 3, checked here too: a
  * folder of this account's that no other account can add to, remove from or
- * re-permission, by its mode or its ACL.
+ * re-permission, by its mode or its ACL. A sandboxed run's home must be
+ * private, as the profile folder is: no group or other bits, and no ACL that
+ * allows anyone else anything.
  */
-static const char *checkHome(int fd) {
+static const char *checkHome(int fd, int private) {
     struct stat st;
     if (fstat(fd, &st) != 0) return "failed";
     if (!S_ISDIR(st.st_mode)) return "type";
     if (st.st_uid != geteuid()) return "owner";
-    if ((st.st_mode & 022) != 0) return "mode";
-    return aclGrantsOthers(fd, 1) ? "acl" : NULL;
+    if ((st.st_mode & (private ? 077 : 022)) != 0) return "mode";
+    return aclGrantsOthers(fd, !private) ? "acl" : NULL;
 }
 
 /** Reads to the end, refusing more than the limit however large the file was when checked. */
@@ -132,11 +135,11 @@ static const char *preflight(int folder, const char *name) {
 }
 
 /** The file's bytes, or why not; on success the caller owns and wipes the buffer. */
-static const char *readSettings(int home, const char *folderName, const char *fileName,
-                                char **buffer, size_t *length) {
+static const char *readSettings(int home, int privateHome, const char *folderName,
+                                const char *fileName, char **buffer, size_t *length) {
     *buffer = NULL;
     *length = 0;
-    const char *homeRefused = checkHome(home);
+    const char *homeRefused = checkHome(home, privateHome);
     if (homeRefused) return homeRefused;
     int folder = openat(home, folderName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     const char *why = folder < 0 ? openFailure(home, folderName) : checkOpened(folder, 1);
@@ -160,11 +163,13 @@ static const char *readSettings(int home, const char *folderName, const char *fi
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4 || strcmp(argv[1], "read") != 0 || !component(argv[2]) || !component(argv[3]))
+    int privateHome = argc == 4 && strcmp(argv[1], "read-private") == 0;
+    if (argc != 4 || (!privateHome && strcmp(argv[1], "read") != 0) || !component(argv[2]) ||
+        !component(argv[3]))
         return 2;
     char *buffer;
     size_t length;
-    const char *why = readSettings(3, argv[2], argv[3], &buffer, &length);
+    const char *why = readSettings(3, privateHome, argv[2], argv[3], &buffer, &length);
     close(3);
     if (why) return refuse(why);
     int written = fputs("ok\n", stdout) >= 0 && fwrite(buffer, 1, length, stdout) == length &&
