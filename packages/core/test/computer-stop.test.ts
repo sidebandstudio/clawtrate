@@ -7,7 +7,34 @@ import { createBridgeSession } from "../src/bridge.ts";
 import type { ComputerViews } from "../src/computer.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { deferred, sleep, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
+
+const PEER = "agent:marlow:main";
+
+/** `run-s` in this task has messaged Marlow, whose run `run-r` (another task) it started. */
+function messagedPeer(gateway: { emit: (event: string, payload: unknown) => void }) {
+  gateway.emit("agent", agentEvent("run-s", 1, "lifecycle", { phase: "start" }));
+  gateway.emit(
+    "agent",
+    agentEvent("run-s", 2, "tool", {
+      phase: "result",
+      name: "sessions_send",
+      toolCallId: "c0",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "{}" }],
+        details: { runId: "run-r", sessionKey: PEER, status: "accepted" },
+      },
+    }),
+  );
+  gateway.emit("agent", agentEvent("run-r", 1, "lifecycle", { phase: "start" }, PEER));
+}
+
+const runEnded = agentEvent("run-s", 9, "lifecycle", {
+  phase: "end",
+  status: "cancelled",
+  aborted: true,
+});
 
 describe("the Computer tab's Stop", () => {
   it("F-145: with two runs active and nothing naming the current one, asks the gateway to stop each", async () => {
@@ -100,6 +127,90 @@ describe("the Computer tab's Stop", () => {
     await stopping;
     await sleep(30);
     expect(gateway.calls("chat.abort")).toEqual([]);
+  });
+
+  it("F-145: a Stop still waiting for write access is withdrawn when this viewer closes the task, though another window keeps it open", async () => {
+    const wait = deferred<unknown>();
+    const { client, gateway, transcript } = await openTask({ held: READ_SCOPES });
+    const viewer = createBridgeSession(client);
+    const other = createBridgeSession(client);
+    onTestFinished(() => {
+      wait.resolve({ status: "denied" });
+      viewer.dispose();
+      other.dispose();
+      client.stop();
+    });
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true });
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((each) => each.state === "running"));
+    await other.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "computerShow", key: KEY });
+    const stopping = viewer.apply({ type: "computerStopTask" });
+    await until(() => client.state.connection.upgrade.status === "pending");
+    await viewer.apply({ type: "closeSession", key: KEY });
+    wait.resolve({
+      status: "approved",
+      requestId: "up-1",
+      deviceToken: "rotated",
+      scopes: ["operator.read", "operator.write"],
+    });
+    await stopping;
+    await until(() => client.state.connection.scopes.includes("operator.write"));
+    expect(gateway.calls("chat.abort")).toEqual([]);
+  });
+
+  it("F-145: Stop in this task affects only this task: a run its messages started in another task is not stopped", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const viewer = createBridgeSession(client);
+    onTestFinished(() => {
+      viewer.dispose();
+      client.stop();
+    });
+    gateway.handlers["chat.abort"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== KEY)
+        return { ok: true, aborted: true, runIds: ["run-r"] };
+      setTimeout(() => gateway.emit("agent", runEnded), 0);
+      return { ok: true, aborted: true, runIds: ["run-s"] };
+    };
+    messagedPeer(gateway);
+    await until(() => transcript().linkedRuns["run-r"]?.state === "running");
+    await viewer.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "computerShow", key: KEY });
+    await viewer.apply({ type: "computerStopTask" });
+    await until(() => transcript().runs[0]?.state === "stopped");
+    // The run's end is where the conversation's Stop asks its recipients: nothing was asked.
+    expect(transcript().runs[0]!.stoppedWith?.recipientsAsked).toBe(true);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-s" }]);
+  });
+
+  it("F-145 F-296: after a refused Stop in this task, the conversation's own Stop still stops the runs its messages started", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const viewer = createBridgeSession(client);
+    onTestFinished(() => {
+      viewer.dispose();
+      client.stop();
+    });
+    let refuse = true;
+    gateway.handlers["chat.abort"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== KEY)
+        return { ok: true, aborted: true, runIds: ["run-r"] };
+      if (refuse) throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      setTimeout(() => gateway.emit("agent", runEnded), 0);
+      return { ok: true, aborted: true, runIds: ["run-s"] };
+    };
+    messagedPeer(gateway);
+    await until(() => transcript().linkedRuns["run-r"]?.state === "running");
+    await viewer.apply({ type: "openSession", key: KEY });
+    await viewer.apply({ type: "computerShow", key: KEY });
+    await viewer.apply({ type: "computerStopTask" });
+    await until(() => transcript().runs[0]?.state === "running");
+    refuse = false;
+    await client.stopRun(KEY, "run-s");
+    await until(() => (transcript().runs[0]!.stoppedWith?.bots.length ?? 0) === 1);
+    expect(gateway.calls("chat.abort")).toContainEqual({ sessionKey: PEER, runId: "run-r" });
   });
 
   it("F-145: a question cancelled while its run is stopping was cancelled; the run has not ended yet", async () => {

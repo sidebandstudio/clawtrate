@@ -1540,8 +1540,11 @@ export function createBridgeSession(
  * find any it does not name.
  */
 class ViewerSession implements BridgeSession {
-  /** The tasks this viewer has open, at most `openLimit`. */
-  private readonly open = new Set<string>();
+  /**
+   * The tasks this viewer has open, at most `openLimit`, each with the owner of what this opening
+   * asked for: closing the task withdraws what the gateway has not been asked yet (a Stop).
+   */
+  private readonly open = new Map<string, object>();
   /** Task creations under way: they count against this viewer's open tasks before the gateway is asked. */
   private creating = 0;
   private disposed = false;
@@ -1599,7 +1602,7 @@ class ViewerSession implements BridgeSession {
     }
     // The client already counts this viewer's interest in the new task.
     if (this.disposed || this.open.has(key)) this.client.closeSession(key);
-    else this.open.add(key);
+    else this.open.set(key, {});
     return { key };
   }
 
@@ -1642,16 +1645,20 @@ class ViewerSession implements BridgeSession {
         if (!this.open.has(command.key)) {
           this.checkRoom();
           client.openSession(command.key);
-          this.open.add(command.key);
+          this.open.set(command.key, {});
         }
         return;
-      case "closeSession":
-        if (!this.open.delete(command.key)) return;
+      case "closeSession": {
+        const opening = this.open.get(command.key);
+        if (!opening) return;
+        this.open.delete(command.key);
+        client.withdraw(opening);
         // This viewer's Computer pane on that task is left first: control is given back, the view ends.
         if (this.viewerId && client.state.computer?.panes[this.viewerId]?.key === command.key)
           client.computerLeave(this.viewerId);
         client.closeSession(command.key);
         return;
+      }
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":
@@ -1954,7 +1961,10 @@ class ViewerSession implements BridgeSession {
         // Only the task of this viewer's pane, while this viewer has that task open.
         const key = this.viewerId ? client.state.computer?.panes[this.viewerId]?.key : undefined;
         if (key) this.mine(key);
-        return client.computerStopTask(this.viewer, { owner });
+        // Asked for this opening of the task: closing it withdraws a Stop not yet sent.
+        return client.computerStopTask(this.viewer, {
+          owner: (key && this.open.get(key)) || owner,
+        });
       }
       case "readMachine":
         return client.readMachine(this.mine(command.key), command.nodes, command.probe);
@@ -2015,7 +2025,7 @@ class ViewerSession implements BridgeSession {
   }
 
   openTasks(): ReadonlySet<string> {
-    return this.open;
+    return new Set(this.open.keys());
   }
 
   computerViewer(): string | null {
@@ -2030,7 +2040,10 @@ class ViewerSession implements BridgeSession {
     // Control is given back and the view ends, as on leaving the tab.
     const viewer = this.viewerId;
     if (viewer) this.client.computerDispose(viewer);
-    for (const key of this.open) this.client.closeSession(key);
+    for (const [key, opening] of this.open) {
+      this.client.withdraw(opening);
+      this.client.closeSession(key);
+    }
     this.open.clear();
   }
 }

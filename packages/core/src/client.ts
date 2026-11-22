@@ -2854,12 +2854,13 @@ export class ClawtrateClient {
   /**
    * Stop a running or waiting run with `chat.abort`. The run is `stopping`
    * until the gateway reports how it ended: `stopped` when the abort took,
-   * `completed` with `finishedBeforeStop` when the run finished first.
+   * `completed` with `finishedBeforeStop` when the run finished first. With `taskOnly` (the
+   * Computer tab's Stop), the runs of other bots this run's messages started are not stopped.
    */
   async stopRun(
     key: string,
     asked: string,
-    options: { owner?: object; everyRun?: boolean } = {},
+    options: { owner?: object; everyRun?: boolean; taskOnly?: boolean } = {},
   ): Promise<void> {
     const transcript = this.state.transcripts[key];
     const runId = transcript
@@ -2874,7 +2875,17 @@ export class ClawtrateClient {
     if (runId === null) return;
     const run = transcript && findRun(transcript, runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
-    this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
+    this.updateActivity(key, (activity) => {
+      const stopping = requestStop(activity, runId, this.now());
+      // A task-only Stop leaves the recipients alone, as if already asked (`stopRecipients`); a
+      // later Stop of the conversation's own, after that one was refused, asks them again.
+      if (options.taskOnly || run.stoppedWith?.recipientsAsked)
+        return noteStoppedWith(stopping, runId, (now) => ({
+          ...now,
+          recipientsAsked: options.taskOnly === true,
+        }));
+      return stopping;
+    });
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
@@ -7087,7 +7098,12 @@ export class ClawtrateClient {
     // All at once: one run's slow answer never holds another's Stop back.
     await Promise.all(
       runs.map((run) =>
-        this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
+        this.stopRun(
+          key,
+          run.id,
+          // "The request affects only this task": nothing these runs' messages started is stopped.
+          owner ? { owner, everyRun: true, taskOnly: true } : { everyRun: true, taskOnly: true },
+        ),
       ),
     );
     return { runIds: runs.map((run) => run.id), aborted: null };
