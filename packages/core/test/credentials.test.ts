@@ -616,6 +616,71 @@ describe("a refused device token never removes a newer one", () => {
     }
   });
 
+  it("keeps a rotated token when an older hello of the socket that owns the key finishes after it", async () => {
+    const { client, gateway, storage } = await pairedOnA();
+    const approval = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-A" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => approval.promise;
+    let holdOther = false;
+    const otherGateway = new FakeGateway();
+    otherGateway.connectReply = (params) => {
+      const { scopes, auth } = params as ConnectParams;
+      holdOther = true;
+      return { ok: true, payload: helloOk(scopes, auth?.deviceToken) };
+    };
+    // The other client's hello save waits, and so does this client's reconnect after the
+    // approval, before it opens a socket: the other client's socket still owns the key.
+    const otherHeld = deferred<void>();
+    const reconnectHeld = deferred<void>();
+    let holdReconnect = false;
+    let otherWaiting = false;
+    let reconnectWaiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdOther && key === tokenKey(URL_A)) {
+        holdOther = false;
+        otherWaiting = true;
+        await otherHeld.promise;
+      } else if (holdReconnect && key === tokenKey(URL_A)) {
+        holdReconnect = false;
+        reconnectWaiting = true;
+        await reconnectHeld.promise;
+      }
+      return get(key);
+    };
+    const other = new ClawtrateClient(testHost(otherGateway, storage), FAST);
+    try {
+      await client.requestAccess();
+      await until(() => client.state.connection.upgrade.status === "pending");
+      await other.start();
+      await until(() => otherWaiting);
+      // The rotation is approved and saved before the other client's older hello finishes.
+      holdReconnect = true;
+      approval.resolve({
+        status: "approved",
+        requestId: "up-A",
+        deviceToken: "token-R",
+        scopes: [...INTERACTIVE_SCOPES],
+      });
+      await until(() => reconnectWaiting);
+      expect(JSON.parse(storage.data.get(tokenKey(URL_A))!).token).toBe("token-R");
+      otherHeld.resolve();
+      await until(() => other.state.connection.status === "connected");
+      await sleep(30);
+      const before = gateway.connects.length;
+      reconnectHeld.resolve();
+      await until(() => gateway.connects.length > before);
+      const next = gateway.connects[gateway.connects.length - 1] as ConnectParams;
+      expect(next.auth?.deviceToken).toBe("token-R");
+      expect(next.scopes).toEqual([...INTERACTIVE_SCOPES]);
+    } finally {
+      otherHeld.resolve();
+      reconnectHeld.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
+
   it("removes the saved token when the gateway refuses it", async () => {
     const { client, gateway, storage } = await pairedOnA();
     // Saved with surrounding whitespace: a connect sends it trimmed.

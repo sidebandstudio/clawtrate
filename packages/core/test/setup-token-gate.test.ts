@@ -8,6 +8,7 @@ import {
   ClawtrateClient,
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_APPEARED,
+  SETUP_PAIRING_UNSAVED,
   SETUP_GRANT_REFUSED,
   setupGrant,
 } from "../src/client.ts";
@@ -115,6 +116,57 @@ describe("the setup connection's token gate", () => {
       client.stop();
     });
   }
+
+  it("F-492: a pairing whose save loses the token to another connection on this store ends in an error, never connected", async () => {
+    const gateway = gatewayGranting({
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "device-token",
+    });
+    // The hello's save waits while another connection on this store opens and closes unsaved.
+    const reply = gateway.connectReply;
+    let holdNext = false;
+    gateway.connectReply = (params, url) => {
+      holdNext = true;
+      return reply(params, url);
+    };
+    const storage = memoryStorage();
+    const held = deferred<void>();
+    let waiting = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holdNext && key === tokenKey(URL)) {
+        holdNext = false;
+        waiting = true;
+        await held.promise;
+      }
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    const statuses: string[] = [];
+    client.store.subscribe(() => statuses.push(client.state.connection.status));
+    const closing = new FakeGateway();
+    closing.refuseConnections = true;
+    const other = new ClawtrateClient(testHost(closing, storage), FAST);
+    try {
+      await client.start();
+      await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+      await until(() => waiting);
+      await other.connectForSetup(URL);
+      await until(() => closing.sockets.some((socket) => socket.readyState === 3));
+      other.stop();
+      held.resolve();
+      await until(() => ["error", "connected"].includes(client.state.connection.status));
+      await sleep(30);
+      expect(statuses).not.toContain("connected");
+      expect(client.state.connection.error?.code).toBe(SETUP_PAIRING_UNSAVED);
+      expect(storage.data.has(tokenKey(URL))).toBe(false);
+    } finally {
+      held.resolve();
+      other.stop();
+      client.stop();
+    }
+  });
 
   it("F-492: a connection cancelled before its grant is checked writes nothing", async () => {
     const gateway = gatewayGranting({

@@ -578,6 +578,8 @@ type ConnectionWrites = {
   rejected: Map<string, Set<string>>;
   /** Refusals accepted so far, of any token: a plan whose last read came before one is not sent. */
   refusals: number;
+  /** Tokens rotated by approved access requests so far: a hello planned before one saves nothing. */
+  rotations: number;
 };
 const connectionWrites = new WeakMap<ClawtrateHost["storage"], ConnectionWrites>();
 
@@ -653,6 +655,8 @@ export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
 export const SETUP_PAIRING_GONE = "SETUP_PAIRING_GONE";
 /** A new setup pairing found a saved token for its gateway: consent to reuse it is needed first. */
 export const SETUP_PAIRING_APPEARED = "SETUP_PAIRING_APPEARED";
+/** A new setup pairing couldn't be saved: another connection on this device's store opened meanwhile. */
+export const SETUP_PAIRING_UNSAVED = "SETUP_PAIRING_UNSAVED";
 /** An ordinary connection's refusal whose code the pinned protocol doesn't name. A code of the client's own. */
 export const CONNECT_REFUSED = "CONNECT_REFUSED";
 /** The refusal codes an ordinary connection publishes as they are: the pinned protocol's named ones. */
@@ -1220,6 +1224,7 @@ export class ClawtrateClient {
       owners: new Map(),
       rejected: new Map(),
       refusals: 0,
+      rotations: 0,
     };
     connectionWrites.set(host.storage, this.writes);
     this.options = options;
@@ -1726,6 +1731,7 @@ export class ClawtrateClient {
               ...(admin ? { adminHeld: true } : {}),
               ...(pairing ? { pairingHeld: true } : {}),
             });
+            this.writes.rotations += 1;
           }),
       },
       reconnect: () => {
@@ -5430,6 +5436,8 @@ export class ClawtrateClient {
     let current: SocketReads | null = null;
     /** `refusals` as the plan last read the saved token. */
     let refusalsAtRead = 0;
+    /** `rotations` as the plan first read the saved token. */
+    let rotationsAtPlan = 0;
     const endReads = (reads: SocketReads | null) => {
       if (!reads) return;
       if (reads.timer) clearTimeout(reads.timer);
@@ -5544,6 +5552,7 @@ export class ClawtrateClient {
           if (generation !== this.generation || current !== mine)
             throw new Error("the connection was replaced");
         };
+        rotationsAtPlan = this.writes.rotations;
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         stillCurrent();
         // After the wait for the token: the setup endpoint still passes, or nothing is signed.
@@ -5716,6 +5725,8 @@ export class ClawtrateClient {
           const ids = { clientId: context.plan.clientId, deviceId: context.plan.identity.deviceId };
           const stored = await tokenStore.load({ ...ids, role });
           if (!live()) return;
+          // A token rotated since this socket planned retires the one this hello carries, so the
+          // hello leaves the rotated token saved.
           await tokenStore.save(
             {
               ...ids,
@@ -5723,7 +5734,7 @@ export class ClawtrateClient {
               token: issued,
               scopes: stored?.token === issued ? stored.scopes : (hello.auth?.scopes ?? []),
             },
-            live,
+            () => live() && this.writes.rotations === rotationsAtPlan,
           );
         }
         if (!live()) return;
@@ -5756,7 +5767,22 @@ export class ClawtrateClient {
             const existing = await this.loadToken(settings.url, staged.deviceId, staged.role);
             if (!live() || generation !== this.generation || this.settings?.url !== settings.url)
               return false;
-            if (!tokenStore.ownsToken(staged.deviceId, staged.role)) return false;
+            if (!tokenStore.ownsToken(staged.deviceId, staged.role)) {
+              // Another connection on this store opened since, so the pairing isn't saved and the
+              // one-time code is used: setup ends here, and trying again makes a new code.
+              this.close();
+              this.setConnection({
+                status: "error",
+                retryAt: null,
+                error: {
+                  code: SETUP_PAIRING_UNSAVED,
+                  message:
+                    "Another connection from this device started while the pairing was being saved, so it wasn't saved.",
+                  hint: null,
+                },
+              });
+              return false;
+            }
             await this.writeToken(settings.url, staged.deviceId, staged.role, {
               token: staged.token,
               grantedScopes: [...staged.scopes],
