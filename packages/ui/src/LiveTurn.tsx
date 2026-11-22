@@ -281,7 +281,8 @@ export function RunEnding({
           {ending.timeouts === null &&
             transcript.outbox.some(
               (message) =>
-                message.runId === run.id &&
+                // Its parent as Stop found it: a send that got no answer names it only by alias.
+                (message.runId === run.id || transcript.steerAliases[message.id] === run.id) &&
                 message.mode === "steer" &&
                 message.leftAt !== null &&
                 message.steer === undefined,

@@ -1087,6 +1087,45 @@ test.describe("steering, queueing and holding", () => {
     await expect(steer).toHaveCount(1);
   });
 
+  test("F-097: a steer whose send timed out and that the gateway did not withdraw keeps the Stop note's warning", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Skip the photos folder");
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Stop Otto" }).click();
+    const note = page.getByTestId("stop-note");
+    await expect(note).toContainText("Completed actions are not undone.");
+    // Its send's answer never came (no run named), its withdrawal was declined: only the alias
+    // its key got as it left names the stopped run.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const steer = transcript.outbox.find((each) => each.text === "Skip the photos folder")!;
+        const unknown = { ...steer, status: "unknown" as const, runId: null, leftAt: Date.now() };
+        delete unknown.steer;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              outbox: transcript.outbox.map((each) => (each === steer ? unknown : each)),
+              steerAliases: { ...transcript.steerAliases, [steer.id]: "run-live" },
+            },
+          },
+        };
+      });
+    });
+    await expect(note).toContainText("The gateway may still run messages it already accepted.");
+  });
+
   test("F-101: a run stopped after three tool calls in a row timed out says so, in the stop note's form", async ({
     page,
   }) => {

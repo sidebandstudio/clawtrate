@@ -3627,18 +3627,18 @@ export function markWithdrawn(activity: TaskActivity, ids: readonly unknown[]): 
   let next = activity;
   for (const message of activity.outbox)
     if (
-      message.mode === "steer" &&
+      // Sent as a steer, by its key's alias; a Resend since may have changed its mode.
+      Object.hasOwn(activity.steerAliases, message.id) &&
       // Left and not settled by history: the gateway's word wins over what this client concluded
       // meanwhile (a history read can mark it unconfirmed while the answer is on its way).
       ["sending", "sent", "checking", "unconfirmed", "unknown"].includes(message.status) &&
-      ids.includes(message.id) &&
-      Object.hasOwn(activity.steerAliases, message.id)
+      ids.includes(message.id)
     )
-      next = updateMessage(next, message.id, {
-        status: "not-sent",
-        steer: "withdrawn",
-        runId: null,
-      });
+      next = {
+        // A Resend's own run under the withdrawn key never ran either.
+        ...updateMessage(next, message.id, { status: "not-sent", steer: "withdrawn", runId: null }),
+        runs: next.runs.filter((run) => run.id !== message.id || run.origin !== "local"),
+      };
   return next;
 }
 

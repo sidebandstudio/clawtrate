@@ -204,9 +204,29 @@ describe("where a steer went (F-096, F-097, F-468)", () => {
     await until(() => run(task)?.state === "stopped");
     // The run ended and history does not hold the steer: it reads unconfirmed.
     await until(() => task.transcript().outbox[0]?.status === "unconfirmed");
+    // The person presses Resend first. The gateway keeps that key as stopped and answers so.
+    task.gateway.handlers["chat.send"] = (params) => {
+      const key = (params as Send).idempotencyKey;
+      return key === task.id
+        ? { runId: key, status: "timeout", summary: "aborted", stopReason: "rpc" }
+        : { runId: key, status: "started" };
+    };
+    task.client.retryMessage(KEY, task.id);
+    await until(() => task.gateway.calls("chat.send").length === 2);
+    await sleep(50);
     late.resolve({ ok: true, aborted: true, runIds: [task.id] });
     await until(() => task.transcript().outbox[0]?.status === "not-sent");
     expect(task.transcript().outbox[0]!.steer).toBe("withdrawn");
+    expect(run(task, task.id)).toBeUndefined();
+    // Send now goes once, under a key of its own.
+    task.client.retryMessage(KEY, task.id);
+    await until(() => task.gateway.calls("chat.send").length === 3);
+    await sleep(50);
+    const sends = (task.gateway.calls("chat.send") as Send[]).map((each) => each.idempotencyKey);
+    expect(sends.slice(1, 2)).toEqual([task.id]);
+    expect(sends[2]).not.toBe(task.id);
+    expect(sends).toHaveLength(3);
+    expect(task.transcript().outbox.map((message) => message.id)).toEqual([sends[2]]);
     task.client.stop();
   }, 15_000);
 
