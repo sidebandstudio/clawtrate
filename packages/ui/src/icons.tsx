@@ -92,8 +92,16 @@ export const PlusIcon = (props: IconProps) => (
   </Icon>
 );
 
-/** A gear: Settings. */
 export const SettingsIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M2.75 5h5.5M11.75 5h1.5M2.75 11h1.5M7.75 11h5.5" />
+    <circle cx="10" cy="5" r="1.75" />
+    <circle cx="6" cy="11" r="1.75" />
+  </Icon>
+);
+
+/** A gear: the desktop's Settings button (docs/design/titlebar.md). */
+export const GearIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M12.79 6.95L14.36 7.25L14.36 8.75L12.79 9.05L12.13 10.64L13.03 11.96L11.96 13.03L10.64 12.13L9.05 12.79L8.75 14.36L7.25 14.36L6.95 12.79L5.36 12.13L4.04 13.03L2.97 11.96L3.87 10.64L3.21 9.05L1.64 8.75L1.64 7.25L3.21 6.95L3.87 5.36L2.97 4.04L4.04 2.97L5.36 3.87L6.95 3.21L7.25 1.64L8.75 1.64L9.05 3.21L10.64 3.87L11.96 2.97L13.03 4.04L12.13 5.36Z" />
     <circle cx="8" cy="8" r="2" />

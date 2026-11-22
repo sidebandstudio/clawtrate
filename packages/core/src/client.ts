@@ -1072,9 +1072,10 @@ export class ClawtrateClient {
     ),
   );
   /** The names given to gateways on this device, from the host's storage (`gateway-names.ts`). */
-  private gatewayNames: GatewayNames | undefined;
+  private gatewayNames: GatewayNames = [];
   /** The current address's name, on every state written, so no reset of the connection loses it. */
   private withGatewayName(next: ClawtrateState): ClawtrateState {
+    // The store normalises its first value before this field is set.
     const name = gatewayNameFor(this.gatewayNames ?? [], next.connection.gatewayUrl);
     return next.connection.gatewayName === name
       ? next

@@ -43,7 +43,7 @@ import {
   RestoreIcon,
   SearchIcon,
   SectionIcon,
-  SettingsIcon,
+  GearIcon,
   SortIcon,
   StarIcon,
   TrashIcon,
@@ -1319,7 +1319,7 @@ export function Rail({
     {
       kind: "item",
       label: "Settings",
-      icon: <SettingsIcon />,
+      icon: <GearIcon />,
       // Focus goes back to the gateway button first, so Settings returns it there.
       onSelect: () => {
         closeMenu(true);
@@ -2231,7 +2231,7 @@ export function Rail({
           title={`Settings (${settingsKeys})`}
           onClick={() => onOpenSettings()}
         >
-          <SettingsIcon />
+          <GearIcon />
         </button>
       </div>
       {menu?.kind === "gateway" && (
