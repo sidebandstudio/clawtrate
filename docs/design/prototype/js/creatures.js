@@ -155,7 +155,8 @@ function defaultAvatar(id        )               {
 
 
 
-const round2 = (n        ) => Math.round(n * 100) / 100;
+// Adding 0 turns a negative zero into zero, so equal values compare and print equal.
+const round2 = (n        ) => Math.round(n * 100) / 100 + 0;
 
 function avatarVariation(id        )                  {
   const angle = ((avatarHash(`${id}:look`) % 8) / 8) * Math.PI * 2;

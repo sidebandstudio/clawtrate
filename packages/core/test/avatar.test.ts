@@ -130,6 +130,36 @@ describe("choosing a bot's creature from its id", () => {
     expect(avatarVariation("otto")).toEqual({ gaze: [0.58, 0.57], blink: 4000 });
   });
 
+  it("pins the hash, the salts and the order of every part list: this corpus covers every body, eyes, claws and colour", () => {
+    // Computed once and checked in. A change to the hash, a salt or a list's order moves one of these.
+    const table: Array<[string, string, string, string, string, [number, number], number]> = [
+      ["main", "wide", "single", "fiddler", "blue", [0, -0.2], 4000],
+      ["otto", "tall", "splayed", "big", "sky", [0.58, 0.57], 4000],
+      ["bot-0", "round", "pair", "fiddler", "lime", [0, -0.2], 800],
+      ["bot-1", "wide", "splayed", "fiddler", "blue", [0.82, 0.25], 1600],
+      ["bot-2", "tall", "single", "fiddler", "yellow", [0, 0.7], 0],
+      ["bot-3", "dome", "splayed", "big", "lime", [0.58, 0.57], 800],
+      ["bot-4", "tall", "splayed", "even", "sky", [-0.82, 0.25], 1600],
+      ["bot-5", "dome", "single", "big", "pink", [0.58, 0.57], 4000],
+      ["bot-6", "wide", "short", "fiddler", "pink", [0.58, -0.07], 1600],
+      ["bot-7", "tall", "short", "fiddler", "violet", [-0.58, -0.07], 800],
+      ["bot-14", "round", "pair", "even", "orchid", [0, -0.2], 3200],
+      ["bot-18", "round", "single", "fiddler", "green", [0.58, 0.57], 0],
+    ];
+    for (const [id, body, eyes, claws, color, gaze, blink] of table) {
+      expect([id, defaultAvatar(id)]).toEqual([
+        id,
+        { family: "clawling", body, eyes, claws, color },
+      ]);
+      expect([id, avatarVariation(id)]).toEqual([id, { gaze, blink }]);
+    }
+    const covered = (index: number) => new Set(table.map((row) => row[index]));
+    expect(covered(1).size).toBe(4);
+    expect(covered(2).size).toBe(4);
+    expect(covered(3).size).toBe(3);
+    expect(covered(4).size).toBe(8);
+  });
+
   it("keeps the colour the previous character had, except orange, which is gone", () => {
     // The previous palette, in its order: the hash picked an index into it.
     const before = [

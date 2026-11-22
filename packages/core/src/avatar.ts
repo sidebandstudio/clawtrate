@@ -152,7 +152,8 @@ export type AvatarVariation = {
   blink: number;
 };
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+// Adding 0 turns a negative zero into zero, so equal values compare and print equal.
+const round2 = (n: number) => Math.round(n * 100) / 100 + 0;
 
 export function avatarVariation(id: string): AvatarVariation {
   const angle = ((avatarHash(`${id}:look`) % 8) / 8) * Math.PI * 2;
