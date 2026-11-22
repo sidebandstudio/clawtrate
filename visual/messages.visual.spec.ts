@@ -924,15 +924,24 @@ for (const width of [320, 390, 430]) {
       const buttons = message.getByTestId("message-actions").getByRole("button");
       await expect(buttons).toHaveCount(3);
       for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
-      // The quote heads the reply's turn, just over its bubble, which lies over the foot of the
-      // quote's 44 px area with the bar shut too: there, only the bar is looked for.
+      // The quote heads the reply's turn, just over its bubble. Across its whole width, no touch
+      // in its 44 px area reaches the bar. The bubble lies over the area's foot with the bar shut
+      // too, so the bar is all that is looked for.
       const quote = page
         .getByTestId("transcript-turn")
         .filter({ has: message })
         .getByTestId("reply-quote");
-      const onBar = (await unreached(quote)).filter((point) =>
-        / (Add a reaction|Reply in a thread|More)$/.test(point),
-      );
+      const onBar = await quote.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const bar = el.closest(".turn")!.querySelector(".msg-actions")!;
+        const points: string[] = [];
+        for (let x = box.left + 0.5; x < box.right; x += 4)
+          for (const dy of [-21.5, -11, 0, 11, 21.5]) {
+            const y = box.top + box.height / 2 + dy;
+            if (bar.contains(document.elementFromPoint(x, y))) points.push(`${x},${y}`);
+          }
+        return points;
+      });
       expect(onBar).toEqual([]);
     });
 
