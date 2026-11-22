@@ -643,4 +643,39 @@ describe("full access under interleavings", () => {
     expect((gateway.connects[later] as ConnectParams).scopes).toEqual([...FULL_SCOPES]);
     client.stop();
   });
+
+  it("a look at another gateway while an upgrade waits leaves that upgrade's full grant as it is", async () => {
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: fullRecord("token-A", READ_SCOPES),
+      [tokenKey("ws://127.0.0.1:19962")]: JSON.stringify({
+        token: "token-B",
+        grantedScopes: READ_SCOPES,
+        heldScopes: READ_SCOPES,
+      }),
+    });
+    const { gateway, approval } = approvingGateway();
+    gateway.connectReply = (params) => ({
+      ok: true,
+      payload: helloOk([...(params as ConnectParams).scopes]),
+    });
+    const client = new ClawtrateClient(host(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    void client.requestAccess().catch(() => {});
+    await until(() => client.state.connection.upgrade.status === "pending");
+    // A setup look reads another gateway's saved pairing meanwhile.
+    expect(await client.deviceAccess("ws://127.0.0.1:19962")).toBe("paired");
+    const wanted = (gateway.calls("device.scopes.requestUpgrade")[0] as { scopes: string[] })
+      .scopes;
+    approval.resolve({
+      status: "approved",
+      requestId: "up-2",
+      deviceToken: "token-U",
+      scopes: wanted,
+    });
+    await until(() => saved(storage)?.token === "token-U");
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({ fullGrant: true });
+    client.stop();
+  });
 });

@@ -8057,8 +8057,10 @@ export class ClawtrateClient {
     return [...token.heldScopes];
   }
 
-  /** Notes the grant of a token record just read or written (`lastGrant`). */
-  private noteGrant(key: string, record: StoredDeviceToken | null): void {
+  /** Notes the grant of a token record of the connected gateway just read or written (`lastGrant`). */
+  private noteGrant(url: string, key: string, record: StoredDeviceToken | null): void {
+    // Only the connected gateway's: a look at another address leaves it as it is.
+    if (this.settings?.url !== url) return;
     this.lastGrant = {
       key,
       full: record?.fullGrant === true,
@@ -8076,7 +8078,7 @@ export class ClawtrateClient {
     includeRejected = false,
   ): Promise<StoredDeviceToken | null> {
     const record = await this.readToken(url, deviceId, role, includeRejected);
-    this.noteGrant(this.tokenKey(url, deviceId, role), record);
+    this.noteGrant(url, this.tokenKey(url, deviceId, role), record);
     return record;
   }
 
@@ -8127,7 +8129,7 @@ export class ClawtrateClient {
   ): Promise<void> {
     const key = this.tokenKey(url, deviceId, role);
     await this.host.storage.set(key, JSON.stringify(record));
-    this.noteGrant(key, record);
+    this.noteGrant(url, key, record);
   }
 
   private tokenParams(deviceId: string) {
@@ -8248,7 +8250,7 @@ export class ClawtrateClient {
           const existing = await this.loadToken(url, deviceId, role, true);
           if (existing?.token.trim() === rejected) {
             await this.host.storage.delete(key);
-            this.noteGrant(key, null);
+            this.noteGrant(url, key, null);
           }
           const refused = this.writes.rejected.get(key);
           refused?.delete(rejected);
