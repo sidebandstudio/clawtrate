@@ -1,0 +1,57 @@
+- group:
+  - text: Messaged Marlow Replied
+  - list:
+    - listitem:
+      - text: Otto sent
+      - time: 5:38 PM
+      - text: "Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines."
+    - listitem:
+      - text: Marlow replied
+      - time: 5:39 PM
+      - text: Nov 16 — Weekly backup finished cleanly. 41 GB across media-box, garage-pi and attic-nas.
+  - button "Open this message in Marlow's task": Open in Marlow
+  - button "Show every message between Otto and Marlow in this task": Show full exchange
+  - button "Raw" [expanded]
+  - region "What the gateway sent":
+    - term: Tool
+    - definition:
+      - text: sessions_send
+      - button "Copy tool name"
+    - paragraph: Arguments
+    - button "Copy arguments"
+    - text: "{ \"sessionKey\": \"agent:marlow:house-log\", \"message\": \"Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines.\", \"timeoutSeconds\": 120 }"
+    - paragraph: Result
+    - button "Copy result"
+    - text: "{ \"content\": [ { \"type\": \"text\", \"text\": \"{\\\"status\\\":\\\"ok\\\",\\\"runId\\\":\\\"run_m42b\\\",\\\"sessionKey\\\":\\\"agent:marlow:house-log\\\",\\\"reply\\\":\\\"Nov 16 — Weekly backup finished cleanly.\\\\n41 GB across media-box, garage-pi and attic-nas.\\\"}\" } ], \"details\": { \"status\": \"ok\", \"runId\": \"run_m42b\", \"sessionKey\": \"agent:marlow:house-log\", \"reply\": \"Nov 16 — Weekly backup finished cleanly.\\n41 GB across media-box, garage-pi and attic-nas.\" } }"
+    - paragraph:
+      - button "Show all 14 lines"
+    - paragraph: Timing
+    - term: Started
+    - definition:
+      - text: 5:38:00 PM
+      - button "Copy started time"
+    - term: Ended
+    - definition:
+      - text: 5:39:00 PM
+      - button "Copy ended time"
+    - term: Took
+    - definition:
+      - text: 60.0 s
+      - button "Copy took time"
+    - paragraph: Identifiers
+    - term: Tool call
+    - definition:
+      - text: call_msg
+      - button "Copy tool call id"
+    - term: Run
+    - definition:
+      - text: run_7f3a91c2
+      - button "Copy run id"
+    - term: Recipient session
+    - definition:
+      - text: agent:marlow:house-log
+      - button "Copy recipient session id"
+    - term: Recipient run
+    - definition:
+      - text: run_m42b
+      - button "Copy recipient run id"

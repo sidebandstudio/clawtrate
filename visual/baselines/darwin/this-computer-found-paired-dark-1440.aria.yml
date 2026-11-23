@@ -1,0 +1,15 @@
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw is running" [level=3]
+  - term: Version
+  - definition: 2026.10.6
+  - term: Profile
+  - definition: default
+  - term: Listens
+  - definition: Configured for loopback
+  - term: Service
+  - definition: LaunchAgent
+  - button "Connect read-only"
+  - paragraph: This device has a saved pairing for this address. Clawtrate asks for read access.
+  - paragraph: On this computer

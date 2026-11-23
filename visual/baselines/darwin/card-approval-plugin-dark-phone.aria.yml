@@ -1,0 +1,9 @@
+- region "Otto asks for approval. Needs approval.":
+  - heading "Otto asks for approval" [level=3]
+  - text: Needs approval
+  - paragraph: post to the house noticeboard. Post this week's backup summary to the house noticeboard.
+  - group: Show full request
+  - button "Allow"
+  - button "Deny"
+  - paragraph: Expires in 28 minutes; the action is not run if it does.
+  - button "Raw"
