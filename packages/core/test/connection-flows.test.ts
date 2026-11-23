@@ -474,14 +474,14 @@ describe("connecting", () => {
   });
 
   describe("a command sent while the saved gateway is still being read at startup", () => {
-    /** A store whose read of the saved gateway waits until `release`. */
-    function pausedRead() {
+    /** A store whose read of `paused`, by default the saved gateway, waits until `release`. */
+    function pausedRead(paused = "connection") {
       const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
       const reading = deferred<void>();
       const gate = deferred<void>();
       const get = storage.get;
       storage.get = async (key) => {
-        if (key === "connection") {
+        if (key === paused) {
           reading.resolve();
           await gate.promise;
         }
@@ -506,6 +506,28 @@ describe("connecting", () => {
         expect(gateway.sockets).toHaveLength(0);
         expect(savedSettings(storage)).toBeNull();
         expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
+    it("F-457: Disconnect sent before the saved gateway is read forgets it too", async () => {
+      // The turn limit is read before the saved gateway.
+      const { storage, reading, release } = pausedRead("turn-limit-minutes");
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const forgetting = createBridgeSession(client).apply(
+          parseBridgeCommand({ type: "disconnect", gatewayUrl: URL }),
+        );
+        release();
+        await Promise.all([starting, forgetting]);
+        await sleep(100);
+        expect(gateway.sockets).toHaveLength(0);
+        expect(savedSettings(storage)).toBeNull();
       } finally {
         release();
         client.stop();

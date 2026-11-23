@@ -1507,22 +1507,23 @@ export class ClawtrateClient {
     const stops = this.stops;
     const selection = this.selectionApplied;
     const prior = this.settings;
-    const identity = await this.loadIdentity();
-    if (stops !== this.stops) return;
-    this.setConnection({ deviceId: identity.deviceId });
-    // A turn limit the person chose earlier, unless the host was given one.
-    if (this.options.turnLimitMs === undefined) {
-      const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
-      if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
-    }
-    this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
-    if (options.resume === false) return;
+    // Published before the first wait: a command sent while the identity loads waits too.
     const commands = this.connectionCommands;
     let restored!: () => void;
     const restoring = new Promise<void>((resolve) => (restored = resolve));
     this.restoring = restoring;
     let settings: ConnectionSettings | null;
     try {
+      const identity = await this.loadIdentity();
+      if (stops !== this.stops) return;
+      this.setConnection({ deviceId: identity.deviceId });
+      // A turn limit the person chose earlier, unless the host was given one.
+      if (this.options.turnLimitMs === undefined) {
+        const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
+        if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+      }
+      this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
+      if (options.resume === false) return;
       // Startup needs to open the socket without waiting for another client's credential write.
       settings = await this.savedSettings();
       if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
