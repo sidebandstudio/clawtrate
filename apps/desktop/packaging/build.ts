@@ -30,6 +30,7 @@ import {
   signingProblems,
   signingSummary,
   windowsSigner,
+  WINDOWS_KEY_COPIES,
 } from "./signing.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
@@ -80,6 +81,7 @@ if (target === "win" && plan.windows === "certificate") {
     process.exit(1);
   }
   signer = expected.thumbprint;
+  console.log(WINDOWS_KEY_COPIES);
 }
 
 // The exact Electron the app is developed and tested with.

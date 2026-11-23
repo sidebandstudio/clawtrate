@@ -23,6 +23,7 @@ import {
   windowsCertificate,
   windowsSignature,
   windowsSigner,
+  WINDOWS_KEY_COPIES,
 } from "../packaging/signing.ts";
 import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
@@ -203,6 +204,15 @@ describe("signing", () => {
     );
     expect(build).toContain("signer = expected.thumbprint;");
     expect(build.indexOf("windowsSigner(process.env")).toBeLessThan(build.indexOf("await build("));
+    // Then, still before signing, one line on the copies of the key signtool leaves, and where.
+    expect(build).toContain(
+      "  signer = expected.thumbprint;\n  console.log(WINDOWS_KEY_COPIES);\n}",
+    );
+    expect(WINDOWS_KEY_COPIES).not.toContain("\n");
+    expect(WINDOWS_KEY_COPIES).toContain("a copy of the .pfx's private key");
+    expect(WINDOWS_KEY_COPIES).toContain(
+      "for each file it signs, in %APPDATA%\\Microsoft\\Crypto\\Keys",
+    );
     expect(build).toContain("projectDir: APP_DIR,");
     // The x64 installer by its expected name, not whichever .exe files the build lists.
     expect(build).toContain("const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;");
