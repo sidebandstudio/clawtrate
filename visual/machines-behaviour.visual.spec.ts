@@ -151,6 +151,39 @@ type Fixture = {
   getState: () => ClawtrateState;
   setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
 };
+/**
+ * Once a `type` command has answered, each commands read is held until the test lets it go, or
+ * fails it, with `finishRead`.
+ */
+const holdCommandsReadAfter = (page: Page, type: string) =>
+  page.evaluate((type) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    const held = window as unknown as { answered?: boolean; finishRead?: (fail: boolean) => void };
+    fixture.invoke = (command) => {
+      if (command.type === type)
+        return original(command).then((answer) => {
+          held.answered = true;
+          return answer;
+        });
+      if (
+        held.answered &&
+        command.type === "readPlacement" &&
+        (command as { part?: string }).part === "commands"
+      )
+        return new Promise((resolve, reject) => {
+          held.finishRead = (fail) =>
+            fail ? reject(new Error("The gateway did not answer.")) : resolve(original(command));
+        });
+      return original(command);
+    };
+  }, type);
+const finishRead = (page: Page, fail: boolean) =>
+  page.evaluate(
+    (fail) => (window as unknown as { finishRead: (fail: boolean) => void }).finishRead(fail),
+    fail,
+  );
+
 /** The connection again, with other scopes: a reconnect at another tier. */
 const reconnect = (page: Page, admin: boolean) =>
   page.evaluate((admin) => {
@@ -753,29 +786,7 @@ test("F-046: after a save, the command picker waits for the read that brings the
 }) => {
   await openFixture(page, `${PANE}&access=admin`, "light");
   await openRunsOn(page);
-  // Once the save has answered, the commands read is held until the test lets it go, or fails it.
-  await page.evaluate(() => {
-    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
-    const original = fixture.invoke.bind(fixture);
-    const held = window as unknown as { saved?: boolean; finishRead?: (fail: boolean) => void };
-    fixture.invoke = (command) => {
-      if (command.type === "setCommandMachine")
-        return original(command).then((answer) => {
-          held.saved = true;
-          return answer;
-        });
-      if (
-        held.saved &&
-        command.type === "readPlacement" &&
-        (command as { part?: string }).part === "commands"
-      )
-        return new Promise((resolve, reject) => {
-          held.finishRead = (fail) =>
-            fail ? reject(new Error("The gateway did not answer.")) : resolve(original(command));
-        });
-      return original(command);
-    };
-  });
+  await holdCommandsReadAfter(page, "setCommandMachine");
   const select = page.getByTestId("runs-on-machine");
   await select.click();
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
@@ -784,22 +795,94 @@ test("F-046: after a save, the command picker waits for the read that brings the
   );
   // The page still shows the revision the save was made over: a second choice would be refused.
   await expect(select).toBeDisabled();
-  await page.evaluate(() =>
-    (window as unknown as { finishRead: (fail: boolean) => void }).finishRead(false),
-  );
+  await finishRead(page, false);
   await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
   await expect(select).toBeEnabled();
   // A read after the save that fails offers Try again instead of the old revision's picker.
   await select.click();
   await page.getByRole("menuitemradio", { name: /^media-box/ }).click();
   await expect(announcer(page)).toHaveText(/^Saved and applied\. .*media-box$/);
-  await page.evaluate(() =>
-    (window as unknown as { finishRead: (fail: boolean) => void }).finishRead(true),
-  );
+  await finishRead(page, true);
   await expect(page.getByTestId("runs-on-error")).toContainText("The gateway did not answer.");
   await expect(
     page.getByTestId("runs-on-error").getByRole("button", { name: "Try again" }),
   ).toBeVisible();
+});
+
+test("F-046: after a save, Back and opening the page again still waits for the read after it", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdCommandsReadAfter(page, "setCommandMachine");
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  await expect(announcer(page)).toHaveText(
+    "Saved and applied. Otto's command machine setting: the gateway's machine",
+  );
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  await openRunsOn(page);
+  // The page opened again still shows the revision the save was made over.
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeDisabled();
+  await finishRead(page, false);
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect(select).toBeEnabled();
+});
+
+test("F-046: while the read asked for after a workspace save is out, the command picker waits for it", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toBeEnabled();
+  await holdCommandsReadAfter(page, "setBotWorkspace");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await page
+    .getByRole("textbox", { name: /path on the gateway's machine/ })
+    .fill("/srv/clawtrate/workspaces/otto-2");
+  await page.getByRole("button", { name: "Save folder" }).click();
+  await expect(announcer(page)).toHaveText(/^Saved\. Otto's workspace: /);
+  // A choice made now would be sent over the commands read from before that read, whenever
+  // the one still out answers.
+  await expect(select).toBeDisabled();
+  await finishRead(page, false);
+  await expect(select).toBeEnabled();
+});
+
+test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  const group = page
+    .locator('[data-testid="approvals-file"][data-machine="media-box"]')
+    .getByRole("radiogroup");
+  await group.getByRole("radio", { checked: true }).focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(settingsAnnouncer(page)).toHaveText("Saved. media-box: Ask every time");
+  const first = group.getByRole("radio", { name: "Ask every time" });
+  await expect(first).toHaveAttribute("aria-checked", "true");
+  await expect(first).not.toHaveAttribute("aria-disabled", "true");
+  // Ask every time is the first choice: Home stays on it, and End then Home comes back to it.
+  await page.keyboard.press("Home");
+  await expect(first).toBeFocused();
+  await expect(first).not.toHaveAttribute("aria-disabled", "true");
+  expect((await sent(page)).filter((c) => c.type === "setMachineDefaults")).toHaveLength(1);
+  await page.keyboard.press("End");
+  await expect(settingsAnnouncer(page)).toHaveText("Saved. media-box: Never allow");
+  await expect(group.getByRole("radio", { name: "Never allow" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.keyboard.press("End");
+  await expect(group.getByRole("radio", { name: "Never allow" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect((await sent(page)).filter((c) => c.type === "setMachineDefaults")).toHaveLength(2);
 });
 
 test("F-156: one machine's pending save keeps its choices waiting while another machine's is saved", async ({
