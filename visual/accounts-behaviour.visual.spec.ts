@@ -825,7 +825,7 @@ test("F-034: a bot written whose first task did not land is said to exist, unfin
   ).toBeVisible();
 });
 
-test("F-519: a bot whose first-run questions were not turned off is not offered to open as it is, only to finish", async ({
+test("F-520: a bot whose first-run questions were not turned off is not offered to open as it is, only to finish", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&create=partial-identity`, "light");

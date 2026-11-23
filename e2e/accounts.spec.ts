@@ -347,7 +347,7 @@ async function injected(session: string): Promise<Record<string, boolean>> {
   return Object.fromEntries(files.map((file) => [file.name, !file.missing]));
 }
 
-test("F-519: a bot made in New bot starts as itself: no first-run sequence, its starting files kept, its name and picture its identity", async () => {
+test("F-520: a bot made in New bot starts as itself: no first-run sequence, its starting files kept, its name and picture its identity", async () => {
   test.setTimeout(180_000);
   await page.keyboard.press("ControlOrMeta+n");
   const create = dialog("New bot");
