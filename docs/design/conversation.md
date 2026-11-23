@@ -509,6 +509,8 @@ The owner's direction: a person cares about what the bot says and what it is thi
 
 **No text twice.** A message on a channel (row 23 of 8.1) whose text is the same as a reply the same run draws (trimmed at its ends, with its line breaks and indents as they are) leaves out only that text: "Message on a conversation · Sent", or "… to the survey office", not the text again above the reply that says it. The recipient stays, and so does a failure's or a refusal's reason. This holds with "Show commands" on too. (F-532)
 
+**A picture goes with its message.** A picture a bot hands over is drawn directly under the bubble of the message that carried it, before anything the bot did after. A message the bot sends with its message tool to the task it is answering is a row of its own, which the gateway writes with the text and the pictures, so they show together with the text the card points to, not under the card and not at the end of the turn. A picture whose message draws no bubble is drawn under the turn. The same picture twice in one turn is drawn once, where it first came. What a picture loads, and what a failed one says, is F-535's. (F-535)
+
 **"Show commands"** is a switch in Settings → Conversation, off by default, kept on the device like the theme (`clawtrate.commands`; `?commands=show` sets it for the fixture). On, all of this section except "No text twice" is undone: each action is its card at level 0, the status line says the running card's words and brings it into view, Raw is back, and the Computer tab lists command lines (`work-pane.md`, "Recent actions and commands"). It changes at once in every open view. (F-531)
 
 ## 8. The kinds of action
