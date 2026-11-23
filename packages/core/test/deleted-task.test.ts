@@ -6,6 +6,7 @@
 // message fails with the reason and keeps its words; nothing is sent again into whatever the key
 // holds now, unless the person sends it again to the task once it is live again.
 import { describe, expect, it } from "vitest";
+import { createBridgeSession } from "../src/bridge.ts";
 import { TaskArchivedError, TaskDeletedError, TaskResetError } from "../src/client.ts";
 import {
   TASK_ARCHIVED_ELSEWHERE,
@@ -405,12 +406,26 @@ describe("a task deleted elsewhere (F-278)", () => {
     const { client, gateway, history, transcript, sends } = await shown({
       session: { sessionId: "s-2" },
     });
-    const id = client.sendMessage(KEY, "Check the disk.", {
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "openSession", key: KEY });
+    client.sendMessage(KEY, "Check the disk.", {
       attachments: [{ fileName: "df.txt", mimeType: "text/plain", type: "file", content: "aGk=" }],
       replyToId: "row-2",
     });
     await until(() => transcript().outbox[0]?.status === "sent");
-    // The task is deleted and another made under its key; history now names it.
+    // The turn fails on the gateway.
+    const runId = transcript().outbox[0]!.runId!;
+    gateway.emit("agent", agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+    gateway.emit(
+      "agent",
+      agentEvent(runId, 2, "lifecycle", {
+        phase: "error",
+        error: "The model provider is overloaded.",
+        executionSettled: true,
+      }),
+    );
+    await until(() => transcript().runs.some((run) => run.id === runId && run.state === "failed"));
+    // Then the task is deleted and another made under its key; history now names it.
     history.sessionId = "s-2";
     client.reloadSession(KEY);
     await until(() => transcript().sessionId === "s-2");
@@ -418,14 +433,22 @@ describe("a task deleted elsewhere (F-278)", () => {
       if ((params as Send).sessionId !== "s-2") throw new GatewayError(MOVED);
       return { runId: "run-new", status: "started" };
     };
-    const again = client.sendAgain(KEY, id);
-    await until(() => transcript().outbox.find((each) => each.id === again)?.status === "failed");
+    // The failed turn's Try again: the engine still holds its message, so the button asks for it
+    // again by the run's message, as the visible button does.
+    const failed = transcript().runs.find((run) => run.id === runId)!;
+    expect(transcript().outbox.some((message) => message.id === failed.messageId)).toBe(true);
+    const again = await viewer.apply({
+      type: "sendAgain",
+      key: KEY,
+      messageId: failed.messageId!,
+    });
+    const sentAgain = () => transcript().outbox.find((each) => each.id === again.messageId);
+    await until(() => sentAgain()?.status === "failed");
     expect(sends()).toHaveLength(2);
     expect(sends()[1]).toMatchObject({ sessionId: "s-1", replyToId: "row-2" });
     expect(sends()[1]!.attachments).toHaveLength(1);
-    expect(transcript().outbox.find((each) => each.id === again)?.error).toBe(
-      TASK_DELETED_ELSEWHERE,
-    );
+    expect(sentAgain()?.error).toBe(TASK_DELETED_ELSEWHERE);
+    viewer.dispose();
     client.stop();
   });
 
