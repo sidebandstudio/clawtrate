@@ -168,11 +168,14 @@ describe("the packaged app's launches", () => {
     const dir = mkdtempSync(join(tmpdir(), "clawtrate-exit-"));
     try {
       const file = join(dir, "app-exit.json");
-      for (const [script, ended] of [
+      const cases: [string, { code: number | null; signal: string | null }][] = [
         ["process.exit(0)", { code: 0, signal: null }],
         ["process.exit(3)", { code: 3, signal: null }],
-        ["process.kill(process.pid, 'SIGSEGV')", { code: null, signal: "SIGSEGV" }],
-      ] as const) {
+      ];
+      // libuv sends no SIGSEGV on Windows: the child would throw and exit 1.
+      if (process.platform !== "win32")
+        cases.push(["process.kill(process.pid, 'SIGSEGV')", { code: null, signal: "SIGSEGV" }]);
+      for (const [script, ended] of cases) {
         rmSync(file, { force: true });
         const child = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
         reportExit(child, file);
