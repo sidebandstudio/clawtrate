@@ -81,6 +81,7 @@ function Screens() {
   const settings = (
     <Settings
       connection={state.connection}
+      showChannelChats={state.showChannelChats === true}
       visible={settingsOpen}
       onClose={() => setSettingsOpen(false)}
       onForget={another}
