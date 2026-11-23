@@ -1550,7 +1550,7 @@ button.reaction {
 }
 
 /* Settings, Conversation: "Show external channel chats", a switch beside its name (F-519). */
-.channel-chats-field {
+.b-field.channel-chats-field {
   display: flex;
   align-items: center;
   justify-content: space-between;
