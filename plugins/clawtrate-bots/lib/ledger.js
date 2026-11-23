@@ -277,7 +277,8 @@ export function clearAge(ledger, version) {
   const ages = ledger.orphanAges;
   if (!ages || !Object.hasOwn(ages.since, version)) return;
   delete ages.since[version];
-  if (Object.keys(ages.since).length === 0) delete ledger.orphanAges;
+  for (const key in ages.since) if (Object.hasOwn(ages.since, key)) return;
+  delete ledger.orphanAges;
 }
 
 // Apply, the journal and Undo (sections 8 and 9). Reached only when the
