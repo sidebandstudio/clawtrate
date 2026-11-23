@@ -186,7 +186,13 @@ export class OperatorSession {
     try {
       return await client.request<T>(method, params, { timeoutMs: left() });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "gateway not connected") throw error;
+      // The client's own "not sent" is a plain Error; the gateway's refusal is a subclass,
+      // whatever its words, and is never sent again.
+      const unsent =
+        error instanceof Error &&
+        Object.getPrototypeOf(error) === Error.prototype &&
+        error.message === "gateway not connected";
+      if (!unsent) throw error;
       // The socket is closing and its close has not reached the client yet.
       await this.connected(timeoutMs, left(), true);
       return client.request<T>(method, params, { timeoutMs: left() });

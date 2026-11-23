@@ -170,6 +170,14 @@ describe("an operator connection the gateway drops", () => {
     expect(gateway.calls).toEqual(["config.patch"]);
   });
 
+  it("fails a refusal whose words are the client's own, and sends it once", async () => {
+    gateway.answers["config.patch"] = new Error("gateway not connected");
+    await expect(session.request("config.patch", { raw: "{}" }, 3_000)).rejects.toThrow(
+      "gateway not connected",
+    );
+    expect(gateway.calls).toEqual(["config.patch"]);
+  });
+
   it("does not resend a request that was in flight when the socket closed", async () => {
     gateway.answers["config.patch"] = "hold";
     const pending = session.request("config.patch", { raw: "{}" }, 10_000);
