@@ -295,7 +295,7 @@ export function Shell({
     });
   }, []);
   const open = useCallback(
-    (key: string) => {
+    (key: string): Promise<void> => {
       const asked = (opens.current.count += 1);
       opens.current.latest.set(key, asked);
       const settle = (error: string | null) => {
@@ -304,7 +304,7 @@ export function Shell({
         opens.current.latest.delete(key);
         setRefusal(key, error);
       };
-      void send({ type: "openSession", key }).then(
+      return send({ type: "openSession", key }).then(
         () => settle(null),
         (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
       );
@@ -315,7 +315,7 @@ export function Shell({
   useEffect(() => {
     if (!taskKey) return;
     shown.current = taskKey;
-    open(taskKey);
+    void open(taskKey);
     return () => {
       shown.current = null;
       void send({ type: "closeSession", key: taskKey });
@@ -733,7 +733,8 @@ export function Shell({
           error instanceof Error &&
           error.message.endsWith(NOT_OPEN_IN_VIEW)
         )
-          open(key);
+          // The guard stays set until this open has answered, as Try again stays shown till then.
+          return open(key);
       })
       .finally(() => {
         if (reloading.current === key) reloading.current = null;
