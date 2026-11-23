@@ -178,7 +178,7 @@ for (const view of LIVE_VIEWS) {
   if (view.scene === "main") continue;
   SCENES.push({
     name: `${view.rows ? `${view.rows}: ` : ""}live ${view.scene}`,
-    query: `scene=${view.scene}&${OTTO_DISK}&panel=closed`,
+    query: `scene=${view.scene}&${OTTO_DISK}&panel=closed${view.query ?? ""}`,
     prepare: view.ready,
   });
 }

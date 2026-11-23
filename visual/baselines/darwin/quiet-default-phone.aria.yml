@@ -1,0 +1,24 @@
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:10 PM
+    - paragraph: Copy last week's log next to this one and check the disk.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: Last week's log is missing. Checking the disk now.
+    - toolbar "Message actions":
+      - button "More"
+    - paragraph: The copy timed out after its two minute limit, and last week's log isn't there.
+    - toolbar "Message actions":
+      - button "More"
+    - group: Worked 6 actions 2 failed 1 unavailable
+    - status
+  - region "Access":
+    - text: Read-only. You can follow Otto's work here. Approvals and questions aren't shown on this connection.
+    - button "Request access"
+  - status
+- status

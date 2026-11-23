@@ -73,36 +73,46 @@ export function useBubbles(): [BubbleChoice, (choice: BubbleChoice) => void] {
   return [choice, choose];
 }
 
-// "Show commands" (conversation.md, 7.11): off by default. One value for the whole window, so
-// Settings, the conversation and the Computer tab change together.
-const commandListeners = new Set<() => void>();
-let commandsShown: boolean | null = null;
-
-function readCommandsShown(): boolean {
-  if (commandsShown === null) {
-    const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("commands");
-    commandsShown = (fromUrl ?? readPreference("commands")) === "show";
-  }
-  return commandsShown;
+/**
+ * A switch kept on this device (conversation.md, 7.11), off by default, stored as
+ * `clawtrate.<key>` = "show"; `?<key>=show` overrides the stored choice. One value
+ * for the whole window, so Settings, the conversation and the Computer tab change together.
+ */
+function deviceSwitch(key: string): () => [boolean, (shown: boolean) => void] {
+  const listeners = new Set<() => void>();
+  let value: boolean | null = null;
+  const read = (): boolean => {
+    if (value === null) {
+      const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get(key);
+      value = (fromUrl ?? readPreference(key)) === "show";
+    }
+    return value;
+  };
+  return function useDeviceSwitch() {
+    const shown = useSyncExternalStore((listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }, read);
+    const choose = useCallback((next: boolean) => {
+      writePreference(key, next ? "show" : null);
+      value = next;
+      for (const listener of listeners) listener();
+    }, []);
+    return [shown, choose];
+  };
 }
 
 /**
- * Whether raw commands and calls are shown: the action cards in the
- * conversation, command lines and the Raw view. `?commands=show` overrides
- * the stored choice.
+ * "Show commands": the action cards in the conversation, command lines and the
+ * Raw view. `?commands=show` overrides the stored choice.
  */
-export function useShowCommands(): [boolean, (shown: boolean) => void] {
-  const shown = useSyncExternalStore((listener) => {
-    commandListeners.add(listener);
-    return () => commandListeners.delete(listener);
-  }, readCommandsShown);
-  const choose = useCallback((next: boolean) => {
-    writePreference("commands", next ? "show" : null);
-    commandsShown = next;
-    for (const listener of commandListeners) listener();
-  }, []);
-  return [shown, choose];
-}
+export const useShowCommands = deviceSwitch("commands");
+
+/**
+ * "Show thinking": the "Thought" lines in the conversation and the thinking under
+ * the status line. `?thinking=show` overrides the stored choice.
+ */
+export const useShowThinking = deviceSwitch("thinking");
 
 /** A set of ids kept as a JSON array in a preference. */
 export function readIdSet(key: string): Set<string> {
