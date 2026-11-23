@@ -6,6 +6,7 @@
 // the connection lacks admin, so the card has no Rename.
 
 import {
+  ADMIN_SCOPES,
   mapHistory,
   RawTable,
   runsFromHistory,
@@ -105,7 +106,16 @@ export function botNameScene(name: BotNameScene, base: ClawtrateState, now: numb
   const admin = name === "bot-name";
   return {
     ...base,
-    connection: { ...base.connection, canAdmin: admin },
+    connection: admin
+      ? {
+          ...base.connection,
+          scopes: [...ADMIN_SCOPES],
+          canWrite: true,
+          canAnswer: true,
+          canApprove: true,
+          canAdmin: true,
+        }
+      : base.connection,
     bots: [
       ...base.bots,
       {

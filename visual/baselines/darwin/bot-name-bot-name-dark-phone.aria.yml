@@ -8,17 +8,25 @@
     - text: Today 5:35 PM
     - paragraph: can i name u
     - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
       - button "More"
     - paragraph: Yes. What would you like to call me?
     - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
       - button "More"
     - paragraph: Johnny
     - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
       - button "More"
     - group: Read IDENTITY.md 7 lines
     - group: Edited IDENTITY.md +1 −1
     - paragraph: Johnny it is. Saved, so I'll remember.
     - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
       - button "More"
     - group: Worked 2 actions
     - status
@@ -27,8 +35,8 @@
     - paragraph: It wrote this name for itself. Rename saves it on the gateway, where Clawtrate reads it.
     - button "Rename"
     - button "Not now"
-  - region "Access":
-    - text: Read-only. You can follow New bot's work here. Approvals and questions aren't shown on this connection.
-    - button "Request access"
+  - button "Attach files"
+  - textbox "Message New bot"
+  - button "Send" [disabled]
   - status
 - status

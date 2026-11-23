@@ -1652,6 +1652,10 @@ button.reaction {
   min-width: 0;
 }
 
+.name-card .name-card-words p {
+  flex: none;
+}
+
 .name-card .name-card-title {
   font-weight: 600;
   overflow-wrap: anywhere;
