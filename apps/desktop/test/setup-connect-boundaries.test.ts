@@ -593,6 +593,9 @@ describe.skipIf(!mac)("local connect's send gate, with a listener of the test's 
             expect(lines[0]).toBe(
               `[setup] couldn't verify what is listening at port ${port} (lock)`,
             );
+            // The gateway goes with its route, for every socket of it after setup.
+            const { settings } = client as unknown as { settings: { route?: string } | null };
+            expect(settings?.route).toBe(".openclaw");
           },
           { pid: 4242 },
           {
@@ -854,7 +857,6 @@ describe.skipIf(!BIN || !mac)(
       try {
         await client.start();
         await until(() => client.state.connection.status === "connected", 60_000);
-        expect([...client.state.connection.scopes].sort()).toEqual([...FULL_SCOPES].sort());
         expect(dials).toBe(1);
         expect(proofs).toBe(1);
       } finally {

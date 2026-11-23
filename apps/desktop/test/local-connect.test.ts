@@ -10,7 +10,12 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
-import { localConnectFor, provedSockets, sendableCloseCode } from "../src/setup/local-connect.ts";
+import {
+  localConnectFor,
+  provedRouteFor,
+  provedSockets,
+  sendableCloseCode,
+} from "../src/setup/local-connect.ts";
 
 const servers: { close(): void }[] = [];
 afterEach(() => {
@@ -198,6 +203,27 @@ describe("local connect's connector", () => {
     expect(server.peers).toEqual([proved[1]]);
     first.close();
     second.close();
+  });
+
+  it("gives the client proved sockets for one loopback endpoint's exact address alone", () => {
+    const routes = provedRouteFor({
+      home: "/nowhere",
+      helper: null,
+      platform: "darwin",
+      sandboxed: true,
+    });
+    expect(routes("ws://127.0.0.1:19417", ".openclaw")).not.toBeNull();
+    for (const url of [
+      "ws://localhost:19417",
+      "wss://127.0.0.1:19417",
+      "ws://127.0.0.2:19417",
+      "ws://127.0.0.1:19417/",
+      "ws://127.0.0.1:0",
+      "ws://127.0.0.1:019417",
+      "ws://127.0.0.1:65536",
+      "ws://127.0.0.1",
+    ])
+      expect(routes(url, ".openclaw"), url).toBeNull();
   });
 
   it("takes its home rule from mustSandbox", () => {
