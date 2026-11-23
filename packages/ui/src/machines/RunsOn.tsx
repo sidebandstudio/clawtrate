@@ -63,6 +63,7 @@ const EMPTY_SAVE: SaveEntry = { pending: 0, version: 0 };
 type PlacementSaves = {
   entries: Record<string, SaveEntry>;
   begin: (scope: string) => () => void;
+  settled: (scope: string) => void;
   versionOf: (scope: string) => number;
 };
 
@@ -79,6 +80,14 @@ export function PlacementSavesProvider({ children }: { children: ReactNode }) {
   // save settles are dropped immediately, before the reload render commits.
   const versions = useRef(new Map<string, number>());
   const versionOf = useCallback((scope: string) => versions.current.get(scope) ?? 0, []);
+  const settled = useCallback((scope: string) => {
+    const next = (versions.current.get(scope) ?? 0) + 1;
+    versions.current.set(scope, next);
+    setEntries((all) => {
+      const was = all[scope] ?? EMPTY_SAVE;
+      return { ...all, [scope]: { pending: was.pending, version: next } };
+    });
+  }, []);
   const begin = useCallback((scope: string) => {
     setEntries((all) => {
       const was = all[scope] ?? EMPTY_SAVE;
@@ -100,8 +109,8 @@ export function PlacementSavesProvider({ children }: { children: ReactNode }) {
     };
   }, []);
   const value = useMemo<PlacementSaves>(
-    () => ({ entries, begin, versionOf }),
-    [entries, begin, versionOf],
+    () => ({ entries, begin, settled, versionOf }),
+    [entries, begin, settled, versionOf],
   );
   return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
 }
@@ -121,6 +130,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const scope = `${botId}\n${connection.gatewayUrl ?? ""}`;
   const entry = saves?.entries[scope] ?? EMPTY_SAVE;
   const savesBegin = saves?.begin ?? null;
+  const savesSettled = saves?.settled ?? null;
   const versionOf = saves?.versionOf ?? null;
   const [held, setHeld] = useState<{
     key: string;
@@ -187,6 +197,10 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
       reload();
     };
   }, [savesBegin, scope, reload]);
+  const settled = useCallback(() => {
+    if (savesSettled) savesSettled(scope);
+    else reload();
+  }, [savesSettled, scope, reload]);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
@@ -202,7 +216,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   };
   const commandsCurrent =
     writing === 0 && held?.key === key && held.at.commands === `${generation}:${version}`;
-  return { read, reload, begin, commandsCurrent };
+  return { read, reload, begin, settled, commandsCurrent };
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
@@ -316,6 +330,7 @@ export function RunsOnPage({
   read,
   reload,
   begin,
+  settled,
   commandsCurrent,
   nameOf,
   connection,
@@ -330,6 +345,8 @@ export function RunsOnPage({
   reload: () => void;
   /** Counts a save as out until the returned function is called, on this page or one opened again. */
   begin: () => () => void;
+  /** Refreshes this bot's placement on its gateway after a save settles, even if this page unmounted. */
+  settled: () => void;
   /** Whether no save is out and the commands part shown was read after the latest reload. */
   commandsCurrent: boolean;
   nameOf: (id: string) => string;
@@ -574,6 +591,7 @@ export function RunsOnPage({
           initial={editing}
           current={workspace.status === "ready" ? workspace.value.workspace : null}
           onDone={(saved) => {
+            if (saved) settled();
             if (!mounted.current) return;
             setEditing(null);
             if (saved) {
@@ -584,12 +602,9 @@ export function RunsOnPage({
                     ? "The gateway accepted the workspace change. The current workspace could not be confirmed."
                     : `The gateway accepted the workspace change. It now lists ${botName}'s workspace as ${saved.workspace}.`,
               );
-              reload();
             }
           }}
-          onFailed={() => {
-            if (mounted.current) reload();
-          }}
+          onFailed={settled}
         />
       )}
 

@@ -831,28 +831,39 @@ test("F-046: after a save, Back and opening the page again still waits for the r
   await expect(select).toBeEnabled();
 });
 
-/** Holds the answer to `type` until `answerHeld`, counting the commands reads answered meanwhile. */
+/** Holds the answer to `type` until `answerHeld`, counting the commands and workspace reads answered meanwhile. */
 const holdAnswer = (page: Page, type: string) =>
   page.evaluate((type) => {
     const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
     const original = fixture.invoke.bind(fixture);
-    const held = window as unknown as { answerHeld?: () => void; commandsReads: number };
+    const held = window as unknown as {
+      answerHeld?: () => void;
+      commandsReads: number;
+      workspaceReads: number;
+    };
     held.commandsReads = 0;
+    held.workspaceReads = 0;
     fixture.invoke = (command) => {
       if (command.type === type)
         return new Promise((resolve, reject) => {
           held.answerHeld = () => void original(command).then(resolve, reject);
         });
-      if (command.type === "readPlacement" && (command as { part?: string }).part === "commands")
-        return original(command).then((answer) => {
-          held.commandsReads += 1;
-          return answer;
-        });
+      if (command.type === "readPlacement") {
+        const part = (command as { part?: string }).part;
+        if (part === "commands" || part === "workspace")
+          return original(command).then((answer) => {
+            if (part === "commands") held.commandsReads += 1;
+            else held.workspaceReads += 1;
+            return answer;
+          });
+      }
       return original(command);
     };
   }, type);
 const commandsReads = (page: Page) =>
   page.evaluate(() => (window as unknown as { commandsReads: number }).commandsReads);
+const workspaceReads = (page: Page) =>
+  page.evaluate(() => (window as unknown as { workspaceReads: number }).workspaceReads);
 
 test("F-046: Back and opening the page again while a save is still out waits for the read after it", async ({
   page,
@@ -946,6 +957,29 @@ test("F-046: closing and reopening Work while a command save is out keeps the pi
   await page.evaluate(() => (window as unknown as { answerHeld: () => void }).answerHeld());
   await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
   await expect(select).toBeEnabled();
+});
+
+test("F-274: a workspace save that finishes after Back and reopening still shows the new folder", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdAnswer(page, "setBotWorkspace");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await page
+    .getByRole("textbox", { name: /path on the gateway's machine/ })
+    .fill("/srv/clawtrate/workspaces/otto-moved");
+  await page.getByRole("button", { name: "Save folder" }).click();
+  // Back before the save answers, then reopen Runs on and let its read of the old folder finish.
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  const before = await workspaceReads(page);
+  await openRunsOn(page);
+  await expect.poll(() => workspaceReads(page)).toBeGreaterThan(before);
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText("/srv/clawtrate/workspaces/otto");
+  await page.evaluate(() => (window as unknown as { answerHeld: () => void }).answerHeld());
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText(
+    "/srv/clawtrate/workspaces/otto-moved",
+  );
 });
 
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
