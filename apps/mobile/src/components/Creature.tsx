@@ -8,6 +8,7 @@ import {
   AVATAR_MOTIONS,
   avatarPose,
   avatarScene,
+  encodeAvatarChoice,
   type AvatarChoice,
   type AvatarMotionName,
   type AvatarShape,
@@ -172,7 +173,14 @@ export function Creature({
         ))}
       </Defs>
       <G transform={fitTransform(scene)}>
-        <ShapeElement shape={scene.root} options={options} />
+        {/* A new choice or state draws afresh: react-native-svg on iOS keeps a
+            transform, stroke width or dash whose prop is removed, so an
+            element reused from the previous scene could keep its old pose. */}
+        <ShapeElement
+          key={`${encodeAvatarChoice(choice)}/${scene.state}`}
+          shape={scene.root}
+          options={options}
+        />
       </G>
     </Svg>
   );
