@@ -179,19 +179,22 @@ export class OperatorSession {
   ): Promise<T> {
     const client = this.client;
     if (!client) throw new Error("not connected");
-    await this.connected(timeoutMs);
+    // One limit for the whole call: the waits and the sends share it.
+    const deadline = Date.now() + timeoutMs;
+    const left = () => Math.max(deadline - Date.now(), 1);
+    await this.connected(timeoutMs, left());
     try {
-      return await client.request<T>(method, params, { timeoutMs });
+      return await client.request<T>(method, params, { timeoutMs: left() });
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "gateway not connected") throw error;
       // The socket is closing and its close has not reached the client yet.
-      await this.connected(timeoutMs, true);
-      return client.request<T>(method, params, { timeoutMs });
+      await this.connected(timeoutMs, left(), true);
+      return client.request<T>(method, params, { timeoutMs: left() });
     }
   }
 
-  /** Resolves with the client connected: now, or at the next hello when `next`. */
-  private connected(timeoutMs: number, next = false): Promise<void> {
+  /** Resolves with the client connected: now, or at the next hello when `next`. Waits `waitMs` at most, the time the request's `timeoutMs` has left. */
+  private connected(timeoutMs: number, waitMs: number, next = false): Promise<void> {
     if (this.ready && !next) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const wake = () => {
@@ -205,7 +208,7 @@ export class OperatorSession {
             `not reconnected within ${timeoutMs} ms after the gateway closed (${this.lastClose || "no close seen"})`,
           ),
         );
-      }, timeoutMs);
+      }, waitMs);
       this.helloWaiters.add(wake);
     });
   }

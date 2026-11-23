@@ -2,7 +2,8 @@
 // against a stand-in gateway on loopback that can drop the socket the way a
 // loaded gateway does. A dropped connection must neither fail a request the
 // gateway would answer nor turn a refusal into a pass.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClient } from "@openclaw/gateway-client";
 import { WebSocketServer, type WebSocket } from "ws";
 import { OperatorSession } from "../src/operator.ts";
 
@@ -136,6 +137,30 @@ describe("an operator connection the gateway drops", () => {
     expect(gateway.calls).toEqual(["config.get"]);
   });
 
+  it("gives the request only the time its wait for the reconnect left", async () => {
+    let sent: number | undefined;
+    let waited = 0;
+    let started = 0;
+    const original = GatewayClient.prototype.request;
+    const spy = vi.spyOn(GatewayClient.prototype, "request").mockImplementation(function (
+      this: GatewayClient,
+      ...args: Parameters<GatewayClient["request"]>
+    ) {
+      waited = Date.now() - started;
+      sent = args[2]?.timeoutMs ?? undefined;
+      return original.apply(this, args);
+    });
+    try {
+      await gateway.drop();
+      started = Date.now();
+      await session.request("config.get", {}, 10_000);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(waited).toBeGreaterThan(200);
+    expect(sent).toBeLessThanOrEqual(10_000 - waited + 50);
+  });
+
   it("still fails a request the gateway refuses after the reconnect, and sends it once", async () => {
     gateway.answers["config.patch"] = new Error("config changed since last load");
     await gateway.drop();
@@ -149,8 +174,10 @@ describe("an operator connection the gateway drops", () => {
     gateway.answers["config.patch"] = "hold";
     const pending = session.request("config.patch", { raw: "{}" }, 10_000);
     await until(() => gateway.calls.length === 1);
+    // Handle the rejection before the drop: it can land before the drop resolves.
+    const failed = expect(pending).rejects.toThrow(/gateway closed \(1008\): slow consumer/);
     await gateway.drop();
-    await expect(pending).rejects.toThrow(/gateway closed \(1008\): slow consumer/);
+    await failed;
     await until(() => gateway.connects === 2);
     expect(gateway.calls).toEqual(["config.patch"]);
   });
