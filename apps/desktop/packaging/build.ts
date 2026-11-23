@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
 import { APP_ID, builderConfig, PRODUCT_NAME } from "./config.ts";
@@ -25,11 +25,10 @@ import { OUTPUT_VARIABLE, packageOutput } from "./output.ts";
 import {
   checkMacSignature,
   checkWindowsSignature,
+  readWindowsSignature,
   signingPlan,
   signingProblems,
   signingSummary,
-  WINDOWS_SIGNATURE_COMMAND,
-  windowsSignatureEnv,
 } from "./signing.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
@@ -128,20 +127,17 @@ if (target === "mac") {
   }
 }
 
-// What the Windows executable's and installer's signatures are, read back from the
-// files. electron-builder deletes its copy of the uninstaller once the installer
+// What the Windows executable's and x64 installer's signatures are, read back from
+// the files. electron-builder deletes its copy of the uninstaller once the installer
 // holds it, so the uninstaller can be read only from an install.
 if (target === "win") {
   const output = packageOutput(env, APP_DIR);
-  const installers = artifacts
-    .filter((file) => file.endsWith(".exe"))
-    .map((file) => basename(file));
-  for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, ...installers]) {
-    const shown = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SIGNATURE_COMMAND],
-      { encoding: "utf8", env: windowsSignatureEnv(process.env, join(output.path, file)) },
-    );
+  const { version } = require("./package.json") as { version: string };
+  const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;
+  if (!artifacts.some((file) => resolve(file) === join(output.path, installer)))
+    failCheck(`The build made no ${output.label}/${installer}.`);
+  for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, installer]) {
+    const shown = readWindowsSignature(join(output.path, file), process.env);
     const { kind, matches } = checkWindowsSignature(plan.windows, shown);
     console.log(`Signature of ${output.label}/${file}: ${kind}.`);
     if (!matches) failCheck(SIGNATURE_DIFFERS);

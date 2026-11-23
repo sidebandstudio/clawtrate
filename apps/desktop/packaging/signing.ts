@@ -3,6 +3,10 @@
 // after it. Nothing here prints a value; electron-builder's own output, which
 // the build passes through, can. docs/development/packaging.md lists the variables.
 
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 export type Env = Record<string, string | undefined>;
 
 export type NotarizeWith = "api-key" | "apple-id" | "keychain-profile";
@@ -179,39 +183,96 @@ export function checkMacSignature(
   return { kind, matches: kind === (plan === "developer-id" ? "certificate" : "ad hoc") };
 }
 
-/** Prints a file's Authenticode status and whether it names a signer, for `windowsSignatureKind`. */
-export const WINDOWS_SIGNATURE_COMMAND =
-  "$ErrorActionPreference = 'Stop'; $s = Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE; '{0} {1}' -f $s.Status, [bool]$s.SignerCertificate";
+/**
+ * Windows PowerShell's arguments for authenticode.ps1, which reads a file's
+ * embedded signatures with WinVerifyTrust. The script goes in encoded, so no
+ * quoting rule and no script execution policy applies to it.
+ */
+export function windowsSignatureArgs(): string[] {
+  const script = readFileSync(join(import.meta.dirname, "authenticode.ps1"), "utf8");
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    Buffer.from(script, "utf16le").toString("base64"),
+  ];
+}
 
 /**
- * The environment `WINDOWS_SIGNATURE_COMMAND` runs in. Windows PowerShell started
- * from PowerShell 7, as CI's steps are, inherits a module path that finds
- * PowerShell 7's own Microsoft.PowerShell.Security first, and cannot load it.
- * Without the variable it uses its own modules.
+ * The environment authenticode.ps1 runs in. Windows PowerShell started from
+ * PowerShell 7, as CI's steps are, inherits a module path that finds PowerShell
+ * 7's own modules first, and cannot load them. Without the variable it uses its own.
  */
 export function windowsSignatureEnv(env: Env, file: string): Env {
   const kept = Object.entries(env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH");
   return { ...Object.fromEntries(kept), SIGNED_FILE: file };
 }
 
+/** authenticode.ps1's output for `file`, for `checkWindowsSignature`. Windows only. */
+export function readWindowsSignature(file: string, env: Env) {
+  return spawnSync("powershell.exe", windowsSignatureArgs(), {
+    encoding: "utf8",
+    env: windowsSignatureEnv(env, file),
+  });
+}
+
+/** WinVerifyTrust's results (winerror.h) that `windowsSignature` accepts, as authenticode.ps1 prints them. */
+const VERIFIED = "00000000";
+/** CERT_E_UNTRUSTEDROOT: the chain ends in a root this machine does not trust, as a test certificate's does. */
+const UNTRUSTED_ROOT = "800b0109";
+/** TRUST_E_NOSIGNATURE: the file has no embedded signature. */
+const NO_SIGNATURE = "800b0100";
+const SHA256 = "2.16.840.1.101.3.4.2.1";
+
+export interface WindowsSignature {
+  readonly kind: "certificate" | "none" | "invalid";
+  /** The signing certificate's thumbprint, when the kind is certificate. */
+  readonly signer: string | null;
+}
+
+const INVALID: WindowsSignature = { kind: "invalid", signer: null };
+
 /**
- * What `WINDOWS_SIGNATURE_COMMAND` says of a file's signature. A signature that
- * covers the file counts even when this machine does not trust its root, which
- * Get-AuthenticodeSignature reports as UnknownError. A signature that no longer
- * matches the file, or any other status, is invalid.
+ * What authenticode.ps1 says of a file. A file without an embedded signature is
+ * `none`. A signed file is `certificate` when each embedded signature verifies, or
+ * fails only on a root this machine does not trust, all name one signer, and one
+ * is SHA-256. electron-builder signs each file twice, SHA-1 and then SHA-256
+ * nested in it, so both must pass. Any other result, such as an expired or
+ * distrusted certificate or a file changed after signing, is invalid, and so is
+ * output that is not exactly one complete reading.
  */
-export function windowsSignatureKind(output: string): "certificate" | "none" | "invalid" {
-  const [status, signer] = output.trim().split(" ");
-  if (status === "NotSigned") return "none";
-  if (signer === "True" && ["Valid", "UnknownError", "NotTrusted"].includes(status ?? ""))
-    return "certificate";
-  return "invalid";
+export function windowsSignature(output: string): WindowsSignature {
+  const [head = "", ...lines] = output.trim().split(/\r?\n/);
+  const count = /^checked ([1-9]\d*)$/.exec(head)?.[1];
+  if (count === undefined || lines.length !== Number(count)) return INVALID;
+  const signatures = [];
+  for (const [index, line] of lines.entries()) {
+    const [, at, result, digest, signer] =
+      /^(\d+) ([0-9a-f]{8}) ([\d.]+|-) ([0-9A-F]{40}|-)$/.exec(line) ?? [];
+    if (Number(at) !== index) return INVALID;
+    signatures.push({ result, digest, signer });
+  }
+  const [first] = signatures;
+  if (!first) return INVALID;
+  if (signatures.length === 1 && first.result === NO_SIGNATURE)
+    return first.digest === "-" && first.signer === "-" ? { kind: "none", signer: null } : INVALID;
+  const signer = first.signer;
+  if (signer === undefined || signer === "-") return INVALID;
+  const passes =
+    signatures.every(
+      (each) =>
+        (each.result === VERIFIED || each.result === UNTRUSTED_ROOT) && each.signer === signer,
+    ) && signatures.some(({ digest }) => digest === SHA256);
+  return passes ? { kind: "certificate", signer } : INVALID;
 }
 
 export function checkWindowsSignature(
   plan: SigningPlan["windows"],
   result: { status: number | null; stdout: string | null },
 ) {
-  const kind = result.status === 0 ? windowsSignatureKind(result.stdout ?? "") : "invalid";
-  return { kind, matches: kind === (plan === "certificate" ? "certificate" : "none") };
+  const reading = result.status === 0 ? windowsSignature(result.stdout ?? "") : INVALID;
+  return {
+    ...reading,
+    matches: reading.kind === (plan === "certificate" ? "certificate" : "none"),
+  };
 }

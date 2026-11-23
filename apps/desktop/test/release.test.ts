@@ -17,9 +17,9 @@ import {
   signingPlan,
   signingProblems,
   signingSummary,
-  WINDOWS_SIGNATURE_COMMAND,
+  windowsSignature,
+  windowsSignatureArgs,
   windowsSignatureEnv,
-  windowsSignatureKind,
 } from "../packaging/signing.ts";
 import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
 import { parseFeed } from "../src/main/update/feed.ts";
@@ -190,10 +190,16 @@ describe("signing", () => {
     expect(build).toContain("signingProblems(process.env, target)");
     expect(build).toContain("console.log(signingSummary(plan, target));");
     expect(build).toContain('spawnSync("codesign", ["--display", "--verbose=2", app]');
-    expect(build).toContain('"-Command", WINDOWS_SIGNATURE_COMMAND]');
+    expect(build).toContain("readWindowsSignature(join(output.path, file), process.env)");
     expect(build).toContain("checkWindowsSignature(plan.windows, shown)");
     expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
     expect(build.indexOf("await build(")).toBeLessThan(build.indexOf("checkWindowsSignature("));
+    // The x64 installer by its expected name, not whichever .exe files the build lists.
+    expect(build).toContain("const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;");
+    expect(build).toContain("for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, installer])");
+    expect(build).toContain(
+      "if (!artifacts.some((file) => resolve(file) === join(output.path, installer)))",
+    );
   });
 
   it("a failed check fails the build, though electron-builder's exit hook ends with 0, and keeps any other failing status", () => {
@@ -225,49 +231,138 @@ describe("signing", () => {
     expect(build.match(/if \(!matches\) failCheck\(SIGNATURE_DIFFERS\);/g)).toHaveLength(2);
   });
 
-  it("reads a Windows signature without PowerShell 7's module path, and stops at any error", () => {
+  it("reads Windows signatures with WinVerifyTrust, without PowerShell 7's module path, and stops at any error", () => {
     expect(
       windowsSignatureEnv(
         { PATH: "p", PSModulePath: "C:\\pwsh7\\Modules", PSMODULEPATH: "q", SIGNED_FILE: "old" },
         "D:\\out\\Clawtrate.exe",
       ),
     ).toEqual({ PATH: "p", SIGNED_FILE: "D:\\out\\Clawtrate.exe" });
+    const script = readFileSync(join(APP, "packaging/authenticode.ps1"), "utf8");
+    const args = windowsSignatureArgs();
+    expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+    expect(Buffer.from(args[3]!, "base64").toString("utf16le")).toBe(script);
     // Without it, a command that cannot be found prints its error and the command goes on.
-    expect(WINDOWS_SIGNATURE_COMMAND).toMatch(/^\$ErrorActionPreference = 'Stop'; /);
+    expect(script).toMatch(/^\$ErrorActionPreference = 'Stop'\r?$/m);
+    expect(script).toContain("[ClawtrateAuthenticode]::Read($env:SIGNED_FILE)");
+    // The file's own signatures, never a catalog's, each one checked by its index.
+    expect(script).toContain("data.dwUnionChoice = 1;");
+    expect(script).toContain("settings.dwFlags = index == 0 ? 3u : 1u;");
   });
 
-  it("reads what Get-AuthenticodeSignature says of a Windows file's signature", () => {
-    expect(WINDOWS_SIGNATURE_COMMAND).toContain("-LiteralPath $env:SIGNED_FILE");
-    expect(windowsSignatureKind("NotSigned False\r\n")).toBe("none");
-    expect(windowsSignatureKind("Valid True\r\n")).toBe("certificate");
-    // A certificate no root on the machine vouches for, such as CI's throwaway one.
-    expect(windowsSignatureKind("UnknownError True\r\n")).toBe("certificate");
-    expect(windowsSignatureKind("NotTrusted True")).toBe("certificate");
-    // A file changed after signing, or a status that names no signer.
-    expect(windowsSignatureKind("HashMismatch True")).toBe("invalid");
-    expect(windowsSignatureKind("UnknownError False")).toBe("invalid");
-    expect(windowsSignatureKind("NotSupportedFileFormat False")).toBe("invalid");
-    expect(windowsSignatureKind("")).toBe("invalid");
+  describe("what WinVerifyTrust says of a Windows file's embedded signatures", () => {
+    const SHA1 = "1.3.14.3.2.26";
+    const SHA256 = "2.16.840.1.101.3.4.2.1";
+    const SIGNER = "0123456789ABCDEF0123456789ABCDEF01234567";
+    const OTHER = "89ABCDEF0123456789ABCDEF0123456789ABCDEF";
+    const invalid = { kind: "invalid", signer: null };
+    // electron-builder's default: SHA-1, then SHA-256 nested in it.
+    const dual = (first: string, second = first, signers = [SIGNER, SIGNER]) =>
+      `checked 2\r\n0 ${first} ${SHA1} ${signers[0]}\r\n1 ${second} ${SHA256} ${signers[1]}\r\n`;
+
+    it("counts a signature that verifies, or fails only on a root this machine does not trust", () => {
+      const certificate = { kind: "certificate", signer: SIGNER };
+      expect(windowsSignature(dual("00000000"))).toEqual(certificate);
+      // CERT_E_UNTRUSTEDROOT, as CI's throwaway certificate gives.
+      expect(windowsSignature(dual("800b0109"))).toEqual(certificate);
+      expect(windowsSignature(dual("00000000", "800b0109"))).toEqual(certificate);
+      expect(windowsSignature(`checked 1\n0 800b0109 ${SHA256} ${SIGNER}\n`)).toEqual(certificate);
+    });
+
+    it("reads a file with no embedded signature as none, a catalog-signed one included", () => {
+      expect(windowsSignature("checked 1\r\n0 800b0100 - -\r\n")).toEqual({
+        kind: "none",
+        signer: null,
+      });
+    });
+
+    it.each([
+      ["CERT_E_EXPIRED", "800b0101"],
+      ["CERT_E_REVOKED", "800b010c"],
+      ["TRUST_E_EXPLICIT_DISTRUST", "800b0111"],
+      ["TRUST_E_BAD_DIGEST, a file changed after signing", "80096010"],
+      ["TRUST_E_TIME_STAMP", "80096005"],
+      ["CERT_E_CHAINING", "800b010a"],
+      ["CERT_E_WRONG_USAGE", "800b0110"],
+      ["CERT_E_UNTRUSTEDTESTROOT", "800b010d"],
+      ["TRUST_E_SUBJECT_FORM_UNKNOWN", "800b0003"],
+      ["a file that cannot be opened", "80070002"],
+    ])("refuses %s on either signature", (_, code) => {
+      expect(windowsSignature(dual(code, "800b0109"))).toEqual(invalid);
+      expect(windowsSignature(dual("800b0109", code))).toEqual(invalid);
+      expect(windowsSignature(`checked 1\n0 ${code} ${SHA256} ${SIGNER}\n`)).toEqual(invalid);
+      expect(windowsSignature(`checked 1\n0 ${code} - -\n`)).toEqual(invalid);
+    });
+
+    it("refuses signatures from two signers, without a signer, or with no SHA-256 signature", () => {
+      expect(windowsSignature(dual("800b0109", "800b0109", [SIGNER, OTHER]))).toEqual(invalid);
+      expect(windowsSignature(dual("800b0109", "800b0109", ["-", "-"]))).toEqual(invalid);
+      expect(windowsSignature(`checked 1\n0 800b0109 ${SHA1} ${SIGNER}\n`)).toEqual(invalid);
+      expect(windowsSignature(`checked 1\n0 800b0109 - ${SIGNER}\n`)).toEqual(invalid);
+    });
+
+    it("refuses anything but one complete reading", () => {
+      for (const output of [
+        "",
+        "checked 0\n",
+        "0 800b0100 - -\n",
+        "checked 1\n",
+        "checked 2\n0 800b0100 - -\n",
+        dual("800b0109").replace("checked 2", "checked 1"),
+        dual("800b0109").replace("checked 2", "checked 3"),
+        dual("800b0109").replace("\r\n1 ", "\r\n2 "),
+        `${dual("800b0109")}${dual("800b0109")}`,
+        `checked 1\n0 800b0109 ${SHA256} ${SIGNER.toLowerCase()}\n`,
+        "checked 1\n0 800B0109 - -\n",
+        // What the Get-AuthenticodeSignature readback printed.
+        "NotSigned\r\n",
+        "NotSigned False\r\n",
+        "NotSigned True\r\n",
+        "UnknownError True\r\n",
+      ]) {
+        expect(windowsSignature(output), output).toEqual(invalid);
+      }
+    });
+
+    it("refuses a reading that says there is no signature and names a signer", () => {
+      expect(windowsSignature(`checked 1\n0 800b0100 - ${SIGNER}\n`)).toEqual(invalid);
+      expect(windowsSignature(`checked 1\n0 800b0100 ${SHA256} -\n`)).toEqual(invalid);
+      expect(windowsSignature(dual("800b0100", "800b0109"))).toEqual(invalid);
+    });
   });
 
   it("requires a successful readback of the requested signature on each Windows file", () => {
-    const none = { status: 0, stdout: "NotSigned False\r\n" };
-    const certificate = { status: 0, stdout: "UnknownError True\r\n" };
-    expect(checkWindowsSignature("unsigned", none)).toEqual({ kind: "none", matches: true });
+    const none = { status: 0, stdout: "checked 1\r\n0 800b0100 - -\r\n" };
+    const signer = "A".repeat(40);
+    const certificate = {
+      status: 0,
+      stdout: `checked 1\r\n0 800b0109 2.16.840.1.101.3.4.2.1 ${signer}\r\n`,
+    };
+    expect(checkWindowsSignature("unsigned", none)).toEqual({
+      kind: "none",
+      signer: null,
+      matches: true,
+    });
     expect(checkWindowsSignature("certificate", certificate)).toEqual({
       kind: "certificate",
+      signer,
       matches: true,
     });
     expect(checkWindowsSignature("unsigned", certificate).matches).toBe(false);
     expect(checkWindowsSignature("certificate", none).matches).toBe(false);
     for (const plan of ["unsigned", "certificate"] as const) {
       for (const result of [
-        { status: 1, stdout: "NotSigned False\r\n" },
-        { status: 1, stdout: "Valid True\r\n" },
-        { status: 0, stdout: "HashMismatch True\r\n" },
+        { status: 1, stdout: none.stdout },
+        { status: 1, stdout: certificate.stdout },
+        { status: 0, stdout: "checked 1\r\n0 80096010 - -\r\n" },
+        { status: 0, stdout: "" },
         { status: null, stdout: null },
       ]) {
-        expect(checkWindowsSignature(plan, result)).toEqual({ kind: "invalid", matches: false });
+        expect(checkWindowsSignature(plan, result)).toEqual({
+          kind: "invalid",
+          signer: null,
+          matches: false,
+        });
       }
     }
   });
