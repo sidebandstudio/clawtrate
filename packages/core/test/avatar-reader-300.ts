@@ -1,14 +1,27 @@
 // #300's strict picture reader, as merged (043501bb, packages/core/src/avatar.ts
-// lines 182-467), copied unchanged but for this header and its imports: only
+// lines 182-467), copied unchanged but for this header, its imports and #300's
+// lists, inlined below so a later change to the spec can't change this reader: only
 // `readPicture` is exported, and `toBase64`, which only the writer used, is left out. It stands in for an older Clawtrate in the
 // interoperability checks: what it makes of a picture this build writes is what
 // every client released before version 2 shows. Do not edit; it is a fixed point.
-import {
-  AVATAR_COLOR_NAMES,
-  AVATAR_FAMILIES,
-  AVATAR_PARTS,
-  type AvatarChoice,
-} from "../src/avatar.ts";
+import type { AvatarChoice } from "../src/avatar.ts";
+
+// #300's own lists, inlined so a later change to the spec can't change this reader.
+const AVATAR_FAMILIES = ["clawling", "shellfolk", "lantern"] as const;
+const AVATAR_COLOR_NAMES = ["green", "blue", "orchid", "violet", "yellow", "pink", "sky", "lime"];
+const AVATAR_PARTS = {
+  clawling: {
+    body: ["dome", "tall", "wide", "round"],
+    eyes: ["pair", "splayed", "short", "single"],
+    claws: ["even", "fiddler", "big"],
+  },
+  shellfolk: { shell: ["spiral", "turret", "dome", "spotted"] },
+  lantern: {
+    body: ["round", "bell", "oval", "box"],
+    lure: ["hook", "flick", "wave", "reach"],
+    eyes: ["two", "one"],
+  },
+} as const;
 
 /** The choice in a text form, or null when anything in it is unknown, repeated or missing. */
 function decodeAvatarChoice(text: string): AvatarChoice | null {

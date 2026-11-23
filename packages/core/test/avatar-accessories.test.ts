@@ -418,7 +418,9 @@ describe("every outfit stays inside the circle an avatar is cropped to", () => {
     let smallest = 1;
     for (const base of everyCreature()) {
       const bare = AVATAR_STATES.map((state) => outfitReach(scene(base, state)));
-      // Within #300's radius, or no farther than the creature alone, whose rounded fit can be a hair outside.
+      // Within #300's radius of the drawn outline, or no farther than the creature alone, whose rounded
+      // fit can be a hair outside. Strokes count as the round bands they are: #300's `sceneReach`
+      // counts them as octagons and puts some outfits up to 19.6, inside its own 19.75 test limit.
       const limit = Math.max(19.5, ...bare) + 0.02;
       for (const head of [undefined, ...AVATAR_HEADWEAR])
         for (const face of [undefined, ...AVATAR_FACEWEAR])

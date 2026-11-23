@@ -829,6 +829,10 @@ describe("the choice's version 2 text form", () => {
     expect(encodeAvatarChoice({ ...LANTERN, head: "beret" })).toBe(
       "v=2&family=lantern&body=bell&lure=wave&eyes=one&color=lime&head=beret&trim=violet",
     );
+    // A crown alone is gold whatever the trim, so it always writes the default one.
+    expect(encodeAvatarChoice({ ...LANTERN, head: "crown", trim: "sky" })).toBe(
+      "v=2&family=lantern&body=bell&lure=wave&eyes=one&color=lime&head=crown&trim=violet",
+    );
   });
 
   it("round-trips every choice in every outfit, the longest in 123 bytes", () => {
@@ -901,10 +905,12 @@ describe("the choice's version 2 text form", () => {
       `${V2_BASE}&head=béret&trim=pink`, // not ASCII
       `${V2_BASE}&neck=tie&trim=pink`,
       `${V2_BASE}&head=glasses&trim=pink`, // the wrong slot
+      `${V2_BASE}&head=crown&trim=pink`, // a crown alone takes only the default trim
       "v=3&family=shellfolk&shell=dome&color=green&head=beret&trim=pink", // a version it doesn't know
       `${V2_BASE}&head=beret&trim=pink`.padEnd(201, "x"),
     ])
       expect(decodeAvatarChoice(text), text).toBeNull();
+    expect(decodeAvatarChoice(`${V2_BASE}&head=crown&trim=violet`)).not.toBeNull();
     // Version 1 keeps #300's rules: nothing worn, nothing else.
     expect(decodeAvatarChoice("v=1&family=shellfolk&shell=dome&color=green&head=beret")).toBeNull();
     expect(
@@ -985,6 +991,12 @@ describe("the two keywords in a picture", () => {
     // Every client reads both in place: a picture written before still reads the same.
     const old = build(withAfterHeader(text(CHOICE)));
     expect(readPicture(old)).toEqual(readPicture300(old));
+  });
+
+  it("never writes a tag its own reader refuses", () => {
+    const shellfolk = { family: "shellfolk", shell: "dome", color: "green" };
+    expect(pictureWithChoice(png(), { ...shellfolk, head: null } as never)).toBeNull();
+    expect(pictureWithChoice(png(), { ...shellfolk, head: "fedora" } as never)).toBeNull();
   });
 
   it("keeps one tag: writing either kind replaces the other, and a broken version 2 tag", () => {

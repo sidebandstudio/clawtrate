@@ -227,7 +227,9 @@ export function encodeAvatarChoice(choice: AvatarChoice): string {
   fields.push(`color=${choice.color}`);
   if (!wears(choice)) return ["v=1", ...fields].join("&");
   for (const slot of SLOTS) if (choice[slot]) fields.push(`${slot}=${choice[slot]}`);
-  fields.push(`trim=${trimOf(choice)}`);
+  // A crown alone is gold whatever the trim, so it always carries the default (section 4).
+  const crownAlone = choice.head === "crown" && !choice.face && !choice.neck;
+  fields.push(`trim=${crownAlone ? AVATAR_TRIM_DEFAULT[choice.color] : trimOf(choice)}`);
   return [`v=${AVATAR_CHOICE_VERSION}`, ...fields].join("&");
 }
 
@@ -253,7 +255,7 @@ const V2_GRAMMAR = new RegExp(
     `)(?:&head=${alt(AVATAR_HEADWEAR)})?(?:&face=${alt(AVATAR_FACEWEAR)})?(?:&neck=${alt(AVATAR_NECKWEAR)})?&trim=${COLOR}$`,
 );
 
-/** A version 2 text, matching the grammar (so at most 123 bytes) and wearing something, as a fresh choice; otherwise null. */
+/** A version 2 text, matching the grammar (so at most 123 bytes), wearing something and written as this build writes it, as a fresh choice; otherwise null. */
 function decodeV2(text: string): AvatarChoice | null {
   if (!V2_GRAMMAR.test(text)) return null;
   const fields: Record<string, string> = {};
@@ -261,7 +263,10 @@ function decodeV2(text: string): AvatarChoice | null {
     const at = pair.indexOf("=");
     fields[pair.slice(0, at)] = pair.slice(at + 1);
   }
-  return SLOTS.some((slot) => Object.hasOwn(fields, slot)) ? parseAvatarChoice(fields) : null;
+  if (!SLOTS.some((slot) => Object.hasOwn(fields, slot))) return null;
+  const choice = parseAvatarChoice(fields);
+  // One text per Claw: only the text this build writes for it is read.
+  return choice && encodeAvatarChoice(choice) === text ? choice : null;
 }
 
 /** A version 1 text, read by #300's rules: nothing worn, nothing else. */
@@ -613,8 +618,8 @@ export function isKeepablePicture(url: string): boolean {
  * A PNG data URL with the choice written into it, right after its header,
  * replacing every tag it carried, either keyword's or a broken one: under
  * `AVATAR_PNG_KEYWORD` when nothing is worn, under `AVATAR_PNG_KEYWORD_V2`
- * when anything is. Null when the URL is not a well-formed PNG or the result
- * would be longer than `MAX_PICTURE_CHARS`.
+ * when anything is. Null when the URL is not a well-formed PNG, the choice's
+ * text would not read back, or the result would be longer than `MAX_PICTURE_CHARS`.
  */
 export function pictureWithChoice(url: string, choice: AvatarChoice): string | null {
   const png = pngOf(url);
@@ -622,6 +627,8 @@ export function pictureWithChoice(url: string, choice: AvatarChoice): string | n
   const { bytes, chunks } = png;
   const keyword = wears(choice) ? AVATAR_PNG_KEYWORD_V2 : AVATAR_PNG_KEYWORD;
   const text = `${keyword}\0${encodeAvatarChoice(choice)}`;
+  // Never write a tag this reader refuses: the bot would show its id's Clawling instead.
+  if (!decodeAvatarChoice(encodeAvatarChoice(choice))) return null;
   const body = new Uint8Array(4 + text.length);
   for (let i = 0; i < text.length; i++) body[4 + i] = text.charCodeAt(i);
   body.set([0x74, 0x45, 0x58, 0x74], 0); // "tEXt"
