@@ -3,6 +3,7 @@
 // and a full pairing the gateway granted less says so and asks for nothing (§2, §8). In light
 // and dark, at 1440 px and the phone; reached by keyboard and named for a screen reader.
 import { expect, test } from "@playwright/test";
+import { COMPUTER } from "./computer-helpers.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const CONSENT =
@@ -88,6 +89,8 @@ test("F-519: a full pairing the gateway granted less keeps it, says so, and offe
   const bar = page.getByTestId("access-bar");
   await expect(bar).toContainText("OpenClaw granted less than full control.");
   await expect(bar.getByRole("button")).toHaveCount(0);
+  // Nor does anything else on the page: the transcript, the step panel or a card.
+  await expect(page.getByRole("button", { name: /Request/ })).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+,");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByTestId("gateway-access")).toHaveText("Less than full control");
@@ -95,4 +98,59 @@ test("F-519: a full pairing the gateway granted less keeps it, says so, and offe
     "OpenClaw granted less than full control. Not granted: sending and stopping, deciding approvals, answering questions, changing gateway settings, approving devices. This device keeps what was granted.",
   );
   await expect(dialog.getByRole("button", { name: "Re-pair" })).toHaveCount(0);
+});
+
+test("F-519: a full pairing granted read, write, approvals and questions is offered admin and device access nowhere", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=access-narrowed&${OTTO_DISK}&access=write&panel=open&tab=settings`,
+    "dark",
+  );
+  // Bot settings' admin bar says so and asks for nothing.
+  const admin = page.getByTestId("admin-bar");
+  await expect(admin).toContainText("OpenClaw granted less than full control.");
+  await expect(admin.getByRole("button", { name: /Request/ })).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  // Nor do Accounts' admin bar and Machines' device bar.
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await expect(settings.getByTestId("admin-bar")).toContainText(
+    "OpenClaw granted less than full control.",
+  );
+  await expect(settings.getByRole("button", { name: /Request/ })).toHaveCount(0);
+  await settings.getByRole("button", { name: "Machines", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "Machines", level: 3 })).toBeVisible();
+  await expect(settings.getByTestId("device-bar")).toHaveText(
+    "OpenClaw granted less than full control.",
+  );
+  await expect(settings.getByRole("button", { name: /Request/ })).toHaveCount(0);
+});
+
+// Each place a read-only connection is offered "Request access", opened as a full pairing (`full=1`).
+const ASKS: Array<[string, string, string]> = [
+  ["an approval card", "scene=approval-readonly", "approval-card"],
+  ["a question card", "scene=question-readonly", "question-card"],
+  ["the transcript's waiting note", `scene=read-wait&${OTTO_DISK}&panel=closed`, "read-only-wait"],
+  ["the Computer tab", `${COMPUTER}&computer=watching&access=read`, "computer-readonly"],
+];
+for (const [where, query, testId] of ASKS) {
+  test(`F-519: a full pairing the gateway granted less is offered no request for more in ${where}`, async ({
+    page,
+  }) => {
+    await openFixture(page, `${query}&full=1`, "light");
+    await expect(page.getByTestId(testId)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request access" })).toHaveCount(0);
+  });
+}
+
+test("F-519: Settings doesn't tell a full pairing holding admin that it asked for admin", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=access-narrowed&${OTTO_DISK}&access=admin`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByTestId("gateway-access")).toHaveText("Less than full control");
+  await expect(dialog).not.toContainText("which it asked for");
 });

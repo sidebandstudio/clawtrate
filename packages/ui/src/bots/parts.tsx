@@ -286,7 +286,14 @@ export function AdminBar({
   let body: ReactNode;
   let action: ReactNode = null;
   let tone: "danger" | undefined;
-  if (info.readOnly) {
+  if (connection.fullPairing && !info.readOnly) {
+    // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+    body = (
+      <>
+        <b>OpenClaw granted less than full control.</b> {need}
+      </>
+    );
+  } else if (info.readOnly) {
     body = (
       <>
         <b>Read-only.</b> {need} This connection only reads.
@@ -354,7 +361,7 @@ export function AdminBar({
       </button>
     );
   }
-  if (connection.status !== "connected" || info.readOnly) action = null;
+  if (connection.status !== "connected" || info.readOnly || connection.fullPairing) action = null;
   const pending = status === "pending";
   return (
     <section

@@ -53,7 +53,10 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
   const status = mine ? upgrade.status : "idle";
   let body: ReactNode;
   let action: ReactNode = null;
-  if (info.readOnly)
+  // A full pairing the gateway granted less: its limit stands, and nothing asks again (§2).
+  if (connection.fullPairing && !info.readOnly)
+    body = <b>OpenClaw granted less than full control.</b>;
+  else if (info.readOnly)
     body = (
       <>
         <b>Read-only.</b> This connection only reads.
@@ -100,7 +103,7 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
       </button>
     );
   }
-  if (connection.status !== "connected" || info.readOnly) action = null;
+  if (connection.status !== "connected" || info.readOnly || connection.fullPairing) action = null;
   return (
     <section
       className="access-bar"

@@ -511,6 +511,8 @@ export function createFixtureBridge(
     computer?: ComputerParams;
     checkIns?: CheckInParams;
     search?: SearchParams;
+    /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
+    fullPairing?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -601,6 +603,8 @@ export function createFixtureBridge(
       transcripts: withComputerRuns(state.transcripts, now, computerParams),
     };
   }
+  if (options.fullPairing)
+    state = { ...state, connection: { ...state.connection, fullPairing: true } };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
@@ -1065,7 +1069,7 @@ export function createFixtureBridge(
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
         ? { ...FIXTURE_INFO, readOnly: true }
-        : name === "connect-full" || name === "access-narrowed"
+        : name === "connect-full" || name === "access-narrowed" || options.fullPairing
           ? { ...FIXTURE_INFO, fullControl: true }
           : FIXTURE_INFO,
     getState: () => state,
