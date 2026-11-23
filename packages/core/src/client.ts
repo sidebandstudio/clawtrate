@@ -1152,6 +1152,8 @@ export class ClawtrateClient {
    * since (`recordSeen`).
    */
   private seenRevision: number | null = null;
+  /** A setup's gateway and the settings revision when the person chose it. */
+  private setupChosen: { url: string; revision: number } | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
@@ -1507,6 +1509,19 @@ export class ClawtrateClient {
   }
 
   /**
+   * Whether a setup for `url` may save it: the record is this client's, or no client changed it
+   * since the person chose this gateway. A record changed since is a later choice, and stays.
+   * Decided without reading the store, so nothing runs between a save's check that its socket is
+   * live and its write.
+   */
+  private setupMaySave(url: string): boolean {
+    const chosen = this.setupChosen;
+    return (
+      this.recordSeen() || (chosen?.url === url && chosen.revision === this.writes.settingsRevision)
+    );
+  }
+
+  /**
    * Whether `saved` names a gateway other than `url` that another client on this store saved
    * since this one last read or wrote the record. That record is the other client's latest
    * choice, and this client's queued changes leave it as it is.
@@ -1631,6 +1646,7 @@ export class ClawtrateClient {
       this.typedAttempt = null;
       if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
       this.settings = { url, token: null };
+      this.setupChosen = { url, revision: this.writes.settingsRevision };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = { url, reuse: false };
@@ -1661,6 +1677,7 @@ export class ClawtrateClient {
       if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
       this.settings = { url: target, token: null };
+      this.setupChosen = { url: target, revision: this.writes.settingsRevision };
       this.pairingSeen = null;
       this.setupCheck = setupCheckFor(target, setup);
       this.setupIntent = { url: target, reuse: true };
@@ -6524,8 +6541,7 @@ export class ClawtrateClient {
           await this.changeConnection(async () => {
             const current = this.settings;
             if (!live() || generation !== this.generation || current?.url !== settings.url) return;
-            // A gateway another client chose since is the later choice, and stays saved.
-            if (this.recordTaken(await this.savedSettings(), settings.url)) return;
+            if (!this.setupMaySave(settings.url)) return;
             await this.saveSettings(current);
           });
           return;
@@ -6542,7 +6558,7 @@ export class ClawtrateClient {
               this.close();
               return;
             }
-            if (this.recordTaken(await this.savedSettings(), settings.url)) return;
+            if (!this.setupMaySave(settings.url)) return;
             await this.saveSettings(current);
             return;
           }
