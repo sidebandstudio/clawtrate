@@ -2612,6 +2612,43 @@ test("F-468: a real question holds a message typed while it is pending, and answ
   await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
 });
 
+// Most checks here read the action cards themselves, so they run with "Show commands" on
+// (conversation.md, 7.11); the F-528 check runs on the default, with it off.
+test.beforeEach(async ({ page }, info) => {
+  if (!info.title.startsWith("F-528"))
+    await page.addInitScript(() => localStorage.setItem("clawtrate.commands", "show"));
+});
+
+test("F-528 F-529 F-530: by default a real run shows no card: the status line names the kind of work, and the run line opens to the actions in plain words", async ({
+  page,
+}) => {
+  await openShell(page);
+  await ownTaskOf(page, "pip", "Pip", "Go through the files quietly");
+  await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
+  await page.keyboard.press("Enter");
+  const status = page.getByTestId("status-line");
+  // While the slow tool runs: no card at level 0, and the phrase is the kind of work.
+  await expect(status.getByTestId("status-phrase")).toHaveText("Using tools", {
+    timeout: 30_000,
+  });
+  await expect(status).toHaveAccessibleName("Pip, working: Using tools.");
+  for (const card of await page.locator(".transcript details.card.action").all())
+    await expect(card).toBeHidden();
+  await expect(page.getByText("I read six files in my workspace.", { exact: true })).toHaveCount(1);
+  // The run ends: one line, which opens to the actions in plain words.
+  await expect(status).toHaveCount(0, { timeout: 60_000 });
+  const run = page.getByTestId("run-line").last();
+  await expect(run.locator(":scope > summary")).toHaveAccessibleName(
+    /^Worked for \d+s · 7 actions$/,
+  );
+  await run.locator(":scope > summary").click();
+  await expect(run.locator(".run-actions details.card.action[data-fold]")).toHaveAttribute(
+    "data-fold",
+    "6",
+  );
+  await expect(run.locator(".run-actions")).toContainText("Read 5 files · 6 reads");
+});
+
 /** The action cards' and folds' lines in a transcript, in order. */
 const actionLines = (page: Page) =>
   page.locator(".transcript details.card.action > summary").evaluateAll((nodes) =>

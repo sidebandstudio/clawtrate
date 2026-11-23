@@ -6,6 +6,8 @@
 import {
   actionWords,
   callFromStep,
+  kindOf,
+  kindPhrase,
   lineOf,
   phraseCall,
   readingContextOf,
@@ -60,6 +62,12 @@ export function actionPhrase(call: ActionCall, ctx: ReadingContext = {}): string
   return line.outcome === "review" ? actionWords.PHRASES.reviewing : line.running;
 }
 
+/** A call drawn as a Messaged or T3 Code card, which stays in view with commands hidden (7.11). */
+function hasCardInView(call: ActionCall, ctx: ReadingContext): boolean {
+  const { kind } = kindOf(call, ctx);
+  return kind === "message" || kind === "t3";
+}
+
 /** Status phases the gateway reports while no step runs (section 5). */
 function phasePhrase(phase: string | null): string | null {
   if (!phase) return null;
@@ -82,7 +90,26 @@ export type StatusLineView = {
   startedAt: number | null;
   /** The running call the phrase names, which the line brings into view; null when none. */
   callId: string | null;
+  /**
+   * Without commands shown (7.11), what the bot is thinking right now: the
+   * text of the reasoning the run ends on, while nothing has come after it.
+   */
+  thought?: string | null;
 };
+
+/** The last characters of what a bot is thinking, from a word's start: the status line shows its end. */
+const THOUGHT_CHARS = 280;
+
+/** The reasoning a running run ends on, with no reply text after it yet; null when none. */
+export function liveThought(run: Run): string | null {
+  const last = run.steps.at(-1);
+  if (!last || last.kind !== "reasoning" || run.text.trim()) return null;
+  const text = (last.output?.text ?? "").trim();
+  if (!text) return null;
+  if (text.length <= THOUGHT_CHARS) return text;
+  const tail = text.slice(-THOUGHT_CHARS);
+  return `…${tail.slice(tail.search(/\s/) + 1)}`;
+}
 
 /**
  * The status line of a run that is running, waiting or stopping: one phrase
@@ -92,7 +119,13 @@ export type StatusLineView = {
 export function statusLineFor(
   run: Run,
   transcript: Transcript,
-  options: { connected: boolean; interactive: boolean; reading?: ReadingContext | undefined },
+  options: {
+    connected: boolean;
+    interactive: boolean;
+    reading?: ReadingContext | undefined;
+    /** "Show commands" is off: the phrase says the kind of work, and the thinking shows (7.11). */
+    quiet?: boolean;
+  },
 ): StatusLineView {
   let view: StatusLineView;
   // Read as the cards read it: with what the gateway said of the task's tools and workspace.
@@ -143,10 +176,12 @@ export function statusLineFor(
     view = {
       state: "working",
       badge: null,
-      phrase: actionPhrase(call, ctx),
+      phrase: options.quiet ? kindPhrase(call, ctx) : actionPhrase(call, ctx),
       tone: "live",
       startedAt: null,
-      callId: call.id,
+      // Without commands shown an action has no card in view, but a Messaged or T3 Code card
+      // always has one: the line brings that card into view (7.11).
+      callId: !options.quiet || hasCardInView(call, ctx) ? call.id : null,
     };
   } else {
     view = {
@@ -160,6 +195,8 @@ export function statusLineFor(
   }
   // A clock only for a start the gateway reported, never this client's own send time.
   view.startedAt = run.reportedStartAt;
+  if (options.quiet)
+    view.thought = view.state === "thinking" && view.tone === "live" ? liveThought(run) : null;
   if (!options.connected) {
     const last = view.phrase.replace(/…$/, "");
     return {
