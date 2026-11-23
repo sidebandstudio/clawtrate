@@ -308,7 +308,7 @@ export type BridgeCommand =
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
-  | { type: "acceptBotName"; botId: string; name: string }
+  | { type: "acceptBotName"; botId: string; name: string; gatewayId: string | null }
   | { type: "declineBotName"; botId: string; name: string }
   /** A bot's new picture (bots.md section 8): a PNG data URL, a creature's with its choice inside. */
   | {
@@ -1099,9 +1099,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
     case "acceptBotName":
+      return {
+        type: "acceptBotName",
+        botId: botId(command.botId),
+        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        gatewayId: command.gatewayId === null ? null : id(command.gatewayId, "gateway"),
+      };
     case "declineBotName":
       return {
-        type: command.type,
+        type: "declineBotName",
         botId: botId(command.botId),
         name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
       };
@@ -1889,7 +1895,7 @@ class ViewerSession implements BridgeSession {
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
       case "acceptBotName":
-        return client.acceptBotName(command.botId, command.name);
+        return client.acceptBotName(command.botId, command.name, command.gatewayId);
       case "declineBotName":
         return client.declineBotName(command.botId, command.name);
       case "setBotPicture":

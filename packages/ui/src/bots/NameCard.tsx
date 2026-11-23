@@ -23,13 +23,17 @@ export function NameCard({
   const { name } = proposal;
   const renaming = busy || proposal.status === "renaming";
   const canRename = connection.status === "connected" && connection.canAdmin;
+  // Announced only once the host says what happened: a Rename that sent nothing, or that the
+  // bot list doesn't confirm, is announced as that.
   const act = async (type: "acceptBotName" | "declineBotName") => {
     setBusy(true);
     try {
-      await send({ type, botId: bot.id, name });
+      if (type === "acceptBotName")
+        await send({ type, botId: bot.id, name, gatewayId: proposal.gatewayId });
+      else await send({ type, botId: bot.id, name });
       onAnnounce(type === "acceptBotName" ? `Renamed to ${name}` : `${bot.name} keeps its name`);
-    } catch {
-      // The card says why, from the state.
+    } catch (error) {
+      onAnnounce(`Not renamed. ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -44,11 +48,11 @@ export function NameCard({
       >
         <div className="name-card-words">
           <p className="name-card-title">
-            {bot.name} would like to be called “<span className="name-card-name">{name}</span>”
+            <bdi>{bot.name}</bdi> would like to be called “<bdi className="name-card-name">{name}</bdi>”
           </p>
           <p className="name-card-line">
             {canRename
-              ? "It wrote this name for itself. Rename saves it on the gateway, where Clawtrate reads it."
+              ? "It wrote this name for itself. Rename changes its name everywhere it shows."
               : `Renaming ${bot.name} needs admin access, which this connection doesn't have.`}
           </p>
           {proposal.status === "failed" && proposal.error && (

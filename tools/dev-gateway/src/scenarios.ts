@@ -479,7 +479,11 @@ export const SCENARIOS: Scenario[] = [
           });
         },
       },
-      (ctx) => [say(`${takenName(ctx.prompt) ?? "That name"} it is. Saved, so I'll remember.`)],
+      (ctx) => [
+        say(
+          `${takenName(ctx.prompt) ?? "That name"} it is. It shows once you confirm it in Clawtrate.`,
+        ),
+      ],
     ],
   },
   {

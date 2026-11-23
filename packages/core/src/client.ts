@@ -1405,6 +1405,8 @@ export class ClawtrateClient {
       this.state.connection.canAdmin &&
       !this.options.readOnly,
     gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
+    gatewayId: () => this.state.connection.gatewayId,
+    sameGateway: (gatewayId) => this.requireSameGateway(gatewayId),
     storage: {
       get: (key) => this.host.storage.get(key),
       set: (key, value) => this.host.storage.set(key, value),
@@ -5258,10 +5260,13 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
-  /** Rename on a name card: `name` must be the one it shows (`bot-names.ts`). */
-  acceptBotName(botId: string, name: string): Promise<void> {
+  /**
+   * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
+   * Nothing is sent unless that gateway is still the one connected.
+   */
+  acceptBotName(botId: string, name: string, gatewayId: string | null): Promise<void> {
     if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
-    return this.botNames.accept(botId, name);
+    return this.botNames.accept(botId, name, gatewayId);
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */

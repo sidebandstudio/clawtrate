@@ -1153,7 +1153,7 @@ export function Conversation({
             onClick={onOpenPanel}
           >
             <Avatar bot={bot} />
-            <span className="title-pill-name">{bot.name}</span>
+            <bdi className="title-pill-name">{bot.name}</bdi>
             {task && <span className="title-pill-task">{task.title}</span>}
           </button>
         ) : (

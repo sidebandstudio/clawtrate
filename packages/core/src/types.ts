@@ -480,6 +480,8 @@ export type NameProposal = {
   name: string;
   /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
   from: string;
+  /** The gateway the file was read on (null when it names none); Rename sends only to it. */
+  gatewayId: string | null;
   /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
   status: "open" | "renaming" | "failed";
   error: string | null;

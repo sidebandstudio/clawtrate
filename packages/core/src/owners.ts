@@ -275,10 +275,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
   // Names bots wrote for themselves (`bot-names.ts`): one card per listed bot, the reads under
-  // way (one per bot, within the file reads), and the bots whose file Clawtrate didn't write.
+  // way (one per bot, within the file reads), and the bots whose file is too long to read.
   "botNames.proposals": {
     max: MAX_BOTS,
-    each: ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + SHORT,
+    each: 2 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + SHORT,
     row: "bookkeeping",
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },

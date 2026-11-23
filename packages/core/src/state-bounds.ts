@@ -726,6 +726,7 @@ const nameProposal = object<NameProposal>()({
   botId: ID,
   name: NAME,
   from: NAME,
+  gatewayId: ID,
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });

@@ -3605,17 +3605,31 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     name: "a bot takes a name in its own file",
     covers: ["#take-name"],
     run: async (h) => {
+      const read = await fileCall(h, "marlow", "IDENTITY.md");
+      const line = /^- \*\*Name:\*\*.*$/m.exec(
+        await workspaceFile(h, "marlow", "IDENTITY.md"),
+      )?.[0];
+      expect(line, "Marlow's IDENTITY.md has a name line");
       const view = await h.run(
         "plain",
         await h.session("marlow", "take-name"),
         "#take-name Johnny",
       );
-      same(
-        [view.terminal.state, view.finalText()],
-        ["final", "Johnny it is. Saved, so I'll remember."],
-        "the run's end",
-      );
-      same(view.result("edit").details.changed, true, "the edit changed the file");
+      view.expectCalls([
+        read,
+        {
+          name: "edit",
+          args: { path: "IDENTITY.md", edits: [{ oldText: line, newText: "- **Name:** Johnny" }] },
+          isError: false,
+          content: textsLike([
+            matchesPattern(/^Successfully replaced 1 block\(s\) in \S+\/IDENTITY\.md\.$/),
+          ]),
+          details: (details: JsonRecord | undefined, where: string) =>
+            same(details?.changed, true, `${where} details changed`),
+          title: "Edit in IDENTITY.md",
+        },
+      ]);
+      view.expectEnd("final", "Johnny it is. It shows once you confirm it in Clawtrate.");
       const file = await workspaceFile(h, "marlow", "IDENTITY.md");
       expect(/^- \*\*Name:\*\* Johnny$/m.test(file), `IDENTITY.md after the edit: ${file}`);
       // The gateway's own name for the bot is its config's, which the edit leaves alone.

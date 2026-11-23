@@ -3,9 +3,9 @@
 // A bot asked to take a name edits the `- Name:` line of its own IDENTITY.md.
 // The name Clawtrate shows is the bot's identity in the gateway's config,
 // which `agents.create` set and which takes precedence over the file, so the
-// edit changes nothing a person sees. After each finished run of a bot made
-// in New bot whose task is open, on a connection that can rename, Clawtrate
-// reads that one file. When its name line differs from the bot's name, the
+// edit changes nothing a person sees. After each finished run of a bot whose
+// task is open, on a connection that can rename, Clawtrate reads that one
+// file. When its name line differs from the bot's name, the
 // conversation shows one card; its Rename sends `agents.update`, which also
 // writes the file's name line, and the card goes once the bot list shows the
 // new name. Nothing is sent without that click. Not now is kept on this
@@ -26,11 +26,6 @@ export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
 export const MAX_NAME_CARDS = 32;
 /** What a card says of a Rename that didn't land, at most. */
 export const MAX_NAME_ERROR_CHARS = 512;
-/**
- * Words every IDENTITY.md New bot wrote carries (`identityFile`): the mark of a bot made in
- * Clawtrate, whose file a rename may write. A bot whose file lacks them gets no read again.
- */
-export const MADE_IN_CLAWTRATE = "in Clawtrate when you were made";
 
 const PLACEHOLDERS = new Set(["not set yet", "pick something you like"]);
 
@@ -61,12 +56,16 @@ export function identityName(content: string): string | null {
 
 /**
  * A bot's name as Rename saves it, from text a bot wrote: control characters and line breaks
- * become spaces, runs of space one, the ends trimmed, as the gateway stores a name; then cut to
+ * become spaces, direction controls and invisible spaces go, runs of space one, the ends trimmed, as the gateway stores a name; then cut to
  * `MAX_BOT_NAME_CHARS` characters. Null when nothing is left.
  */
 export function plainName(raw: string): string | null {
-  // eslint-disable-next-line no-control-regex
-  const spaced = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+  const spaced = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+    // Direction controls and invisible spaces: a name reads as the characters it has. U+200C and
+    // U+200D stay, as emoji sequences and some scripts need them.
+    .replace(/[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, "");
   const name = Array.from(spaced.replace(/\s+/g, " ").trim())
     .slice(0, MAX_BOT_NAME_CHARS)
     .join("")
@@ -81,6 +80,10 @@ export type BotNamesContext = {
   canRename: () => boolean;
   /** The gateway's identity, or its address before that is known: whose Not now it is. */
   gateway: () => string | null;
+  /** The connected gateway's own identity, or null when it names none: whose card it is. */
+  gatewayId: () => string | null;
+  /** Refuse unless `gatewayId` is the gateway connected now, as every bot write does. */
+  sameGateway: (gatewayId: string | null) => Promise<void>;
   storage: KeyValueStore;
   /** Take one of the client's file reads, or null when they are all in use. */
   takeRead: () => (() => void) | null;
@@ -113,8 +116,8 @@ export class BotNames {
   async afterRun(botId: string): Promise<void> {
     if (!this.ctx.canRename() || this.reading.has(botId) || this.skipped.has(botId)) return;
     const bot = this.ctx.bots().find((each) => each.id === botId);
-    // The gateway's default bot was not made in New bot, and the gateway renames an implicit
-    // `main` only through its config (docs/research/bot-self-management.md, R16).
+    // The gateway's default bot takes its name in OpenClaw's own first run, which saves the config
+    // too, and the gateway renames an implicit `main` only through its config (R13, R16).
     if (!bot || bot.isDefault) return;
     const release = this.ctx.takeRead();
     if (!release) return;
@@ -128,8 +131,9 @@ export class BotNames {
       );
       if (epoch !== this.epoch) return;
       const content = typeof answer?.content === "string" ? answer.content : null;
-      if (content === null || content.length > MAX_IDENTITY_CHARS) return;
-      if (!content.includes(MADE_IN_CLAWTRATE)) {
+      if (content === null) return;
+      if (content.length > MAX_IDENTITY_CHARS) {
+        // Read once, then left alone on this connection: a file this long isn't one to rename from.
         this.skipped.add(botId);
         if (this.skipped.size > MAX_NAME_CARDS)
           this.skipped.delete(this.skipped.values().next().value!);
@@ -137,14 +141,21 @@ export class BotNames {
       }
       const raw = identityName(content);
       const name = raw === null ? null : plainName(raw);
+      const declined = name !== null && (await this.declined(botId, name));
+      // A card being renamed stays until its Rename settles; a read from before a reset counts for nothing.
+      if (epoch !== this.epoch || this.proposals.get(botId)?.status === "renaming") return;
       const now = this.ctx.bots().find((each) => each.id === botId);
-      if (!now || name === null || name === now.name || (await this.declined(botId, name)))
-        return this.drop(botId);
-      if (epoch !== this.epoch) return;
+      if (!now || name === null || name === now.name || declined) return this.drop(botId);
       const open = this.proposals.get(botId);
-      if (open?.status === "renaming") return;
       if (!open && this.proposals.size >= MAX_NAME_CARDS) return;
-      this.proposals.set(botId, { botId, name, from: now.name, status: "open", error: null });
+      this.proposals.set(botId, {
+        botId,
+        name,
+        from: now.name,
+        gatewayId: this.ctx.gatewayId(),
+        status: "open",
+        error: null,
+      });
       this.publish();
     } catch (error) {
       this.ctx.log(`could not read ${botId}'s IDENTITY.md: ${errorText(error)}`);
@@ -154,11 +165,16 @@ export class BotNames {
     }
   }
 
-  /** Rename: one `agents.update` with the name the card shows, then the bot list read back. */
-  async accept(botId: string, name: string): Promise<void> {
+  /**
+   * Rename: one `agents.update` with the name the card shows, on the gateway it was drawn for,
+   * then the bot list read back. The one way a card's name is saved.
+   */
+  async accept(botId: string, name: string, gatewayId: string | null): Promise<void> {
     const open = this.proposals.get(botId);
     if (!open || open.name !== name || open.status === "renaming")
       throw new Error("That name is no longer waiting for you.");
+    if (open.gatewayId !== gatewayId)
+      throw new Error("This name was found on another gateway, so nothing was sent.");
     if (!this.ctx.canRename()) throw new Error("Renaming a bot needs admin access.");
     const epoch = this.epoch;
     const set = (patch: Partial<NameProposal>) => {
@@ -171,11 +187,18 @@ export class BotNames {
       // The bot as the gateway lists it now: renamed or gone since the card was drawn, nothing is sent.
       await this.ctx.refreshBots();
       const bot = this.ctx.bots().find((each) => each.id === botId);
-      if (!bot || bot.name === name) return this.drop(botId);
+      if (!bot) {
+        this.drop(botId);
+        throw new Error(`${open.from} is no longer on the gateway, so nothing was sent.`);
+      }
+      if (bot.name === name) return this.drop(botId);
       if (bot.name !== open.from) {
         this.drop(botId);
         throw new Error(`${open.from} was renamed ${bot.name} meanwhile, so nothing was sent.`);
       }
+      // Still the gateway the card was drawn for, on the connection that read it.
+      await this.ctx.sameGateway(gatewayId);
+      if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
       await this.ctx.request("agents.update", { agentId: botId, name });
     } catch (error) {
       if (this.proposals.get(botId)?.status !== "renaming") throw error;
@@ -187,13 +210,48 @@ export class BotNames {
       });
       throw error;
     }
+    await this.keepPictureOutOfFile(botId, epoch);
     try {
       await this.ctx.refreshBots();
     } catch {
       // Shown below: the list did not confirm it.
     }
     if (this.ctx.bots().find((each) => each.id === botId)?.name === name) return this.drop(botId);
-    set({ status: "failed", error: "The gateway saved it, but its bot list doesn't show it yet." });
+    const unconfirmed = "The gateway saved it, but its bot list doesn't show it yet.";
+    set({ status: "failed", error: unconfirmed });
+    throw new Error(unconfirmed);
+  }
+
+  /**
+   * `agents.update` writes every identity field the config holds into IDENTITY.md, the picture
+   * as an `Avatar` line of up to 32 KB that every run would carry (R38). Take that line out
+   * again, held to the file just read, as New bot's first step does (`endFirstRun`); the picture
+   * stays in the config, which takes precedence over the file. The rename has landed whatever
+   * happens here, so a failure is only logged.
+   */
+  private async keepPictureOutOfFile(botId: string, epoch: number): Promise<void> {
+    try {
+      const file = asRecord(
+        asRecord(
+          await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
+        )?.file,
+      );
+      if (epoch !== this.epoch) return;
+      const content = typeof file?.content === "string" ? file.content : null;
+      const hash =
+        typeof file?.hash === "string" && /^[a-f0-9]{64}$/i.test(file.hash) ? file.hash : null;
+      if (content === null || hash === null) return;
+      const kept = content.replace(/^- Avatar: data:[^\n]*(\n|$)/gm, "");
+      if (kept === content) return;
+      await this.ctx.request("agents.files.set", {
+        agentId: botId,
+        name: "IDENTITY.md",
+        content: kept,
+        expectedHash: hash,
+      });
+    } catch (error) {
+      this.ctx.log(`could not take the picture out of ${botId}'s IDENTITY.md: ${errorText(error)}`);
+    }
   }
 
   /** Not now: kept on this device for this bot and this name. */

@@ -2,7 +2,8 @@
 // IDENTITY.md's `- Name:` line becomes one card, and only the person's Rename
 // sends `agents.update`. The files and answers are as a development gateway
 // on OpenClaw 2026.10.6 gave them: `agents.update` rewrites the line as
-// `- Name: <name>` and the bot list then shows it.
+// `- Name: <name>`, with every other identity field of the config, the
+// picture's data URL included, and the bot list then shows it.
 
 import { describe, expect, it } from "vitest";
 import { identityFile } from "../src/accounts-engine.ts";
@@ -16,33 +17,63 @@ import {
 } from "../src/bot-names.ts";
 import { MAX_BOTS } from "../src/state-bounds.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, openTask, URL_A, grantingGateway } from "./client-harness.ts";
-import { GatewayError, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
+import { agentEvent, openTask, URL_A, URL_B, grantingGateway } from "./client-harness.ts";
+import { deferred, GatewayError, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
 
 const KEY = "agent:new-bot:main";
 
-/** A gateway with the default bot and one New bot made, whose IDENTITY.md the test writes. */
-function namingGateway(fileOf: (name: string) => string = (name) => identityFile(name, false)) {
+const PICTURE = `data:image/png;base64,${"A".repeat(30_000)}`;
+/** A revision of the file's content, in the gateway's 64-hex form (FNV-1a, repeated). */
+const hashOf = (content: string) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) h = Math.imul(h ^ content.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, "0").repeat(8);
+};
+
+/**
+ * A gateway with the default bot and one New bot made, whose IDENTITY.md the test writes. With
+ * `picture`, the bot's config identity has one, as New bot saves a chosen picture.
+ */
+function namingGateway(
+  fileOf: (name: string) => string = (name) => identityFile(name, false),
+  options: { picture?: boolean } = {},
+) {
   const gateway = grantingGateway();
-  const bot = { name: "New bot", file: fileOf("New bot") };
+  const bot = { name: "New bot", file: fileOf("New bot"), gatewayId: "gw-a" };
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: bot.gatewayId });
   gateway.handlers["agents.list"] = () => ({
     defaultId: "main",
     agents: [
       { id: "main", identity: { name: "Juniper" } },
-      { id: "new-bot", name: bot.name, identity: { name: bot.name } },
+      {
+        id: "new-bot",
+        name: bot.name,
+        identity: { name: bot.name, ...(options.picture ? { avatar: PICTURE } : {}) },
+      },
     ],
   });
   gateway.handlers["agents.files.get"] = (params) => {
     const { agentId, name } = params as { agentId: string; name: string };
     if (name !== "IDENTITY.md") throw new Error("only IDENTITY.md is read");
     const content = agentId === "new-bot" ? bot.file : "# IDENTITY.md\n\n- Name: Juniper2\n";
-    return { file: { name, missing: false, content, hash: "a".repeat(64) } };
+    return { file: { name, missing: false, content, hash: hashOf(content) } };
   };
-  // As the gateway does: the config's name, and the file's `- Name:` line rewritten.
+  gateway.handlers["agents.files.set"] = (params) => {
+    const { content, expectedHash } = params as { content: string; expectedHash: string };
+    if (expectedHash !== hashOf(bot.file))
+      throw new GatewayError({ code: "CONFLICT", message: "IDENTITY.md changed" });
+    bot.file = content;
+    return { ok: true };
+  };
+  // As the gateway does (`mergeIdentityMarkdownContent`): the config's name on the first `-` Name
+  // line, and each other identity field the config holds as a line of its own below it.
   gateway.handlers["agents.update"] = (params) => {
     const { name } = params as { name: string };
     bot.name = name;
-    bot.file = bot.file.replace(/^- \*{0,2}Name:\*{0,2} .*$/m, `- Name: ${name}`);
+    bot.file = bot.file.replace(
+      /^- \*{0,2}Name:\*{0,2} .*$/m,
+      `- Name: ${name}${options.picture ? `\n- Avatar: ${PICTURE}` : ""}`,
+    );
     return { ok: true, agentId: "new-bot" };
   };
   /** The bot edits its own file, as `#take-name` does. */
@@ -86,7 +117,14 @@ describe("F-552: a bot that takes a name", () => {
     endRun(gateway);
     await until(() => (client.state.botNames ?? []).length === 1);
     expect(client.state.botNames).toEqual([
-      { botId: "new-bot", name: "Johnny", from: "New bot", status: "open", error: null },
+      {
+        botId: "new-bot",
+        name: "Johnny",
+        from: "New bot",
+        gatewayId: "gw-a",
+        status: "open",
+        error: null,
+      },
     ]);
     // Another run ends: still one card, one read each run, and no write.
     endRun(gateway);
@@ -109,19 +147,24 @@ describe("F-552: a bot that takes a name", () => {
     takeName("Johnny");
     endRun(gateway);
     await until(() => (client.state.botNames ?? []).length === 1);
-    await client.acceptBotName("new-bot", "Johnny");
+    await client.acceptBotName("new-bot", "Johnny", "gw-a");
     expect(gateway.calls("agents.update")).toEqual([{ agentId: "new-bot", name: "Johnny" }]);
     expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
     expect(client.state.botNames).toEqual([]);
     // The file and the config agree, with one name line: the next run brings no card.
     expect(bot.file.match(/Name:/g)).toHaveLength(2); // the line, and the prose naming it
     expect(identityName(bot.file)).toBe("Johnny");
+    // One read when the run ended, one after Rename for the picture line, and nothing written.
+    expect(reads(gateway)).toBe(2);
+    expect(gateway.calls("agents.files.set")).toEqual([]);
     endRun(gateway);
-    await until(() => reads(gateway) === 2);
+    await until(() => reads(gateway) === 3);
     await sleep(30);
     expect(client.state.botNames).toEqual([]);
     // A second Rename of the same card is refused, and sends nothing.
-    await expect(client.acceptBotName("new-bot", "Johnny")).rejects.toThrow(/no longer waiting/);
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
+      /no longer waiting/,
+    );
     expect(gateway.calls("agents.update")).toHaveLength(1);
     client.stop();
   });
@@ -137,10 +180,16 @@ describe("F-552: a bot that takes a name", () => {
     takeName("Johnny");
     endRun(gateway);
     await until(() => (client.state.botNames ?? []).length === 1);
-    await expect(client.acceptBotName("new-bot", "Johnny2")).rejects.toThrow(/no longer waiting/);
+    await expect(client.acceptBotName("new-bot", "Johnny2", "gw-a")).rejects.toThrow(
+      /no longer waiting/,
+    );
+    // Drawn for another gateway: nothing is sent.
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-b")).rejects.toThrow(
+      /found on another gateway, so nothing was sent/,
+    );
     // Renamed elsewhere since the card was drawn: the read just before sending finds it.
     bot.name = "Scout";
-    await expect(client.acceptBotName("new-bot", "Johnny")).rejects.toThrow(
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
       /renamed Scout meanwhile, so nothing was sent/,
     );
     expect(gateway.calls("agents.update")).toEqual([]);
@@ -166,7 +215,7 @@ describe("F-552: a bot that takes a name", () => {
     takeName("Johnny");
     endRun(gateway);
     await until(() => (client.state.botNames ?? []).length === 1);
-    await expect(client.acceptBotName("new-bot", "Johnny")).rejects.toThrow();
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow();
     expect(client.state.botNames?.[0]).toMatchObject({
       status: "failed",
       error: "The gateway refused: renaming a bot needs admin access.",
@@ -190,7 +239,7 @@ describe("F-552: a bot that takes a name", () => {
     await first.client.declineBotName("new-bot", "Johnny");
     expect(first.client.state.botNames).toEqual([]);
     expect(storage.data.get(NAME_DECLINES_KEY)).toBe(
-      JSON.stringify({ [`${URL_A}\nnew-bot`]: "Johnny" }),
+      JSON.stringify({ ["gw-a\nnew-bot"]: "Johnny" }),
     );
     first.client.stop();
 
@@ -229,7 +278,7 @@ describe("F-552: a bot that takes a name", () => {
     client.stop();
   });
 
-  it("F-552: no read on a connection that can't rename, nor for the default bot or a bot Clawtrate didn't make", async () => {
+  it("F-552: no read on a connection that can't rename or for the default bot; a bot not made in New bot gets a card, and a file too long is read once", async () => {
     for (const held of [READ_SCOPES, INTERACTIVE_SCOPES]) {
       const { gateway, takeName } = namingGateway();
       takeName("Johnny");
@@ -251,15 +300,21 @@ describe("F-552: a bot that takes a name", () => {
     client.openSession("agent:main:main");
     endRun(gateway, "agent:main:main");
     endRun(gateway);
-    await until(() => reads(gateway) === 1);
-    // Not Clawtrate's file: no card, and no read again on this connection.
-    endRun(gateway);
-    await sleep(50);
-    expect(reads(gateway)).toBe(1);
+    // The gateway's own file, not New bot's: a card all the same. The default bot is not read.
+    await until(() => (client.state.botNames ?? []).length === 1);
+    expect(client.state.botNames![0]).toMatchObject({ name: "Johnny", from: "New bot" });
     expect(gateway.calls("agents.files.get")).toEqual([
       { agentId: "new-bot", name: "IDENTITY.md" },
     ]);
-    expect(client.state.botNames ?? []).toEqual([]);
+    // A file too long to read for a name: read once, the card gone, then left alone.
+    gateway.handlers["agents.files.get"] = () => ({
+      file: { missing: false, content: "x".repeat(MAX_IDENTITY_CHARS + 1), hash: "a".repeat(64) },
+    });
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 0);
+    endRun(gateway);
+    await sleep(50);
+    expect(reads(gateway)).toBe(2);
     client.stop();
   });
 
@@ -276,7 +331,129 @@ describe("F-552: a bot that takes a name", () => {
     endRun(gateway);
     await sleep(50);
     expect(reads(gateway)).toBe(0);
-    await expect(client.acceptBotName("new-bot", "Johnny")).rejects.toThrow();
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow();
+    expect(gateway.calls("agents.update")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: Rename of a bot with a picture leaves the picture in its settings and out of IDENTITY.md", async () => {
+    const { gateway, bot, takeName } = namingGateway((name) => identityFile(name, true), {
+      picture: true,
+    });
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    await client.acceptBotName("new-bot", "Johnny", "gw-a");
+    expect(gateway.calls("agents.update")).toEqual([{ agentId: "new-bot", name: "Johnny" }]);
+    // The gateway wrote the picture into the file; it was taken out again, held to that file.
+    const [write] = gateway.calls("agents.files.set") as Array<{ expectedHash: string }>;
+    expect(gateway.calls("agents.files.set")).toHaveLength(1);
+    expect(write!.expectedHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(bot.file).not.toMatch(/^- Avatar:/m);
+    expect(bot.file).toBe(
+      identityFile("New bot", true).replace("- **Name:** New bot", "- Name: Johnny"),
+    );
+    expect(bot.file.length).toBeLessThan(1_000);
+    expect(client.state.botNames).toEqual([]);
+    // Its next run reads the short file and finds nothing to ask.
+    endRun(gateway);
+    await until(() => reads(gateway) === 3);
+    await sleep(30);
+    expect(client.state.botNames).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: Rename announces only what happened: nothing sent for a bot gone, and an unconfirmed name is an error", async () => {
+    const { gateway, bot, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // The bot list doesn't show the new name after the write.
+    const list = gateway.handlers["agents.list"]!;
+    gateway.handlers["agents.update"] = () => ({ ok: true, agentId: "new-bot" });
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
+      /doesn't show it yet/,
+    );
+    expect(client.state.botNames![0]).toMatchObject({ status: "failed" });
+    // The bot is gone when Rename reads the list again: nothing is sent, and it says so.
+    gateway.handlers["agents.list"] = () => ({ defaultId: "main", agents: [{ id: "main" }] });
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
+      /no longer on the gateway, so nothing was sent/,
+    );
+    expect(gateway.calls("agents.update")).toHaveLength(1);
+    gateway.handlers["agents.list"] = list;
+    expect(bot.name).toBe("New bot");
+    client.stop();
+  });
+
+  it("F-552: a run that ends while Rename is out leaves its card until the rename settles", async () => {
+    const { gateway, takeName } = namingGateway();
+    const { client } = await openTask({
+      gateway,
+      storage: adminStorage(),
+      held: ADMIN_SCOPES,
+      key: KEY,
+    });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    const held = deferred<void>();
+    const update = gateway.handlers["agents.update"]!;
+    gateway.handlers["agents.update"] = async (params) => {
+      await held.promise;
+      return update(params);
+    };
+    const renaming = client.acceptBotName("new-bot", "Johnny", "gw-a");
+    await until(() => gateway.calls("agents.update").length === 1);
+    // The bot puts its old name back meanwhile, and a run ends.
+    takeName("New bot");
+    endRun(gateway);
+    await until(() => reads(gateway) === 2);
+    await sleep(30);
+    expect(client.state.botNames).toMatchObject([{ name: "Johnny", status: "renaming" }]);
+    held.resolve();
+    await renaming;
+    expect(client.state.bots.find((each) => each.id === "new-bot")?.name).toBe("Johnny");
+    expect(client.state.botNames).toEqual([]);
+    client.stop();
+  });
+
+  it("F-552: a card left open across a switch of gateway sends nothing to the next one", async () => {
+    const { gateway, bot, takeName } = namingGateway();
+    const storage = adminStorage();
+    const { client } = await openTask({ gateway, storage, held: ADMIN_SCOPES, key: KEY });
+    takeName("Johnny");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // Another gateway, with a bot of the same id whose file names it Johnny too.
+    bot.gatewayId = "gw-b";
+    storage.data.set(tokenKey(URL_B), storage.data.get(tokenKey(URL_A))!);
+    await client.connect({ url: URL_B });
+    await until(() => client.state.connection.gatewayId === "gw-b");
+    expect(client.state.botNames ?? []).toEqual([]);
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
+      /no longer waiting/,
+    );
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    endRun(gateway);
+    await until(() => (client.state.botNames ?? []).length === 1);
+    // The first gateway's card, clicked late, is not this one's.
+    await expect(client.acceptBotName("new-bot", "Johnny", "gw-a")).rejects.toThrow(
+      /another gateway/,
+    );
     expect(gateway.calls("agents.update")).toEqual([]);
     client.stop();
   });
@@ -284,6 +461,12 @@ describe("F-552: a bot that takes a name", () => {
   it("F-552: markup, control characters, line breaks and a 10,000-character name are bounded and kept as plain text", async () => {
     expect(plainName("<b>Jo</b>\u0000\u0007hn\nny\r\n\u2028 *x*")).toBe("<b>Jo</b> hn ny *x*");
     expect(plainName(" \n\t\u0000 ")).toBeNull();
+    // Direction controls and invisible spaces go; the joiners emoji need stay.
+    expect(plainName("Johnny\u202egnp.exe")).toBe("Johnnygnp.exe");
+    expect(plainName("Ot\u200bto")).toBe("Otto");
+    expect(plainName("\u2067Jo\u2069\u200e\u200f\u061c\u2060\ufeffhn")).toBe("John");
+    expect(plainName("👩\u200d💻")).toBe("👩\u200d💻");
+    expect(plainName("\u202e\u200b")).toBeNull();
     // As many cards as the state lists bots.
     expect(MAX_NAME_CARDS).toBe(MAX_BOTS);
     expect(plainName("J".repeat(10_000))).toBe("J".repeat(MAX_BOT_NAME_CHARS));
@@ -312,13 +495,13 @@ describe("F-552: a bot that takes a name", () => {
     const markup = "<img src=x onerror=alert(1)> ";
     expect(name).toBe(markup + "y".repeat(MAX_BOT_NAME_CHARS - markup.length));
     expect(Array.from(name)).toHaveLength(MAX_BOT_NAME_CHARS);
-    await client.acceptBotName("new-bot", name);
+    await client.acceptBotName("new-bot", name, "gw-a");
     expect(gateway.calls("agents.update")).toEqual([{ agentId: "new-bot", name }]);
 
     // A file longer than an identity file gets no card.
     bot.file = identityFile("Pip", false) + "x".repeat(MAX_IDENTITY_CHARS);
     endRun(gateway);
-    await until(() => reads(gateway) === 2);
+    await until(() => reads(gateway) === 3);
     await sleep(30);
     expect(client.state.botNames).toEqual([]);
     client.stop();

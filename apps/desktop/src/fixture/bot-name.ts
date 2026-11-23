@@ -26,7 +26,7 @@ export const NAMED_BOT = "new-bot";
 export const NAMED_TASK = "agent:new-bot:main";
 const SECOND = 1000;
 const FILE =
-  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above, and Clawtrate asks them to confirm it.\n";
+  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above and tell them it shows once they confirm it in Clawtrate.\n";
 
 function rows(start: number) {
   const run = "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40";
@@ -93,7 +93,7 @@ function rows(start: number) {
     },
     {
       role: "assistant",
-      content: [{ type: "text", text: "Johnny it is. Saved, so I'll remember." }],
+      content: [{ type: "text", text: "Johnny it is. It shows once you confirm it in Clawtrate." }],
       timestamp: at(33),
       model: "scripted/dev-1",
       __openclaw: meta("n-8", run, 8),
@@ -142,7 +142,7 @@ export function botNameScene(
           botId: NAMED_BOT,
           sessionId: "5f2c8e1a-7b3d-4a96-b0e4-1d9c6a2f8e37",
           title: "Main",
-          preview: "Johnny it is. Saved, so I'll remember.",
+          preview: "Johnny it is. It shows once you confirm it in Clawtrate.",
           updatedAt: start + 33 * SECOND,
           status: "done",
           unread: false,
@@ -161,7 +161,16 @@ export function botNameScene(
         questions: [],
       },
     },
-    botNames: [{ botId: NAMED_BOT, name: "Johnny", from: "New bot", status: "open", error: null }],
+    botNames: [
+      {
+        botId: NAMED_BOT,
+        name: "Johnny",
+        from: "New bot",
+        gatewayId: base.connection.gatewayId,
+        status: "open",
+        error: null,
+      },
+    ],
   };
 }
 
