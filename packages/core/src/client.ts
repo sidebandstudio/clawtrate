@@ -756,8 +756,9 @@ export type SetupEndpointCheck = {
    * Whether the host's dialog consent still holds (its two minutes), asked just before the
    * first frame that carries a credential, a saved token's included. Once a hello is in, the
    * consent is used and isn't asked again. On a plain `connect` it decides only whether a first
-   * pairing over the proved route asks for the six, before each such request: without it the
-   * same token asks for read, as a typed address does, and the connection goes on.
+   * pairing over the proved route asks for the six, before each such request until the gateway
+   * holds one pending, whose retries keep the six: without it the same token asks for read, as a
+   * typed address does, and the connection goes on.
    */
   consent?: () => boolean;
   /**
@@ -1124,6 +1125,8 @@ export class ClawtrateClient {
    * lost, from the moment the refusal is accepted, before its removal runs.
    */
   private fullEligible = false;
+  /** The pending request a first pairing sent the six in, with consent: its retries ask for them. */
+  private fullPending: string | null = null;
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
   /**
@@ -6918,6 +6921,15 @@ export class ClawtrateClient {
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
+      // The gateway keeps this request's six whatever a retry asks (a smaller one only refreshes
+      // it), so a first pairing that sent them with consent keeps asking for them while it waits.
+      if (
+        requestId &&
+        plan &&
+        !plan.selectedAuth.usingStoredDeviceToken &&
+        plan.scopes.some((scope) => !READ_SCOPES.includes(scope))
+      )
+        this.fullPending = seen;
       // A setup connection shows this device, the scopes it asked for and the gateway's
       // pending-devices instruction, never the request's own fields.
       const scopes =
@@ -8557,12 +8569,13 @@ export class ClawtrateClient {
   /**
    * Whether a first pairing at `url` may ask for the six, given full access: always at a
    * protected address; over a proved route only while the person's consent for it holds. It is
-   * asked here, before each first-pairing credential, until the first hello spends it. Full
-   * access over that route is a plain connect's alone, so a loopback setup code still starts
-   * read-only (F-509).
+   * asked here, before each first-pairing credential, until the first hello spends it or the
+   * gateway holds such a request pending. Full access over that route is a plain connect's alone,
+   * so a loopback setup code still starts read-only (F-509).
    */
   private firstPairingMayAskFull(url: string): boolean {
     if (protectedGatewayUrl(url)) return true;
+    if (this.fullPending !== null && this.fullPending === this.pairingSeen) return true;
     const consent = this.setupCheck?.url === url ? this.setupCheck.consent : undefined;
     return consent?.() === true;
   }
