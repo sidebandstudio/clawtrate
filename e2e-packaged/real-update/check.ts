@@ -105,10 +105,18 @@ class Page {
     });
     return new Page(socket);
   }
-  /** Evaluates an expression in the page, awaiting a promise, and returns its value as JSON. */
-  async evaluate<T>(expression: string): Promise<T> {
+  /**
+   * Evaluates an expression in the page, awaiting a promise, and returns its value as JSON.
+   * A call with no answer within `ms` fails, so no stage outlasts its own limit.
+   */
+  async evaluate<T>(expression: string, ms = 60_000): Promise<T> {
     const id = this.next++;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const reply = await new Promise<{ result?: unknown; error?: unknown }>((resolve) => {
+      timer = setTimeout(() => {
+        this.waiting.delete(id);
+        resolve({ error: `no answer within ${ms} ms to ${expression}` });
+      }, ms);
       this.waiting.set(id, resolve);
       this.socket.send(
         JSON.stringify({
@@ -117,7 +125,7 @@ class Page {
           params: { expression, awaitPromise: true, returnByValue: true },
         }),
       );
-    });
+    }).finally(() => clearTimeout(timer));
     const evaluated = reply.result as
       { result?: { value?: T }; exceptionDetails?: unknown } | undefined;
     if (reply.error || evaluated?.exceptionDetails)
@@ -185,6 +193,15 @@ async function main() {
     return targets.find((t) => t.type === "page") ?? null;
   });
   const page = await Page.open(target.webSocketDebuggerUrl);
+  try {
+    return await drive(page, pid);
+  } finally {
+    page.close();
+  }
+}
+
+/** The check, download, inspection and Restart, through the open page. */
+async function drive(page: Page, pid: number): Promise<boolean> {
   const snapshot = () => page.evaluate<Snapshot>(`${updates}.get()`);
   await until("the update bridge", 60_000, () =>
     page
@@ -208,8 +225,9 @@ async function main() {
     throw new Error(`offered ${offered.state.version}, expected ${values.expect}`);
   result.offeredVersion = offered.state.version;
   const started = Date.now();
-  await page.evaluate(`${updates}.download(${JSON.stringify(offered.state.offerId)})`);
-  const downloaded = await until("the download and inspection", 600_000, async () => {
+  // The call answers when the download and inspection end; the poll below bounds the stage too.
+  await page.evaluate(`${updates}.download(${JSON.stringify(offered.state.offerId)})`, 600_000);
+  const downloaded = await until("the download and inspection", 60_000, async () => {
     const s = await snapshot();
     return s.state.kind === "downloading" ? null : s;
   });
@@ -234,19 +252,21 @@ async function main() {
 
   if (downloaded.install.kind !== "restart-available") {
     result.outcome = `not offered a restart: ${downloaded.install.reason ?? downloaded.install.kind}`;
-    page.close();
-    for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
     return false;
   }
+  // The previous release's own requirement, which the replacement must meet.
+  const requirement = /designated => (.+)/.exec(run("/usr/bin/codesign", ["-d", "-r-", app]))?.[1];
+  result.previousRequirement = requirement ?? null;
   log("restarting to update");
+  const asked = Date.now();
   await page
-    .evaluate(`${updates}.restart(${JSON.stringify(downloaded.install.offerId)})`)
+    .evaluate(`${updates}.restart(${JSON.stringify(downloaded.install.offerId)})`, 30_000)
     .catch(() => {});
-  page.close();
   // The app quits, the system updater replaces the bundle, then reopens it.
   await until("the previous app to quit", 180_000, () =>
     appProcesses().some((p) => p.pid === pid) ? null : true,
   );
+  result.quitMs = Date.now() - asked;
   const replaced = await until("the bundle to be replaced", 180_000, () => {
     try {
       const version = bundleVersion();
@@ -261,6 +281,7 @@ async function main() {
     "--deep",
     "--strict",
     "--verbose=2",
+    ...(requirement ? [`-R=${requirement}`] : []),
     app,
   ]);
   const reopened = await until("the updated app to reopen", 60_000, mainPid).catch(() => null);
@@ -270,21 +291,28 @@ async function main() {
     // A runner is discarded afterwards; still, stop only what this check started.
     for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
   }
+  // Passing needs the replacement, its signature meeting the previous release's requirement,
+  // and the updated app open again.
   const ok =
     result.installedVersion === offered.state.version &&
-    (result.replacedSignature as string).includes("\nexit 0\n");
+    !!requirement &&
+    (result.replacedSignature as string).includes("\nexit 0\n") &&
+    reopened !== null;
   result.outcome = ok ? "updated in place" : "not updated in place";
   return ok;
 }
 
 main()
   .then((ok) => {
+    if (!ok) for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
     result.finishedAt = new Date().toISOString();
     save();
     log(String(result.outcome));
     process.exitCode = ok ? 0 : 1;
   })
   .catch((error: unknown) => {
+    // Whatever this check opened is stopped by PID.
+    for (const p of appProcesses()) spawnSync("/bin/kill", [String(p.pid)]);
     result.error = String(error);
     result.finishedAt = new Date().toISOString();
     save();
