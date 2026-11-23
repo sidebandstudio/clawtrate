@@ -22,7 +22,7 @@ export async function quitWithin(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const deadline = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), ms);
+      timer = setTimeout(() => resolve(false), Math.max(0, end - performance.now()));
     });
     const quit = Promise.race([gone().then(() => performance.now() < end), deadline]);
     const detached = Promise.race([detach().catch(() => undefined), deadline]);

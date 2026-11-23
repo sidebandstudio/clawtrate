@@ -156,7 +156,10 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     const host = liveProcess();
     const successor = liveProcess();
     const run = aRun(deadProcess(), host);
-    recordSuccessor(recordPath(run.records, run.record.run), successor);
+    // Refused, as the runner is gone, but kept in the record for the run's cleanup.
+    expect(() => recordSuccessor(recordPath(run.records, run.record.run), successor)).toThrow(
+      /cleanup has started/,
+    );
     recoverDeadRuns(run.records, run.reset, run.log);
     expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");
     expect(processState(host.pid, host.identity, processIdentity)).toBe("dead");
@@ -166,7 +169,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
   it("refuses a newer build recorded once the run's cleanup has started, and leaves it in the record for that cleanup", () => {
     const run = aRun(liveProcess());
     const path = recordPath(run.records, run.record.run);
-    expect(successorAtCleanUp(path)).toBeUndefined();
+    expect(successorAtCleanUp(path, run.record.runner)).toBeUndefined();
     const late = liveProcess();
     expect(() => recordSuccessor(path, late)).toThrow(/cleanup has started/);
     expect(readRecord(path)?.successor).toEqual(late);
@@ -176,12 +179,35 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     const run = aRun(liveProcess());
     const path = recordPath(run.records, run.record.run);
     // The worker has read the record; the runner's cleanup then runs to the end.
-    expect(successorAtCleanUp(path)).toBeUndefined();
+    expect(successorAtCleanUp(path, run.record.runner)).toBeUndefined();
     expect(cleanUp(run.records, run.record, run.reset)).toEqual([]);
     expect(existsSync(path)).toBe(false);
     // The worker's save puts the record it read back, and its check must still see the cleanup.
     saveRecord(run.records, run.record);
     expect(() => recordSuccessor(path, liveProcess())).toThrow(/cleanup has started/);
+  });
+
+  it("still refuses a newer build whose test read the record before a later run removed the cleanup's mark", () => {
+    // The worker has read the record; the runner cleans up and exits, and a later run
+    // removes the mark once that runner is proven gone.
+    const run = aRun(deadProcess());
+    const path = recordPath(run.records, run.record.run);
+    expect(successorAtCleanUp(path, run.record.runner)).toBeUndefined();
+    expect(cleanUp(run.records, run.record, run.reset)).toEqual([]);
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(existsSync(`${path}.closing`)).toBe(false);
+    // The worker's save puts the record it read back, and its check must still refuse.
+    saveRecord(run.records, run.record);
+    expect(() => recordSuccessor(path, liveProcess())).toThrow(/cleanup has started/);
+  });
+
+  it("names the runner in a cleanup mark written after the record was removed, so a later run can remove it", () => {
+    const run = aRun(deadProcess());
+    const path = recordPath(run.records, run.record.run);
+    rmSync(path);
+    expect(successorAtCleanUp(path, run.record.runner)).toBeUndefined();
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(existsSync(`${path}.closing`)).toBe(false);
   });
 
   it("removes a finished run's cleanup mark once its runner is proven gone, and keeps a live runner's", () => {
@@ -192,7 +218,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     ] as const) {
       const record: RunRecord = { run, runner, instances: [], host: null, dirs: [] };
       saveRecord(records, record);
-      successorAtCleanUp(recordPath(records, run));
+      successorAtCleanUp(recordPath(records, run), runner);
       expect(cleanUp(records, record, () => undefined)).toEqual([]);
     }
     recoverDeadRuns(
@@ -209,7 +235,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     const path = recordPath(run.records, run.record.run);
     const successor = liveProcess();
     recordSuccessor(path, successor);
-    expect(successorAtCleanUp(path)).toEqual(successor);
+    expect(successorAtCleanUp(path, run.record.runner)).toEqual(successor);
     const problems = cleanUp(run.records, { ...run.record, successor }, run.reset);
     expect(problems).toEqual([]);
     expect(processState(successor.pid, successor.identity, processIdentity)).toBe("dead");

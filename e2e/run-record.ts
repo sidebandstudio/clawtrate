@@ -106,18 +106,29 @@ const closingPath = (path: string) => `${path}.closing`;
  * throws, and the caller never releases the build, or the cleanup reads the
  * build in the record and stops it.
  */
-export function recordSuccessor(path: string, successor: Proc): void {
+export function recordSuccessor(
+  path: string,
+  successor: Proc,
+  identify: Identify = processIdentity,
+): void {
   const record = readRecord(path);
   if (!record) throw new Error(`${path} is not a run record`);
   saveRecord(dirname(path), { ...record, successor });
-  if (existsSync(closingPath(path)))
+  // A later run removes the mark only once the runner is dead, so with no mark a live runner
+  // means the cleanup has yet to start and will read the build.
+  if (
+    existsSync(closingPath(path)) ||
+    processVerdict(record.runner.pid, record.runner.identity, identify).state === "dead"
+  )
     throw new Error("the run's cleanup has started, so the newer build may not start");
 }
 
-/** Starts the run's cleanup for newer builds, then returns the one a test recorded, if any. */
-export function successorAtCleanUp(path: string): Proc | undefined {
-  const record = readRecord(path);
-  writeFileSync(closingPath(path), JSON.stringify(record?.runner ?? null));
+/**
+ * Starts the run's cleanup for newer builds, then returns the one a test recorded, if any.
+ * The runner calls it with itself, so the mark names it even when the record is already gone.
+ */
+export function successorAtCleanUp(path: string, runner: Proc): Proc | undefined {
+  writeFileSync(closingPath(path), JSON.stringify(runner));
   return readRecord(path)?.successor;
 }
 

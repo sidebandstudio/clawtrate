@@ -354,7 +354,7 @@ async function macSetup(app: string, domain: string) {
   const cleanUpOnce = () => {
     if (cleaned) return cleaned;
     // A test may have recorded a newer build it started on the same data folder.
-    const successor = successorAtCleanUp(recordPath(RECORDS, record.run));
+    const successor = successorAtCleanUp(recordPath(RECORDS, record.run), record.runner);
     if (successor) record.successor = successor;
     return (cleaned = cleanUp(RECORDS, record, reset));
   };

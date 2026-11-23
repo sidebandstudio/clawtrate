@@ -51,6 +51,22 @@ describe("a quit's deadline", () => {
     expect(ask).toHaveBeenCalledTimes(1);
   });
 
+  it("counts the time asking took toward the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let result: boolean | undefined;
+    // Asking takes 40 ms, as a slow taskkill can on Windows.
+    void quitWithin(
+      () => vi.advanceTimersByTime(40),
+      never,
+      async () => undefined,
+      60,
+    ).then((quit) => (result = quit));
+    await vi.advanceTimersByTimeAsync(19);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBe(false);
+  });
+
   it("returns at the deadline though the disconnect never settles, so a forced quit can follow", async () => {
     vi.useFakeTimers();
     let result: boolean | undefined;
