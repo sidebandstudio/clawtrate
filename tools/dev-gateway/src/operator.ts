@@ -55,6 +55,10 @@ export class OperatorSession {
   private readonly waiters = new Set<(event: GatewayEvent) => void>();
   private seq = 0;
   private client: GatewayClient | null = null;
+  /** Between a close and the client's own reconnect, requests wait for the next hello. */
+  private ready = false;
+  private readonly helloWaiters = new Set<() => void>();
+  private lastClose = "";
   /** This connection's device, as the gateway lists it. */
   deviceId = "";
 
@@ -132,8 +136,16 @@ export class OperatorSession {
               error: new Error("the gateway refused the connection"),
             });
           },
+          onClose: (code, reason) => {
+            // The close that dropped a live connection, not a failed reconnect after it.
+            if (session.ready) session.lastClose = `${code} ${reason}`.trim();
+            session.ready = false;
+          },
           onHelloOk: () => {
             session.client = client;
+            session.ready = true;
+            for (const wake of session.helloWaiters) wake();
+            session.helloWaiters.clear();
             settle({ ok: true });
           },
         });
@@ -153,9 +165,49 @@ export class OperatorSession {
     for (const waiter of this.waiters) waiter(entry);
   }
 
-  request<T = JsonRecord>(method: string, params: unknown = {}, timeoutMs = 60_000): Promise<T> {
-    if (!this.client) throw new Error("not connected");
-    return this.client.request<T>(method, params, { timeoutMs });
+  /**
+   * A request on this connection. The gateway's tick watch or a slow-consumer
+   * close can drop it under load, and the client reconnects by itself: a
+   * request made in that gap waits for the next hello instead of failing. Only
+   * a request the client never sent ("gateway not connected") is retried, and
+   * once. A refusal, or a close while the request was in flight, is the caller's.
+   */
+  async request<T = JsonRecord>(
+    method: string,
+    params: unknown = {},
+    timeoutMs = 60_000,
+  ): Promise<T> {
+    const client = this.client;
+    if (!client) throw new Error("not connected");
+    await this.connected(timeoutMs);
+    try {
+      return await client.request<T>(method, params, { timeoutMs });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "gateway not connected") throw error;
+      // The socket is closing and its close has not reached the client yet.
+      await this.connected(timeoutMs, true);
+      return client.request<T>(method, params, { timeoutMs });
+    }
+  }
+
+  /** Resolves with the client connected: now, or at the next hello when `next`. */
+  private connected(timeoutMs: number, next = false): Promise<void> {
+    if (this.ready && !next) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.helloWaiters.delete(wake);
+        reject(
+          new Error(
+            `not reconnected within ${timeoutMs} ms after the gateway closed (${this.lastClose || "no close seen"})`,
+          ),
+        );
+      }, timeoutMs);
+      this.helloWaiters.add(wake);
+    });
   }
 
   /** The first event, already received or still to come, that matches. */

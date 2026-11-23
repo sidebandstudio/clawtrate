@@ -246,6 +246,13 @@ importers:
       typebox:
         specifier: 1.4.6
         version: 1.4.6
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.2
+        version: 8.18.2
+      ws:
+        specifier: 8.22.2
+        version: 8.22.2
 
 packages:
 
