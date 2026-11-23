@@ -51,8 +51,6 @@
     - paragraph: Johnny
     - toolbar "Message actions":
       - button "More"
-    - group: Read IDENTITY.md 7 lines
-    - group: Edited IDENTITY.md +1 −1
     - paragraph: Johnny it is. Saved, so I'll remember.
     - toolbar "Message actions":
       - button "More"

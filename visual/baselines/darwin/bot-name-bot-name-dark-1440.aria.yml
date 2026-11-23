@@ -58,8 +58,6 @@
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - group: Read IDENTITY.md 7 lines
-    - group: Edited IDENTITY.md +1 −1
     - paragraph: Johnny it is. Saved, so I'll remember.
     - toolbar "Message actions":
       - button "Add a reaction"
