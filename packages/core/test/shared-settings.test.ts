@@ -866,7 +866,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     const client = new ClawtrateClient(testHost(pairingAtB(), storage), FAST);
     const other = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
     try {
-      const hold = holdRead(storage, "show-channel-chats");
+      const hold = holdRead(storage, "connection");
       const starting = client.start();
       await until(hold.waiting);
       await other.start({ resume: false });
@@ -886,7 +886,7 @@ describe("clients sharing a store keep each other's saved gateway", () => {
     }
   });
 
-  it("setup's Back leaves gateway B, saved while startup's read returned a stale record", async () => {
+  it("startup reads the saved gateway again when another client saved B during the read, and resumes B", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: null }),
       [tokenKey(URL_A)]: readToken("token-A"),
@@ -914,13 +914,15 @@ describe("clients sharing a store keep each other's saved gateway", () => {
       await other.connect({ url: URL_B });
       gate.resolve();
       await starting;
+      // The read returned A from before B was saved; the client reads again, and keeps B.
       await until(() => client.state.connection.status === "connected");
-      expect(client.state.connection.gatewayUrl).toBe(URL_A);
+      expect(client.state.connection.gatewayUrl).toBe(URL_B);
+      // B is the record it resumed, so setup's Back forgets it, as for any resumed gateway.
       const selection = client.nextSelection();
       await client.connectWithSetupCode({ ...setupCode, url: URL_C });
       await until(() => client.state.connection.status === "pairing");
       await client.disconnect(URL_C, selection);
-      expect(saved(storage)).toEqual({ url: URL_B, token: null });
+      expect(saved(storage)).toBeNull();
     } finally {
       gate.resolve();
       other.stop();

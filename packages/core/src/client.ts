@@ -1607,15 +1607,20 @@ export class ClawtrateClient {
     }));
     if (options.resume === false) return;
     // Startup needs to open the socket without waiting for another client's credential write.
-    // A write that lands during the read may not be in the record it returned, so only an
-    // uncontended read claims the revision it saw.
-    const before = this.writes.settingsRevision;
-    const settings = await this.savedSettings();
-    const after = this.writes.settingsRevision;
+    // A write that lands during the read may or may not be in what it returned, so the record is
+    // read again, twice at most, until no write lands across a read. Only that read claims its
+    // revision, so the record and the revision this client keeps go together.
+    let before = this.writes.settingsRevision;
+    let settings = await this.savedSettings();
+    for (let again = 0; again < 2 && before !== this.writes.settingsRevision; again += 1) {
+      before = this.writes.settingsRevision;
+      settings = await this.savedSettings();
+    }
+    const uncontended = before === this.writes.settingsRevision;
     if (stops !== this.stops || selection !== this.selectionApplied || this.settings !== prior)
       return;
     this.settings = settings;
-    this.seenRevision = before === after ? after : null;
+    this.seenRevision = uncontended ? before : null;
     if (settings && (settings.suspended || options.resume === "disconnected")) {
       this.setConnection({ status: "disconnected", gatewayUrl: settings.url });
       return;
