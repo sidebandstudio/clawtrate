@@ -1123,7 +1123,9 @@ describe("the iOS app", () => {
       waitFor({ id: "licenses" }, 20_000),
       see("Figtree"),
       see("(?s).*SIL OPEN FONT LICENSE Version 1\\.1.*"),
-      scrollTo({ text: "JetBrains Mono" }, "DOWN"),
+      // Figtree's whole license comes first: five swipes, each taking seconds
+      // more on a slow runner.
+      scrollTo({ text: "JetBrains Mono" }, "DOWN", 180_000),
     ]);
     await shoot("licenses");
     await steps("licenses-back", [
