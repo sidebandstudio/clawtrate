@@ -268,12 +268,13 @@ test("F-201: closing the viewer or reconnecting before the patch sends nothing, 
     await expect.poll(() => client.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
     await expect.poll(() => client.state.discovery.status).toBe("ready");
     expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
-    const gatewayId = client.state.checkIns!.gatewayId!;
+    // Each draft is stamped by the latest read, as the dialog's is: a Disconnect moves the host
+    // to a new target, and a draft read before it is refused.
     const draft = (saveId: string, every = "24h", was = "30m") => ({
       type: "saveCheckIn" as const,
       saveId,
       botId: "marlow",
-      gatewayId,
+      stamp: client.state.checkIns!.stamp!,
       every,
       prompt: null,
       was: { every: was, prompt: null },
@@ -310,7 +311,7 @@ test("F-201: closing the viewer or reconnecting before the patch sends nothing, 
 
     // The same two moments, ended by a reconnect instead of a closed viewer.
     const reconnect = async () => {
-      expect(client.state.checkIns?.gatewayId).toBeNull();
+      expect(client.state.checkIns?.stamp).toBeNull();
       await observer.apply({ type: "retry" });
       await expect
         .poll(() => client.state.connection.status, { timeout: 30_000 })

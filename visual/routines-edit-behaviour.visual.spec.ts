@@ -692,6 +692,98 @@ test.describe("1440", () => {
     await expect(page.getByTestId("b-announcer")).toHaveText("Changed the time zone of 1 routine");
   });
 
+  test("F-196: the zone dialog keeps the gateway it opened on: another identity on the same target can't save", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    const gatewayId = await connectionValue(page, "gatewayId");
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+    // A reconnect reports another gateway's identity, on the same target.
+    await setConnection(page, { gatewayId: "another-gateway" });
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    await setConnection(page, { gatewayId });
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  test("F-196: after the Disconnect that keeps the gateway, then Reconnect, a zone dialog opened before can't save", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+    type Fixture = {
+      clawtrateFixture: {
+        invoke: (command: { type: string }) => Promise<unknown>;
+        getState: () => ClawtrateState;
+      };
+    };
+    const connection = () =>
+      page.evaluate(() => {
+        const { status, target } = (window as unknown as Fixture).clawtrateFixture.getState()
+          .connection;
+        return { status, target };
+      });
+    const before = (await connection()).target;
+    // The host's own commands, as Settings sends them: the target moves on, and stays there.
+    await page.evaluate(async () => {
+      const fixture = (window as unknown as Fixture).clawtrateFixture;
+      await fixture.invoke({ type: "suspend" });
+      await fixture.invoke({ type: "retry" });
+    });
+    await expect.poll(async () => (await connection()).status).toBe("connected");
+    expect((await connection()).target).toBeGreaterThan(before);
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  test("F-196: a zone change whose result can't be read back any more says it is unknown and can be closed", async ({
+    page,
+  }) => {
+    await open(page, `${ADMIN}&save=noanswer&routinehold=routine-backup`);
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+          ).clawtrateFixture.sent.some((each) => each.type === "updateRoutine"),
+        ),
+      )
+      .toBe(true);
+    // The person connects again before the write's result is read back: a new target.
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, target: state.connection.target + 1 },
+      })),
+    );
+    const release = () =>
+      page.evaluate(() =>
+        (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+      );
+    await expect(async () => {
+      await release();
+      await expect(dialog).toContainText("whether it took effect is unknown", { timeout: 500 });
+    }).toPass();
+    await expect(dialog).not.toContainText("Changed Nightly backup check");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
   test("F-196: a zone change changes nothing when it can't list all of a bot's routines, and says so", async ({
     page,
   }) => {

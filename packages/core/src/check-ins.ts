@@ -15,6 +15,7 @@
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { GatewayStamp } from "./types.ts";
 
 /** The longest prompt kept and edited here; a longer one is shown cut and left as it is. */
 export const MAX_CHECKIN_PROMPT_CHARS = 4_000;
@@ -88,8 +89,11 @@ export type CheckInSave = {
 export type CheckInsState = {
   status: "loading" | "ready" | "error";
   error: string | null;
-  /** The identity (`gateway.identity.get`) of the gateway this was read from; null once its connection closed. */
-  gatewayId: string | null;
+  /**
+   * Where this was read: the gateway's identity (`gateway.identity.get`) and the host's target.
+   * Null once its connection closed.
+   */
+  stamp: GatewayStamp | null;
   /** `cron.status` `enabled`: false means no scheduled check-in runs; null when not read. */
   scheduler: boolean | null;
   /** The bot IDs covered by the last job and settings read. */
@@ -101,7 +105,9 @@ export type CheckInsState = {
   save: CheckInSave | null;
 };
 
-export type CheckInRead = Pick<CheckInsState, "gatewayId" | "jobs" | "settings" | "defaults">;
+export type CheckInRead = Pick<CheckInsState, "jobs" | "settings" | "defaults"> & {
+  stamp: GatewayStamp;
+};
 
 /** A bot another save also writes, at the cadence it inherits now. */
 export type CheckInKept = { botId: string; every: string };
@@ -111,10 +117,10 @@ export type CheckInKept = { botId: string; every: string };
  * as they were ("" prompt: the default's). `was` is the bot's own setting the
  * draft started from, and `kept` the other bots the dialog said it would also
  * write: if the gateway's config no longer matches them, nothing is written.
- * `gatewayId` is the gateway the draft was made on; no other is written.
+ * `stamp` is where the draft was read; nothing is written anywhere else.
  */
 export type CheckInDraft = {
-  gatewayId: string;
+  stamp: GatewayStamp;
   every: string | null;
   prompt: string | null;
   was: { every: string | null; prompt: string | null };
@@ -131,6 +137,8 @@ export type CheckInsContext = {
   link(): CheckInsLink;
   /** The current connection's gateway identity, once `gateway.identity.get` answered; null if it gave none. */
   gateway(): Promise<string | null>;
+  /** The host's target now (`ConnectionState.target`). */
+  target(): number;
   /** Marks a read begun; the check turns false once a later one begins, and its answer is then not shown. */
   begin(): () => boolean;
   get(): CheckInsState | undefined;
@@ -324,7 +332,7 @@ function shows(jobs: readonly CheckInJob[], botId: string, every: string): boole
 const emptyState = (): CheckInsState => ({
   status: "loading",
   error: null,
-  gatewayId: null,
+  stamp: null,
   scheduler: null,
   readBotIds: [],
   jobs: [],
@@ -441,19 +449,22 @@ export async function loadCheckIns(
   const latest = ctx.begin();
   // What is read is tied to the gateway that answered, so a draft is never carried to another.
   try {
+    // The target before any wait: one raised meanwhile closed this link too.
+    const target = ctx.target();
     const gatewayId = await ctx.gateway();
     const next = await read(ctx, link);
-    if (!link.alive() || !latest()) return null;
+    if (!link.alive() || !latest() || ctx.target() !== target) return null;
+    const stamp = { gatewayId, target };
     ctx.set({
       ...(ctx.get() ?? emptyState()),
       ...shown(next),
-      gatewayId,
+      stamp,
       status: "ready",
       error: null,
     });
     if (!botId || gatewayId === null || next.settings === null) return null;
     return {
-      gatewayId,
+      stamp,
       jobs: next.jobs.filter((job) => job.botId === botId),
       settings: next.settings.filter((setting) => setting.botId === botId),
       defaults: next.defaults,
@@ -596,9 +607,12 @@ export async function saveCheckIn(
     throw new Error("invalid check-in cadence");
   const link = ctx.link();
   if (!link.alive()) throw new Error("Not connected to the gateway.");
+  // The host's own guard checked the draft's stamp before this; the link it holds from here on
+  // closes with any change of target.
   const here = await ctx.gateway();
-  if (!link.alive()) throw new Error("The connection changed before the change was sent.");
-  if (here === null || here !== draft.gatewayId)
+  if (!link.alive() || ctx.target() !== draft.stamp.target)
+    throw new Error("The connection changed before the change was sent.");
+  if (here === null || here !== draft.stamp.gatewayId)
     throw new Error("This change was made for another gateway, so nothing was sent.");
   if (ctx.get()?.save?.status === "saving") throw new Error("A save is under way.");
   const settle = (status: CheckInSave["status"], error: string | null, loading = false) => {
@@ -615,7 +629,7 @@ export async function saveCheckIn(
       ctx.set({
         ...(ctx.get() ?? emptyState()),
         ...shown(snapshot),
-        gatewayId: here,
+        stamp: draft.stamp,
         status: "ready",
         error: null,
       });

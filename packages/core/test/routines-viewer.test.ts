@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { fieldsOf, parseRoutine } from "../src/routines.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { grantingGateway, openTask, URL_A } from "./client-harness.ts";
+import { grantingGateway, openTask, stampOn, URL_A } from "./client-harness.ts";
 import { deferred, memoryStorage, tokenKey, until } from "./fake-gateway.ts";
 
 const adminStorage = () =>
@@ -122,7 +122,7 @@ describe("a zone change's read-back from a viewer behind the host", () => {
     await reconnect();
     // The viewer has not seen the new gateway yet, and names the one it wrote to.
     await expect(
-      viewer.apply({ type: "readRoutine", id: JOB, gateway: "gateway-1" }),
+      viewer.apply({ type: "readRoutine", id: JOB, stamp: stampOn("gateway-1", client) }),
     ).rejects.toThrow("Another gateway is connected now");
     expect(gateway.calls("cron.get")).toHaveLength(0);
     viewer.dispose();
@@ -133,7 +133,11 @@ describe("a zone change's read-back from a viewer behind the host", () => {
     const { gateway, client, viewer, reconnect } = await switched();
     const held = deferred<unknown>();
     gateway.handlers["cron.get"] = () => held.promise;
-    const read = viewer.apply({ type: "readRoutine", id: JOB, gateway: "gateway-1" });
+    const read = viewer.apply({
+      type: "readRoutine",
+      id: JOB,
+      stamp: stampOn("gateway-1", client),
+    });
     void read.catch(() => {});
     await until(() => gateway.calls("cron.get").length === 1);
     await reconnect();
@@ -159,7 +163,7 @@ describe("the editor's check of a save in doubt, from a viewer behind the host",
         type: "checkRoutineCreate",
         key: "draft-1",
         input: fieldsOf(parseRoutine(job())!),
-        gateway: "gateway-1",
+        stamp: stampOn("gateway-1", client),
       }),
     ).rejects.toThrow("Another gateway is connected now");
     expect(gateway.calls("cron.list")).toHaveLength(lists);
