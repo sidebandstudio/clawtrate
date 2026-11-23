@@ -102,9 +102,20 @@ describe("on OpenClaw 2026.10.6", () => {
     const lib = readdirSync(new URL("../lib/", import.meta.url))
       .map((file) => read(`../lib/${file}`))
       .join("\n");
-    const methods = [...lib.matchAll(/dispatchGatewayMethod\(\s*"([^"]+)"/g)].map((m) => m[1]);
-    expect(new Set(methods)).toEqual(new Set(["agents.list", "config.get", "config.patch"]));
+    // Any first argument, so a method named through a variable shows up too.
+    const methods = [...lib.matchAll(/dispatchGatewayMethod\(\s*([^,)]+)/g)].map((m) =>
+      m[1]!.trim(),
+    );
+    expect(new Set(methods)).toEqual(new Set(['"agents.list"', '"config.get"', '"config.patch"']));
     expect(lib.match(/options\.effects/g)).toHaveLength(1);
+    // Options are read by name only, so no other name can carry an Apply in.
+    expect(lib).not.toMatch(/\boptions\s*\[/);
+    expect([...lib.matchAll(/\{([\w\s,]*)\}\s*=\s*options\b/g)].map((m) => m[1]!.trim())).toEqual([
+      "sdk",
+    ]);
+    expect(new Set([...lib.matchAll(/\boptions\.(\w+)/g)].map((m) => m[1]))).toEqual(
+      new Set(["effects", "journal", "monotonic", "now", "store", "sweepIntervalMs", "versions"]),
+    );
   });
 });
 
@@ -325,6 +336,46 @@ describe("Apply and the journal", () => {
     expect(gateway.writes).toEqual([]);
   });
 
+  it("recovery keeps a field with no conditional write unavailable, as the worker does", async () => {
+    const { host, open } = applying();
+    const p = await seed(host, { name: "Scout", label: "Helper" });
+    // The worker stops right before its own settle.
+    const settle = host.store.hold("ledger", "cas", (value) => {
+      const state = (value as Ledger)?.proposals?.[p.id]?.state;
+      return Boolean(state) && state !== "committing";
+    });
+    void accept(host, p);
+    await settle.reached;
+    settle.drop();
+    const restarted = open();
+    await restarted.start();
+    expect(await entryOf(restarted, p.id)).toMatchObject({
+      state: "partial",
+      outcome: { name: "unavailable", label: "applied" },
+    });
+  });
+
+  it("a worker whose claim recovery settled between fields writes nothing more", async () => {
+    const { host, open, gateway } = applying();
+    const p = await seed(host, { label: "Helper", effort: "high" });
+    // Holds the worker's ledger read right before its next write, after the label landed.
+    let armed = false;
+    const next = host.store.hold("ledger", "read", () => {
+      const hit = armed;
+      armed = false;
+      return hit;
+    });
+    gateway.faults.after = (step) => {
+      if (step === "label") armed = true;
+    };
+    const answer = accept(host, p);
+    await next.reached;
+    await open().records.settleAbandoned();
+    next.release();
+    expect((await answer).payload).toMatchObject({ state: "partial" });
+    expect(gateway.writes.map((w) => w.step)).toEqual(["label"]);
+  });
+
   it("settling counts a step applied only when its journal entry is attached", () => {
     const l = L.emptyLedger();
     const id = `p_${"1".repeat(32)}`;
@@ -335,7 +386,16 @@ describe("Apply and the journal", () => {
       T,
     );
     L.claimForApply(l, id, "d", T, { by: null, epoch: "e", steps: ["label"] });
-    expect(L.settleClaim(l, "proposal", id, 1, { outcome: { label: "applied" } }, T)).toEqual({
+    expect(
+      L.settleClaim(
+        l,
+        "proposal",
+        id,
+        1,
+        { outcome: { label: "applied" }, observed: undefined },
+        T,
+      ),
+    ).toEqual({
       state: "unknown",
       outcome: { label: "unknown" },
     });
@@ -399,6 +459,39 @@ describe("Apply and the journal", () => {
       false,
       {},
     ]);
+  });
+
+  it("a retention run clears only its own deletion mark, so a concurrent run's mark survives a failed delete", async () => {
+    const { host, journal } = applying();
+    const old = keyOf(`p_${"2".repeat(32)}`, "label");
+    await host.records.transact((l) => {
+      l.journal = { [old]: { at: T - L.JOURNAL_RETAIN_MS, target: "b:1:label", digest: "d" } };
+      l.journalDeleting = ["j:pending"];
+    });
+    for (const key of ["j:pending", old]) journal.rows.set(key, { json: "{}", rev: 0 });
+    // Run B finishes the pending deletion and is held at clearing its mark.
+    let first = true;
+    const clear = host.store.hold("ledger", "cas", (value) => {
+      const hit = first && !(value as Ledger)?.journalDeleting;
+      if (hit) first = false;
+      return hit;
+    });
+    const b = host.records.journalRetention();
+    await clear.reached;
+    // Run A finishes the same deletion, marks the expired row, and stops while deleting it.
+    const mark = host.store.hold("ledger", "cas", (value) =>
+      Boolean((value as Ledger)?.journalDeleting?.includes(old)),
+    );
+    const a = host.records.journalRetention().catch((error: Error) => error.message);
+    await mark.reached;
+    journal.faults.failNextDelete = true;
+    mark.release();
+    expect(await a).toBe("the delete failed");
+    clear.release();
+    await b;
+    expect((await host.records.ledger()).journalDeleting).toEqual([old]);
+    expect(await host.records.journalRetention()).toContain(old);
+    expect(journal.rows.has(old)).toBe(false);
   });
 });
 

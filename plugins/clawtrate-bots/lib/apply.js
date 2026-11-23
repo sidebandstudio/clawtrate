@@ -85,7 +85,13 @@ export async function accept(records, effects, { id, digest, by, gateway, deadli
   let writable = [];
   const claimOnce = () =>
     records.transact(
-      (l, at) => L.claimForApply(l, id, digest, at, { by, epoch: records.epoch, steps: writable }),
+      (l, at) =>
+        L.claimForApply(l, id, digest, at, {
+          by,
+          epoch: records.epoch,
+          steps: writable,
+          unavailable: steps.filter((step) => !writable.includes(step)),
+        }),
       async (l, at) => {
         const entry = L.claim(l, id, digest, at);
         body = await records.version(id, entry.digest);

@@ -306,11 +306,18 @@ export function journalUse(ledger) {
  * digest shown, the grant's generation) and one journal space per step,
  * reserved in the same transition.
  */
-export function claimForApply(ledger, id, digest, now, { by, epoch, steps }, budget) {
+export function claimForApply(
+  ledger,
+  id,
+  digest,
+  now,
+  { by, epoch, steps, unavailable = [] },
+  budget,
+) {
   const entry = claim(ledger, id, digest, now);
   if (journalUse(ledger) + steps.length > JOURNAL_MAX) throw journalFull();
   Object.assign(entry, { state: "committing", reserved: steps.length, effects: [] });
-  entry.claim = { by, at: now, attempt: 1, epoch, steps };
+  entry.claim = { by, at: now, attempt: 1, epoch, steps, unavailable };
   if (!fits(ledger, budget)) throw full();
   return entry.claim;
 }

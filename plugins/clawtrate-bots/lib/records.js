@@ -366,6 +366,8 @@ export class Records {
             i < found.length ? "applied" : i === found.length ? "unknown" : "not-applied",
           ]),
         );
+        // Fields with no conditional write were never claimed, and are reported as the worker would.
+        for (const step of entry.claim.unavailable ?? []) outcome[step] = "unavailable";
         const unknown = steps[found.length];
         const observed =
           unknown && observe ? { [unknown]: await observe(entry.bot, unknown) } : undefined;
@@ -408,8 +410,9 @@ export class Records {
 
   async deleteJournal(keys) {
     for (const key of keys) await this.journal.delete(key);
+    // Only this run's mark: a concurrent run may have marked other rows since.
     await this.transact((l) => {
-      delete l.journalDeleting;
+      if (isDeepStrictEqual(l.journalDeleting, keys)) delete l.journalDeleting;
     });
     return keys;
   }

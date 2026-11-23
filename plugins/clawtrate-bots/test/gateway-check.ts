@@ -292,7 +292,7 @@ try {
         incarnations.map((b) => ({ id: b.id, createdAt: b.createdAt })),
       );
       assert.deepEqual(await managersOf(), set.managers);
-      // The plugin's instance is replaced with its new config, and keeps answering.
+      // The managers path is a dynamic read, so the plugin's instance is kept and keeps answering.
       assert.equal((await call<Json>(op, "status")).plugin, PLUGIN);
       const narrowed = await call<{ managers: Json[] }>(op, "managers.set", { bots: [second] });
       assert.deepEqual(await managersOf(), narrowed.managers);
