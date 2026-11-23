@@ -1518,8 +1518,9 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     if (options.resume === false) return;
     const commands = this.connectionCommands;
-    const restored = Promise.withResolvers<void>();
-    this.restoring = restored.promise;
+    let restored!: () => void;
+    const restoring = new Promise<void>((resolve) => (restored = resolve));
+    this.restoring = restoring;
     let settings: ConnectionSettings | null;
     try {
       // Startup needs to open the socket without waiting for another client's credential write.
@@ -1528,8 +1529,8 @@ export class ClawtrateClient {
         return;
       this.settings = settings;
     } finally {
-      if (this.restoring === restored.promise) this.restoring = null;
-      restored.resolve();
+      if (this.restoring === restoring) this.restoring = null;
+      restored();
     }
     // A Disconnect, Suspend or Retry sent during the read decides what happens to the gateway,
     // which shows as closed until it does.
