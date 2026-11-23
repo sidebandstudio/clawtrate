@@ -756,7 +756,10 @@ export type SetupEndpointCheck = {
   /**
    * Whether the host's dialog consent still holds (its two minutes), asked just before the
    * first frame that carries a credential, a saved token's included. Once a hello is in, the
-   * consent is used and isn't asked again.
+   * consent is used and isn't asked again. On a plain `connect` it decides only whether a first
+   * pairing over the proved route asks for the six, before each such request until the gateway
+   * holds one pending, whose retries keep the six: without it the same token asks for read, as a
+   * typed address does, and the connection goes on.
    */
   consent?: () => boolean;
   /**
@@ -1123,6 +1126,8 @@ export class ClawtrateClient {
    * lost, from the moment the refusal is accepted, before its removal runs.
    */
   private fullEligible = false;
+  /** The pending request a first pairing sent the six in, with consent: its retries ask for them. */
+  private fullPending: string | null = null;
   /** This attempt's plans have used a saved token: one gone since was lost. */
   private planHadToken = false;
   /**
@@ -1589,8 +1594,13 @@ export class ClawtrateClient {
     if (settings) await this.open();
   }
 
-  /** Connect to a gateway. A token is only needed until this device is paired. */
-  async connect(options: ConnectOptions): Promise<void> {
+  /**
+   * Connect to a gateway. A token is only needed until this device is paired. `setup` is for a
+   * host's own setup only: the address form passes none. With local connect's proved sockets
+   * and the person's consent it is the route a first pairing at this computer's gateway may ask
+   * for full access on (docs/design/setup-effortless.md §3).
+   */
+  async connect(options: ConnectOptions, setup: SetupEndpointCheck = {}): Promise<void> {
     const stops = this.stops;
     const selection = ++this.selectionAsked;
     const endsAtStart = this.eligibilityEnds;
@@ -1616,7 +1626,7 @@ export class ClawtrateClient {
       this.planHadToken = false;
       if (switched) this.abandonAccessRequest("Switched to another gateway.");
       this.setupCode = null;
-      this.setupCheck = null;
+      this.setupCheck = setupCheckFor(url, setup);
       this.setupIntent = null;
       this.pairingSeen = null;
       if (stops === this.stops) await this.open();
@@ -6076,10 +6086,19 @@ export class ClawtrateClient {
       return;
     }
 
-    // Full access goes only over a protected route (`protectedGatewayUrl`): elsewhere this
-    // device asks for read, as before, and a full pairing's token there asks for read too.
+    // Full access goes only over a protected route: a protected address (`protectedGatewayUrl`),
+    // or this computer's gateway when every socket of the connection is proved (`socketsProved`,
+    // setup-effortless.md §3). Elsewhere this device asks for read, as before, and a full
+    // pairing's token there asks for read too. What a first pairing may ask for on that route
+    // is `firstPairingMayAskFull`'s. Only a plain connect's token takes the proved route: a setup
+    // code, and setup's reuse of a saved pairing, ask for read there.
     const full = this.options.fullAccess === true && !this.options.readOnly;
-    const routed = full && protectedGatewayUrl(settings.url);
+    const proved = !this.setupIntent && !this.setupCode && this.socketsProved(settings.url);
+    const routed = full && (protectedGatewayUrl(settings.url) || proved);
+    // Every socket of this connection, retries included, is the proved route's, also after
+    // setup's check ends at its first read: a full pairing's token never falls back to the
+    // host's own socket here.
+    const provedSocket = proved ? this.setupCheck?.createSocket : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
     this.fullAccess = routed && secure;
@@ -6203,9 +6222,8 @@ export class ClawtrateClient {
         current = null;
         const check = this.setupCheck?.url === settings.url ? this.setupCheck : null;
         try {
-          socket = check?.createSocket
-            ? check.createSocket(settings.url)
-            : this.host.createWebSocket(settings.url);
+          const create = check?.createSocket ?? provedSocket;
+          socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
           if (this.isSetup(settings.url)) this.dropSetupCredentials();
@@ -6953,6 +6971,15 @@ export class ClawtrateClient {
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
       if (requestId) this.pairingSeen = seen;
+      // The gateway keeps this request's six whatever a retry asks (a smaller one only refreshes
+      // it), so a first pairing that sent them with consent keeps asking for them while it waits.
+      if (
+        requestId &&
+        plan &&
+        !plan.selectedAuth.usingStoredDeviceToken &&
+        plan.scopes.some((scope) => !READ_SCOPES.includes(scope))
+      )
+        this.fullPending = seen;
       // A setup connection shows this device, the scopes it asked for and the gateway's
       // pending-devices instruction, never the request's own fields.
       const scopes =
@@ -8584,13 +8611,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * Whether every socket of the connection to `url` comes from a proved route to this computer's
+   * gateway (setup-effortless.md §3): local connect's sockets, each proved when dialled and again
+   * before its credential. The one place a proved route is named, for the full-access gate.
+   */
+  private socketsProved(url: string): boolean {
+    return this.setupCheck?.url === url && !!this.setupCheck.createSocket;
+  }
+
+  /**
+   * Whether a first pairing at `url` may ask for the six, given full access: always at a
+   * protected address; over a proved route only while the person's consent for it holds. It is
+   * asked here, before each first-pairing credential, until the first hello spends it or the
+   * gateway holds such a request pending. Full access over that route is a plain connect's alone,
+   * so a loopback setup code still starts read-only (F-509).
+   */
+  private firstPairingMayAskFull(url: string): boolean {
+    if (protectedGatewayUrl(url)) return true;
+    if (this.fullPending !== null && this.fullPending === this.pairingSeen) return true;
+    const consent = this.setupCheck?.url === url ? this.setupCheck.consent : undefined;
+    return consent?.() === true;
+  }
+
+  /**
    * The scopes a connect asks for. A read-only host asks for read. With no saved token, a
    * first pairing asks for all six with full access, and read otherwise. A saved token asks
    * for exactly what it holds, except that a setup connection reusing it asks for read.
    */
   private scopesToAsk(url: string, token: StoredDeviceToken | null): string[] {
     if (this.options.readOnly) return [...READ_SCOPES];
-    if (!token) return this.fullAccess && this.fullEligible ? [...FULL_SCOPES] : [...READ_SCOPES];
+    if (!token)
+      return this.fullAccess && this.fullEligible && this.firstPairingMayAskFull(url)
+        ? [...FULL_SCOPES]
+        : [...READ_SCOPES];
     // A full pairing's token is used for more than read only while full access holds.
     if (token.fullGrant && !this.fullAccess) return [...READ_SCOPES];
     // A setup reusing this device's saved pairing asks for read alone, as its consent says,
