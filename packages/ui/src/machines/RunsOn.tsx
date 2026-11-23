@@ -13,7 +13,17 @@ import {
   type PlacementPart,
   type PlacementParts,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
@@ -46,6 +56,56 @@ export const connectionKey = (connection: ConnectionState) =>
     connection.scopes.join(" "),
   ].join("\n");
 
+type SaveEntry = { pending: number; version: number };
+
+const EMPTY_SAVE: SaveEntry = { pending: 0, version: 0 };
+
+type PlacementSaves = {
+  entries: Record<string, SaveEntry>;
+  begin: (scope: string) => () => void;
+  versionOf: (scope: string) => number;
+};
+
+const PlacementSavesContext = createContext<PlacementSaves | null>(null);
+
+/**
+ * Tracks in-flight placement saves and completion reloads above Work, keyed by
+ * bot and gateway so closing Work keeps a save's pending state and refresh,
+ * and another gateway or bot is never affected by it.
+ */
+export function PlacementSavesProvider({ children }: { children: ReactNode }) {
+  const [entries, setEntries] = useState<Record<string, SaveEntry>>({});
+  // Mirrors each scope's latest version synchronously so reads started before a
+  // save settles are dropped immediately, before the reload render commits.
+  const versions = useRef(new Map<string, number>());
+  const versionOf = useCallback((scope: string) => versions.current.get(scope) ?? 0, []);
+  const begin = useCallback((scope: string) => {
+    setEntries((all) => {
+      const was = all[scope] ?? EMPTY_SAVE;
+      return { ...all, [scope]: { pending: was.pending + 1, version: was.version } };
+    });
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      const next = (versions.current.get(scope) ?? 0) + 1;
+      versions.current.set(scope, next);
+      setEntries((all) => {
+        const was = all[scope] ?? EMPTY_SAVE;
+        return {
+          ...all,
+          [scope]: { pending: Math.max(0, was.pending - 1), version: next },
+        };
+      });
+    };
+  }, []);
+  const value = useMemo<PlacementSaves>(
+    () => ({ entries, begin, versionOf }),
+    [entries, begin, versionOf],
+  );
+  return <PlacementSavesContext.Provider value={value}>{children}</PlacementSavesContext.Provider>;
+}
+
 /**
  * A bot's placement, its parts read when shown and again on `reload()`. A read
  * belongs to the bot and the connection's access it was made for: while another
@@ -57,32 +117,44 @@ export const connectionKey = (connection: ConnectionState) =>
  */
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
+  const saves = useContext(PlacementSavesContext);
+  const scope = `${botId}\n${connection.gatewayUrl ?? ""}`;
+  const entry = saves?.entries[scope] ?? EMPTY_SAVE;
+  const savesBegin = saves?.begin ?? null;
+  const versionOf = saves?.versionOf ?? null;
   const [held, setHeld] = useState<{
     key: string;
     parts: Partial<Placement>;
-    at: Partial<Record<PlacementPart, number>>;
+    at: Partial<Record<PlacementPart, string>>;
   } | null>(null);
-  // The latest reload asked for, as rendered.
+  // The latest local reload asked for, as rendered.
   const [generation, setGeneration] = useState(0);
   // Bumped as soon as a reload is asked, so the reads started before it are dropped at once,
   // not only once the reload's render ends them.
   const asked = useRef(0);
+  // Fallback pending count when rendered outside PlacementSavesProvider.
+  const [localWriting, setLocalWriting] = useState(0);
+  const writing = saves ? entry.pending : localWriting;
+  const version = saves ? entry.version : 0;
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const key = `${botId}\n${connectionKey(connection)}`;
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
-    const at = asked.current;
+    const at = generation;
+    const atVersion = version;
+    const stamp = `${at}:${atVersion}`;
     const keep = (name: PlacementPart, part: Partial<Placement>) =>
       live &&
       at === asked.current &&
+      (!versionOf || atVersion === versionOf(scope)) &&
       setHeld((was) => {
         const same = was?.key === key;
         return {
           key,
           parts: { ...(same ? was.parts : {}), ...part },
-          at: { ...(same ? was.at : {}), [name]: at },
+          at: { ...(same ? was.at : {}), [name]: stamp },
         };
       });
     for (const part of PLACEMENT_PARTS)
@@ -99,23 +171,22 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, key, generation]);
+  }, [bridge, botId, active, connected, key, generation, version, scope, versionOf]);
   const reload = useCallback(() => {
     asked.current += 1;
     setGeneration(asked.current);
   }, []);
-  // Saves still out, counted here and not on the page: a page opened again after Back while one
-  // is out must wait for it too.
-  const [writing, setWriting] = useState(0);
   const begin = useCallback(() => {
-    setWriting((n) => n + 1);
+    if (savesBegin) return savesBegin(scope);
+    setLocalWriting((n) => n + 1);
     let ended = false;
     return () => {
       if (ended) return;
       ended = true;
-      setWriting((n) => n - 1);
+      setLocalWriting((n) => n - 1);
+      reload();
     };
-  }, []);
+  }, [savesBegin, scope, reload]);
   // On a disconnect or another key, what was read is dropped before anything is derived.
   if (held && (!connected || held.key !== key)) setHeld(null);
   const part = <P extends PlacementPart>(name: P): Placement[P] =>
@@ -129,7 +200,8 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     inventory: part("inventory"),
     credentials: part("credentials"),
   };
-  const commandsCurrent = writing === 0 && held?.key === key && held.at.commands === generation;
+  const commandsCurrent =
+    writing === 0 && held?.key === key && held.at.commands === `${generation}:${version}`;
   return { read, reload, begin, commandsCurrent };
 }
 
@@ -380,13 +452,11 @@ export function RunsOnPage({
       // A change never sent, or a read-back that failed or shows another setting: none confirms a save.
       announce("Save not confirmed");
     } finally {
+      // Ending the save also bumps its bot-and-gateway version above Work, so any
+      // open or reopened Runs on view for that bot and gateway refreshes and waits
+      // for the new read, without touching another bot or gateway.
       done();
       if (mounted.current) setSaving(false);
-      // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
-      // keyed by bot and connection), so the Runs on row shows it even after Back. The picker
-      // waits for that read, here or on a page opened again: a second choice sent over this
-      // one's revision would be refused though nobody else changed it.
-      reload();
     }
   };
 

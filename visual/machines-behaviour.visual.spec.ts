@@ -924,6 +924,30 @@ test("F-046: a command menu opened during a workspace save closes when the save 
   await expect(select).toBeEnabled();
 });
 
+test("F-046: closing and reopening Work while a command save is out keeps the picker waiting and refreshes when it answers", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await holdAnswer(page, "setCommandMachine");
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Close Work while the write is still out, then reopen Work and Runs on.
+  await page.getByTestId("work-panel").getByRole("button", { name: "Close work panel" }).click();
+  await expect(page.getByTestId("work-panel")).toHaveCount(0);
+  const before = await commandsReads(page);
+  await page.keyboard.press("ControlOrMeta+\\");
+  await expect(page.getByTestId("work-panel")).toBeVisible();
+  await openRunsOn(page);
+  await expect.poll(() => commandsReads(page)).toBeGreaterThan(before);
+  const select = page.getByTestId("runs-on-machine");
+  await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
+  await expect(select).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { answerHeld: () => void }).answerHeld());
+  await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
+  await expect(select).toBeEnabled();
+});
+
 test("F-156: Home or End onto the checked choice saves nothing and leaves the choices usable", async ({
   page,
 }) => {
