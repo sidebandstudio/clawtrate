@@ -37,6 +37,14 @@
 #define PACKAGE_LIMIT (512 * 1024)
 #define MODULE_LIMIT (64 * 1024 * 1024)
 #define MAX_HOLDERS 16
+// A test build may skew the start the scan records, or the one (f) checks last, to show (f)
+// refuses a process whose start changed at either end.
+#ifndef PROVE_START_SKEW
+#define PROVE_START_SKEW 0
+#endif
+#ifndef PROVE_LATE_SKEW
+#define PROVE_LATE_SKEW 0
+#endif
 
 /** One path component: no separator, not "." or "..", and short. */
 static int component(const char *name) {
@@ -217,14 +225,24 @@ static int loopback(const struct in_sockinfo *ini, int local) {
            memcmp(&six->s6_addr[12], "\x7f\0\0\x01", 4) == 0;
 }
 
-/** A process's descriptors; NULL when it is gone or can't be read, with errno set. */
+/**
+ * A process's descriptors, possibly none; NULL only when it is gone or can't
+ * be read, with errno set. The size query always answers with room to spare
+ * (the kernel adds slack to its count), so 0 there is a failure. The fill
+ * answers 0 bytes both for a failure, which sets errno, and for a process with
+ * no descriptors, which leaves it alone: errno is cleared before it, so a
+ * stale one is never taken for a failure.
+ */
 static struct proc_fdinfo *descriptors(pid_t pid, int *count) {
+    *count = 0;
     int size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
     if (size <= 0) return NULL;
     size += 32 * (int)sizeof(struct proc_fdinfo);
     struct proc_fdinfo *fds = malloc((size_t)size);
-    int got = fds ? proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, size) : 0;
-    if (got <= 0) {
+    if (!fds) return NULL;
+    errno = 0;
+    int got = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, size);
+    if (got < 0 || (got == 0 && errno != 0)) {
         free(fds);
         return NULL;
     }
@@ -273,7 +291,8 @@ static int holders(int port, int localPort, pid_t *found, uint64_t *starts, cons
                 if (info.pbi_uid != geteuid() || info.pbi_ruid != geteuid()) *why = "account";
                 else if (held == MAX_HOLDERS) *why = "holder";
                 else if (held == 0 || found[held - 1] != pids[i]) {
-                    starts[held] = info.pbi_start_tvsec * 1000000ull + info.pbi_start_tvusec;
+                    starts[held] = info.pbi_start_tvsec * 1000000ull + info.pbi_start_tvusec +
+                                   PROVE_START_SKEW;
                     found[held++] = pids[i];
                 }
             }
@@ -457,8 +476,9 @@ static const char *profileFiles(int home, const char *folderName, struct stat *l
  * the module's architecture and hash, the lock and the package.json. (f) runs
  * in this order: the same process the scan saw, then the profile's gateway
  * lock and state database held open, which opens nothing; only then the
- * program it runs and its mapped module, which are opened and read. So a
- * process that isn't this profile's gateway has nothing of its opened here.
+ * program it runs and its mapped module, which are opened and read; last,
+ * the same process again. So a process that isn't this profile's gateway has
+ * nothing of its opened here, and a PID taken over midway is refused.
  */
 static int prove(int home, int privateHome, const char *folderName, int port, int localPort) {
     static char lockBytes[LOCK_LIMIT + 1];
@@ -482,6 +502,8 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
         size_t packageLength = 0;
         snprintf(packagePath, sizeof packagePath, "%s/package.json", because ? "" : root);
         if (!because) because = readSmall(packagePath, PACKAGE_LIMIT, &package, &packageLength);
+        // And still that process, so every fact above is about the one the scan saw.
+        if (!because) because = sameProcess(found[i], starts[i] + PROVE_LATE_SKEW, &info);
         if (!because) {
             int written =
                 printf("proved %d %llu %s %s %zu %zu\n", found[i],

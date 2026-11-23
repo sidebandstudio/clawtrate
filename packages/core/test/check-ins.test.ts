@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { enforce } from "../src/bounds.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
+import { FAST, grantingGateway, stampOn, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import {
   cannotKeep,
@@ -160,6 +160,7 @@ function fakeGateway(
   let admin = true;
   let reads = 0;
   const ctx: CheckInsContext = {
+    target: () => 0,
     link: () => {
       gateway.linkAlive = true;
       const alive = () => gateway.linkAlive;
@@ -207,7 +208,7 @@ function draft(
 ): CheckInDraft {
   const setting = state.settings?.find((each) => each.botId === botId);
   return {
-    gatewayId: "gw-1",
+    stamp: stampOn("gw-1"),
     every: change.every ?? null,
     prompt: change.prompt ?? null,
     was: { every: setting?.every ?? null, prompt: setting?.prompt ?? null },
@@ -495,7 +496,7 @@ describe("F-201 the patch a save writes", () => {
   it("F-201: a save is refused before anything is read or written when the gateway is not the one its draft was made on", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
-    expect(state().gatewayId).toBe("gw-1");
+    expect(state().stamp).toEqual(stampOn("gw-1"));
     const asked = draft(state(), "marlow", { every: "24h" });
     gateway.identity = "gw-2";
     const before = gateway.attempts.length;
@@ -509,21 +510,21 @@ describe("F-201 the patch a save writes", () => {
       config: { agents: { entries: { otto: {}, main: { heartbeat: { prompt: "P" } } } } },
     };
     const was = { every: null, prompt: null };
-    const gatewayId = "gw-1";
+    const stamp = stampOn("gw-1");
     expect(
-      planCheckIn("otto", { gatewayId, every: null, prompt: "Q", was, kept: [] }, config),
+      planCheckIn("otto", { stamp, every: null, prompt: "Q", was, kept: [] }, config),
     ).toMatchObject({
       patch: { agents: { entries: { otto: { heartbeat: { every: "0m", prompt: "Q" } } } } },
     });
     expect(
       planCheckIn(
         "main",
-        { gatewayId, every: null, prompt: "", was: { every: null, prompt: "P" }, kept: [] },
+        { stamp, every: null, prompt: "", was: { every: null, prompt: "P" }, kept: [] },
         config,
       ),
     ).toMatchObject({ patch: { agents: { entries: { main: { heartbeat: { prompt: null } } } } } });
     expect(
-      planCheckIn("otto", { gatewayId, every: null, prompt: null, was, kept: [] }, config),
+      planCheckIn("otto", { stamp, every: null, prompt: null, was, kept: [] }, config),
     ).toEqual({ patch: null, own: {}, expect: [] });
   });
 });
@@ -970,7 +971,7 @@ describe("F-201 a save across a connection change", () => {
 const emptyLoading: CheckInsState = {
   status: "loading",
   error: null,
-  gatewayId: null,
+  stamp: null,
   scheduler: null,
   readBotIds: [],
   jobs: [],
@@ -1065,26 +1066,27 @@ describe("F-201 a save across a real connection change", () => {
     await client.refreshCheckIns();
     return { client, gateway, world };
   }
-  const daily: CheckInDraft = {
-    gatewayId: "gw-1",
+  /** Every day for Marlow, as a dialog read on `client` from `gatewayId` drafts it. */
+  const daily = (client: ClawtrateClient, gatewayId = "gw-1"): CheckInDraft => ({
+    stamp: stampOn(gatewayId, client),
     every: "24h",
     prompt: null,
     was: { every: null, prompt: null },
     kept: [{ botId: "main", every: "30m" }],
-  };
+  });
 
   it("F-201: suspending invalidates a snapshot before reconnect reads it again", async () => {
     const { client } = await adminClient();
     try {
-      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+      expect(client.state.checkIns?.stamp?.gatewayId).toBe("gw-1");
       await client.suspend();
-      expect(client.state.checkIns?.gatewayId).toBeNull();
+      expect(client.state.checkIns?.stamp).toBeNull();
       expect(await client.refreshCheckIns("marlow")).toBeNull();
       await client.retryNow();
       await until(() => client.state.connection.status === "connected");
-      expect(client.state.checkIns?.gatewayId).toBeNull();
+      expect(client.state.checkIns?.stamp).toBeNull();
       expect(await client.refreshCheckIns("marlow")).not.toBeNull();
-      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+      expect(client.state.checkIns?.stamp?.gatewayId).toBe("gw-1");
     } finally {
       client.stop();
     }
@@ -1094,7 +1096,7 @@ describe("F-201 a save across a real connection change", () => {
     const { client } = await adminClient(true);
     try {
       expect(client.state.connection.gatewayId).toBeNull();
-      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+      expect(client.state.checkIns?.stamp?.gatewayId).toBe("gw-1");
     } finally {
       client.stop();
     }
@@ -1102,13 +1104,13 @@ describe("F-201 a save across a real connection change", () => {
 
   it("F-201: a reconnect between the read and the patch sends nothing on the new connection", async () => {
     const { client, gateway, world } = await adminClient();
-    expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+    expect(client.state.checkIns?.stamp?.gatewayId).toBe("gw-1");
     gateway.handlers["cron.status"] = () => {
       gateway.handlers["cron.status"] = () => ({ enabled: false });
       gateway.dropAll();
       return { enabled: false };
     };
-    await client.saveCheckIn("s1", "marlow", daily);
+    await client.saveCheckIn("s1", "marlow", daily(client));
     expect(client.state.checkIns?.save).toMatchObject({
       status: "failed",
       error: expect.stringMatching(/connection changed/),
@@ -1123,16 +1125,20 @@ describe("F-201 a save across a real connection change", () => {
     world.identity = "gw-2";
     gateway.dropAll();
     // Until the new connection says which gateway it is, what is shown belongs to none.
-    await until(() => client.state.checkIns?.gatewayId === null);
+    await until(() => client.state.checkIns?.stamp === null);
     await until(
       () => client.state.connection.status === "connected" && client.state.connection.canAdmin,
     );
-    await expect(client.saveCheckIn("s1", "marlow", daily)).rejects.toThrow(/another gateway/);
+    await expect(client.saveCheckIn("s1", "marlow", daily(client))).rejects.toThrow(
+      /another gateway/,
+    );
     await client.refreshCheckIns();
-    expect(client.state.checkIns?.gatewayId).toBe("gw-2");
-    await expect(client.saveCheckIn("s2", "marlow", daily)).rejects.toThrow(/another gateway/);
+    expect(client.state.checkIns?.stamp?.gatewayId).toBe("gw-2");
+    await expect(client.saveCheckIn("s2", "marlow", daily(client))).rejects.toThrow(
+      /another gateway/,
+    );
     expect(world.patches).toBe(0);
-    await client.saveCheckIn("s3", "marlow", { ...daily, gatewayId: "gw-2" });
+    await client.saveCheckIn("s3", "marlow", daily(client, "gw-2"));
     expect(world.patches).toBe(1);
     client.stop();
   });

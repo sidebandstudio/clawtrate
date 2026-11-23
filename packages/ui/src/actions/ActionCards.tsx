@@ -5,6 +5,7 @@
 
 import { StepFileLinks } from "../work/links.tsx";
 import {
+  actionsLineOf,
   actionWords,
   foldLineOf,
   isOpenOutcome,
@@ -869,21 +870,22 @@ export function ThoughtLine({
 // The run line -------------------------------------------------------------------------
 
 /**
- * "4 actions": the action cards of history that names no run, behind one line
- * of their own while commands are not shown (7.11). Kept open as a run line is.
+ * "4 actions · 1 failed": the action cards of history that names no run, behind
+ * one line of their own while commands are not shown (7.11), counted as a run
+ * line counts them. Kept open as a run line is.
  */
 export function ActionsLine({
   id,
-  count,
+  calls,
   children,
 }: {
   id: string;
-  count: number;
+  calls: ActionCall[];
   children: ReactNode;
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(id), false);
-  const words = actionWords.RUN_LINE.actions(count);
+  const words = actionsLineOf(calls, env.ctx);
   return (
     <details
       className="run-line"
