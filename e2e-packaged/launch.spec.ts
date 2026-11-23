@@ -61,6 +61,8 @@ const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
 const SANDBOX = process.env.CLAWTRATE_PACKAGED_SANDBOX!;
 const RECORD = process.env.CLAWTRATE_PACKAGED_RECORD ?? "";
+/** Where the runner writes the first app's exit status once it has reaped it. */
+const APP_EXIT = process.env.CLAWTRATE_PACKAGED_EXIT ?? "";
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -408,8 +410,8 @@ function runEndpoint() {
   return endpoint;
 }
 
-test("pairs with its own development gateway instance and shows the seeded bots", async () => {
-  test.skip(WINDOWS, NO_GATEWAY);
+/** Pairs the app global setup started with the run's instance, from its connect screen. */
+async function pair(): Promise<void> {
   const endpoint = runEndpoint();
 
   await page.getByPlaceholder("Gateway address").fill(endpoint.url);
@@ -431,6 +433,11 @@ test("pairs with its own development gateway instance and shows the seeded bots"
     "Otto",
     "Pip",
   ]);
+}
+
+test("pairs with its own development gateway instance and shows the seeded bots", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
+  await pair();
   await page.getByRole("button", { name: /^Otto, \d+ tasks?/ }).click();
   await page
     .getByRole("list", { name: "Otto's tasks" })
@@ -570,9 +577,14 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   test.skip(WINDOWS, NO_GATEWAY);
   test.setTimeout(300_000);
   const gateway = join(USER_DATA, "gateway");
-  const key = readFileSync(join(gateway, "device-key.pem"));
   const state = () =>
     JSON.parse(readFileSync(join(gateway, "state.json"), "utf8")) as Record<string, string>;
+  const paired = () =>
+    existsSync(join(gateway, "state.json")) &&
+    Object.keys(state()).some((name) => name.startsWith("deviceToken:"));
+  // Run alone (`--grep`), no earlier test has paired the app.
+  if (!paired()) await pair();
+  const key = readFileSync(join(gateway, "device-key.pem"));
   const before = state();
   expect(before.connection).toBeTruthy();
   expect(Object.keys(before).some((name) => name.startsWith("deviceToken:"))).toBe(true);
@@ -593,13 +605,10 @@ test("opens with the same pairing and tasks after a newer build takes its place"
   // with the teardown's own bounds: 15 seconds for the app, 10 for its helpers.
   // Asked while the debugging client is attached, as the teardown asks; the
   // 15 seconds start at SIGTERM, and closing that client runs alongside.
+  // Gone once the runner that started the app has reaped it and written how it ended.
   const firstGone = async () => {
     for (const end = Date.now() + 20_000; Date.now() < end; await sleep(100)) {
-      // The runner that started the app reaps it; until then `ps` shows a zombie.
-      const state = spawnSync("ps", ["-o", "stat=", "-p", String(APP_PID)], {
-        encoding: "utf8",
-      }).stdout.trim();
-      if (!state || state.startsWith("Z")) return;
+      if (existsSync(APP_EXIT)) return;
     }
     await new Promise(() => undefined);
   };
@@ -610,6 +619,11 @@ test("opens with the same pairing and tasks after a newer build takes its place"
     15_000,
   );
   expect(firstQuit, "the app quits within 15 seconds, as an update asks it").toBe(true);
+  // A crash on the way out (SIGSEGV, another code) is not the quit an update asks for.
+  expect(
+    JSON.parse(readFileSync(APP_EXIT, "utf8")),
+    "the app quits cleanly, as an update asks it",
+  ).toEqual({ code: 0, signal: null });
   // From the app's exit: its helpers' own 10 seconds.
   await expect
     .poll(() => processesUsing(USER_DATA), {
@@ -739,8 +753,9 @@ test("opens with the same pairing and tasks after a newer build takes its place"
       status.code === 0,
       `the newer build quits cleanly, not with ${JSON.stringify(status)}`,
     ).toBe(true);
-    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
+    // First, so a helper that could not be ended names why it is still listed.
     expect(unsignalled, "every helper left could be ended").toEqual([]);
+    expect(left, "the newer build's helpers end within 10 seconds of it").toEqual([]);
   }
 });
 
