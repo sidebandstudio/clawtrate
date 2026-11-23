@@ -2,6 +2,7 @@
 // browser-safe protocol client, with transport, storage and signing injected.
 
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
+import { readVoice, setVoice, VOICE_GET_METHOD } from "./voice.ts";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
@@ -1308,6 +1309,8 @@ export class ClawtrateClient {
   private readonly toolReads = new Map<string, { again: boolean }>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
+  /** Whether the last hello listed the voice plugin's methods. */
+  private voicePlugin = false;
   /** File content on its way to viewers, in chunks (`files.ts`): nothing else of a file is kept. */
   private readonly fileTransfers = new FileTransfers(() => this.now());
   /** File lists and reads in flight (`MAX_FILE_READS`). */
@@ -5414,6 +5417,18 @@ export class ClawtrateClient {
     );
   }
 
+  /** Whether every bot is told to write plainly, as the voice plugin says (`clawtrate-voice.get`). */
+  readVoice() {
+    return readVoice((method, params) => this.request(method, params), this.voicePlugin);
+  }
+
+  /** Turn the plain voice on or off for every bot (`clawtrate-voice.set`, admin), as read back. */
+  async setVoice(plain: boolean) {
+    if (this.options.readOnly || !this.state.connection.canAdmin)
+      throw new Error("Changing how bots talk requires admin access.");
+    return setVoice((method, params) => this.request(method, params), plain);
+  }
+
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
   listTaskFiles(key: string, options: FileReadOptions = {}): Promise<TaskFileList> {
     return this.fileRead((ctx) => listTaskFiles(ctx, key), options);
@@ -6951,9 +6966,11 @@ export class ClawtrateClient {
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
     const methods = asRecord(hello.features)?.methods;
-    this.computer.hello(
-      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
-    );
+    const listed = Array.isArray(methods)
+      ? methods.filter((m): m is string => typeof m === "string")
+      : [];
+    this.voicePlugin = listed.includes(VOICE_GET_METHOD);
+    this.computer.hello(listed);
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;

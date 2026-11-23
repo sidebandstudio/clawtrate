@@ -1,0 +1,6 @@
+{
+  "plugin": "clawtrate-voice",
+  "settings": {},
+  "tools": [],
+  "hooks": { "allowConversationAccess": true }
+}

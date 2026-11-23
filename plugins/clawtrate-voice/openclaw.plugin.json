@@ -1,0 +1,12 @@
+{
+  "id": "clawtrate-voice",
+  "name": "Clawtrate voice",
+  "description": "Tells every bot to write to its person plainly, with no em dashes, unless a person turns it off. Not made by or affiliated with OpenClaw.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

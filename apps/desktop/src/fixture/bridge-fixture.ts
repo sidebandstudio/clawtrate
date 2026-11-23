@@ -31,6 +31,7 @@ import {
   type RunRawRead,
   type TaskActivity,
   type Transcript,
+  type VoiceSetting,
   hasUnsettledWork,
   NOT_OPEN_IN_VIEW,
 } from "@clawtrate/core";
@@ -630,6 +631,12 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
+  // The voice plugin as a gateway with it loaded answers: on until turned off.
+  let voice: Extract<VoiceSetting, { plugin: true }> = {
+    plugin: true,
+    plain: true,
+    reachesBots: true,
+  };
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand): Promise<unknown> {
@@ -652,6 +659,15 @@ export function createFixtureBridge(
       if (command.type === "writeMemory" && !state.connection.canAdmin)
         throw new Error("Changing memory requires admin access.");
       return memory(command);
+    }
+    if (command.type === "readVoice" || command.type === "setVoice") {
+      sent.push(command);
+      if (command.type === "setVoice") {
+        if (!state.connection.canAdmin)
+          throw new Error("Changing how bots talk requires admin access.");
+        voice = { ...voice, plain: command.plain };
+      }
+      return voice;
     }
     const routine = routineCommand(command, () => state, set);
     if (routine) {

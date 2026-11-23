@@ -415,6 +415,27 @@ describe("the plugin opening", () => {
       );
     });
 
+    it("grants a plugin's hooks conversation access only as exactly declared, and writes it into its entry", () => {
+      const hooks = { allowConversationAccess: true };
+      expect(check({ ...base, hooks })).toEqual([]);
+      for (const bad of [
+        true,
+        { allowConversationAccess: false },
+        { allowPromptInjection: true },
+        { ...hooks, allowPromptInjection: true },
+      ]) {
+        refused({ ...base, hooks: bad }, /hooks must be exactly/);
+      }
+      const { checkout, root } = checkoutWithFixture();
+      const additionPath = join(root, "hello-tool", ADDITION_FILE);
+      const addition = JSON.parse(readFileSync(additionPath, "utf8"));
+      writeFileSync(additionPath, JSON.stringify({ ...addition, hooks }));
+      const granted = loadDevPlugin("hello-tool", checkout, PLUGIN_RULE);
+      expect(granted.conversationHooks).toBe(true);
+      expect(pluginEntry(granted, stateFolder(), 9).hooks).toEqual(hooks);
+      expect(pluginEntry(plugin(), stateFolder(), 9)).not.toHaveProperty("hooks");
+    });
+
     it("keeps the development config's own plugin entries for itself", () => {
       expect(
         additionProblems({ plugin: "ollama" }, { manifestId: "ollama", ...PLUGIN_RULE }),

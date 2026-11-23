@@ -5,6 +5,7 @@
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
 import { utf8Length } from "./encoding.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
+import type { VoiceSetting } from "./voice.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -178,6 +179,9 @@ export type BridgeCommand =
   | { type: "readTaskFile"; key: string; path: string }
   | { type: "listMemory"; botId: string }
   | { type: "readMemory"; botId: string; path: string }
+  /** Whether every bot is told to write plainly (plugins/clawtrate-voice), and turning it on or off. */
+  | { type: "readVoice" }
+  | { type: "setVoice"; plain: boolean }
   | {
       type: "writeMemory";
       botId: string;
@@ -551,20 +555,26 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                                                 }
                                                                                               ? CheckInRead | null
                                                                                               : C extends {
-                                                                                                    type: "listMemory";
+                                                                                                    type:
+                                                                                                      | "readVoice"
+                                                                                                      | "setVoice";
                                                                                                   }
-                                                                                                ? MemoryList
+                                                                                                ? VoiceSetting
                                                                                                 : C extends {
-                                                                                                      type: "readMemory";
+                                                                                                      type: "listMemory";
                                                                                                     }
-                                                                                                  ? MemoryDocument
+                                                                                                  ? MemoryList
                                                                                                   : C extends {
-                                                                                                        type:
-                                                                                                          | "checkRoutineCreate"
-                                                                                                          | "checkRoutineUpdate";
+                                                                                                        type: "readMemory";
                                                                                                       }
-                                                                                                    ? RoutineSaveCheck
-                                                                                                    : void;
+                                                                                                    ? MemoryDocument
+                                                                                                    : C extends {
+                                                                                                          type:
+                                                                                                            | "checkRoutineCreate"
+                                                                                                            | "checkRoutineUpdate";
+                                                                                                        }
+                                                                                                      ? RoutineSaveCheck
+                                                                                                      : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1349,6 +1359,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readTaskFile":
     case "readCheckoutDiff":
       return { type: command.type, key: sessionKey(command.key), path: filePath(command.path) };
+    case "readVoice":
+      return { type: "readVoice" };
+    case "setVoice":
+      if (typeof command.plain !== "boolean") throw new Error("invalid voice setting");
+      return { type: "setVoice", plain: command.plain };
     case "listMemory":
       return { type: command.type, botId: botId(command.botId) };
     case "readMemory":
@@ -1985,6 +2000,10 @@ class ViewerSession implements BridgeSession {
         return client.readTaskFile(this.mine(command.key), command.path, this.fileOptions());
       case "readCheckoutDiff":
         return client.readCheckoutDiff(this.mine(command.key), command.path, this.fileOptions());
+      case "readVoice":
+        return client.readVoice();
+      case "setVoice":
+        return client.setVoice(command.plain);
       case "listMemory":
         return client.listMemory(command.botId);
       case "readMemory":

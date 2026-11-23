@@ -62,7 +62,15 @@ pnpm dev-gateway start --instance rules --with-plugin clawtrate-tool-rules
 
 Its rules are set from a connection with admin access (`clawtrate-tool-rules.set`), and its cards are the gateway's plugin approvals, answered from a client with `operator.approvals`. `pnpm scenarios` runs the rules checks on an instance of their own started this way, with an admin connection, Clawtrate's interactive tier, another device with approvals, one with read and write and a read-only one: rules lost with and without a copy (the check spoils the instance's own rules file and restores it), the methods' tiers and the empty event, an Ask's card and who receives it, Allow once and Deny, a Never, an Allow that does not pass an Ask, "Ask when nothing else decides", the limits, a Never on another spelling of a file's name, a card with approval forwarding on (to no destination) and with `cardDetails: "full"`, a routine's call, a setting changed while a card waits, the plugin turned off in the middle of a run, and a call in a run another bot's message started (`#message-read`). [The plugin's page](../../plugins/clawtrate-tool-rules/README.md#on-a-clawtrate-development-gateway) lists what each asserts. Turning the plugin off and on again, setting its `cardDetails`, or turning approval forwarding on, as the checks do, takes the config outside the contract until it is back.
 
-The default instance and `pnpm e2e` load no plugins. [The opening](../decisions.md#development-gateway) is described in `docs/decisions.md`.
+A plugin whose hook must see a conversation may grant itself exactly that, `"hooks": { "allowConversationAccess": true }` in its `clawtrate-dev-contract.json`, and the tool writes it into the plugin's entry. A plugin that is not bundled needs it for `before_prompt_build`. [`plugins/clawtrate-voice`](../../plugins/clawtrate-voice/README.md), which tells every bot to write plainly, does this:
+
+```bash
+pnpm dev-gateway start --instance voice --with-plugin clawtrate-voice
+```
+
+Ask any bot "What did plugins add to your system prompt?" and the scripted model quotes each block a plugin added, or says none was.
+
+The default instance loads no plugins. `pnpm e2e`'s seeded instance loads `clawtrate-memory` and `clawtrate-voice`. [The opening](../decisions.md#development-gateway) is described in `docs/decisions.md`.
 
 ## Scripted provider accounts
 

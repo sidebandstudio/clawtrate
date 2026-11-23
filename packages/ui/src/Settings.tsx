@@ -13,20 +13,22 @@ import {
   type CheckInsState,
   type ConnectionState,
   type HostInfo,
+  type VoiceSetting,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
-import { useClawtrateState, useCommand } from "./bridge.tsx";
+import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
-import { useAnnouncer } from "./bots/parts.tsx";
+import { AdminBar, GrantedBar, useAnnouncer, useGranted } from "./bots/parts.tsx";
 import "./bots/bots.css";
+import "./routines/routines.css";
 import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
@@ -80,15 +82,130 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
-  ["conversation", "Conversation", "How long a bot's turn may run"],
+  ["conversation", "Conversation", "How bots talk and how long a turn may run"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
   ["updates", "Updates", "Clawtrate's own updates"],
 ];
 
+/**
+ * Whether every bot on the gateway is told to write plainly, with no em dashes
+ * (F-519), shown as the voice plugin reads it back: nothing is shown as on or
+ * off until the gateway answers.
+ */
+function PlainVoice({
+  connection,
+  info,
+  announce,
+}: {
+  connection: ConnectionState;
+  info: HostInfo;
+  announce: (text: string) => void;
+}) {
+  const bridge = useBridge();
+  const granted = useGranted(connection);
+  const canChange = !info.readOnly && connection.canAdmin;
+  const connected = connection.status === "connected";
+  const gateway = connection.gatewayUrl;
+  const [voice, setVoice] = useState<VoiceSetting | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const message = (failure: unknown) =>
+    failure instanceof Error ? failure.message : String(failure);
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    void bridge.invoke({ type: "readVoice" }).then(
+      (read) => {
+        if (!live) return;
+        setVoice(read);
+        setError(null);
+      },
+      (failure: unknown) => live && setError(message(failure)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bridge, connected, gateway]);
+  const on = voice?.plugin === true && voice.plain;
+  const toggle = () => {
+    if (voice?.plugin !== true || saving) return;
+    setSaving(true);
+    setError(null);
+    void bridge
+      .invoke({ type: "setVoice", plain: !voice.plain })
+      .then(
+        (read) => {
+          setVoice(read);
+          if (read.plugin) announce(read.plain ? "Plain voice is on" : "Plain voice is off");
+        },
+        (failure: unknown) => setError(message(failure)),
+      )
+      .finally(() => setSaving(false));
+  };
+  const note =
+    voice === null
+      ? error
+        ? null
+        : "Reading the gateway's setting."
+      : !voice.plugin
+        ? "Needs Clawtrate's voice plugin on the gateway. Without it, bots write the way OpenClaw tells them to."
+        : !voice.reachesBots
+          ? "The gateway keeps the voice plugin from adding to bots' instructions, so no bot is told this. To allow it, set plugins.entries.clawtrate-voice.hooks.allowConversationAccess to true in the gateway's config."
+          : "Every bot on this gateway is told to write to you plainly and warmly, with no em dashes. On by default.";
+  return (
+    <>
+      <div className="b-field">
+        <span id="plain-voice-label">Plain voice</span>
+        <span className="plain-voice-field">
+          <button
+            type="button"
+            className="b-switch"
+            role="switch"
+            aria-checked={on}
+            aria-busy={saving || undefined}
+            aria-labelledby="plain-voice-label"
+            aria-describedby="plain-voice-note"
+            data-testid="plain-voice"
+            disabled={voice?.plugin !== true || !canChange}
+            onClick={toggle}
+          />
+          <span aria-hidden="true">{voice?.plugin ? (on ? "On" : "Off") : ""}</span>
+        </span>
+      </div>
+      <p className="b-hint" id="plain-voice-note" data-testid="plain-voice-note">
+        {note}
+      </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {voice?.plugin &&
+        (granted ? (
+          <GrantedBar />
+        ) : canChange ? null : (
+          <AdminBar
+            connection={connection}
+            info={info}
+            need="Changing the plain voice needs admin access."
+          />
+        ))}
+    </>
+  );
+}
+
 /** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
-function ConversationPane({ announce }: { announce: (text: string) => void }) {
+function ConversationPane({
+  connection,
+  info,
+  announce,
+}: {
+  connection: ConnectionState;
+  info: HostInfo;
+  announce: (text: string) => void;
+}) {
   const send = useCommand();
   const minutes = useClawtrateState().turnLimitMinutes ?? 50;
   const [draft, setDraft] = useState<string | null>(null);
@@ -110,6 +227,7 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
   };
   return (
     <>
+      <PlainVoice connection={connection} info={info} announce={announce} />
       <label className="b-field">
         <span>Turn time limit</span>
         <span className="turn-limit-field">
@@ -470,7 +588,7 @@ export function Settings({
             ? {
                 title: "Conversation",
                 back: toNav,
-                body: <ConversationPane announce={announce} />,
+                body: <ConversationPane connection={connection} info={info} announce={announce} />,
                 foot: null,
               }
             : section === "usage"

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { chunkText } from "../src/fake-provider.ts";
-import { normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
+import {
+  NO_PLUGIN_CONTEXT,
+  normalizePrompt,
+  planReply,
+  PLUGIN_CONTEXT_HEADER,
+  PLUGIN_CONTEXT_PROMPT,
+  type ChatMessage,
+} from "../src/scripts.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 
 const ALL_TOOLS = new Set(["ls", "read", "write", "exec"]);
@@ -93,6 +100,18 @@ describe("planReply", () => {
         ALL_TOOLS,
       ),
     ).toEqual([{ kind: "text", text: memory }]);
+  });
+
+  it("quotes what plugins added to the system prompt, or says nothing was", () => {
+    const ask = [{ role: "user" as const, content: `[Mon 09:00] ${PLUGIN_CONTEXT_PROMPT}` }];
+    const base = "You are a bot.\n<!-- /openclaw:attempt:DYNAMIC -->";
+    const added = `${base}\n\n---\n\n${PLUGIN_CONTEXT_HEADER}\n\nWrite plainly.\n- Short words.\n\n---`;
+    expect(planReply([{ role: "system", content: added }, ...ask], ALL_TOOLS)).toEqual([
+      { kind: "text", text: "Write plainly.\n- Short words." },
+    ]);
+    expect(planReply([{ role: "system", content: base }, ...ask], ALL_TOOLS)).toEqual([
+      { kind: "text", text: NO_PLUGIN_CONTEXT },
+    ]);
   });
 
   it("gives every scripted prompt a unique text", () => {

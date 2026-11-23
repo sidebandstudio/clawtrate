@@ -126,6 +126,18 @@ export const GATEWAY_TURN_PROMPTS = [
 const REMINDER_PROMPT = "A scheduled reminder has been triggered. The reminder content is:\n\n";
 const REMINDER_RELAY = "Please relay this reminder to the user in a helpful and friendly way.";
 
+/**
+ * Asked this, the scripted model quotes what plugins added to its system
+ * prompt (a `before_prompt_build` hook's `appendSystemContext` or
+ * `prependSystemContext`), each block under the gateway's own header, or says
+ * NO_PLUGIN_CONTEXT.
+ */
+export const PLUGIN_CONTEXT_PROMPT = "What did plugins add to your system prompt?";
+/** The line the gateway puts before a plugin's system context (OpenClaw 2026.10.6). */
+export const PLUGIN_CONTEXT_HEADER =
+  "OpenClaw plugin-injected system context. This block is not workspace file content.";
+export const NO_PLUGIN_CONTEXT = "No plugin added anything to my system prompt.";
+
 export const isGatewayTurn = (prompt: string) =>
   GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
 
@@ -175,6 +187,14 @@ export function planReply(
       ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
       ?.trim();
     return [{ kind: "text", text: memory || "I have no root memory for this task." }];
+  }
+  if (prompt === PLUGIN_CONTEXT_PROMPT) {
+    const added = messages
+      .filter((message) => message.role === "system")
+      .flatMap((message) => messageText(message).split(PLUGIN_CONTEXT_HEADER).slice(1))
+      .map((block) => block.split(/\n---\s*(?:\n|$)/, 1)[0]!.trim())
+      .filter(Boolean);
+    return [{ kind: "text", text: added.length > 0 ? added.join("\n\n") : NO_PLUGIN_CONTEXT }];
   }
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.

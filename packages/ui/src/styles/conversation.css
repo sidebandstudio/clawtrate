@@ -1548,3 +1548,19 @@ button.reaction {
 .turn-limit-field > span {
   color: var(--text-muted);
 }
+
+/* Settings, Conversation: the plain voice switch (F-519). */
+.plain-voice-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.plain-voice-field > span {
+  color: var(--text-muted);
+}
+
+.plain-voice-field .b-switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

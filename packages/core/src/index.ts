@@ -105,3 +105,4 @@ export {
   type MemoryFile,
   type MemoryList,
 } from "./memory.ts";
+export type { VoiceSetting } from "./voice.ts";

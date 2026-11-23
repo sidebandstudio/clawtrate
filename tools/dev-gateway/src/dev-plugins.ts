@@ -26,6 +26,12 @@
 //     "settings": { "<key>": { "kind": "<kind>", "value": … }, … },
 //     "tools": [ { "name": "<tool>", "kind": "plugin-tool" }, … ] }
 //
+// It may also grant its own hooks the one permission a prompt hook needs,
+// `"hooks": { "allowConversationAccess": true }`, which the tool writes into
+// the plugin's entry. A plugin that is not bundled needs it for
+// `before_prompt_build` and the other conversation hooks. Nothing else under
+// `hooks` is accepted.
+//
 // The setting kinds are SETTING_KINDS and nothing else: there is no kind for
 // free text, a command, an argument list, a credential or a model provider.
 // Any other key or kind is refused. A `scripted-model-url` is a path on the
@@ -149,6 +155,8 @@ export type DevPlugin = {
   tools: string[];
   /** The bots it gives a browser of their own, or null. */
   botBrowsers: BotBrowsers | null;
+  /** Whether its hooks may see conversations (`hooks.allowConversationAccess`). */
+  conversationHooks: boolean;
   /** The scripted account providers its manifest declares sign-ins for. */
   providers: string[];
 };
@@ -280,7 +288,8 @@ function settingProblem(key: string, setting: unknown): string | null {
 
 /**
  * Why an addition is not a closed description this guard accepts, one line
- * per problem: only `plugin`, `settings` and `tools`; every setting a plain
+ * per problem: only `plugin`, `settings`, `tools`, `botBrowsers` and
+ * `hooks`; every setting a plain
  * key with a value of a known kind; every tool a plain name of kind
  * `plugin-tool` that the gateway does not provide itself.
  */
@@ -291,7 +300,7 @@ export function additionProblems(
   if (!isPlainObject(addition)) return ["the addition must be an object"];
   const problems: string[] = [];
   for (const key of Object.keys(addition)) {
-    if (!["plugin", "settings", "tools", "botBrowsers"].includes(key)) {
+    if (!["plugin", "settings", "tools", "botBrowsers", "hooks"].includes(key)) {
       problems.push(`the addition may not set ${key}`);
     }
   }
@@ -332,6 +341,14 @@ export function additionProblems(
   }
   if (addition.botBrowsers !== undefined) {
     problems.push(...botBrowsersProblems(addition.botBrowsers, options.seedBots));
+  }
+  if (
+    addition.hooks !== undefined &&
+    (!isPlainObject(addition.hooks) ||
+      Object.keys(addition.hooks).join() !== "allowConversationAccess" ||
+      addition.hooks.allowConversationAccess !== true)
+  ) {
+    problems.push("the addition's hooks must be exactly { allowConversationAccess: true }");
   }
   return problems;
 }
@@ -439,6 +456,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     settings?: Record<string, Setting>;
     tools?: { name: string }[];
     botBrowsers?: BotBrowsers;
+    hooks?: { allowConversationAccess: true };
   };
   return {
     name,
@@ -448,6 +466,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     settings: checked.settings ?? {},
     tools: (checked.tools ?? []).map((tool) => tool.name),
     botBrowsers: checked.botBrowsers ?? null,
+    conversationHooks: checked.hooks?.allowConversationAccess === true,
     providers: declared.providers,
   };
 }
@@ -515,7 +534,11 @@ export function pluginEntry(
   plugin: DevPlugin,
   stateDir: string,
   providerPort: number,
-): { enabled: true; config: Record<string, unknown> } {
+): {
+  enabled: true;
+  config: Record<string, unknown>;
+  hooks?: { allowConversationAccess: true };
+} {
   const base = pluginData(stateDir, plugin.name);
   const config: Record<string, unknown> = {};
   for (const [key, { kind, value }] of Object.entries(plugin.settings)) {
@@ -537,7 +560,11 @@ export function pluginEntry(
     }
     config[key] = path;
   }
-  return { enabled: true, config };
+  return {
+    enabled: true,
+    config,
+    ...(plugin.conversationHooks ? { hooks: { allowConversationAccess: true as const } } : {}),
+  };
 }
 
 /** Plugins are for named instances only; the default instance never loads any. */

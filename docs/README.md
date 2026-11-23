@@ -23,6 +23,7 @@ Every document in the repository, by what you want to do.
 - [The relay protocol](../packages/relay-protocol/README.md): frames, relay messages, the connector's register proof and the end-to-end Noise channel for reaching a gateway through the relay.
 - [The development gateway tool](../tools/dev-gateway/README.md): scripted provider accounts, sign-ins and the account checks.
 - [The computer plugin](../plugins/clawtrate-computer/README.md): a bot's own browser, watched live and taken over by a person.
+- [The voice plugin](../plugins/clawtrate-voice/README.md): every bot told to write plainly, with no em dashes, until a person turns it off.
 - [The rules plugin](../plugins/clawtrate-tool-rules/README.md): what each bot may do with its tools, asked first or never, while the plugin runs.
 
 ## The plan
