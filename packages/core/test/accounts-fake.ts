@@ -186,7 +186,11 @@ export class AccountsGateway {
       })),
     });
     g.handlers["agents.update"] = (params) => {
-      const { agentId, avatar } = params as { agentId: string; avatar?: string };
+      const { agentId, avatar, name } = params as {
+        agentId: string;
+        avatar?: string;
+        name?: string;
+      };
       const bot = this.bots.find((each) => each.id === agentId);
       if (!bot)
         throw new GatewayError({
@@ -194,6 +198,23 @@ export class AccountsGateway {
           message: `agent "${agentId}" not found`,
         });
       if (avatar !== undefined && !this.keepNoPicture) bot.avatar = avatar;
+      if (name !== undefined) {
+        bot.name = name;
+        // As OpenClaw merges a new name into IDENTITY.md: only the `- Name:` line is replaced,
+        // whatever its emphasis, and the rest of the file is left as it was.
+        const files = this.files.get(agentId);
+        const identity = files?.get("IDENTITY.md");
+        if (files && identity !== undefined)
+          files.set(
+            "IDENTITY.md",
+            identity
+              .split("\n")
+              .map((line) =>
+                /^\s*-\s*[*_`]*name[*_`]*\s*:/i.test(line) ? `- Name: ${name}` : line,
+              )
+              .join("\n"),
+          );
+      }
       this.updated = true;
       return { ok: true, agentId };
     };

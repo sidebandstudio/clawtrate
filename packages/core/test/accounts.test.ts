@@ -912,9 +912,19 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
     client.stop();
   });
 
+  it("carries only the new name after the gateway renames the bot", async () => {
+    const { client, fake } = await accountsClient();
+    await client.createBot({ ...input, name: "Maple" });
+    await fake.gateway.handlers["agents.update"]!({ agentId: "maple", name: "Juniper" });
+    const file = fake.files.get("maple")!.get("IDENTITY.md")!;
+    expect(file).toMatch(/^- Name: Juniper$/m);
+    expect(file).not.toContain("Maple");
+    client.stop();
+  });
+
   it("names the bot, and names a picture only when one was chosen, in lines the gateway reads", () => {
     expect(identityFile("  Maple \n Leaf ", false)).toBe(
-      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYou were named Maple Leaf in Clawtrate when you were made. Keep that name unless the person asks for another.\n",
+      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n",
     );
     const withPicture = identityFile("Maple", true);
     expect(withPicture).toMatch(/^- \*\*Picture:\*\* chosen in Clawtrate/m);

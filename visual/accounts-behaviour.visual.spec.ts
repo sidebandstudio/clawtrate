@@ -825,6 +825,29 @@ test("F-034: a bot written whose first task did not land is said to exist, unfin
   ).toBeVisible();
 });
 
+test("F-519: a bot whose first-run questions were not turned off is not offered to open as it is, only to finish", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=partial-identity`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByTestId("create").click();
+  const note = page.getByTestId("create-partial");
+  await expect(note).toContainText(
+    "Viral exists, and isn't finished. Viral was created, but OpenClaw's first-run questions were not turned off",
+  );
+  await expect(note.getByRole("button", { name: "Finish Viral" })).toBeVisible();
+  await expect(note.getByRole("button", { name: "Open Viral as it is" })).toHaveCount(0);
+  // Finish is what turns them off, and it completes the bot by its id.
+  await note.getByRole("button", { name: "Finish Viral" }).click();
+  await expect(newBot(page)).toHaveCount(0);
+  const types = (await sent(page)).map((each) => each.type);
+  expect(types.filter((type) => type === "createBot")).toHaveLength(1);
+  expect(types.indexOf("finishBot")).toBeGreaterThan(types.indexOf("createBot"));
+});
+
 test("F-476: on admin two unlabelled accounts of one provider read differently, by their ids, in New bot and Settings", async ({
   page,
 }) => {

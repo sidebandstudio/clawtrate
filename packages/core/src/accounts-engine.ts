@@ -1964,9 +1964,11 @@ export function identityFile(name: string, picture: boolean): string {
         ]
       : []),
     "",
+    // No name here: the gateway's identity writers replace only the `- Name:` line, so a name
+    // repeated in prose would contradict a rename in every turn.
     picture
-      ? `You were named ${line} and given your picture in Clawtrate when you were made. Keep both. Don't make or save another picture unless the person asks for one.`
-      : `You were named ${line} in Clawtrate when you were made. Keep that name unless the person asks for another.`,
+      ? "Your name and picture were chosen in Clawtrate when you were made. Keep both. Don't make or save another picture unless the person asks for one."
+      : "Your name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.",
     "",
   ].join("\n");
 }
