@@ -804,6 +804,36 @@ test.describe("a failed history", () => {
     expect(await holds(page)).toBe(1);
   });
 
+  test("F-105: refusing a reopen while another view holds the task shows why without crashing the page", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    await otherView(page, "openSession");
+    expect(await holds(page)).toBe(2);
+
+    await page.evaluate(
+      ([key, error]) =>
+        (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.refuseReopen(
+          key,
+          error,
+        ),
+      [KEY, SLOTS] as const,
+    );
+    await expect(page.getByText("Could not load this conversation")).toBeVisible();
+    await expect(page.getByText(SLOTS)).toBeVisible();
+    expect(await holds(page)).toBe(1);
+    expect(errors).toEqual([]);
+
+    // Once a slot frees up, Try again opens the task again without re-reading the shared history.
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("transcript-turn")).not.toHaveCount(0);
+    expect(await holds(page)).toBe(2);
+    expect(errors).toEqual([]);
+  });
+
   test("F-105: a refusal of Try again that comes after the task was left doesn't open it again", async ({
     page,
   }) => {

@@ -641,6 +641,7 @@ export function createFixtureBridge(
     }
     return transcripts ? { ...source, transcripts } : source;
   };
+  let snapshot = pageState(state);
   let holdSnapshots = false;
   let snapshotPending = false;
   const publish = () => {
@@ -648,7 +649,7 @@ export function createFixtureBridge(
       snapshotPending = true;
       return;
     }
-    const snapshot = pageState(state);
+    snapshot = pageState(state);
     for (const listener of listeners) listener(snapshot);
   };
   // The host's target (`ConnectionState.target`), as the host keeps it: raised when the person
@@ -1153,7 +1154,7 @@ export function createFixtureBridge(
         : name === "connect-full" || name === "access-narrowed" || options.fullPairing
           ? { ...FIXTURE_INFO, fullControl: true }
           : FIXTURE_INFO,
-    getState: () => pageState(state),
+    getState: () => snapshot,
     subscribe(listener) {
       listeners.add(listener);
       startSteps();
