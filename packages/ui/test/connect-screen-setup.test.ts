@@ -79,7 +79,7 @@ describe("the setup card after a change of this device's saved pairing", () => {
 });
 
 describe("pairing with a gateway named on this device", () => {
-  it("F-522: the steps keep the address beside the name, since a name is kept by address alone", () => {
+  it("F-523: the steps keep the address beside the name, since a name is kept by address alone", () => {
     const connection = {
       ...initialState.connection,
       status: "pairing" as const,

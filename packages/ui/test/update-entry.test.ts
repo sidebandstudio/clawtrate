@@ -23,7 +23,7 @@ const at = (state: DesktopUpdateState, extra: Partial<DesktopUpdateSnapshot> = {
   updateEntry({ ...base, ...extra, state });
 const offer = { version: "1.1.0", offerId: "A" };
 
-describe("F-520: the update button", () => {
+describe("F-521: the update button", () => {
   it("says each state in words, and only Restart to Update acts on its own", () => {
     const rows = [
       at({ kind: "offered", releaseDate: "2026-11-01", ...offer }),
@@ -81,7 +81,7 @@ describe("F-520: the update button", () => {
   });
 });
 
-describe("F-519: the brand", () => {
+describe("F-520: the brand", () => {
   const brand = (snapshot: DesktopUpdateSnapshot | null) =>
     renderToStaticMarkup(
       createElement(Brand, {
