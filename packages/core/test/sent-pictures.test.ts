@@ -4,7 +4,7 @@
 // each file so another device can say what was sent.
 
 import { describe, expect, it } from "vitest";
-import { fromBase64, toBase64 } from "../src/bytes.ts";
+import { fromBase64, toBase64, utf8Bytes } from "../src/bytes.ts";
 import {
   MAX_RETAINED_ATTACHMENT_BYTES,
   MAX_SENT_PICTURE_MESSAGES,
@@ -34,7 +34,7 @@ const textFile: OutgoingAttachment = {
   type: "file",
   mimeType: "text/plain",
   fileName: "notes.txt",
-  content: toBase64(new TextEncoder().encode("milk\neggs\n")),
+  content: toBase64(utf8Bytes("milk\neggs\n")),
 };
 
 /** A file of exactly `bytes` decoded bytes. */
@@ -159,8 +159,8 @@ describe("F-557: a picture you sent, from this app's own copy", () => {
     const id = client.sendMessage(KEY, "these", {
       attachments: [
         picture(large, "large.png"),
-        picture(new TextEncoder().encode("<svg/>"), "drawing.svg", "image/svg+xml"),
-        picture(new TextEncoder().encode("not a png"), "fake.png"),
+        picture(utf8Bytes("<svg/>"), "drawing.svg", "image/svg+xml"),
+        picture(utf8Bytes("not a png"), "fake.png"),
       ],
     });
     expect(await client.readSentPicture(KEY, id, 0)).toEqual({

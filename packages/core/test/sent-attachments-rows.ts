@@ -7,8 +7,6 @@
 // fields and other values unrelated to the files are left out; ids are the
 // development gateway's own.
 
-import { deflateSync } from "node:zlib";
-
 /** A user row for the message `id` sent, with these `__openclaw.media` entries. */
 export function sentRow(
   id: string,
@@ -74,28 +72,53 @@ function crc32(bytes: Uint8Array): number {
   return ~c >>> 0;
 }
 
+const concat = (parts: Uint8Array[]) => {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+};
+const u32 = (value: number) =>
+  new Uint8Array([value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255]);
+const ascii = (text: string) => Uint8Array.from(text, (char) => char.charCodeAt(0));
+
+/** A zlib stream of stored (uncompressed) blocks. */
+function zlibStored(data: Uint8Array): Uint8Array {
+  const blocks: Uint8Array[] = [new Uint8Array([0x78, 0x01])];
+  for (let at = 0; at < data.length || at === 0; at += 65_535) {
+    const part = data.subarray(at, at + 65_535);
+    const last = at + 65_535 >= data.length ? 1 : 0;
+    const n = part.length;
+    blocks.push(new Uint8Array([last, n & 255, n >>> 8, ~n & 255, (~n >>> 8) & 255]), part);
+    if (data.length === 0) break;
+  }
+  let a = 1;
+  let b = 0;
+  for (const byte of data) {
+    a = (a + byte) % 65_521;
+    b = (b + a) % 65_521;
+  }
+  blocks.push(u32(((b << 16) | a) >>> 0));
+  return concat(blocks);
+}
+
 /** A PNG of one colour, made here: no one's picture. */
-export function solidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
-  const chunk = (type: string, data: Buffer) => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length);
-    const body = Buffer.concat([Buffer.from(type), data]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(body));
-    return Buffer.concat([length, body, crc]);
+export function solidPng(width: number, height: number, rgb: [number, number, number]): Uint8Array {
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = concat([ascii(type), data]);
+    return concat([u32(data.length), body, u32(crc32(body))]);
   };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 2;
-  const raw = Buffer.alloc((width * 3 + 1) * height);
+  const header = concat([u32(width), u32(height), new Uint8Array([8, 2, 0, 0, 0])]);
+  const raw = new Uint8Array((width * 3 + 1) * height);
   for (let y = 0; y < height; y += 1)
     for (let x = 0; x < width; x += 1) raw.set(rgb, y * (width * 3 + 1) + 1 + x * 3);
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  return concat([
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),
-    chunk("IDAT", deflateSync(raw)),
-    chunk("IEND", Buffer.alloc(0)),
+    chunk("IDAT", zlibStored(raw)),
+    chunk("IEND", new Uint8Array(0)),
   ]);
 }

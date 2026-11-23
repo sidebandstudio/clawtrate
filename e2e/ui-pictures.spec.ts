@@ -171,7 +171,7 @@ test.describe("F-557: a picture you attach", () => {
       .toMatch(/^Approved /m);
     await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
 
-    const shot = solidPng(48, 32, [220, 40, 40]);
+    const shot = Buffer.from(solidPng(48, 32, [220, 40, 40]));
     await page
       .locator('.composer input[type="file"]')
       .setInputFiles([{ name: "shot.png", mimeType: "image/png", buffer: shot }]);
