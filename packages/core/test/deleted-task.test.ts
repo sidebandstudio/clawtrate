@@ -589,6 +589,35 @@ describe("a send before the task's session is known (F-278)", () => {
     expect(sends()[0]).toMatchObject({ sessionKey: key, sessionId: "s-9" });
     client.stop();
   });
+
+  it("a first message whose run failed to start keeps the session its creation answered: Resend after the task was replaced is refused as deleted", async () => {
+    const { client, gateway, sends } = await opening(null, { sessionId: "s-9" });
+    const key = "agent:otto:fresh";
+    // The creation names its session and a run that did not start (OpenClaw's `runError`).
+    gateway.handlers["sessions.create"] = () => ({
+      ok: true,
+      key,
+      sessionId: "s-9",
+      runError: { code: "UNAVAILABLE", message: "The model provider is down." },
+    });
+    // Then the task is deleted elsewhere and another made under its key, which history names.
+    gateway.handlers["chat.history"] = () => ({ messages: [], hasMore: false, sessionId: "s-10" });
+    gateway.handlers["sessions.describe"] = () => ({ session: { sessionId: "s-10" } });
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as Send).sessionId !== "s-10") throw new GatewayError(MOVED);
+      return { runId: "run-new", status: "started" };
+    };
+    await client.createTask("otto", "Back up the photos.");
+    const transcript = () => client.state.transcripts[key]!;
+    expect(transcript().outbox[0]?.status).toBe("failed");
+    await until(() => transcript().sessionId === "s-10");
+    client.retryMessage(key, transcript().outbox[0]!.id);
+    await until(() => sends().length === 1);
+    expect(sends()[0]).toMatchObject({ sessionId: "s-9", expectedLeafEntryId: null });
+    await until(() => transcript().outbox[0]?.error === TASK_DELETED_ELSEWHERE);
+    expect(sends()).toHaveLength(1);
+    client.stop();
+  });
 });
 
 describe("a task archived elsewhere (F-277)", () => {

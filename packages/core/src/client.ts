@@ -3008,6 +3008,9 @@ export class ClawtrateClient {
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const runError = asRecord(result?.runError);
     const now = this.now();
+    // The session the creation made: its first message, and any sent before its history is read,
+    // go there only. A creation can answer with it and with a run that failed to start.
+    const named = sessionNamed(result);
     const message: OutgoingMessage = {
       id,
       text: creation.text,
@@ -3020,11 +3023,10 @@ export class ClawtrateClient {
       createdAt: now,
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
+      ...(named ? { sessionId: named } : {}),
     };
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
-    // The session the creation made: a message sent before its history is read goes there only.
-    const named = sessionNamed(result);
     if (named && !this.state.transcripts[key]?.sessionId)
       this.setTranscript(key, (current) => ({ ...current!, sessionId: named }));
     this.updateActivity(key, (activity, ctx) => {
