@@ -24,9 +24,12 @@ final class ClawtrateLayoutView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     isUserInteractionEnabled = false
-    registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) {
-      (view: ClawtrateLayoutView, _: UITraitCollection) in
-      view.report()
+    // Before iOS 17 there is no hinge, and a portrait iPhone keeps its size class.
+    if #available(iOS 17.0, *) {
+      registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) {
+        (view: ClawtrateLayoutView, _: UITraitCollection) in
+        view.report()
+      }
     }
     #if canImport(UIKit, _version: 9127.0.85)
     if #available(iOS 27.1, *) {
@@ -90,9 +93,10 @@ final class ClawtrateLayoutView: ExpoView {
     // The inner display turns with the device; the outer one and every other iPhone stay upright.
     ClawtrateOrientation.allowTurning(window, hasHinge && regular)
     let insets = safeAreaInsets
+    let (width, height) = (bounds.width, bounds.height)
     let metrics: [String: Any] = [
-      "width": bounds.width,
-      "height": bounds.height,
+      "width": width,
+      "height": height,
       "hasHinge": hasHinge,
       "sizeClass": regular ? "regular" : "compact",
       "verticalBarEdge": barEdge,
@@ -106,8 +110,9 @@ final class ClawtrateLayoutView: ExpoView {
     sent = next
     onLayoutChange(metrics)
     // One line per change, so a check can tell what the app measured.
+    let (hinge, sizeClass, count) = (hasHinge, regular ? "regular" : "compact", regions.count)
     Self.log.notice(
-      "window \(Int(bounds.width), privacy: .public)x\(Int(bounds.height), privacy: .public) hinge=\(self.hasHinge, privacy: .public) sizeClass=\(regular ? "regular" : "compact", privacy: .public) bar=\(barEdge, privacy: .public) regions=\(regions.count, privacy: .public)"
+      "window \(Int(width), privacy: .public)x\(Int(height), privacy: .public) hinge=\(hinge, privacy: .public) sizeClass=\(sizeClass, privacy: .public) bar=\(barEdge, privacy: .public) regions=\(count, privacy: .public)"
     )
   }
 }
