@@ -18,6 +18,7 @@ import {
   signingProblems,
   signingSummary,
   WINDOWS_SIGNATURE_COMMAND,
+  windowsSignatureEnv,
   windowsSignatureKind,
 } from "../packaging/signing.ts";
 import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
@@ -212,6 +213,17 @@ describe("signing", () => {
     expect(build).toContain('process.on("exit", () => (process.exitCode = 1));');
     expect(build).not.toMatch(/^\s*process\.exitCode = 1;/m);
     expect(build.match(/if \(!matches\) failSignatureCheck\(\);/g)).toHaveLength(2);
+  });
+
+  it("reads a Windows signature without PowerShell 7's module path, and stops at any error", () => {
+    expect(
+      windowsSignatureEnv(
+        { PATH: "p", PSModulePath: "C:\\pwsh7\\Modules", PSMODULEPATH: "q", SIGNED_FILE: "old" },
+        "D:\\out\\Clawtrate.exe",
+      ),
+    ).toEqual({ PATH: "p", SIGNED_FILE: "D:\\out\\Clawtrate.exe" });
+    // Without it, a command that cannot be found prints its error and the command goes on.
+    expect(WINDOWS_SIGNATURE_COMMAND).toMatch(/^\$ErrorActionPreference = 'Stop'; /);
   });
 
   it("reads what Get-AuthenticodeSignature says of a Windows file's signature", () => {

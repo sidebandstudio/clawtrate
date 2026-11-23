@@ -29,6 +29,7 @@ import {
   signingProblems,
   signingSummary,
   WINDOWS_SIGNATURE_COMMAND,
+  windowsSignatureEnv,
 } from "./signing.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
@@ -133,7 +134,7 @@ if (target === "win") {
     const shown = spawnSync(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SIGNATURE_COMMAND],
-      { encoding: "utf8", env: { ...process.env, SIGNED_FILE: join(output.path, file) } },
+      { encoding: "utf8", env: windowsSignatureEnv(process.env, join(output.path, file)) },
     );
     const { kind, matches } = checkWindowsSignature(plan.windows, shown);
     console.log(`Signature of ${output.label}/${file}: ${kind}.`);

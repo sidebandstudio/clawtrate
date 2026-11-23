@@ -181,7 +181,18 @@ export function checkMacSignature(
 
 /** Prints a file's Authenticode status and whether it names a signer, for `windowsSignatureKind`. */
 export const WINDOWS_SIGNATURE_COMMAND =
-  "$s = Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE -ErrorAction Stop; '{0} {1}' -f $s.Status, [bool]$s.SignerCertificate";
+  "$ErrorActionPreference = 'Stop'; $s = Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE; '{0} {1}' -f $s.Status, [bool]$s.SignerCertificate";
+
+/**
+ * The environment `WINDOWS_SIGNATURE_COMMAND` runs in. Windows PowerShell started
+ * from PowerShell 7, as CI's steps are, inherits a module path that finds
+ * PowerShell 7's own Microsoft.PowerShell.Security first, and cannot load it.
+ * Without the variable it uses its own modules.
+ */
+export function windowsSignatureEnv(env: Env, file: string): Env {
+  const kept = Object.entries(env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH");
+  return { ...Object.fromEntries(kept), SIGNED_FILE: file };
+}
 
 /**
  * What `WINDOWS_SIGNATURE_COMMAND` says of a file's signature. A signature that
