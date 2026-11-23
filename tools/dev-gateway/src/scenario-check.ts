@@ -560,6 +560,8 @@ const isChat = (state: string) => (e: GatewayEvent) =>
 
 export type Harness = {
   op(client: ClientName): OperatorSession;
+  /** The instance was started with `--with-images`: it offers image_generate (StartOptions.images). */
+  images: boolean;
   /** A new session key for a bot, subscribed on every client. */
   session(botId: string, tag: string): Promise<string>;
   /** Send and return the run, without waiting for it. */
@@ -3074,6 +3076,9 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     name: "the tools in effect are exactly the allowed ones",
     covers: [],
     run: async (h) => {
+      // An instance started with `--with-images` offers image_generate as well, and no other.
+      const withImages = (tools: string[]) =>
+        h.images ? [...tools, "image_generate"].sort() : tools;
       // What the model was really offered, as the scripted server received it.
       const paired = await h.session("main", "offered");
       const pairedRun = await h.run("plain", paired, "#text");
@@ -3081,7 +3086,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       pairedRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(paired),
-        EXPECTED_OFFERED_TOOLS,
+        withImages(EXPECTED_OFFERED_TOOLS),
         "tools offered in a paired client's run",
       );
       const ownerKey = await h.session("main", "offered-owner");
@@ -3090,7 +3095,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       ownerRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(ownerKey),
-        [...EXPECTED_OFFERED_TOOLS, "automations"].sort(),
+        withImages([...EXPECTED_OFFERED_TOOLS, "automations"].sort()),
         "tools offered in an owner's run",
       );
       // What the gateway reports as available, which does not know the sender.
@@ -3106,10 +3111,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           .filter((t) => t.status === "available")
           .map((t) => String(t.id))
           .sort(),
-        EXPECTED_EFFECTIVE_TOOLS,
+        withImages(EXPECTED_EFFECTIVE_TOOLS),
         "tools.effective available tools",
       );
-      for (const tool of DENIED_TOOLS) {
+      for (const tool of DENIED_TOOLS.filter((t) => !(h.images && t === "image_generate"))) {
         const row = tools.find((t) => t.id === tool);
         expect(!row || row.status !== "available", `${tool} is denied but reported available`);
       }
@@ -3615,10 +3620,17 @@ export async function runScenarioChecks(
     only?: (check: ScenarioCheck) => boolean;
     ownerAgent?: (botId: string, key: string, message: string) => Promise<void>;
     providerUrl?: string;
+    /** The instance was started with `--with-images` (`Harness.images`). */
+    images?: boolean;
   } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
-  const harness = createHarness(clients, options.ownerAgent, options.providerUrl);
+  const harness = createHarness(
+    clients,
+    options.ownerAgent,
+    options.providerUrl,
+    options.images ?? false,
+  );
   await prepareRecipient(harness);
   let passed = 0;
   let failed = 0;
@@ -3652,12 +3664,14 @@ export function createHarness(
   clients: Record<ClientName, OperatorSession>,
   ownerAgent?: (botId: string, key: string, message: string) => Promise<void>,
   providerUrl?: string,
+  images = false,
 ): Harness & { notes: string[] } {
   let counter = 0;
   const notes: string[] = [];
   const stamp = Date.now().toString(36);
   const harness = {
     notes,
+    images,
     op: (client: ClientName) => clients[client],
     async session(botId: string, tag: string) {
       counter += 1;

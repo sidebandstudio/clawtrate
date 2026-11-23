@@ -2,7 +2,8 @@
 // this run's own development gateway, started with the stand-in image provider
 // (`--with-images`). The bot's run asks for the picture, the gateway delivers
 // it in a turn of its own, and the page draws the bytes the host fetched
-// through the download the gateway issued.
+// through the download the gateway issued. The file runs after
+// preview.spec.ts, whose checks read Otto's task list as the seed left it.
 import { expect, test, type Page } from "@playwright/test";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";

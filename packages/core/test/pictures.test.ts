@@ -4,6 +4,7 @@
 // recorded them (OpenClaw 2026.10.6).
 
 import { describe, expect, it } from "vitest";
+import { toBase64 } from "../src/bytes.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { FileTransfers } from "../src/files.ts";
 import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
@@ -18,6 +19,7 @@ const ARTIFACT = "artifact_managed_image_2de197ca-510c-4299-bd7a-ded7fe92de0c";
 const PROMPT = "A sun over a green hill, in flat solid colours";
 const ISSUED = `/api/chat/media/outgoing/${encodeURIComponent(KEY)}/2de197ca-510c-4299-bd7a-ded7fe92de0c/full?mediaTicket=v1.eyJzY29wZSI6Im1hbmFnZWQifQ.wvFYVx-PH9Ic`;
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+const ascii = (text: string) => Uint8Array.from(text, (char) => char.charCodeAt(0));
 const NOW = Date.parse("2026-11-23T00:40:00.000Z");
 const LATER = "2026-11-23T00:45:22.834Z";
 
@@ -69,7 +71,7 @@ function response(
     body: {
       getReader: () => ({
         read: async () =>
-          at < chunks.length ? { done: false, value: chunks[at++] } : { done: true },
+          at < chunks.length ? { done: false, value: chunks[at++]! } : { done: true },
         cancel: async () => {
           cancelled = true;
         },
@@ -151,7 +153,7 @@ describe("F-519: reading a picture", () => {
       kind: "image",
       mimeType: "image/png",
       bytes: PNG.length,
-      transfer: { id: null, chunks: 1, data: Buffer.from(PNG).toString("base64") },
+      transfer: { id: null, chunks: 1, data: toBase64(PNG) },
     });
   });
 
@@ -179,11 +181,11 @@ describe("F-519: reading a picture", () => {
   it("F-519: a type other than a picture's, bytes that don't start as their type's, and a picture over Clawtrate's limit are refused", async () => {
     const answer = { url: ISSUED, expiresAt: LATER };
     const svg = context(answer, () =>
-      response(200, { "content-type": "image/svg+xml" }, [new TextEncoder().encode("<svg/>")]),
+      response(200, { "content-type": "image/svg+xml" }, [ascii("<svg/>")]),
     );
     expect(await readChatPicture(svg.ctx, KEY, ARTIFACT)).toMatchObject({ status: "failed" });
     const html = context(answer, () =>
-      response(200, { "content-type": "image/png" }, [new TextEncoder().encode("<html>")]),
+      response(200, { "content-type": "image/png" }, [ascii("<html>")]),
     );
     expect(await readChatPicture(html.ctx, KEY, ARTIFACT)).toEqual({
       status: "failed",

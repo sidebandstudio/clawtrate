@@ -263,6 +263,7 @@ async function imageChecks(
   try {
     const { passed, failed } = await runScenarioChecks(clients, {
       only: (check) => check.name === IMAGE_CHECK,
+      images: true,
     });
     console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;
