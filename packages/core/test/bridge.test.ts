@@ -474,4 +474,40 @@ describe("reloadSession", () => {
       client.stop();
     }
   });
+
+  it("F-105: a duplicate reload while a read is pending is coalesced so the first read settles the transcript", async () => {
+    const { client, gateway } = await openTask();
+    const first = createBridgeSession(client);
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => client.state.transcripts[KEY]?.status === "error");
+
+      // The first retry starts a read; a second retry arrives in a later turn before it settles.
+      const read = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => read.promise;
+      const before = gateway.calls("chat.history").length;
+      await first.apply({ type: "reloadSession", key: KEY });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+      await first.apply({ type: "reloadSession", key: KEY });
+
+      // A queued second read would fail and replace the first read's success with error.
+      gateway.handlers["chat.history"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
+      };
+      read.resolve({ messages: [], hasMore: false });
+      await until(() => client.state.transcripts[KEY]?.status !== "loading");
+      await client.historyReadsSettled(KEY);
+      await client.historyReadsSettled(KEY);
+      expect(gateway.calls("chat.history")).toHaveLength(before + 1);
+      expect(client.state.transcripts[KEY]?.status).toBe("ready");
+    } finally {
+      first.dispose();
+      client.stop();
+    }
+  });
 });

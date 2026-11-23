@@ -557,6 +557,8 @@ test.describe("a failed history", () => {
     refuseReopen(key: string, error: string): void;
     hold(): void;
     release(): void;
+    holdSnapshots(): void;
+    releaseSnapshots(): void;
     reads: string[];
     sent: Command[];
     holds(key: string): number;
@@ -914,6 +916,39 @@ test.describe("a failed history", () => {
       KEY,
     );
     expect(reloadsAfter).toBe(reloadsBefore + 1);
+    expect(await holds(page)).toBe(1);
+  });
+
+  test("F-105: clicking Try again a second time before the loading snapshot arrives still reads once", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const turns = await page.getByTestId("transcript-turn").count();
+    expect(turns).toBeGreaterThan(0);
+    await fail(page, true);
+    const note = page.locator(".load-note");
+    await expect(note).toContainText("Couldn't refresh this conversation.");
+    const before = await reads(page);
+
+    // Hold both the read's answer and state snapshots so the first command settles while Try again
+    // is still visible, then send a second click in a later turn.
+    await page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      fixture.hold();
+      fixture.holdSnapshots();
+    });
+    await note.getByRole("button", { name: "Try again" }).click();
+    await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    await note.getByRole("button", { name: "Try again" }).click();
+
+    await page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+      fixture.releaseSnapshots();
+      fixture.release();
+    });
+    await expect(note).toHaveCount(0);
+    await expect.poll(() => reads(page)).toBe(before + 1);
+    await expect(page.getByTestId("transcript-turn")).toHaveCount(turns);
     expect(await holds(page)).toBe(1);
   });
 });

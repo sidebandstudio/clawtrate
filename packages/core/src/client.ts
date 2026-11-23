@@ -1894,28 +1894,7 @@ export class ClawtrateClient {
     if (count > 0) {
       // A view coming to a task whose history failed asks for it, as a first open would,
       // unless a read already under way will settle it.
-      const current = this.state.transcripts[key];
-      if (current?.status !== "error") return;
-      const load = this.loads.get(key);
-      if (!load) {
-        this.reloadSession(key);
-        return;
-      }
-      // Capture the incarnation before publishing loading: a synchronous store listener can close
-      // every hold and reopen the same key, replacing it before this open returns.
-      const incarnation = this.incarnations.get(key);
-      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
-      // A read that published its failure while this view arrived (its listeners run before it
-      // ends) settles nothing more: still loading once it ends, the task is read again. A close
-      // and reopen between here and then is a different task, so its incarnation must still match.
-      void load.done.then(() => {
-        if (
-          this.openSessions.has(key) &&
-          this.incarnations.get(key) === incarnation &&
-          this.state.transcripts[key]?.status === "loading"
-        )
-          this.reloadSession(key);
-      });
+      if (this.state.transcripts[key]?.status === "error") this.reloadSession(key);
       return;
     }
     // A task closed with unsent work was kept: reopening shows the same queue.
@@ -1936,6 +1915,28 @@ export class ClawtrateClient {
   reloadSession(key: string): void {
     if (!this.openSessions.has(key)) throw new Error("That task isn't open.");
     const current = this.state.transcripts[key];
+    const load = this.loads.get(key);
+    if (load) {
+      // A read already under way settles this task; coalescing avoids queuing a second read
+      // behind it (for instance from a second Try again before the loading snapshot arrives).
+      if (current?.status !== "error") return;
+      // Capture the incarnation before publishing loading: a synchronous store listener can close
+      // every hold and reopen the same key, replacing it before this call returns.
+      const incarnation = this.incarnations.get(key);
+      this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
+      // A read that published its failure while this retry arrived (its listeners run before it
+      // ends) settles nothing more: still loading once it ends, the task is read again. A close
+      // and reopen between here and then is a different task, so its incarnation must still match.
+      void load.done.then(() => {
+        if (
+          this.openSessions.has(key) &&
+          this.incarnations.get(key) === incarnation &&
+          this.state.transcripts[key]?.status === "loading"
+        )
+          this.reloadSession(key);
+      });
+      return;
+    }
     if (current?.status === "error")
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
     if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);

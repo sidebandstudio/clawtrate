@@ -551,6 +551,9 @@ export function createFixtureBridge(
    */
   hold(): void;
   release(): void;
+  /** Hold state snapshots from reaching subscribers until `releaseSnapshots`, as IPC/WS can delay them. */
+  holdSnapshots(): void;
+  releaseSnapshots(): void;
   /** Takes the Computer pane has shown refused as busy so far (`computerFixture`'s `refusals`). */
   computerRefusals(): number;
 } {
@@ -624,8 +627,14 @@ export function createFixtureBridge(
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
   let histories = state.transcripts;
   const listeners = new Set<(state: ClawtrateState) => void>();
+  let holdSnapshots = false;
+  let snapshotPending = false;
   const set = (next: ClawtrateState) => {
     state = next;
+    if (holdSnapshots) {
+      snapshotPending = true;
+      return;
+    }
     for (const listener of listeners) listener(state);
   };
   const computer =
@@ -1139,6 +1148,15 @@ export function createFixtureBridge(
     raceArchive: () => void (railRace.archive = true),
     hold: timers.hold,
     release: timers.release,
+    holdSnapshots: () => {
+      holdSnapshots = true;
+    },
+    releaseSnapshots: () => {
+      holdSnapshots = false;
+      if (!snapshotPending) return;
+      snapshotPending = false;
+      for (const listener of listeners) listener(state);
+    },
     computerRefusals: () => computer?.refusals() ?? 0,
   };
 }
