@@ -35,7 +35,7 @@ import {
   type ComposerView,
   type SendMode,
 } from "./live.ts";
-import { useStartFromMessage } from "./LiveTurn.tsx";
+import { useResendElsewhere, useStartFromMessage } from "./LiveTurn.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 
 /** The gateway's limits, checked as files are added (conversation.md, section 15). */
@@ -260,6 +260,8 @@ export function Composer({
   const sendRef = useRef<HTMLButtonElement>(null);
 
   const runId = transcript?.runs.find((run) => run.state !== "queued" && isLive(run))?.id ?? null;
+  // The task's session as drawn: a send goes there only, whatever the host learns before it arrives.
+  const shownSession = transcript?.sessionId;
   const view: ComposerView = composerFor(transcript, {
     bot: bot.name,
     connected,
@@ -383,6 +385,7 @@ export function Composer({
           text: body,
           mode: how === "queue" ? "queue" : "auto",
           attachmentIds,
+          ...(shownSession ? { sessionId: shownSession } : {}),
         });
         // A pending question holds every message, however it was sent.
         if (view.mode === "hold") onAnnounce("Held until you answer");
@@ -421,6 +424,7 @@ export function Composer({
       view,
       stop,
       runId,
+      shownSession,
     ],
   );
 
@@ -1084,8 +1088,9 @@ function isLive(run: Run): boolean {
 /**
  * One unsent message on the shelf, in the same words and with the same recovery wherever it
  * shows: "Not sent" (Send, Remove), "Couldn't start" (Try again, Delete; or, refused because its
- * task was deleted or archived elsewhere, Start a new task with this message, Delete), "Held until
- * you answer" (Edit, Cancel) or "Queued" (Send now, Cancel) (conversation.md, section 15).
+ * task was deleted, archived or reset elsewhere, Start a new task with this message, Delete, and
+ * Try again once the task is live again), "Held until you answer" (Edit, Cancel) or "Queued"
+ * (Send now, Cancel) (conversation.md, section 15).
  */
 export function ShelfRow({
   message,
@@ -1110,6 +1115,7 @@ export function ShelfRow({
 }) {
   const bridge = useBridge();
   const startNew = useStartFromMessage(message, taskKey, onAnnounce);
+  const resend = useResendElsewhere(message, taskKey);
   const send = (type: "retryMessage" | "deleteMessage" | "cancelQueued" | "sendQueuedNow") =>
     act(() => bridge.send({ type, key: taskKey, messageId: message.id }));
   if (message.status === "not-sent") {
@@ -1166,17 +1172,24 @@ export function ShelfRow({
             Try again
           </button>
         ) : (
-          startNew.offered && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              disabled={startNew.starting}
-              onClick={() => act(startNew.start)}
-            >
-              Start a new task with this message
-            </button>
-          )
+          <>
+            {resend && (
+              <button type="button" className="button" data-size="sm" onClick={() => act(resend)}>
+                Try again
+              </button>
+            )}
+            {startNew.offered && (
+              <button
+                type="button"
+                className="button"
+                data-size="sm"
+                disabled={startNew.starting}
+                onClick={() => act(startNew.start)}
+              >
+                Start a new task with this message
+              </button>
+            )}
+          </>
         )}
         <button
           type="button"

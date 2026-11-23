@@ -1361,8 +1361,14 @@ test.describe("steering, queueing and holding", () => {
     await expect(row).toContainText("Then send me a summary.");
     await expect(row.getByRole("button", { name: "Try again" })).toHaveCount(0);
     await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
-    // Its words were all of it: it leaves this task for the new one.
+    // Its words were all of it: it leaves this task for the new one, which opens holding them.
     await row.getByRole("button", { name: "Start a new task with this message" }).click();
+    await expect(
+      page.locator('[data-testid="task"][data-key="agent:otto:new-task"]'),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await expect(page.getByTestId("outgoing")).toContainText("Then send me a summary.");
+    await expect(page.getByTestId("outgoing")).not.toContainText("deleted elsewhere");
     await expect(page.getByTestId("shelf-row")).toHaveCount(0);
   });
 

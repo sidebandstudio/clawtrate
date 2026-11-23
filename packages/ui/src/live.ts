@@ -15,8 +15,9 @@ import {
   isActive,
   runningRunId,
   questionPending,
+  refusedElsewhere,
   TASK_ARCHIVED_ELSEWHERE,
-  TASK_DELETED_ELSEWHERE,
+  TASK_RESET_ELSEWHERE,
   type OutgoingMessage,
   type Run,
   type Transcript,
@@ -300,15 +301,25 @@ export function couldNotStart(message: OutgoingMessage): boolean {
   return message.status === "failed" && message.mode === "queue";
 }
 
+export { refusedElsewhere };
+
 /**
- * A message the gateway refused because its task was deleted or archived elsewhere: sent again it
- * would be refused the same way, so it offers a new task instead (F-278, F-277).
+ * Where Resend sends a message refused because its task was archived or reset elsewhere, once the
+ * gateway shows the task live again: listed, so not archived, and its history naming the session
+ * the screen shows. Restored, that is the session the message was written for; reset, the one
+ * that followed it. It goes there only by the person's choice, and is checked there as any send
+ * is. Null for a deleted task, and while the task is not live again.
  */
-export function refusedElsewhere(message: OutgoingMessage): boolean {
-  return (
-    message.status === "failed" &&
-    (message.error === TASK_DELETED_ELSEWHERE || message.error === TASK_ARCHIVED_ELSEWHERE)
-  );
+export function resendSession(
+  message: OutgoingMessage,
+  transcript: Transcript | undefined,
+  listed: boolean,
+): string | null {
+  const shown = transcript?.sessionId;
+  if (!listed || !shown || message.status !== "failed") return null;
+  if (message.error === TASK_ARCHIVED_ELSEWHERE) return shown === message.sessionId ? shown : null;
+  if (message.error === TASK_RESET_ELSEWHERE) return shown !== message.sessionId ? shown : null;
+  return null;
 }
 
 /** Messages shown as your bubbles at the foot of the transcript, in the order sent. */

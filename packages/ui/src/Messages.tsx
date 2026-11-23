@@ -595,6 +595,8 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         mode: "auto",
         attachmentIds: [],
         replyToId: messageId,
+        // The task as drawn: the reply goes there only, whatever the host learns meanwhile.
+        ...(transcript.sessionId ? { sessionId: transcript.sessionId } : {}),
       });
       sent.current.set(answer.messageId, { id: answer.messageId, mode: "new", runId: null });
       setAdded((count) => count + 1);

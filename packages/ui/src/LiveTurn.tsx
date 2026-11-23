@@ -20,7 +20,7 @@ import { OpenTaskContext } from "./cards/context.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf, refusedElsewhere } from "./live.ts";
+import { endingOf, refusedElsewhere, resendSession } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
 
 /**
@@ -79,6 +79,27 @@ export function useStartFromMessage(
   };
 }
 
+/**
+ * Resend on a message refused because its task was archived or reset elsewhere, once the gateway
+ * shows the task live again (`resendSession`): to the session the screen shows, only by the
+ * person's choice. Null while there is nothing it could be sent to.
+ */
+export function useResendElsewhere(message: OutgoingMessage, taskKey: string): (() => void) | null {
+  const bridge = useBridge();
+  const state = useClawtrateState();
+  const botId = botIdFromSessionKey(taskKey);
+  const listed = Boolean(botId && state.tasksByBot[botId]?.some((task) => task.key === taskKey));
+  const session = resendSession(message, state.transcripts[taskKey], listed);
+  if (!session) return null;
+  return () =>
+    void bridge.send({
+      type: "retryMessage",
+      key: taskKey,
+      messageId: message.id,
+      sessionId: session,
+    });
+}
+
 /** Your message while the engine holds it, with what is known about its delivery. */
 export function OutgoingBubble({
   message,
@@ -94,6 +115,7 @@ export function OutgoingBubble({
 }) {
   const bridge = useBridge();
   const startNew = useStartFromMessage(message, taskKey, announce);
+  const resend = useResendElsewhere(message, taskKey);
   const retry = () =>
     void bridge.send({ type: "retryMessage", key: taskKey, messageId: message.id });
   const remove = () =>
@@ -143,12 +165,18 @@ export function OutgoingBubble({
       break;
     case "failed":
       caption = refusedElsewhere(message) ? (
-        // Sent again it would be refused the same way: the gateway no longer takes work here.
+        // Sent again to the same session it would be refused the same way. Once the task is live
+        // again, Resend sends it to the session the screen shows.
         <>
           <span>
             Not sent. {message.error}
             {startNew.note && ` ${startNew.note}`}
           </span>
+          {resend && (
+            <button type="button" className="link-button" onClick={resend}>
+              Resend
+            </button>
+          )}
           {startNew.offered && (
             <button
               type="button"
@@ -502,9 +530,10 @@ export function RunEnding({
               data-size="sm"
               onClick={() => {
                 setRetryError(null);
-                // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and history gives the words alone. A reply
-                // goes again as a reply to the same message.
+                // The engine still holds the message: its words and files go again together, to
+                // the session it was written for. Otherwise only history has it, and history
+                // gives the words alone, for the session that history came from. A reply goes
+                // again as a reply to the same message.
                 const held = transcript.outbox.some((message) => message.id === run.messageId);
                 const parent = messageReplyOf(run, transcript);
                 const again = held
@@ -516,6 +545,7 @@ export function RunEnding({
                       mode: "auto",
                       attachmentIds: [],
                       ...(parent ? { replyToId: parent } : {}),
+                      ...(transcript.sessionId ? { sessionId: transcript.sessionId } : {}),
                     });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),

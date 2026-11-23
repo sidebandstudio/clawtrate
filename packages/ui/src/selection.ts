@@ -1,10 +1,4 @@
-import {
-  TASK_ARCHIVED_ELSEWHERE,
-  TASK_DELETED_ELSEWHERE,
-  type Bot,
-  type ClawtrateState,
-  type Task,
-} from "@clawtrate/core";
+import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
 import { useCallback, useMemo, useState } from "react";
 import { readIdSet, readPreference, writeIdSet, writePreference } from "./preferences.ts";
 import { isUnread, markSeen, type SeenMap } from "./unread.ts";
@@ -135,10 +129,11 @@ export function visibleTasks<T extends { key: string }>(
 }
 
 /**
- * The task on screen, when the gateway deleted or archived it while a message written in it was on
- * its way, queued or held, or refused the message for that reason: it stays on screen with the
- * message and its words until the person leaves it or deletes the message (F-278, F-277). Null for
- * a task still listed, or any other.
+ * The task on screen, when it left the list while a message written in it was on its way, queued
+ * or held, or after the gateway refused one, for its task being deleted, archived or reset
+ * elsewhere or for a reason Clawtrate does not know: it stays on screen with the message and its
+ * words until the person leaves it, sends it again or deletes it (F-278, F-277). Null for a task
+ * still listed, or any other.
  */
 export function keptOnScreen(
   shown: Task | null,
@@ -154,8 +149,7 @@ export function keptOnScreen(
       message.status === "checking" ||
       message.status === "queued" ||
       message.status === "held" ||
-      (message.status === "failed" &&
-        (message.error === TASK_DELETED_ELSEWHERE || message.error === TASK_ARCHIVED_ELSEWHERE)),
+      message.status === "failed",
   );
   return waits ? shown : null;
 }

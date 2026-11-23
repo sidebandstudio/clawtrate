@@ -152,7 +152,7 @@ describe("F-278 F-277: a task deleted or archived elsewhere while a message writ
   const holding = (...messages: Array<Partial<OutgoingMessage>>) =>
     ({ gone: { outbox: messages } }) as unknown as ClawtrateState["transcripts"];
 
-  it("stays on screen while the message is on its way, queued or held, and once it was refused as deleted", () => {
+  it("stays on screen while the message is on its way, queued or held, and once it was refused, for whatever reason", () => {
     for (const status of ["sending", "awaiting-access", "checking", "queued", "held"] as const) {
       expect(keptOnScreen(gone, "otto", [other], holding({ status }))).toBe(gone);
     }
@@ -160,16 +160,18 @@ describe("F-278 F-277: a task deleted or archived elsewhere while a message writ
     expect(keptOnScreen(gone, "otto", [other], refused)).toBe(gone);
     const archived = holding({ status: "failed", error: TASK_ARCHIVED_ELSEWHERE });
     expect(keptOnScreen(gone, "otto", [other], archived)).toBe(gone);
+    // A refusal whose words Clawtrate does not know: the message keeps Resend, and its task stays.
+    const unknown = holding({ status: "failed", error: "Something the gateway newly says." });
+    expect(keptOnScreen(gone, "otto", [other], unknown)).toBe(gone);
   });
 
-  it("gives way otherwise: a task still listed, another bot's, one with nothing out, or one refused for another reason", () => {
+  it("gives way otherwise: a task still listed, another bot's, or one with nothing out", () => {
     const out = holding({ status: "sending" });
     expect(keptOnScreen(gone, "otto", [gone, other], out)).toBeNull();
     expect(keptOnScreen(gone, "pip", [other], out)).toBeNull();
     expect(keptOnScreen(gone, "otto", [other], holding())).toBeNull();
     expect(keptOnScreen(gone, "otto", [other], {})).toBeNull();
-    const failed = holding({ status: "failed", error: "budget exhausted" });
-    expect(keptOnScreen(gone, "otto", [other], failed)).toBeNull();
+    expect(keptOnScreen(gone, "otto", [other], holding({ status: "sent" }))).toBeNull();
     expect(keptOnScreen(null, "otto", [other], out)).toBeNull();
   });
 });

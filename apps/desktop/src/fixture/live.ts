@@ -7,6 +7,7 @@ import {
   applyQuestionRequested,
   emptyActivity,
   INTERACTIVE_SCOPES,
+  mapSessionRow,
   newRun,
   parseExecApproval,
   RawTable,
@@ -1008,7 +1009,8 @@ export function liveCommand(
       return Promise.resolve({ key: "agent:otto:new-task" });
     case "startTaskFromMessage": {
       // As the engine does: a message without files leaves its task; one with files stays, with
-      // the task its words went to, and is offered the choice no more.
+      // the task its words went to, and is offered the choice no more. The new task is listed
+      // first under the bot, holding the words as its first message.
       const refused = get().transcripts[OPEN_TASK]?.outbox.find(
         (each) => each.id === command.messageId,
       );
@@ -1024,6 +1026,41 @@ export function liveCommand(
                 each.id === command.messageId ? { ...each, startedTask: key } : each,
               ),
       }));
+      const state = get();
+      const row = mapSessionRow({ key, agentId: "otto", label: refused.text, updatedAt: now });
+      const first: OutgoingMessage = {
+        id: `${refused.id}-new`,
+        text: refused.text,
+        mode: "new",
+        status: "sent",
+        runId: null,
+        messageSeq: null,
+        leftAt: now,
+        createdAt: now,
+        error: null,
+        attachments: [],
+      };
+      set({
+        ...state,
+        tasksByBot: { ...state.tasksByBot, otto: [row!, ...(state.tasksByBot.otto ?? [])] },
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...emptyActivity,
+            outbox: [first],
+            sessionKey: key,
+            status: "ready",
+            items: [],
+            error: null,
+            hasMore: false,
+            live: null,
+            linkedRuns: {},
+            interSession: [],
+            mcpTools: {},
+            loadedAt: now,
+          },
+        },
+      });
       return Promise.resolve({ key });
     }
     case "setTurnLimit":
