@@ -3,8 +3,8 @@
 // every state of sections 17 to 19, the full view and its control bar, and
 // the machine. The fixture answers with the engine itself and a scripted
 // computer plugin (apps/desktop/src/fixture/computer.ts).
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 import {
   COMPUTER,
   computerPanel,

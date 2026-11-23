@@ -5,8 +5,8 @@
 // schedule it doesn't write, Run now, the delete confirmation and the row's
 // menu. The read-only list and page are in routines.visual.spec.ts. The
 // fixture's routines are made up (apps/desktop/src/fixture/routines.ts).
-import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
+import { test, type Page } from "@playwright/test";
+import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query?: string; ready: (page: Page, phone: boolean) => Promise<void> };
 

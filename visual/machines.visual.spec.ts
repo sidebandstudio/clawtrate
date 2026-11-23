@@ -2,9 +2,10 @@
 // 15 and 19) against approved baselines. The main states at 1440, 1100, 800 and
 // 390 px in light and dark; the rest at 1440 and 390 in light. The fixture's
 // machines and devices are made up (apps/desktop/src/fixture/machines.ts).
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import {
   contextFor,
+  expect,
   hold,
   openFixture,
   OTTO_DISK,
