@@ -127,8 +127,7 @@ public static class UpdateVersions {
     if (!none || error < 1812 || error > 1815) throw new IOException("Resource enumeration failed", error);
   }
   // One resource's bytes, as long as the resource says it is, which its data must hold.
-  static byte[] Bytes(IntPtr module, IntPtr name, ushort language) {
-    IntPtr found = FindResourceExW(module, VersionType, name, language);
+  static byte[] Bytes(IntPtr module, IntPtr found) {
     IntPtr loaded = found == IntPtr.Zero ? IntPtr.Zero : LoadResource(module, found);
     IntPtr at = loaded == IntPtr.Zero ? IntPtr.Zero : LockResource(loaded);
     uint size = at == IntPtr.Zero ? 0 : SizeofResource(module, found);
@@ -163,7 +162,16 @@ public static class UpdateVersions {
           Ended(languages.Count, false);
       }
       var resources = new List<byte[]>();
-      foreach (var each in languages) resources.Add(Bytes(module, each.Key, each.Value));
+      var entries = new List<IntPtr>();
+      foreach (var each in languages) {
+        IntPtr found = FindResourceExW(module, VersionType, each.Key, each.Value);
+        // Each one Windows finds at an entry of its own. A name and language listed twice, or a
+        // name "#1", which Windows reads as the number 1, beside that number, lead two of them to
+        // one entry, so one resource would be read twice and another never.
+        if (entries.Contains(found)) throw new InvalidDataException("Version resources Windows finds at one entry");
+        entries.Add(found);
+        resources.Add(Bytes(module, found));
+      }
       return resources;
     } finally {
       foreach (var each in names) if (!IsNumber(each)) Marshal.FreeHGlobal(each);

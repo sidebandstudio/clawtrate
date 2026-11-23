@@ -205,6 +205,34 @@ function languagesTree(...resources: [language: number, resource: Buffer][]) {
   ]);
 }
 
+/** A resource table with a version resource under a string name and one under name 1, each in
+ * language 0x409. Windows lists the string name first. */
+function namedTree(name: string, named: Buffer, numbered: Buffer) {
+  // The string: its length in characters, then the characters, at offset 136.
+  const label = pad(Buffer.concat([Buffer.alloc(2), Buffer.from(name, "utf16le")]));
+  label.writeUInt16LE(name.length, 0);
+  // Type 16's directory: one entry named by that string, then name 1's.
+  const names = Buffer.alloc(32);
+  names.writeUInt16LE(1, 12);
+  names.writeUInt16LE(1, 14);
+  names.writeUInt32LE((0x80000000 | 136) >>> 0, 16);
+  names.writeUInt32LE((DIRECTORY | 56) >>> 0, 20);
+  names.writeUInt32LE(1, 24);
+  names.writeUInt32LE((DIRECTORY | 80) >>> 0, 28);
+  const at = 136 + label.length;
+  return Buffer.concat([
+    directory([DIRECTORY | 24], 16),
+    names,
+    directory([104], 0x409),
+    directory([120], 0x409),
+    dataEntry(at, named.length),
+    dataEntry(at + pad(named).length, numbered.length),
+    label,
+    pad(named),
+    numbered,
+  ]);
+}
+
 /** Every name of type 16 leads to one directory, and every language there to one data entry,
  * so a reader without limits parses the same resource count × count times. */
 function loopingTree(count: number) {
@@ -436,6 +464,30 @@ if (windows)
       ]);
     });
 
+    // Windows lists each of these, but finds both at the one entry, so the other resource, at
+    // another release here, would never be read.
+    test("F-231: refuses one name and language listed twice", async () => {
+      const tree = languagesTree([0x409, release], [0x409, german("1.2.1")]);
+      const { lines } = await readVersions(place("setup.exe", portable(tree)));
+      expect(lines).toEqual(["refused InvalidDataException"]);
+    });
+
+    test("F-231: refuses a name #1 beside the number 1", async () => {
+      const tree = namedTree("#1", german("1.2.1"), release);
+      const { lines } = await readVersions(place("setup.exe", portable(tree)));
+      expect(lines).toEqual(["refused InvalidDataException"]);
+    });
+
+    test("F-231: gives a version resource under a string name beside name 1's", async () => {
+      const tree = namedTree("VERSION", german("1.2.1"), release);
+      const { lines } = await readVersions(place("setup.exe", portable(tree)));
+      expect(lines).toEqual([
+        "versions 2",
+        `resource 1.2.0.0 ${base64("1.2.1")}`,
+        `resource 1.2.0.0 ${base64("1.2.0")}`,
+      ]);
+    });
+
     test("F-231: refuses a copy without the held file's SHA-512, and removes it", async () => {
       const path = place("setup.exe", portable(versionTree(release)));
       const { lines } = await readVersions(path, { sha512: "A".repeat(86) + "==" });
@@ -515,7 +567,7 @@ if (windows)
           directory([DIRECTORY | 48]),
           directory(
             Array.from({ length: 17 }, (_, i) => 48 + 16 + 8 * 17 + 16 * i),
-            0x409,
+            Array.from({ length: 17 }, (_, i) => 0x401 + i),
           ),
           ...Array.from({ length: 17 }, () =>
             dataEntry(48 + 16 + 8 * 17 + 16 * 17, release.length),
