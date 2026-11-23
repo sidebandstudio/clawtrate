@@ -62,7 +62,12 @@ async function shots(page: Page, name: string): Promise<void> {
   ] as const) {
     await page.setViewportSize({ width, height });
     await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
-    await page.waitForTimeout(300);
+    // The new size and theme are laid out and drawn: the size is the window's, and two frames pass.
+    await page.waitForFunction(
+      (seen) => window.innerWidth === seen.width && ++seen.runs > 2,
+      { width, runs: 0 },
+      { polling: "raf" },
+    );
     await page.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
   }
   await page.setViewportSize(size);
@@ -71,9 +76,10 @@ async function shots(page: Page, name: string): Promise<void> {
 
 async function open(browser: Browser, readOnly: boolean): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-machines-"));
-  const started = startHost(INSTANCE, STATIC, data, { readOnly });
+  let started: ReturnType<typeof startHost> | null = null;
   let context: BrowserContext | null = null;
   try {
+    started = startHost(INSTANCE, STATIC, data, { readOnly });
     started.gated.release();
     const url = await started.url;
     context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -89,7 +95,7 @@ async function open(browser: Browser, readOnly: boolean): Promise<Host> {
   } catch (error) {
     // Not yet a Host that afterAll knows of: released here, each step on its own.
     await context?.close().catch(() => {});
-    await stopChild(started.host).catch(() => {});
+    if (started) await stopChild(started.host).catch(() => {});
     rmSync(data, { recursive: true, force: true });
     throw error;
   }
@@ -158,6 +164,28 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
+  // The hosts go first: each restore can wait the full request timeout, and they need only `admin`.
+  // Each resource is released on its own, so one failure leaves none of the others behind.
+  const release = async (steps: Array<() => unknown>) => {
+    for (const step of steps) {
+      try {
+        await step();
+      } catch (error) {
+        console.warn(`machines cleanup: ${String(error)}`);
+      }
+    }
+  };
+  await release(
+    [writer, reader].flatMap((host) =>
+      host
+        ? [
+            () => host.page.context().close(),
+            () => stopChild(host.child),
+            () => rmSync(host.data, { recursive: true, force: true }),
+          ]
+        : [],
+    ),
+  );
   // Put back Otto's settings: its command placement and deny list, and its workspace, each on its
   // own. Only what beforeAll recorded is put back; failures are reported after everything is closed.
   const restores: Array<() => Promise<void>> = [];
@@ -206,23 +234,7 @@ test.afterAll(async () => {
       restoreErrors.push(error);
     }
   }
-  // Each resource is released on its own, so one failure leaves none of the others behind.
-  const steps: Array<() => unknown> = [() => admin?.close()];
-  for (const host of [writer, reader]) {
-    if (!host) continue;
-    steps.push(
-      () => host.page.context().close(),
-      () => stopChild(host.child),
-      () => rmSync(host.data, { recursive: true, force: true }),
-    );
-  }
-  for (const step of steps) {
-    try {
-      await step();
-    } catch (error) {
-      console.warn(`machines cleanup: ${String(error)}`);
-    }
-  }
+  await release([() => admin?.close()]);
   if (restoreErrors.length === 1) throw restoreErrors[0];
   if (restoreErrors.length > 1) throw new AggregateError(restoreErrors, "machines restore failed");
 });
@@ -322,6 +334,7 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   if (said.startsWith("Saved and applied")) {
     // Nothing else writes during the check, so the revision now stored is the one the save's
     // receipt named (core's unit checks pin the receipt rule itself).
+    expect(read.hash, "the revision the save made").toEqual(expect.any(String));
     expect(read.hash, "the revision the save made").not.toBe(unsaved.hash);
     expect(read.configRevisionHash, "the revision the gateway reports").toEqual(expect.any(String));
     expect(read.appliedConfigHash).toBe(read.configRevisionHash);
