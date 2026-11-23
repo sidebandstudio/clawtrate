@@ -608,6 +608,32 @@ describe("connecting", () => {
       }
     });
 
+    it("F-457: a Disconnect still fails when the saved gateway read rejects without a reason", async () => {
+      const storage = memoryStorage({ connection: JSON.stringify({ url: URL, token: null }) });
+      const gate = deferred<void>();
+      const reading = deferred<void>();
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (key !== "connection") return get(key);
+        reading.resolve();
+        await gate.promise;
+        return Promise.reject(undefined);
+      };
+      const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+      try {
+        const starting = client.start();
+        await reading.promise;
+        const forgetting = client.disconnect(URL);
+        gate.resolve();
+        await expect(starting).rejects.toBeUndefined();
+        await expect(forgetting).rejects.toBeUndefined();
+        expect(savedSettings(storage)?.url).toBe(URL);
+      } finally {
+        gate.resolve();
+        client.stop();
+      }
+    });
+
     it.each(["suspend", "disconnect"] as const)(
       "F-457: stopping when startup shows the gateway keeps a queued %s from writing",
       async (action) => {
@@ -712,6 +738,7 @@ describe("connecting", () => {
         await Promise.all([starting, retrying]);
         await until(() => client.state.connection.status === "connected");
         expect(client.state.connection.gatewayUrl).toBe(URL);
+        expect(gateway.sockets).toHaveLength(1);
       } finally {
         release();
         client.stop();

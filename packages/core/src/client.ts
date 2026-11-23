@@ -1180,8 +1180,8 @@ export class ClawtrateClient {
    * it acts on the saved gateway; `start` waits for those `commands` before it opens anything.
    */
   private restoring: {
-    read: Promise<unknown>;
-    release: (failure?: unknown) => void;
+    read: Promise<{ failed: false } | { failed: true; error: unknown }>;
+    release: (outcome: { failed: false } | { failed: true; error: unknown }) => void;
     commands: Promise<unknown>[];
   } | null = null;
   /** Each Disconnect, Suspend or Retry that acted on the gateway, counted as it does. */
@@ -1560,9 +1560,9 @@ export class ClawtrateClient {
     const stops = this.stops;
     const restoring = this.restoring;
     const run = this.changeConnection(async () => {
-      const failure = await restoring?.read;
+      const outcome = await restoring?.read;
       if (stops !== this.stops) return;
-      if (failure !== undefined) throw failure;
+      if (outcome?.failed) throw outcome.error;
       return change(stops);
     });
     restoring?.commands.push(run);
@@ -1580,12 +1580,13 @@ export class ClawtrateClient {
     const prior = this.settings;
     // Published before the first wait: a command sent while the identity loads waits too.
     const commands = this.connectionCommands;
-    let release!: (failure?: unknown) => void;
-    const read = new Promise<unknown>((resolve) => (release = resolve));
+    type ReadOutcome = { failed: false } | { failed: true; error: unknown };
+    let release!: (outcome: ReadOutcome) => void;
+    const read = new Promise<ReadOutcome>((resolve) => (release = resolve));
     const restoring = { read, release, commands: [] as Promise<unknown>[] };
     this.restoring = restoring;
     let settings: ConnectionSettings | null;
-    let failure: unknown;
+    let outcome: ReadOutcome = { failed: false };
     try {
       try {
         const identity = await this.loadIdentity();
@@ -1610,10 +1611,10 @@ export class ClawtrateClient {
           return;
         this.settings = settings;
       } catch (error) {
-        failure = error;
+        outcome = { failed: true, error };
         throw error;
       } finally {
-        release(failure);
+        release(outcome);
       }
       // Publish before clearing `restoring` so commands sent from this notification wait ahead of resume.
       if (restoring.commands.length > 0 && settings) {
@@ -1976,7 +1977,7 @@ export class ClawtrateClient {
   stop(): void {
     this.stops += 1;
     // A command waiting for startup's read no longer holds other clients' writes.
-    this.restoring?.release();
+    this.restoring?.release({ failed: false });
     const signal = this.stopSignal;
     this.stopSignal = null;
     signal?.resolve();

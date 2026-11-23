@@ -166,10 +166,22 @@ describe("clients sharing a store keep each other's saved gateway", () => {
 
     it("F-457: a stopped client's Suspend no longer holds another client's Connect", async () => {
       const { storage, reading, release } = pausedRead("turn-limit-minutes", "before");
+      const set = storage.set;
+      const remove = storage.delete;
+      const writes: string[] = [];
+      let deletes = 0;
+      storage.set = (key, value) => {
+        if (key === "connection") writes.push(value);
+        return set(key, value);
+      };
+      storage.delete = (key) => {
+        if (key === "connection") deletes += 1;
+        return remove(key);
+      };
       const client = new ClawtrateClient(testHost(pairingGateway("token-A"), storage), FAST);
       const other = new ClawtrateClient(testHost(pairingGateway("token-B"), storage), FAST);
       try {
-        void client.start();
+        const starting = client.start();
         await reading;
         const suspending = client.suspend();
         client.stop();
@@ -179,6 +191,10 @@ describe("clients sharing a store keep each other's saved gateway", () => {
         await until(() => connected);
         expect(saved(storage)?.url).toBe(URL_B);
         await Promise.all([suspending, connecting]);
+        release();
+        await starting;
+        expect(writes).toEqual([JSON.stringify({ url: URL_B, token: null })]);
+        expect(deletes).toBe(0);
       } finally {
         release();
         other.stop();
