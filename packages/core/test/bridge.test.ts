@@ -345,6 +345,9 @@ describe("openSession", () => {
       gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
       await until(() => gateway.calls("chat.history").length === before + 1);
 
+      // Capture the old read's promise while its entry is still in `loads`.
+      const oldRead = client.historyReadsSettled(KEY);
+
       // A view arrives while the refresh is held: it schedules a reread for when the read ends.
       client.openSession(KEY);
       expect(client.state.transcripts[KEY]?.status).toBe("loading");
@@ -366,12 +369,12 @@ describe("openSession", () => {
       gateway.handlers["chat.history"] = () => {
         throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
       };
+      // Spy after `openSession` so we catch a stale retry even when the replacement read is loading.
+      const reloadSpy = vi.spyOn(client, "reloadSession");
       // The old refresh, from the closed task, finishes while the reopen's read is still held.
-      // A buggy reread rides on the reopen's read as its `again`.
       refresh.resolve({ messages: [], hasMore: false });
-      // Let the old read's listeners run so any stale reread is queued before the reopen settles.
-      await Promise.resolve();
-      await Promise.resolve();
+      await oldRead;
+      expect(reloadSpy).not.toHaveBeenCalled();
       reopen.resolve({ messages: [], hasMore: false });
       await until(() => client.state.transcripts[KEY]?.status !== "loading");
       await client.historyReadsSettled(KEY);
@@ -403,6 +406,8 @@ describe("openSession", () => {
       gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
       await until(() => gateway.calls("chat.history").length === before + 1);
 
+      const oldRead = client.historyReadsSettled(KEY);
+
       // When a second open publishes loading, a synchronous store listener closes both holds
       // and reopens the same key, giving it a new incarnation before the second open returns.
       stop = client.store.subscribe(() => {
@@ -421,9 +426,10 @@ describe("openSession", () => {
       gateway.handlers["chat.history"] = () => {
         throw new GatewayError({ code: "UNAVAILABLE", message: "history unavailable" });
       };
+      const reloadSpy = vi.spyOn(client, "reloadSession");
       refresh.resolve({ messages: [], hasMore: false });
-      await Promise.resolve();
-      await Promise.resolve();
+      await oldRead;
+      expect(reloadSpy).not.toHaveBeenCalled();
       reopen.resolve({ messages: [], hasMore: false });
       await until(() => client.state.transcripts[KEY]?.status !== "loading");
       await client.historyReadsSettled(KEY);
@@ -455,6 +461,8 @@ describe("openSession", () => {
         vi.useRealTimers();
       }
 
+      // Capture the abandoned queue while its entry is still installed.
+      const abandoned = client.historyReadsSettled(KEY);
       // The last view closes the task (releasing its loads entry) and reopens it.
       client.closeSession(KEY);
       expect(client.state.transcripts[KEY]).toBeUndefined();
@@ -472,8 +480,7 @@ describe("openSession", () => {
       await client.historyReadsSettled(KEY);
 
       refresh.resolve({ messages: [], hasMore: false });
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      await client.historyReadsSettled(KEY);
+      await abandoned;
       expect(gateway.calls("chat.history")).toHaveLength(before + 2);
       expect(client.state.transcripts[KEY]?.status).toBe("ready");
     } finally {
