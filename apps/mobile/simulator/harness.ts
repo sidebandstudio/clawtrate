@@ -237,9 +237,11 @@ export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
  */
 export function screen(pointsWide: number): (x: number, y: number) => [number, number, number] {
   const file = join(OUTPUT, "screen.png");
-  screenshot(file);
+  const shown = screenshot(file);
   const image = decodePng(readFileSync(file));
-  const scale = image.width / pointsWide;
+  // On iPhone Duo the picture is of the display in use, whose width in points is known:
+  // there a side safe area can keep every element narrower than the screen.
+  const scale = image.width / (shown?.width ?? pointsWide);
   return (x, y) => {
     const i = (Math.round(y * scale) * image.width + Math.round(x * scale)) * 4;
     return [image.data[i]!, image.data[i + 1]!, image.data[i + 2]!];
@@ -267,9 +269,11 @@ function simctl(...args: string[]) {
  * The screen as a PNG. iPhone Duo has two displays, and simctl takes the inner
  * one unless told otherwise, so there the picture is of the display in use.
  */
-function screenshot(file: string) {
-  const active = process.env.CLAWTRATE_IOS_FORM === "duo" && displays().find((d) => d.active);
+function screenshot(file: string): Display | null {
+  const active =
+    process.env.CLAWTRATE_IOS_FORM === "duo" ? (displays().find((d) => d.active) ?? null) : null;
   simctl("io", env.device, "screenshot", ...(active ? [`--display=${active.id}`] : []), file);
+  return active;
 }
 
 /**
@@ -889,11 +893,12 @@ export type MeasuredWindow = {
   sizeClass: "compact" | "regular";
   bar: "none" | "left" | "right";
   regions: number;
+  safe: { top: number; bottom: number; left: number; right: number };
 };
 
 export function measuredWindows(sinceSeconds: number): MeasuredWindow[] {
   const pattern =
-    /window (\d+)x(\d+) hinge=(true|false) sizeClass=(compact|regular) bar=(none|left|right) regions=(\d+)/g;
+    /window (\d+)x(\d+) hinge=(true|false) sizeClass=(compact|regular) bar=(none|left|right) regions=(\d+) safe=(\d+),(\d+),(\d+),(\d+)/g;
   return [...appLog(sinceSeconds).matchAll(pattern)].map((m) => ({
     width: Number(m[1]),
     height: Number(m[2]),
@@ -901,6 +906,7 @@ export function measuredWindows(sinceSeconds: number): MeasuredWindow[] {
     sizeClass: m[4] as MeasuredWindow["sizeClass"],
     bar: m[5] as MeasuredWindow["bar"],
     regions: Number(m[6]),
+    safe: { top: Number(m[7]), bottom: Number(m[8]), left: Number(m[9]), right: Number(m[10]) },
   }));
 }
 

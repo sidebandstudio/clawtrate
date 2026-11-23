@@ -535,7 +535,7 @@ describe("the iOS app", () => {
   // Registered only when `pnpm mobile:check` runs on an iPhone Duo (CLAWTRATE_IOS_DEVICE_TYPE),
   // never on the run's usual iPhone; see docs/development/ios.md.
   if (process.env.CLAWTRATE_IOS_FORM === "duo") {
-    it("on iPhone Duo folded, the outer display keeps the phone's layout: Home, a bot's tasks and a task's chat each fill the screen, one at a time, and Back goes from the chat to the bot's tasks and on to Home", async () => {
+    it("on iPhone Duo folded, the outer display keeps the phone's layout: Home, a bot's tasks and a task's chat each fill the screen inside its safe area, one at a time, clear of the clock and camera at its side, and Back goes from the chat to the bot's tasks and on to Home", async () => {
       // Folded: the outer display is the one in use, and the inner one is off.
       const [outer, inner] = displays().sort((a, b) => a.width * a.height - b.width * b.height);
       expect(outer?.active).toBe(true);
@@ -546,14 +546,16 @@ describe("the iOS app", () => {
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.at(-1)).toMatchObject({ hinge: true, sizeClass: "compact" });
       expect(seen.every((w) => w.sizeClass === "compact")).toBe(true);
-      const width = seen.at(-1)!.width;
+      const { width, safe } = seen.at(-1)!;
       expect(Math.abs(width - outer!.width)).toBeLessThanOrEqual(1);
-      /** The element spans the whole window, as on any iPhone. */
+      // The outer display keeps its clock and camera at a side, not along the top.
+      expect(safe.left + safe.right).toBeGreaterThan(0);
+      /** The element spans the window between its side safe areas, as a screen spans an iPhone. */
       const fills = async (id: string) => {
         const box = (await layout()).get(id)?.[0];
         expect(box, id).toBeDefined();
-        expect(box!.x1, id).toBeLessThanOrEqual(1);
-        expect(Math.abs(box!.x2 - width), id).toBeLessThanOrEqual(1);
+        expect(Math.abs(box!.x1 - safe.left), id).toBeLessThanOrEqual(1);
+        expect(Math.abs(box!.x2 - (width - safe.right)), id).toBeLessThanOrEqual(1);
       };
       await steps("duo-folded-home", [waitFor({ id: "home" }, 30_000), notSee({ id: "no-chat" })]);
       await fills("home");

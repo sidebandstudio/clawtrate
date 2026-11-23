@@ -111,8 +111,10 @@ final class ClawtrateLayoutView: ExpoView {
     onLayoutChange(metrics)
     // One line per change, so a check can tell what the app measured.
     let (hinge, sizeClass, count) = (hasHinge, regular ? "regular" : "compact", regions.count)
+    let safe = [insets.top, insets.bottom, insets.left, insets.right].map { String(Int($0)) }
+      .joined(separator: ",")
     Self.log.notice(
-      "window \(Int(width), privacy: .public)x\(Int(height), privacy: .public) hinge=\(hinge, privacy: .public) sizeClass=\(sizeClass, privacy: .public) bar=\(barEdge, privacy: .public) regions=\(count, privacy: .public)"
+      "window \(Int(width), privacy: .public)x\(Int(height), privacy: .public) hinge=\(hinge, privacy: .public) sizeClass=\(sizeClass, privacy: .public) bar=\(barEdge, privacy: .public) regions=\(count, privacy: .public) safe=\(safe, privacy: .public)"
     )
   }
 }
