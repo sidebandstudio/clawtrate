@@ -137,6 +137,10 @@ jobs:
           echo "CLAWTRATE_OWNER_FIXTURE_HOME=$fixture/fixture-home" >> "$GITHUB_ENV"
       # The settings reader's macOS helper, built with packaging's flags.
       - run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts
+      # The update folders under Electron's own fs, which reads app.asar as a folder (#383).
+      - run: pnpm exec vitest run apps/desktop/test/update/asar-trees.test.ts
+        env:
+          CLAWTRATE_ELECTRON_FS_TESTS: "1"
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
       # What a failed or flaky check saw: the first attempt's actual and difference pictures,
