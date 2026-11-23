@@ -132,8 +132,13 @@ export const waitFor = (selector: Selector | string, ms = 60_000): Step => ({
 export const waitGone = (selector: Selector | string, ms = 60_000): Step => ({
   extendedWaitUntil: { notVisible: selector, timeout: ms },
 });
-export const scrollTo = (selector: Selector, direction: "UP" | "DOWN"): Step => ({
-  scrollUntilVisible: { element: selector, direction, timeout: 30_000 },
+/**
+ * Swipe until the element is wholly on screen. Maestro looks before each swipe
+ * and stops once `ms` has passed, so a long scroll needs time for every swipe
+ * and the settling Maestro waits for before and after it.
+ */
+export const scrollTo = (selector: Selector, direction: "UP" | "DOWN", ms = 30_000): Step => ({
+  scrollUntilVisible: { element: selector, direction, timeout: ms },
 });
 
 type Node = { attributes?: Record<string, string>; children?: Node[] };
