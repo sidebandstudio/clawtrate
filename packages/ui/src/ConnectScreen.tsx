@@ -344,7 +344,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
         <p className="field-hint">
           {PRODUCT_NAME} works with an OpenClaw gateway you already run.{" "}
           {info.fullControl
-            ? "At a secure address (wss://) it asks once for full control; at any other address it asks for read access only."
+            ? "At a secure address (wss://) that isn't localhost, it asks once for full control; at any other address it asks for read access only."
             : "It asks for read access only."}
         </p>
       </form>

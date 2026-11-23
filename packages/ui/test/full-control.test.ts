@@ -47,7 +47,9 @@ describe("the consent line on the address form", () => {
     expect(WHAT_IT_MEANS).toHaveLength(5);
     for (const point of WHAT_IT_MEANS)
       expect(html).toContain(`<li>${point.replace(/'/g, "&#x27;")}</li>`);
-    expect(html).toContain("At a secure address (wss://) it asks once for full control");
+    expect(html).toContain(
+      "At a secure address (wss://) that isn&#x27;t localhost, it asks once for full control",
+    );
   });
 
   for (const url of ["ws://127.0.0.1:18789", "wss://127.0.0.1:18789", "ws://gateway.example", ""]) {

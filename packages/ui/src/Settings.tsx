@@ -507,10 +507,10 @@ export function Settings({
         <p className="settings-note">
           {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
           disconnected.{" "}
-          {connection.canAdmin
-            ? "This device holds admin access, which it asked for to change bots and accounts."
-            : connection.fullPairing
-              ? ""
+          {connection.fullPairing
+            ? ""
+            : connection.canAdmin
+              ? "This device holds admin access, which it asked for to change bots and accounts."
               : holdsAll
                 ? "This device can send, stop and answer."
                 : info.readOnly

@@ -28,6 +28,8 @@ export function protectedGatewayUrl(raw: string): boolean {
     return false;
   }
   if (url.protocol !== "wss:") return false;
+  // An address with a user name, password or fragment can't be used (§4).
+  if (url.username || url.password || url.hash) return false;
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   if (host === "" || host === "localhost" || host.endsWith(".localhost")) return false;
   // The URL parser writes every IPv4 form (decimal, hex, short) as a dotted quad.

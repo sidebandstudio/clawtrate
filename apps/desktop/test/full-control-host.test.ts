@@ -50,6 +50,11 @@ describe("which hosts pair with full control", () => {
     ["without the flag", { secretBox: box }],
     ["without a Keychain box", { fullAccess: true }],
     ["read-only", { secretBox: box, fullAccess: true, readOnly: true }],
+    // The Keychain can't be used, so it runs session-only and asks for read (`SESSION_ONLY`).
+    [
+      "whose Keychain can't be used",
+      { secretBox: { ...box, available: async () => false }, fullAccess: true },
+    ],
   ];
   for (const [name, options] of closed) {
     it(`a host ${name} doesn't`, async () => {

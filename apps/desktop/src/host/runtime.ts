@@ -190,6 +190,8 @@ export async function startHostRuntime(options: {
     if (saved && saved.url !== devOnly.url) throw new SavedGatewayRefusedError(saved.url);
   }
   await client.start({ resume: options.resume !== false });
+  // A session-only start never asks for full control (`SESSION_ONLY`), so it shows no consent line.
+  const fullControl = full && (await host.credentialStatus?.()) !== "session";
   if (options.autoConnectDev && devGateway && client.state.connection.status === "idle") {
     await client.connect(devGateway);
   }
@@ -210,7 +212,7 @@ export async function startHostRuntime(options: {
           }
         : null,
       ...(options.readOnly ? { readOnly: true } : {}),
-      ...(full ? { fullControl: true } : {}),
+      ...(fullControl ? { fullControl: true } : {}),
     },
     // Files viewers add before sending, held in this process until a message takes them.
     policy: {
