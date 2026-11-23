@@ -726,6 +726,39 @@ describe("connecting", () => {
       }
     });
 
+    it("F-387: a Retry whose open fails leaves startup to open the saved gateway", async () => {
+      const { storage, reading, release } = pausedRead();
+      // The device token's first read fails, so the Retry's open fails before any socket.
+      let failToken = true;
+      const get = storage.get;
+      storage.get = async (key) => {
+        if (failToken && key === tokenKey(URL)) {
+          failToken = false;
+          throw new Error("The keychain is locked.");
+        }
+        return get(key);
+      };
+      const gateway = new FakeGateway();
+      const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        const starting = client.start();
+        await reading;
+        const retrying = createBridgeSession(client)
+          .apply(parseBridgeCommand({ type: "retry" }))
+          .then(
+            () => "fulfilled",
+            () => "rejected",
+          );
+        release();
+        await Promise.all([starting, retrying]);
+        expect(await retrying).toBe("rejected");
+        await until(() => gateway.sockets.length === 1);
+      } finally {
+        release();
+        client.stop();
+      }
+    });
+
     it("F-387: Retry opens the saved gateway offered as a choice", async () => {
       const { storage, reading, release } = pausedRead();
       const gateway = new FakeGateway();

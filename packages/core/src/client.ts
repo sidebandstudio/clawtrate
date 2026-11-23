@@ -1268,8 +1268,10 @@ export class ClawtrateClient {
   private readonly writes: ConnectionWrites;
   /** A host stop cancels socket opens requested before it, including ones still saving settings. */
   private stops = 0;
-  /** Settled on `stop()` so queued commands abandon a stalled read instead of holding the queue. */
-  private stopSignal: { promise: Promise<void>; resolve: () => void } | null = null;
+  /** Each settings read still out, ended by `stop()` so it can't hold the shared queue. */
+  private readonly stopWaiters = new Set<() => void>();
+  /** Every startup still reading, released by `stop()`: a later `start()` replaces `restoring`. */
+  private readonly startReads = new Set<{ release: (outcome: { failed: false }) => void }>();
   /** The current attempt reached hello. */
   private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
@@ -1520,16 +1522,14 @@ export class ClawtrateClient {
   /** Read the saved gateway, or abandon the read if `stop()` runs first. */
   private async readSavedSettings(stops: number): Promise<ConnectionSettings | null> {
     if (stops !== this.stops) return null;
-    if (!this.stopSignal) {
-      let resolve!: () => void;
-      const promise = new Promise<void>((r) => (resolve = r));
-      this.stopSignal = { promise, resolve };
+    let stop!: () => void;
+    const stopped = new Promise<null>((resolve) => (stop = () => resolve(null)));
+    this.stopWaiters.add(stop);
+    try {
+      return await Promise.race([this.savedSettings(), stopped]);
+    } finally {
+      this.stopWaiters.delete(stop);
     }
-    const outcome = await Promise.race([
-      this.savedSettings().then((settings) => ({ stopped: false as const, settings })),
-      this.stopSignal.promise.then(() => ({ stopped: true as const })),
-    ]);
-    return outcome.stopped ? null : outcome.settings;
   }
 
   /** Written first: settings the host could not save are never the ones in use. */
@@ -1585,6 +1585,7 @@ export class ClawtrateClient {
     const read = new Promise<ReadOutcome>((resolve) => (release = resolve));
     const restoring = { read, release, commands: [] as Promise<unknown>[] };
     this.restoring = restoring;
+    this.startReads.add(restoring);
     let settings: ConnectionSettings | null;
     let outcome: ReadOutcome = { failed: false };
     try {
@@ -1622,6 +1623,7 @@ export class ClawtrateClient {
       }
     } finally {
       if (this.restoring === restoring) this.restoring = null;
+      this.startReads.delete(restoring);
     }
     // A Disconnect, Suspend or Retry sent during the read (or its notification) decides what
     // happens to the gateway. One that was refused leaves it to startup.
@@ -1858,8 +1860,10 @@ export class ClawtrateClient {
           suspended: false,
         });
       }
+      if (stops !== this.stops) return;
+      // Counted once it opens: one whose open failed leaves startup to open the saved gateway.
+      await this.open();
       this.connectionCommands += 1;
-      if (stops === this.stops) await this.open();
     });
     if (reload !== null && reload === this.generation) await this.bootstrap(reload, null);
   }
@@ -1871,14 +1875,16 @@ export class ClawtrateClient {
   async suspend(): Promise<void> {
     return this.connectionCommand(async (stops) => {
       if (!this.settings) return;
+      // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
+      // Taken before the read: a refusal during it ends the attempt and drops its token from memory.
+      const url = this.settings.url;
+      const typed = this.typedTokenEnds(url);
+      const token = this.settings.token;
       // Read the current record so another client's gateway or newer token stays intact.
       const saved = await this.readSavedSettings(stops);
       if (!this.settings || stops !== this.stops) return;
-      // Saved, so a restart does not reconnect by itself; a token typed for this attempt ends with it.
-      const url = this.settings.url;
-      const typed = this.typedTokenEnds(url);
       if (saved?.url === url) {
-        const dropToken = typed && saved.token === this.settings.token;
+        const dropToken = typed && saved.token === token;
         await this.saveSettings({
           ...saved,
           suspended: true,
@@ -1978,10 +1984,8 @@ export class ClawtrateClient {
   stop(): void {
     this.stops += 1;
     // A command waiting for startup's read no longer holds other clients' writes.
-    this.restoring?.release({ failed: false });
-    const signal = this.stopSignal;
-    this.stopSignal = null;
-    signal?.resolve();
+    for (const restoring of this.startReads) restoring.release({ failed: false });
+    for (const stop of this.stopWaiters) stop();
     this.close();
   }
 
