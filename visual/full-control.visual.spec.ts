@@ -51,7 +51,7 @@ test("F-519: the consent line sits directly above Connect, and only for a secure
     await address.fill(url);
     await expect(consent).toHaveCount(0);
   }
-  await address.fill("wss://mac.example.ts.net");
+  await address.fill("wss://gateway.example.net");
   await expect(page.getByTestId("full-control-consent")).toBeVisible();
 });
 
