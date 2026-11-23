@@ -94,15 +94,20 @@ export function Settings({
   // reports it, and goes back when the choice could not be kept.
   const [asked, setAsked] = useState<boolean | null>(null);
   const [channelError, setChannelError] = useState<string | null>(null);
+  // One save at a time: a second tap before the first is kept could show the first's answer.
+  const [saving, setSaving] = useState(false);
   if (asked !== null && asked === showChannelChats) setAsked(null);
   const channelChats = asked ?? showChannelChats;
   const toggleChannelChats = (on: boolean) => {
     setAsked(on);
+    setSaving(true);
     setChannelError(null);
-    void send({ type: "setShowChannelChats", on }).catch((failure: unknown) => {
-      setAsked(null);
-      setChannelError(redact(failure instanceof Error ? failure.message : String(failure)));
-    });
+    void send({ type: "setShowChannelChats", on })
+      .catch((failure: unknown) => {
+        setAsked(null);
+        setChannelError(redact(failure instanceof Error ? failure.message : String(failure)));
+      })
+      .finally(() => setSaving(false));
   };
   return (
     <Modal
@@ -285,6 +290,7 @@ export function Settings({
                 accessibilityLabel={W.channelChats}
                 accessibilityHint={CHANNEL_CHATS_NOTE.join("")}
                 value={channelChats}
+                disabled={saving}
                 onValueChange={toggleChannelChats}
                 trackColor={{ false: c["border-strong"], true: c["bg-inverse"] }}
                 ios_backgroundColor={c["border-strong"]}
