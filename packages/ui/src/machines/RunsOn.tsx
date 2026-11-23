@@ -262,17 +262,18 @@ export function RunsOnPage({
       </h3>
     </div>
   );
-  const foot = granted ? (
-    <GrantedBar />
-  ) : !admin ? (
-    <div className="b-panel-foot">
-      <AdminBar
-        connection={connection}
-        info={info}
-        need={`Changing where ${botName} runs needs admin access.`}
-      />
-    </div>
-  ) : null;
+  const foot =
+    granted && admin ? (
+      <GrantedBar />
+    ) : !admin ? (
+      <div className="b-panel-foot">
+        <AdminBar
+          connection={connection}
+          info={info}
+          need={`Changing where ${botName} runs needs admin access.`}
+        />
+      </div>
+    ) : null;
   // A save's outcome stays shown when the read after it fails.
   const saveLines = (
     <>
