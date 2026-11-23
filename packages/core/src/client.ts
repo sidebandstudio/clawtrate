@@ -8532,7 +8532,6 @@ export class ClawtrateClient {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
   }
 
-  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
   /** Whether this device's saved pairing with the current gateway is a full pairing's record. */
   private holdsFullPairing(): boolean {
     const url = this.settings?.url;
@@ -8541,6 +8540,7 @@ export class ClawtrateClient {
     return this.writes.grants.get(this.tokenKey(url, deviceId, "operator"))?.full === true;
   }
 
+  /** Device tokens are scoped to one gateway, so a token is never offered to another. */
   private tokenKey(url: string, deviceId: string, role: string): string {
     return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
   }
